@@ -5,6 +5,8 @@
 #include "encode/ParameterSets.h"
 #include "native_test_framework.h"
 
+#include <string>
+
 using namespace mw::native::encode;
 using namespace mw::native::encode::paramsets;
 using h264vui_detail::BitReader;
@@ -51,6 +53,33 @@ HevcSequence hevc1080p()
     s.maxReferences = 4;
     s.fps = 60;
     return s;
+}
+
+/// What the Arc A380's D3D12 encoder was created with on 21/09/2026: 8..64
+/// coding blocks, 4..32 transforms, depth 2, AMP (which that driver requires),
+/// 1080 lines coded as 1088, one picture held, an 8-bit POC.
+HevcSequence arcShape()
+{
+    HevcSequence s;
+    s.dialect = HevcDialect::D3d12;
+    s.width = 1920;
+    s.height = 1080;
+    s.codedWidth = 1920;
+    s.codedHeight = 1088;
+    s.maxReferences = 1;
+    s.log2MaxPocLsb = 8;
+    s.asymmetricMotionPartitions = true;
+    return s;
+}
+
+/// A unit written without its start code — as the v1 tests kept them — in
+/// Annex-B.
+std::vector<uint8_t> annexB(const char* hex)
+{
+    std::vector<uint8_t> v = {0, 0, 0, 1};
+    for (; hex[0] && hex[1]; hex += 2)
+        v.push_back(static_cast<uint8_t>(std::stoi(std::string(hex, 2), nullptr, 16)));
+    return v;
 }
 
 } // namespace
@@ -317,5 +346,182 @@ void run_parameter_sets_tests()
         predicted.referencePoc = 6;
         CHECK(hevcSliceHeader(hevc, predicted) ==
               Bytes({0x00, 0x00, 0x00, 0x01, 0x02, 0x01, 0xD0, 0x00, 0x48, 0x99, 0x5B, 0x70}));
+    }
+
+    SECTION("ParameterSets — the D3D12 fields leave the VA-API bytes alone");
+    {
+        const HevcSequence plain = hevc1080p();
+        HevcSequence loaded = plain;
+        loaded.tenBit = true;
+        loaded.hdr = true;
+        loaded.log2MaxCodingBlock = 5;
+        loaded.transformDepthInter = 3;
+        loaded.sampleAdaptiveOffset = true;
+        loaded.longTermReferences = true;
+        loaded.transformSkip = true;
+        loaded.constrainedIntraPrediction = true;
+        loaded.loopFilterAcrossSlices = false;
+        loaded.defaultActiveReferences = 2;
+        CHECK(hevcVps(loaded) == hevcVps(plain));
+        CHECK(hevcSps(loaded) == hevcSps(plain));
+        CHECK(hevcPps(loaded) == hevcPps(plain));
+        HevcSlice slice;
+        slice.poc = 5;
+        slice.kept = {4, 2};
+        slice.referencePoc = 4;
+        CHECK(hevcSliceHeader(loaded, slice) == hevcSliceHeader(plain, slice));
+    }
+
+    SECTION("ParameterSets — D3D12: the bytes a decoder accepted over the drivers' slices "
+            "(goldens)");
+    {
+        // The first D3D12 attempt's (84524e7f^, test_hevc_param_sets.cpp), in
+        // its own hex. These went ahead of 800 frames of the Arc's encoder on
+        // 21/09 and ffmpeg decoded the lot, P frames included; the same writer,
+        // fed each GPU's own configuration, did as well over the three GPUs of
+        // DualRTX on 26/09 (mw-d3d12-lab encode). That is the only proof there
+        // is that the PPS says what the drivers' slice headers assume.
+        const HevcSequence s = arcShape();
+        CHECK(hevcVps(s) == annexB("40010c01ffff016000000300b000000300000300992c09"));
+        CHECK(hevcSps(s) == annexB("420101016000000300b00000030000030099a003c0801107cb94b9246d226a"
+                                   "02020201"));
+        CHECK(hevcPps(s) == annexB("4401c0f3e0cc90"));
+        CHECK(escaped(hevcVps(s)));
+        CHECK(escaped(hevcSps(s)));
+        CHECK(escaped(hevcPps(s)));
+    }
+
+    SECTION("ParameterSets — D3D12: the three GPUs of DualRTX as created on 26/09 (goldens)");
+    {
+        // mw-d3d12-lab encode (CBR 1080p60, level 4.1, one picture held) put
+        // these ahead of each GPU's own slices, and ffmpeg decoded the three
+        // streams without an error. The PPS is the same for all.
+        const auto gpu = [](int log2MaxCodingBlock, int depth, bool amp) {
+            HevcSequence s = arcShape();
+            s.levelIdc = 123;
+            s.log2MaxCodingBlock = log2MaxCodingBlock;
+            s.transformDepthInter = s.transformDepthIntra = depth;
+            s.asymmetricMotionPartitions = amp;
+            return s;
+        };
+        const HevcSequence rtx = gpu(5, 3, true);  // RTX 5060 Ti: 8..32, AMP required
+        const HevcSequence amd = gpu(6, 4, false); // the AMD iGPU: AMP free, left off
+        const HevcSequence arc = gpu(6, 2, true);  // Arc A380: AMP required
+        const auto vps = annexB("40010c01ffff016000000300b0000003000003007b2c09");
+        CHECK(hevcVps(rtx) == vps);
+        CHECK(hevcVps(amd) == vps);
+        CHECK(hevcVps(arc) == vps);
+        CHECK(hevcSps(rtx) ==
+              annexB("420101016000000300b0000003000003007ba003c0801107cb94bb9084489a8080808040"));
+        CHECK(hevcSps(amd) ==
+              annexB("420101016000000300b0000003000003007ba003c0801107cb94b924294226a020202010"));
+        CHECK(hevcSps(arc) ==
+              annexB("420101016000000300b0000003000003007ba003c0801107cb94b9246d226a02020201"));
+        CHECK(hevcPps(rtx) == annexB("4401c0f3e0cc90"));
+        CHECK(hevcPps(amd) == annexB("4401c0f3e0cc90"));
+        CHECK(hevcPps(arc) == annexB("4401c0f3e0cc90"));
+    }
+
+    SECTION("ParameterSets — D3D12: Main 10, BT.2020 PQ (golden)");
+    {
+        // The first attempt's writer gave these for the shape its last test
+        // used: the Arc's, 1440p, 10 bits, HDR. No decoder has seen them yet —
+        // the encoder's test in Main 10 comes with it (C4.6).
+        HevcSequence s = arcShape();
+        s.width = s.codedWidth = 2560;
+        s.height = s.codedHeight = 1440;
+        s.tenBit = true;
+        s.hdr = true;
+        const auto sps = hevcSps(s);
+        CHECK(hevcVps(s) == annexB("40010c01ffff022000000300b000000300000300992c09"));
+        CHECK(sps == annexB("420101022000000300b00000030000030099a001402005a13652e491b489a8"
+                            "48804804"));
+        CHECK(hevcPps(s) == annexB("4401c0f3e0cc90")); // the PPS knows neither
+        const auto rbsp = rbspOf(sps, 2);
+        BitReader r{rbsp};
+        r.u(8);
+        r.u(3);
+        CHECK_EQ(r.u(5), 2u);           // general_profile_idc: Main 10
+        CHECK_EQ(r.u(32), 0x20000000u); // compatible with Main 10 alone
+        r.u(32);                        // the constraint flags, the 44 reserved bits
+        r.u(16);
+        CHECK_EQ(r.u(8), 153u);
+        CHECK_EQ(r.ue(), 0u);
+        CHECK_EQ(r.ue(), 1u);
+        CHECK_EQ(r.ue(), 2560u);
+        CHECK_EQ(r.ue(), 1440u);
+        CHECK_EQ(r.u(1), 0u); // no window: nothing coded beyond the picture
+        CHECK_EQ(r.ue(), 2u); // bit_depth_luma_minus8
+        CHECK_EQ(r.ue(), 2u); // bit_depth_chroma_minus8
+        CHECK(!r.overrun);
+        // BT.2020, PQ, BT.2020 NCL: three bytes in a row somewhere in the VUI,
+        // byte-aligned or not.
+        bool found = false;
+        for (size_t bit = 0; bit + 24 <= rbsp.size() * 8 && !found; ++bit) {
+            BitReader at{rbsp, bit};
+            found = at.u(8) == 9 && at.u(8) == 16 && at.u(8) == 9;
+        }
+        CHECK(found);
+    }
+
+    SECTION("ParameterSets — D3D12: every switch of the encoder's configuration (golden)");
+    {
+        // No GPU's: every field the dialect reads, off its default at once,
+        // against the first attempt's writer — its branches all taken.
+        HevcSequence s = arcShape();
+        s.width = 1366;
+        s.height = 768;
+        s.codedWidth = 1376;
+        s.codedHeight = 768;
+        s.levelIdc = 120;
+        s.log2MaxCodingBlock = 5;
+        s.transformDepthInter = 3;
+        s.transformDepthIntra = 3;
+        s.sampleAdaptiveOffset = true;
+        s.longTermReferences = true;
+        s.transformSkip = true;
+        s.constrainedIntraPrediction = true;
+        s.loopFilterAcrossSlices = false;
+        s.log2MaxPocLsb = 16;
+        s.maxReferences = 4;
+        s.defaultActiveReferences = 2;
+        CHECK(hevcVps(s) == annexB("40010c01ffff016000000300b00000030000030078170240"));
+        CHECK(hevcSps(s) == annexB("420101016000000300b00000030000030078a002b080301cde345ee4211b93"
+                                   "5010101008"));
+        CHECK(hevcPps(s) == annexB("4401c0aff81364"));
+        // The window, in chroma samples: 10 luma columns.
+        const auto rbsp = rbspOf(hevcSps(s), 2);
+        BitReader r{rbsp};
+        r.u(8);
+        r.u(32); // profile_tier_level: 96 bits with no sub-layers
+        r.u(32);
+        CHECK_EQ(r.u(32) & 0xFF, 120u);
+        CHECK_EQ(r.ue(), 0u);
+        CHECK_EQ(r.ue(), 1u);
+        CHECK_EQ(r.ue(), 1376u);
+        CHECK_EQ(r.ue(), 768u);
+        CHECK_EQ(r.u(1), 1u);
+        CHECK_EQ(r.ue(), 0u);
+        CHECK_EQ(r.ue(), 5u);
+        CHECK_EQ(r.ue(), 0u);
+        CHECK_EQ(r.ue(), 0u);
+        CHECK(!r.overrun);
+    }
+
+    SECTION("ParameterSets — D3D12: no start code inside a unit, whatever the size");
+    {
+        // The profile_tier_level alone holds 44 zero bits in a row.
+        bool all = true;
+        for (uint32_t height : {720u, 1080u, 1440u, 2160u})
+            for (bool tenBit : {false, true}) {
+                HevcSequence s = arcShape();
+                s.height = height;
+                s.width = height * 16 / 9;
+                s.codedWidth = (s.width + 15) / 16 * 16;
+                s.codedHeight = (height + 15) / 16 * 16;
+                s.tenBit = s.hdr = tenBit;
+                all = all && escaped(hevcVps(s)) && escaped(hevcSps(s)) && escaped(hevcPps(s));
+            }
+        CHECK(all);
     }
 }
