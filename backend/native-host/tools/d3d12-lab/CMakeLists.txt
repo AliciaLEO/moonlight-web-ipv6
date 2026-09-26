@@ -24,7 +24,9 @@ add_executable(mw-d3d12-lab
     src/Queues.cpp
     src/Interop.cpp
     src/HevcHeaders.cpp
+    src/LabD3d12.cpp
     src/Encode.cpp
+    src/Vendors.cpp
 )
 
 set_target_properties(mw-d3d12-lab PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
@@ -33,6 +35,11 @@ target_compile_definitions(mw-d3d12-lab PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNI
 # The engine's own sources directory too: the probes use its internal classes.
 target_include_directories(mw-d3d12-lab PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
                                                 ${CMAKE_CURRENT_SOURCE_DIR}/../../src)
+# The vendors' headers, as the engine takes them (`vendors` drives NVENC and AMF
+# through the engine's own loaders).
+target_include_directories(mw-d3d12-lab SYSTEM PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/nvenc-headers
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/amf-headers)
 target_link_libraries(mw-d3d12-lab PRIVATE mw-native-host d3d12 d3d11 dxgi d3dcompiler ole32
                                            version advapi32)
 
