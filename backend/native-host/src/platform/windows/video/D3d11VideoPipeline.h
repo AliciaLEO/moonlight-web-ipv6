@@ -106,6 +106,10 @@ public:
 
     void logEndOfSession() const override;
 
+    /// What the converter last wrote — NV12, P010 or AYUV — for the tests,
+    /// which compare it with ColorConvert's own. Null before a build.
+    ID3D11Texture2D* output() const { return m_Converter ? m_Converter->output() : nullptr; }
+
 private:
     /// The device the converter and the encoder are built on: the capture's,
     /// or the bridge's when the encoder sits on another GPU.

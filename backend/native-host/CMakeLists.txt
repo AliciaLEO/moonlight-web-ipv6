@@ -375,6 +375,7 @@ if(MW_BUILD_TESTS)
         tests/test_capabilities.cpp
         tests/test_capture.cpp
         tests/test_color_convert.cpp
+        tests/test_d3d11_video_pipeline.cpp
         tests/test_win32_cursor.cpp
         tests/test_host_mute.cpp
         tests/test_evdev_keymap.cpp
