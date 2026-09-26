@@ -51,6 +51,7 @@ if(WIN32)
         src/capture/windows/Win32Cursor.cpp
         src/convert/windows/ColorConvert.cpp
         src/convert/windows/ConvertShaders.cpp
+        src/convert/windows/d3d12/ColorConvert12.cpp
         src/input/windows/Win32Input.cpp
         src/input/windows/VigemGamepad.cpp
         third_party/vigem-client/src/ViGEmClient.cpp
@@ -379,6 +380,7 @@ if(MW_BUILD_TESTS)
         tests/test_capabilities.cpp
         tests/test_capture.cpp
         tests/test_color_convert.cpp
+        tests/test_color_convert12.cpp
         tests/test_d3d11_video_pipeline.cpp
         tests/test_d3d12_device.cpp
         tests/test_dda_interop.cpp

@@ -20,6 +20,7 @@ void run_selector_tests();
 void run_capabilities_tests();
 void run_capture_tests();
 void run_color_convert_tests();
+void run_color_convert12_tests();
 void run_d3d11_video_pipeline_tests();
 void run_d3d12_device_tests();
 void run_dda_interop_tests();
@@ -104,6 +105,7 @@ int main()
     run_cursor_position_gate_tests();
     run_capture_tests();
     run_color_convert_tests();
+    run_color_convert12_tests();
     run_d3d11_video_pipeline_tests();
     run_d3d12_device_tests();
     run_dda_interop_tests();
