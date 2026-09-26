@@ -25,6 +25,7 @@ void run_d3d11_video_pipeline_tests();
 void run_d3d12_device_tests();
 void run_dda_interop_tests();
 void run_video_encode_caps12_tests();
+void run_video_encode12_tests();
 void run_win32_cursor_tests();
 void run_host_mute_tests();
 void run_evdev_keymap_tests();
@@ -117,6 +118,7 @@ int main()
     run_d3d12_device_tests();
     run_dda_interop_tests();
     run_video_encode_caps12_tests();
+    run_video_encode12_tests();
     run_win32_cursor_tests();
     run_host_mute_tests();
     run_evdev_keymap_tests();
