@@ -411,6 +411,7 @@ if(MW_BUILD_TESTS)
         tests/test_h264_vui.cpp
         tests/test_parameter_sets.cpp
         tests/test_hevc_slice_parser.cpp
+        tests/test_hevc_dpb.cpp
         tests/test_reference_slots.cpp
         tests/test_audio_pacer.cpp
         tests/test_audio_interleave.cpp
