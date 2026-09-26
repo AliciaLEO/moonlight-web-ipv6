@@ -70,6 +70,7 @@ struct Options
     int kbps = 20000;
     int qp = 30;
     int maxQp = 51;
+    int qvs = -1;
     int deltaSweep = 0;
     int intraRefresh = 0;
     bool change = false;
@@ -325,6 +326,8 @@ bool parse(int argc, wchar_t** argv, Options& o)
             o.kbps = std::max(100, std::atoi(next().c_str()));
         } else if (arg == L"--qp") {
             o.qp = std::clamp(std::atoi(next().c_str()), 0, 51);
+        } else if (arg == L"--qvs") {
+            o.qvs = std::clamp(std::atoi(next().c_str()), 0, 15);
         } else if (arg == L"--max-qp") {
             o.maxQp = std::clamp(std::atoi(next().c_str()), 18, 51);
         } else if (arg == L"--delta-sweep") {
@@ -377,6 +380,8 @@ void encodeUsage()
         "                          taken); delta: CQP + a delta-QP map; absolute: a QP map\n"
         "  --kbps <n> --qp <n>     target (cbr) or QP (the others); default 20000 and 30\n"
         "  --max-qp <n>            cbr: the top of the QP range (default 51)\n"
+        "  --qvs <n>               cbr/cqp/delta: QualityVsSpeed through the EXTENSION1\n"
+        "                          structures (0 = fastest); default: the driver's\n"
         "  --delta-sweep <n>       delta/absolute: the map moves by +-n every second\n"
         "  --intra-refresh <n>     row-based intra refresh over n frames\n"
         "  --change                cbr: the target steps x1/4 and back every 2 s\n"
@@ -499,18 +504,49 @@ int runEncode(int argc, wchar_t** argv)
     cbr.InitialVBVFullness = cbr.VBVCapacity;
     cbr.MaxFrameBitSize = cbr.VBVCapacity;
     D3D12_VIDEO_ENCODER_RATE_CONTROL_ABSOLUTE_QP_MAP absolute = {0};
+    // The EXTENSION1 twins, which carry QualityVsSpeed (--qvs): refreshed from
+    // cbr and cqp before every frame, so a rate step moves them too.
+    const bool ext1 = o.qvs >= 0 && o.rc != "absolute";
+    D3D12_VIDEO_ENCODER_RATE_CONTROL_CBR1 cbr1 = {};
+    D3D12_VIDEO_ENCODER_RATE_CONTROL_CQP1 cqp1 = {};
+    const auto syncExt1 = [&] {
+        cbr1.InitialQP = cbr.InitialQP;
+        cbr1.MinQP = cbr.MinQP;
+        cbr1.MaxQP = cbr.MaxQP;
+        cbr1.MaxFrameBitSize = cbr.MaxFrameBitSize;
+        cbr1.TargetBitRate = cbr.TargetBitRate;
+        cbr1.VBVCapacity = cbr.VBVCapacity;
+        cbr1.InitialVBVFullness = cbr.InitialVBVFullness;
+        cbr1.QualityVsSpeed = static_cast<UINT>(std::max(0, o.qvs));
+        cqp1.ConstantQP_FullIntracodedFrame = cqp.ConstantQP_FullIntracodedFrame;
+        cqp1.ConstantQP_InterPredictedFrame_PrevRefOnly =
+            cqp.ConstantQP_InterPredictedFrame_PrevRefOnly;
+        cqp1.ConstantQP_InterPredictedFrame_BiDirectionalRef =
+            cqp.ConstantQP_InterPredictedFrame_BiDirectionalRef;
+        cqp1.QualityVsSpeed = static_cast<UINT>(std::max(0, o.qvs));
+    };
+    syncExt1();
+    const D3D12_VIDEO_ENCODER_RATE_CONTROL_FLAGS ext1Flags =
+        ext1 ? D3D12_VIDEO_ENCODER_RATE_CONTROL_FLAG_ENABLE_EXTENSION1_SUPPORT |
+                   D3D12_VIDEO_ENCODER_RATE_CONTROL_FLAG_ENABLE_QUALITY_VS_SPEED
+             : D3D12_VIDEO_ENCODER_RATE_CONTROL_FLAG_NONE;
     D3D12_VIDEO_ENCODER_RATE_CONTROL rc = {};
     rc.TargetFrameRate = {static_cast<UINT>(o.fps), 1};
     std::vector<D3D12_VIDEO_ENCODER_RATE_CONTROL_FLAGS> flagChain;
     if (o.rc == "cbr") {
         rc.Mode = D3D12_VIDEO_ENCODER_RATE_CONTROL_MODE_CBR;
-        rc.ConfigParams.DataSize = sizeof(cbr);
-        rc.ConfigParams.pConfiguration_CBR = &cbr;
+        if (ext1) {
+            rc.ConfigParams.DataSize = sizeof(cbr1);
+            rc.ConfigParams.pConfiguration_CBR1 = &cbr1;
+        } else {
+            rc.ConfigParams.DataSize = sizeof(cbr);
+            rc.ConfigParams.pConfiguration_CBR = &cbr;
+        }
         // Everything the product asks, then less until the driver says yes.
         const auto vbv = D3D12_VIDEO_ENCODER_RATE_CONTROL_FLAG_ENABLE_VBV_SIZES;
         const auto range = D3D12_VIDEO_ENCODER_RATE_CONTROL_FLAG_ENABLE_QP_RANGE;
         const auto cap = D3D12_VIDEO_ENCODER_RATE_CONTROL_FLAG_ENABLE_MAX_FRAME_SIZE;
-        flagChain = {vbv | range | cap, vbv | range, vbv};
+        flagChain = {vbv | range | cap | ext1Flags, vbv | range | ext1Flags, vbv | ext1Flags};
     } else if (o.rc == "absolute") {
         rc.Mode = D3D12_VIDEO_ENCODER_RATE_CONTROL_MODE_ABSOLUTE_QP_MAP;
         rc.ConfigParams.DataSize = sizeof(absolute);
@@ -518,10 +554,16 @@ int runEncode(int argc, wchar_t** argv)
         flagChain = {D3D12_VIDEO_ENCODER_RATE_CONTROL_FLAG_NONE};
     } else {
         rc.Mode = D3D12_VIDEO_ENCODER_RATE_CONTROL_MODE_CQP;
-        rc.ConfigParams.DataSize = sizeof(cqp);
-        rc.ConfigParams.pConfiguration_CQP = &cqp;
-        flagChain = {o.rc == "delta" ? D3D12_VIDEO_ENCODER_RATE_CONTROL_FLAG_ENABLE_DELTA_QP
-                                     : D3D12_VIDEO_ENCODER_RATE_CONTROL_FLAG_NONE};
+        if (ext1) {
+            rc.ConfigParams.DataSize = sizeof(cqp1);
+            rc.ConfigParams.pConfiguration_CQP1 = &cqp1;
+        } else {
+            rc.ConfigParams.DataSize = sizeof(cqp);
+            rc.ConfigParams.pConfiguration_CQP = &cqp;
+        }
+        flagChain = {(o.rc == "delta" ? D3D12_VIDEO_ENCODER_RATE_CONTROL_FLAG_ENABLE_DELTA_QP
+                                      : D3D12_VIDEO_ENCODER_RATE_CONTROL_FLAG_NONE) |
+                     ext1Flags};
     }
 
     const D3D12_VIDEO_ENCODER_INTRA_REFRESH_MODE refreshMode =
@@ -529,7 +571,9 @@ int runEncode(int argc, wchar_t** argv)
                            : D3D12_VIDEO_ENCODER_INTRA_REFRESH_MODE_NONE;
     D3D12_VIDEO_ENCODER_PICTURE_RESOLUTION_DESC res = {static_cast<UINT>(o.width),
                                                        static_cast<UINT>(o.height)};
-    D3D12_FEATURE_DATA_VIDEO_ENCODER_SUPPORT sup = {};
+    // SUPPORT1 (it knows QualityVsSpeed), the original SUPPORT where a runtime
+    // or driver refuses it: the same structure without its last members.
+    D3D12_FEATURE_DATA_VIDEO_ENCODER_SUPPORT1 sup = {};
     D3D12_FEATURE_DATA_VIDEO_ENCODER_RESOLUTION_SUPPORT_LIMITS limits = {};
     D3D12_VIDEO_ENCODER_PROFILE_HEVC suggestedProfile = {};
     D3D12_VIDEO_ENCODER_LEVEL_TIER_CONSTRAINTS_HEVC suggestedLevel = {};
@@ -556,8 +600,13 @@ int runEncode(int argc, wchar_t** argv)
             sup.SuggestedLevel.DataSize = sizeof(suggestedLevel);
             sup.SuggestedLevel.pHEVCLevelSetting = &suggestedLevel;
             sup.pResolutionDependentSupport = &limits;
-            if (SUCCEEDED(video->CheckFeatureSupport(D3D12_FEATURE_VIDEO_ENCODER_SUPPORT, &sup,
-                                                     sizeof(sup))) &&
+            HRESULT asked =
+                video->CheckFeatureSupport(D3D12_FEATURE_VIDEO_ENCODER_SUPPORT1, &sup, sizeof(sup));
+            if (FAILED(asked))
+                asked =
+                    video->CheckFeatureSupport(D3D12_FEATURE_VIDEO_ENCODER_SUPPORT, &sup,
+                                               sizeof(D3D12_FEATURE_DATA_VIDEO_ENCODER_SUPPORT));
+            if (SUCCEEDED(asked) &&
                 (sup.SupportFlags & D3D12_VIDEO_ENCODER_SUPPORT_FLAG_GENERAL_SUPPORT_OK)) {
                 ok = true;
                 break;
@@ -579,9 +628,10 @@ int runEncode(int argc, wchar_t** argv)
          D3D12_VIDEO_ENCODER_SUPPORT_FLAG_RECONSTRUCTED_FRAMES_REQUIRE_TEXTURE_ARRAYS) != 0;
     const UINT region = limits.QPMapRegionPixelsSize ? limits.QPMapRegionPixelsSize : 16;
     say("coded %dx%d, rc %s flags 0x%x, support 0x%x, qp-map region %u px, recon %s, rate "
-        "reconfiguration %s\n",
+        "reconfiguration %s, quality vs speed <= %u%s\n",
         codedW, codedH, o.rc.c_str(), static_cast<unsigned>(rc.Flags), sup.SupportFlags, region,
-        reconArrays ? "texture array" : "textures", reconfigurable ? "yes" : "no");
+        reconArrays ? "texture array" : "textures", reconfigurable ? "yes" : "no",
+        sup.MaxQualityVsSpeed, ext1 ? (" (asked " + std::to_string(o.qvs) + ")").c_str() : "");
 
     D3D12_FEATURE_DATA_VIDEO_ENCODER_RESOURCE_REQUIREMENTS req = {};
     req.Codec = D3D12_VIDEO_ENCODER_CODEC_HEVC;
@@ -915,6 +965,7 @@ int runEncode(int argc, wchar_t** argv)
             pic.pRateControlQPMap = qpMap.data();
         }
 
+        syncExt1();
         D3D12_VIDEO_ENCODER_ENCODEFRAME_INPUT_ARGUMENTS in = {};
         in.SequenceControlDesc.Flags =
             changed ? D3D12_VIDEO_ENCODER_SEQUENCE_CONTROL_FLAG_RATE_CONTROL_CHANGE
