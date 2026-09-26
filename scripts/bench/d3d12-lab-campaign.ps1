@@ -29,6 +29,9 @@ param(
     [string] $Build = ''
 )
 $ErrorActionPreference = 'Continue'
+# powershell -File hands "rtx,arc" over as one string, not as an array.
+$Gpus = @($Gpus | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
+$Loads = @($Loads | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $root = (Resolve-Path "$PSScriptRoot\..\..").Path
 if (-not $Build) { $Build = Join-Path $root 'build-d3d12' }
 if (-not $Out) { $Out = Join-Path $root 'bench-out\d3d12v2\g1' }
@@ -71,8 +74,9 @@ function Probe($gpu, $loadName, $dir, $name, [string[]] $probeArgs) {
     # UTF-8, not the UTF-16 that *> writes in PowerShell 5.1.
     & $lab @all 2>&1 | Out-File -FilePath $txt -Encoding utf8
     Stop-Load $p
-    $summary = Get-Content $txt | Where-Object { $_ -match 'refused|wall ms, P|NVENC-D3D12|AMF-DX12|ddasync=gpu' } |
-        Select-Object -First 1
+    $summary = [string](Get-Content $txt |
+        Where-Object { $_ -match 'refused|wall ms, P|NVENC-D3D12|AMF-DX12|ddasync=gpu|^(d3d11|ps|cs) .*\|' } |
+        Select-Object -First 1)
     Write-Host ("  {0,-16} {1}" -f $name, ($summary -replace '\s+', ' '))
 }
 
@@ -83,22 +87,31 @@ foreach ($gpu in $Gpus) {
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
         Write-Host "=== $gpu, $loadName, token $token -> $dir"
 
-        # The conversion's queues, three variants per load run.
+        # The conversion's queues, one variant per call: under load a late
+        # submission waits for the game's frame, so a variant of 12 s can
+        # take 30, and a second one would run past the load's 60 s.
         $s = "$Seconds"
-        Probe $gpu $loadName $dir 'queues-a' @('queues', '--adapter', $n, '--seconds', $s, '--warmup', '30',
-            '--variants', 'd3d11,ps', '--priorities', 'high', '--creators', 'own,default')
-        Probe $gpu $loadName $dir 'queues-b' @('queues', '--adapter', $n, '--seconds', $s, '--warmup', '30',
-            '--variants', 'ps,cs', '--priorities', 'realtime', '--creators', 'own')
-        Probe $gpu $loadName $dir 'queues-n' @('queues', '--adapter', $n, '--seconds', $s, '--warmup', '30',
-            '--variants', 'ps,cs', '--priorities', 'normal', '--creators', 'own')
-        Probe $gpu $loadName $dir 'queues-c' @('queues', '--adapter', $n, '--seconds', $s, '--warmup', '30',
-            '--variants', 'cs', '--priorities', 'high', '--creators', 'own,default')
+        $queueVariants = @(
+            @('q-d3d11', 'd3d11', 'high', 'own'),
+            @('q-ps-high-own', 'ps', 'high', 'own'),
+            @('q-ps-high-default', 'ps', 'high', 'default'),
+            @('q-ps-realtime', 'ps', 'realtime', 'own'),
+            @('q-cs-realtime', 'cs', 'realtime', 'own'),
+            @('q-ps-normal', 'ps', 'normal', 'own'),
+            @('q-cs-normal', 'cs', 'normal', 'own'),
+            @('q-cs-high-own', 'cs', 'high', 'own'),
+            @('q-cs-high-default', 'cs', 'high', 'default'))
+        foreach ($q in $queueVariants) {
+            Probe $gpu $loadName $dir $q[0] @('queues', '--adapter', $n, '--seconds', $s, '--warmup', '30',
+                '--variants', $q[1], '--priorities', $q[2], '--creators', $q[3])
+        }
 
         # The encoder: D3D12 Video Encode alone, then after the conversion.
+        # $Seconds of frames: late ones stretch the run the same way.
         Probe $gpu $loadName $dir 'encode' @('encode', '--adapter', $n, '--rc', 'cbr', '--qvs', '0',
-            '--seconds', "$([Math]::Min(3 * $Seconds, 40))")
+            '--seconds', $s)
         Probe $gpu $loadName $dir 'encode-convert' @('encode', '--adapter', $n, '--rc', 'cbr', '--qvs', '0',
-            '--seconds', "$([Math]::Min(3 * $Seconds, 40))", '--convert', 'ps', '--source', '2560x1440')
+            '--seconds', $s, '--convert', 'ps', '--source', '2560x1440')
         if ($gpu -ne 'arc') {
             Probe $gpu $loadName $dir 'vendors' @('vendors', '--adapter', $n, '--frames', "$([Math]::Min(180 * $Seconds / 3, 2400))")
         }
