@@ -22,6 +22,7 @@ add_executable(mw-d3d12-lab
     src/Caps.cpp
     src/ComputeConvert.cpp
     src/Queues.cpp
+    src/Interop.cpp
 )
 
 set_target_properties(mw-d3d12-lab PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)

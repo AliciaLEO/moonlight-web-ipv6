@@ -21,6 +21,7 @@
 // it enters the engine. See tools/d3d12-lab/CMakeLists.txt for the why.
 
 #include "Caps.h"
+#include "Interop.h"
 #include "Queues.h"
 
 #include <windows.h>
@@ -35,6 +36,7 @@ void usage()
     std::puts("mw-d3d12-lab <command> [options]\n"
               "  caps    what every GPU answers (driver, queues, fences, D3D12 Video Encode)\n"
               "  queues  where the conversion waits: D3D11, D3D12 DIRECT and COMPUTE, by priority\n"
+              "  interop what the DDA handshake costs, and what reading without it does\n"
               "Run a command with --help for its options.\n");
 }
 
@@ -63,6 +65,13 @@ int wmain(int argc, wchar_t** argv)
             return 0;
         }
         return lab::runQueues(argc - 2, argv + 2);
+    }
+    if (command == L"interop") {
+        if (help) {
+            lab::interopUsage();
+            return 0;
+        }
+        return lab::runInterop(argc - 2, argv + 2);
     }
     usage();
     return command == L"--help" ? 0 : 2;
