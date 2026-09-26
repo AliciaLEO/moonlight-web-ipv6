@@ -21,6 +21,7 @@ void run_capabilities_tests();
 void run_capture_tests();
 void run_color_convert_tests();
 void run_d3d11_video_pipeline_tests();
+void run_d3d12_device_tests();
 void run_win32_cursor_tests();
 void run_host_mute_tests();
 void run_evdev_keymap_tests();
@@ -103,6 +104,7 @@ int main()
     run_capture_tests();
     run_color_convert_tests();
     run_d3d11_video_pipeline_tests();
+    run_d3d12_device_tests();
     run_win32_cursor_tests();
     run_host_mute_tests();
     run_evdev_keymap_tests();

@@ -18,6 +18,7 @@
 #pragma once
 
 #include <d3d11.h>
+#include <d3d12.h>
 #include <windows.h>
 
 namespace mw::native {
@@ -71,6 +72,27 @@ public:
 
     /// Each device the pipeline draws on, as it is (re)built.
     static void raiseDevice(ID3D11Device* device, const char* role);
+
+    /// The GPU scheduling class engage() obtained for the process. Unknown
+    /// before the first engage(); LeftAlone under MW_GPU_PRIORITY=normal.
+    enum class GpuClass
+    {
+        Unknown,
+        LeftAlone,
+        Normal,
+        AboveNormal,
+        High,
+        Realtime,
+    };
+    static GpuClass grantedClass();
+    static const char* toString(GpuClass gpuClass);
+
+    /// What a D3D12 queue of the pipeline asks for under that class:
+    /// GLOBAL_REALTIME where the process has REALTIME (the same privilege
+    /// grants both), NORMAL where scheduling was left alone on purpose, and
+    /// HIGH otherwise — HIGH asks nothing of the token. A D3D11 device has no
+    /// queue to give a priority to; SetGPUThreadPriority is its equivalent.
+    static D3D12_COMMAND_QUEUE_PRIORITY queuePriority();
 
 private:
     HANDLE m_PowerRequest = nullptr;

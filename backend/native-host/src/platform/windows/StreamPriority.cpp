@@ -156,11 +156,14 @@ bool enableBasePriorityPrivilege()
     return ok;
 }
 
+std::atomic<StreamPriority::GpuClass> g_GrantedClass{StreamPriority::GpuClass::Unknown};
+
 void raiseGpuScheduling()
 {
     const auto set = reinterpret_cast<SetSchedulingClassFn>(
         ::GetProcAddress(gdi32(), "D3DKMTSetProcessSchedulingPriorityClass"));
     if (!set) {
+        g_GrantedClass = StreamPriority::GpuClass::Normal;
         log::info("[native] priority: no GPU scheduling class on this Windows");
         return;
     }
@@ -179,6 +182,7 @@ void raiseGpuScheduling()
         const bool privilege = enableBasePriorityPrivilege();
         const LONG realtime = set(::GetCurrentProcess(), KmtRealtime);
         if (realtime == 0) {
+            g_GrantedClass = StreamPriority::GpuClass::Realtime;
             log::info("[native] priority: GPU scheduling class REALTIME (token " + who + ")");
             return;
         }
@@ -188,10 +192,13 @@ void raiseGpuScheduling()
     }
     const LONG high = set(::GetCurrentProcess(), KmtHigh);
     if (high == 0) {
+        g_GrantedClass = StreamPriority::GpuClass::High;
         log::info("[native] priority: GPU scheduling class HIGH");
         return;
     }
     const LONG above = set(::GetCurrentProcess(), KmtAboveNormal);
+    g_GrantedClass =
+        above == 0 ? StreamPriority::GpuClass::AboveNormal : StreamPriority::GpuClass::Normal;
     log::info("[native] priority: GPU scheduling class HIGH refused (" + hex(high) + ")" +
               (above == 0 ? ", ABOVE_NORMAL instead" : ", left NORMAL"));
 }
@@ -204,10 +211,12 @@ void StreamPriority::engage()
 {
     if (!g_ProcessDone.exchange(true)) {
         leaveEcoQos();
-        if (!envIs("MW_GPU_PRIORITY", "normal"))
+        if (!envIs("MW_GPU_PRIORITY", "normal")) {
             raiseGpuScheduling();
-        else
+        } else {
+            g_GrantedClass = GpuClass::LeftAlone;
             log::info("[native] priority: MW_GPU_PRIORITY=normal — GPU scheduling left as is");
+        }
         // Bench switch, off by default: the whole process one class up on the
         // CPU. Never REALTIME, which can starve the input stack itself.
         if (envIs("MW_CPU_PRIORITY", "high")) {
@@ -232,6 +241,34 @@ void StreamPriority::engage()
         log::info("[native] priority: could not keep the machine awake (error " +
                   std::to_string(::GetLastError()) + ")");
     }
+}
+
+StreamPriority::GpuClass StreamPriority::grantedClass()
+{
+    return g_GrantedClass.load();
+}
+
+const char* StreamPriority::toString(GpuClass gpuClass)
+{
+    switch (gpuClass) {
+    case GpuClass::Unknown: return "unknown";
+    case GpuClass::LeftAlone: return "left alone";
+    case GpuClass::Normal: return "NORMAL";
+    case GpuClass::AboveNormal: return "ABOVE_NORMAL";
+    case GpuClass::High: return "HIGH";
+    case GpuClass::Realtime: return "REALTIME";
+    }
+    return "unknown";
+}
+
+D3D12_COMMAND_QUEUE_PRIORITY StreamPriority::queuePriority()
+{
+    switch (grantedClass()) {
+    case GpuClass::Realtime: return D3D12_COMMAND_QUEUE_PRIORITY_GLOBAL_REALTIME;
+    case GpuClass::LeftAlone: return D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+    default: break;
+    }
+    return D3D12_COMMAND_QUEUE_PRIORITY_HIGH;
 }
 
 void StreamPriority::release()

@@ -43,6 +43,7 @@ if(WIN32)
         src/platform/windows/CrossGpuBridge.cpp
         src/platform/windows/StreamPriority.cpp
         src/platform/windows/video/D3d11VideoPipeline.cpp
+        src/platform/windows/d3d12/D3d12Device.cpp
         src/capture/windows/DxgiDuplication.cpp
         src/capture/windows/WgcCapture.cpp
         src/capture/windows/CursorShape.cpp
@@ -80,9 +81,10 @@ if(WIN32)
     # avrt is MMCSS: the capture thread registers as a "Games" task so the
     # scheduler favours it over the desktop's background work (and the audio
     # thread as "Pro Audio").
-    # d3d12 is the cross-GPU copy's readback only: its COPY queue runs on the
+    # d3d12 is the cross-GPU copy's readback — its COPY queue runs on the
     # GPU's DMA engine, out of the way of a game holding the 3D engine
-    # (CrossGpuBridge).
+    # (CrossGpuBridge) — and the D3D12 video pipeline's device, queues and
+    # fences (platform/windows/d3d12).
     # ole32 is COM: WASAPI's device enumerator is a COM object.
     # runtimeobject is the Windows Runtime's ABI entry points — RoInitialize,
     # RoGetActivationFactory, the HSTRING helpers — which is how the WGC
@@ -376,6 +378,7 @@ if(MW_BUILD_TESTS)
         tests/test_capture.cpp
         tests/test_color_convert.cpp
         tests/test_d3d11_video_pipeline.cpp
+        tests/test_d3d12_device.cpp
         tests/test_win32_cursor.cpp
         tests/test_host_mute.cpp
         tests/test_evdev_keymap.cpp
