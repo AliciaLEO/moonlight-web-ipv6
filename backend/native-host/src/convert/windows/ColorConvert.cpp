@@ -22,90 +22,15 @@
 #endif
 
 #include "ColorConvert.h"
-#include "ConvertHlsl.h"
+#include "ConvertShaders.h"
 
 #include "../../core/Log.h"
-#include "../../platform/macos/FrameFit.h"
 
-#include <d3dcompiler.h>
-
-#include <algorithm>
-#include <cmath>
-#include <cstdio>
+#include <cstring>
 
 using Microsoft::WRL::ComPtr;
 
 namespace mw::native::convert {
-namespace {
-
-/// @p scRgbSource picks what the BT.709 entry points read: the 8-bit desktop,
-/// or the FP16 one through the tone map. Spelled "0"/"1" rather than left
-/// undefined, so the shader's #if never depends on what fxc makes of an
-/// unknown name.
-bool compile(const char* entryPoint, const char* target, bool scRgbSource, ComPtr<ID3DBlob>& blob,
-             std::string& error)
-{
-    const D3D_SHADER_MACRO defines[] = {{"MW_SCRGB_SOURCE", scRgbSource ? "1" : "0"},
-                                        {nullptr, nullptr}};
-    ComPtr<ID3DBlob> errors;
-    const HRESULT hr = ::D3DCompile(
-        kShaderSource, sizeof(kShaderSource) - 1, "ColorConvert.hlsl", defines, nullptr, entryPoint,
-        target, D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, blob.GetAddressOf(), errors.GetAddressOf());
-    if (SUCCEEDED(hr)) return true;
-
-    error = std::string("could not compile ") + entryPoint;
-    if (errors && errors->GetBufferPointer()) {
-        error += ": ";
-        error += static_cast<const char*>(errors->GetBufferPointer());
-    }
-    return false;
-}
-
-/// One direction of the resample pass. @p length is the source extent along
-/// the filtered axis, @p output the picture's extent along it, @p fixed the
-/// extent of the other axis (rows for horizontal, columns for vertical).
-bool compileScale(bool horizontal, bool decode, int length, int output, int fixed,
-                  ComPtr<ID3DBlob>& blob, std::string& error)
-{
-    const double dilate = std::max(1.0, static_cast<double>(length) / output);
-    const int taps = static_cast<int>(std::ceil(4.0 * dilate)) + 1;
-    // The dilation goes in as the ratio it is, never as a formatted double:
-    // "%f" follows LC_NUMERIC, and a host whose region writes decimals with a
-    // comma would emit `1,166667` — which HLSL reads as two arguments and the
-    // compile fails, with an error about Lanczos2 that says nothing about the
-    // locale. The ratio is also exact where nine digits are not.
-    char dilateText[48];
-    if (length <= output)
-        std::snprintf(dilateText, sizeof(dilateText), "1.0");
-    else
-        std::snprintf(dilateText, sizeof(dilateText), "(%d.0 / %d.0)", length, output);
-    const std::string tapsText = std::to_string(taps);
-    const std::string lengthText = std::to_string(length) + ".0";
-    const std::string fixedText = std::to_string(fixed) + ".0";
-    const D3D_SHADER_MACRO defines[] = {{"MW_HORIZONTAL", horizontal ? "1" : "0"},
-                                        {"MW_DECODE", decode ? "1" : "0"},
-                                        {"MW_DILATE", dilateText},
-                                        {"MW_TAPS", tapsText.c_str()},
-                                        {"MW_LEN", lengthText.c_str()},
-                                        {"MW_FIXED", fixedText.c_str()},
-                                        {nullptr, nullptr}};
-    ComPtr<ID3DBlob> errors;
-    const HRESULT hr =
-        ::D3DCompile(kScaleShaderSource, sizeof(kScaleShaderSource) - 1, "ColorScale.hlsl", defines,
-                     nullptr, "PsScale", "ps_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0,
-                     blob.GetAddressOf(), errors.GetAddressOf());
-    if (SUCCEEDED(hr)) return true;
-
-    error = std::string("could not compile the ") + (horizontal ? "horizontal" : "vertical") +
-            " resample";
-    if (errors && errors->GetBufferPointer()) {
-        error += ": ";
-        error += static_cast<const char*>(errors->GetBufferPointer());
-    }
-    return false;
-}
-
-} // namespace
 
 ColorConvert::~ColorConvert() = default;
 
@@ -151,45 +76,25 @@ bool ColorConvert::init(ID3D11Device* device, DXGI_FORMAT sourceFormat, int sour
     m_SourceWidth = sourceWidth;
     m_SourceHeight = sourceHeight;
 
-    // NV12 chroma is half resolution in both axes, so an odd dimension has no
-    // representation at all. Round down rather than up: growing the image would
-    // sample outside the captured area.
-    m_OutputWidth = (outputWidth > 0 ? outputWidth : sourceWidth) & ~1;
-    m_OutputHeight = (outputHeight > 0 ? outputHeight : sourceHeight) & ~1;
-    if (m_OutputWidth <= 0 || m_OutputHeight <= 0) {
-        error = "output size is degenerate";
+    // Even sizes, the filter in effect, the bars: ConvertShaders.cpp, shared
+    // with the D3D12 converter so both make the same picture.
+    ConvertGeometry geometry;
+    if (!convertGeometry(sourceWidth, sourceHeight, outputWidth, outputHeight, filter, geometry,
+                         error))
         return false;
-    }
-
-    // The resample pass only where there is something to resample: at 1:1
-    // the conversion reads the capture as it always did, and pays nothing.
-    const bool scaling = m_OutputWidth != m_SourceWidth || m_OutputHeight != m_SourceHeight;
-    m_Filter = scaling ? filter : ScaleFilter::Bilinear;
-    m_Letterboxed = false;
+    m_OutputWidth = geometry.outputWidth;
+    m_OutputHeight = geometry.outputHeight;
+    const bool scaling = geometry.scaling;
+    m_Filter = geometry.filter;
+    m_Letterboxed = geometry.letterboxed;
     // A new device, or a new size: what the pass costs is a new question.
     releaseResampleTiming();
     m_ResampleCost.reset();
     m_ResampleCostTaken = false;
-    m_PictureX = m_PictureY = 0.0f;
-    m_PictureWidth = static_cast<float>(m_OutputWidth);
-    m_PictureHeight = static_cast<float>(m_OutputHeight);
-    if (m_Filter != ScaleFilter::Bilinear) {
-        // A source of another shape is fitted between bars, as macOS does
-        // (FrameFit.h), rather than stretched as the bilinear path does: the
-        // Selector never starts a session this way, so this is a display that
-        // changed mode under a session told not to follow it.
-        const platform::FrameFit fit =
-            platform::frameFit(m_SourceWidth, m_SourceHeight, m_OutputWidth, m_OutputHeight);
-        const float w = std::floor(m_SourceWidth * fit.scale + 0.5f);
-        const float h = std::floor(m_SourceHeight * fit.scale + 0.5f);
-        if (w < m_OutputWidth - 1 || h < m_OutputHeight - 1) {
-            m_Letterboxed = true;
-            m_PictureWidth = std::max(2.0f, w);
-            m_PictureHeight = std::max(2.0f, h);
-            m_PictureX = std::floor((m_OutputWidth - m_PictureWidth) / 2.0f);
-            m_PictureY = std::floor((m_OutputHeight - m_PictureHeight) / 2.0f);
-        }
-    }
+    m_PictureX = geometry.pictureX;
+    m_PictureY = geometry.pictureY;
+    m_PictureWidth = geometry.pictureWidth;
+    m_PictureHeight = geometry.pictureHeight;
 
     if (!createShaders(error)) return false;
     if (!createOutput(error)) return false;
@@ -315,9 +220,9 @@ bool ColorConvert::createScaler(std::string& error)
     const bool decode = !m_Hdr && !m_ToneMap;
 
     ComPtr<ID3DBlob> h, v;
-    if (!compileScale(true, decode, m_SourceWidth, pictureWidth, m_SourceHeight, h, error))
+    if (!compileScaleShader(true, decode, m_SourceWidth, pictureWidth, m_SourceHeight, h, error))
         return false;
-    if (!compileScale(false, false, m_SourceHeight, pictureHeight, pictureWidth, v, error))
+    if (!compileScaleShader(false, false, m_SourceHeight, pictureHeight, pictureWidth, v, error))
         return false;
     if (FAILED(m_Device->CreatePixelShader(h->GetBufferPointer(), h->GetBufferSize(), nullptr,
                                            m_ScaleHShader.ReleaseAndGetAddressOf())) ||
@@ -386,7 +291,7 @@ void ColorConvert::setSdrWhite(float scRgbWhite)
 bool ColorConvert::createShaders(std::string& error)
 {
     ComPtr<ID3DBlob> vs;
-    if (!compile("VsMain", "vs_5_0", m_ToneMap, vs, error)) return false;
+    if (!compileConvertShader("VsMain", "vs_5_0", m_ToneMap, vs, error)) return false;
     if (FAILED(m_Device->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr,
                                             m_VertexShader.ReleaseAndGetAddressOf()))) {
         error = "could not create the vertex shader";
@@ -401,8 +306,8 @@ bool ColorConvert::createShaders(std::string& error)
     const char* chromaEntry = m_Hdr ? "PsChromaHdr" : "PsChroma";
 
     ComPtr<ID3DBlob> luma, chroma;
-    if (!compile(lumaEntry, "ps_5_0", m_ToneMap, luma, error)) return false;
-    if (!compile(chromaEntry, "ps_5_0", m_ToneMap, chroma, error)) return false;
+    if (!compileConvertShader(lumaEntry, "ps_5_0", m_ToneMap, luma, error)) return false;
+    if (!compileConvertShader(chromaEntry, "ps_5_0", m_ToneMap, chroma, error)) return false;
 
     auto& lumaShader = m_Hdr ? m_LumaHdrShader : m_LumaShader;
     auto& chromaShader = m_Hdr ? m_ChromaHdrShader : m_ChromaShader;
@@ -416,7 +321,7 @@ bool ColorConvert::createShaders(std::string& error)
 
     if (m_Chroma == Chroma::C444) {
         ComPtr<ID3DBlob> packed;
-        if (!compile("PsPacked444", "ps_5_0", m_ToneMap, packed, error)) return false;
+        if (!compileConvertShader("PsPacked444", "ps_5_0", m_ToneMap, packed, error)) return false;
         if (FAILED(m_Device->CreatePixelShader(packed->GetBufferPointer(), packed->GetBufferSize(),
                                                nullptr, m_PackedShader.ReleaseAndGetAddressOf()))) {
             error = "could not create the 4:4:4 conversion shader";
@@ -641,48 +546,26 @@ bool ColorConvert::convert(ID3D11Texture2D* source, const capture::CursorState& 
         m_Context->OMSetRenderTargets(0, nullptr, nullptr);
     }
 
-    // The cursor rectangle, expressed in the uv of whatever the conversion
-    // samples: the capture, or the scaled picture — the same square when the
-    // shapes match, the fitted one between the bars when they do not. Drawing
-    // in output pixels instead would misplace the pointer by the scale factor
-    // on any stream that is not native resolution.
-    const bool drawCursor = cursor.visible && m_CursorPixelsView && cursor.width > 0 &&
-                            cursor.height > 0 && m_SourceWidth > 0 && m_SourceHeight > 0;
+    // Where the pointer goes, in the uv of whatever the conversion samples:
+    // ConvertShaders.cpp, shared with the D3D12 converter.
     const bool resampled = m_Filter != ScaleFilter::Bilinear;
     {
+        ConvertGeometry geometry;
+        geometry.outputWidth = m_OutputWidth;
+        geometry.outputHeight = m_OutputHeight;
+        geometry.pictureX = m_PictureX;
+        geometry.pictureY = m_PictureY;
+        geometry.pictureWidth = m_PictureWidth;
+        geometry.pictureHeight = m_PictureHeight;
+        const OverlayConstants overlay =
+            overlayConstants(cursor, draw, m_CursorPixelsView != nullptr, m_SourceWidth,
+                             m_SourceHeight, resampled, geometry, m_SdrWhite);
         D3D11_MAPPED_SUBRESOURCE mapped = {};
         if (FAILED(m_Context->Map(m_OverlayBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
             error = "could not update the cursor position";
             return false;
         }
-        // Magnified around the hotspot, not around the top-left: the pointer has
-        // to keep aiming at the same pixel while it grows, or a bigger cursor
-        // would also be a cursor that clicks somewhere else.
-        const float magnify = draw.magnify > 1.0f ? draw.magnify : 1.0f;
-        const float width = static_cast<float>(cursor.width) * magnify;
-        const float height = static_cast<float>(cursor.height) * magnify;
-        const float left = static_cast<float>(cursor.x + draw.hotspotX) -
-                           static_cast<float>(draw.hotspotX) * magnify;
-        const float top = static_cast<float>(cursor.y + draw.hotspotY) -
-                          static_cast<float>(draw.hotspotY) * magnify;
-
-        float* p = static_cast<float*>(mapped.pData);
-        p[0] = left / static_cast<float>(m_SourceWidth);
-        p[1] = top / static_cast<float>(m_SourceHeight);
-        p[2] = width / static_cast<float>(m_SourceWidth);
-        p[3] = height / static_cast<float>(m_SourceHeight);
-        if (resampled) {
-            // Source uv → scaled-picture uv: the identity unless letterboxed.
-            const float sx = m_PictureWidth / static_cast<float>(m_OutputWidth);
-            const float sy = m_PictureHeight / static_cast<float>(m_OutputHeight);
-            p[0] = m_PictureX / static_cast<float>(m_OutputWidth) + p[0] * sx;
-            p[1] = m_PictureY / static_cast<float>(m_OutputHeight) + p[1] * sy;
-            p[2] *= sx;
-            p[3] *= sy;
-        }
-        p[4] = drawCursor ? 1.0f : 0.0f;
-        p[5] = m_SdrWhite;
-        p[6] = p[7] = 0.0f;
+        std::memcpy(mapped.pData, overlay.values, sizeof(overlay.values));
         m_Context->Unmap(m_OverlayBuffer.Get(), 0);
     }
 

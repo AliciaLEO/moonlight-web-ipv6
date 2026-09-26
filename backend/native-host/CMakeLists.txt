@@ -50,6 +50,7 @@ if(WIN32)
         src/capture/windows/CursorShape.cpp
         src/capture/windows/Win32Cursor.cpp
         src/convert/windows/ColorConvert.cpp
+        src/convert/windows/ConvertShaders.cpp
         src/input/windows/Win32Input.cpp
         src/input/windows/VigemGamepad.cpp
         third_party/vigem-client/src/ViGEmClient.cpp
