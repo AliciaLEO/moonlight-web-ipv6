@@ -668,7 +668,16 @@ int runEncode(int argc, wchar_t** argv)
     const int64_t periodUs = 1000000 / o.fps;
     int64_t next = nowUs();
     const int total = o.fps * o.seconds;
+    // Late frames stretch the run; under load, past the load's own end. So
+    // --seconds is a deadline too (one period of slack), and a late run ends
+    // with fewer frames.
+    const int64_t deadline = next + static_cast<int64_t>(o.seconds) * 1000000 + periodUs;
+    int cut = 0;
     for (int n = 0; n < total; ++n) {
+        if (nowUs() >= deadline) {
+            cut = total - n;
+            break;
+        }
         next += periodUs;
         const UINT poc = static_cast<UINT>(n) - lastIdr;
         const bool isIdr = poc == 0;
@@ -946,6 +955,7 @@ int runEncode(int argc, wchar_t** argv)
 
     const Stats p = stats(wallP), i = stats(wallIdr), b = stats(bytesP), q = stats(qps);
     say("\n%d frames, %d errors\n", frames, errors);
+    if (cut > 0) say("out of time: %d frames not encoded\n", cut);
     say("wall ms, P:   mean %.2f  p50 %.2f  p99 %.2f  max %.2f\n", p.mean, p.p50, p.p99, p.max);
     say("wall ms, IDR: mean %.2f  max %.2f (%zu)\n", i.mean, i.max, wallIdr.size());
     say("P frame bytes: mean %.0f  p99 %.0f  max %.0f;  average QP %.1f (p99 %.0f)\n", b.mean,
@@ -967,7 +977,7 @@ int runEncode(int argc, wchar_t** argv)
         j.field("intraRefresh", o.intraRefresh).field("refs", o.refs).field("convert", o.convert);
         j.field("bitstream", sysmem ? "sysmem" : "copy");
         j.field("reconfigurable", reconfigurable).field("qpMapRegion", region);
-        j.field("frames", frames).field("errors", errors);
+        j.field("frames", frames).field("errors", errors).field("cut", cut);
         j.field("wallPMean", p.mean).field("wallPP50", p.p50).field("wallPP99", p.p99);
         j.field("wallPMax", p.max).field("wallIdrMean", i.mean);
         j.field("bytesPMean", b.mean).field("bytesPP99", b.p99).field("qpMean", q.mean);

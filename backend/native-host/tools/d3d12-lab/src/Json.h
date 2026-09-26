@@ -82,7 +82,8 @@ public:
     Json& value(double v)
     {
         char buf[40];
-        std::snprintf(buf, sizeof(buf), "%.6g", v);
+        // 15 digits: an epoch in seconds keeps its milliseconds.
+        std::snprintf(buf, sizeof(buf), "%.15g", v);
         return number(buf);
     }
     Json& null() { return number("null"); }

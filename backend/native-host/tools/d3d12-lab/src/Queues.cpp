@@ -172,6 +172,9 @@ struct Result
     /// code, and how many codes differ by more than 2. -1 when not compared.
     int maxDiff = -1;
     size_t bigDiffs = 0;
+    /// Submissions left undone when the variant ran out of time (late ones
+    /// stretch it: under load, past the load's own end).
+    int cut = 0;
 };
 
 void compare(const std::vector<uint8_t>& reference, const std::vector<uint8_t>& got, Result& r)
@@ -228,6 +231,15 @@ private:
     int64_t m_Next = 0;
     HANDLE m_Timer = nullptr;
 };
+
+/// How long a variant may run once its warm-up is done: --seconds, and one
+/// period for the timer's slack. A variant whose submissions come back late
+/// stops there with fewer of them, instead of running on past a load that
+/// stops at 60 s.
+int64_t deadlineUs(const Options& o)
+{
+    return static_cast<int64_t>(o.seconds) * 1000000 + 1000000 / std::max(1, o.rate);
+}
 
 /// A picture with detail everywhere, so the resample and the conversion do
 /// their real work.
@@ -336,10 +348,18 @@ void runD3d11(const Adapter& a, const Options& o, const std::vector<uint8_t>& pi
     Pacer pacer(o.rate);
     UINT64 value = 0;
     const int total = o.warmup + o.seconds * o.rate;
+    int64_t deadline = 0;
     for (int i = 0; i < total; ++i) {
         const bool onTime = pacer.wait();
         const bool counted = i >= o.warmup;
-        if (counted && r.start == 0) r.start = epochSeconds();
+        if (counted && r.start == 0) {
+            r.start = epochSeconds();
+            deadline = nowUs() + deadlineUs(o);
+        }
+        if (counted && nowUs() >= deadline) {
+            r.cut = total - i;
+            break;
+        }
         if (counted && !onTime) ++r.late;
         const int64_t t0 = qpc();
         context->Begin(disjoint.Get());
@@ -635,10 +655,18 @@ void runD3d12(ID3D12Device* device, ID3D12Resource* source, const std::string& a
     Pacer pacer(o.rate);
     bool cursorUploaded = false;
     const int total = o.warmup + o.seconds * o.rate;
+    int64_t deadline = 0;
     for (int i = 0; i < total; ++i) {
         const bool onTime = pacer.wait();
         const bool counted = i >= o.warmup;
-        if (counted && r.start == 0) r.start = epochSeconds();
+        if (counted && r.start == 0) {
+            r.start = epochSeconds();
+            deadline = nowUs() + deadlineUs(o);
+        }
+        if (counted && nowUs() >= deadline) {
+            r.cut = total - i;
+            break;
+        }
         if (counted && !onTime) ++r.late;
 
         const int64_t r0 = qpc();
@@ -969,6 +997,7 @@ int runQueues(int argc, wchar_t** argv)
         say("%-62s %5zu | %5.2f %5.2f %6.2f %6.2f | %-13s | %-13s | %6.3f | %4d | %-8s | %s\n",
             r.name.c_str(), w.n, w.mean, w.p50, w.p99, w.max, gpu, wait, rec.mean, r.late, same,
             load);
+        if (r.cut > 0) say("%-62s (out of time: %d submissions not made)\n", "", r.cut);
     }
     say("(vs PS: the largest code difference of the last frame against ColorConvert12's, then\n"
         " how many codes differ by more than 2; wait: GPU start minus submit, D3D12 only)\n");
@@ -998,7 +1027,7 @@ int runQueues(int argc, wchar_t** argv)
                 jsonStats(j, "gpu", r.gpu);
                 jsonStats(j, "wait", r.wait);
                 jsonStats(j, "record", r.record);
-                j.field("late", r.late).field("timeouts", r.timeouts);
+                j.field("late", r.late).field("timeouts", r.timeouts).field("cut", r.cut);
                 j.field("start", r.start).field("end", r.end);
                 if (r.maxDiff >= 0)
                     j.field("maxDiffVsPs", r.maxDiff)
