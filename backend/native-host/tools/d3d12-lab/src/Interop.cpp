@@ -43,6 +43,7 @@
 #include <d3dcompiler.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -271,7 +272,8 @@ void interopUsage()
               "  display must show scripts/bench/content/scroll.html?band=1 (kiosk.ps1), SDR.\n"
               "  For each acquired frame D3D11 copies the frame-number bands (the truth) and\n"
               "  D3D12 reads them through DdaInterop; the two are compared.\n"
-              "  --display <label>     'Display 3', or a monitor name; default the primary\n"
+              "  --display <which>     'Display 3', a monitor name, or a piece of the GPU's name\n"
+              "                        (Arc); default the primary\n"
               "  --seconds <s>         per run (default 15)\n"
               "  --modes none,gpu,cpu  ddasync variants (default all three)\n"
               "  --delays 0,8          ms of busy shader in front of the D3D12 read (default 0,8)\n"
@@ -295,10 +297,21 @@ int runInterop(int argc, wchar_t** argv)
         return 2;
     }
     const DisplayInfo* target = nullptr;
+    // A label ("Display 3"), a monitor name, or a piece of the GPU's name
+    // ("Arc"): the first display that answers.
+    std::string wanted = o.display;
+    for (char& ch : wanted)
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     for (const DisplayInfo& d : caps.displays) {
+        if (target) break;
+        const GpuInfo* g = caps.gpuFor(d);
+        std::string gpuName = g ? g->name : std::string();
+        for (char& ch : gpuName)
+            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
         if (o.display.empty() ? d.primary
                               : (d.label.find(o.display) != std::string::npos ||
-                                 d.detail.find(o.display) != std::string::npos))
+                                 d.detail.find(o.display) != std::string::npos ||
+                                 gpuName.find(wanted) != std::string::npos))
             target = &d;
     }
     if (!target) target = &caps.displays.front();

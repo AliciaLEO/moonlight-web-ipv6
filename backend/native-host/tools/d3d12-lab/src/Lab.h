@@ -76,6 +76,11 @@ struct Adapter
 /// The machine's GPUs, one entry per LUID, in DXGI order. WARP only when asked.
 std::vector<Adapter> adapters(bool includeSoftware);
 
+/// The adapter @p spec names: its DXGI index ("2"), or a piece of its name,
+/// case-insensitive ("RTX", "arc"); empty = the first hardware one. Null when
+/// nothing matches. Indexes move from one boot to the next; names do not.
+const Adapter* pickAdapter(const std::vector<Adapter>& all, const std::string& spec);
+
 /// The user-mode driver version DXGI reports, "a.b.c.d", or "" when refused.
 std::string umdVersion(IDXGIAdapter* adapter);
 /// Hardware-accelerated GPU scheduling for this GPU: "on", "off",

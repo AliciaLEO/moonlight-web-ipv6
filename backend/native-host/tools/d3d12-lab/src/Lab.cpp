@@ -17,6 +17,9 @@
 
 #include "Lab.h"
 
+#include <cctype>
+#include <cstdlib>
+
 #include <cstdio>
 #include <ctime>
 
@@ -216,6 +219,29 @@ std::vector<Adapter> adapters(bool includeSoftware)
         out.push_back(std::move(entry));
     }
     return out;
+}
+
+const Adapter* pickAdapter(const std::vector<Adapter>& all, const std::string& spec)
+{
+    const bool index = !spec.empty() && spec.find_first_not_of("0123456789") == std::string::npos;
+    std::string wanted = spec;
+    for (char& ch : wanted)
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    for (const Adapter& a : all) {
+        if (spec.empty()) {
+            if (!(a.desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) return &a;
+            continue;
+        }
+        if (index) {
+            if (static_cast<int>(a.index) == std::atoi(spec.c_str())) return &a;
+            continue;
+        }
+        std::string name = a.name;
+        for (char& ch : name)
+            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        if (name.find(wanted) != std::string::npos) return &a;
+    }
+    return nullptr;
 }
 
 std::string umdVersion(IDXGIAdapter* adapter)

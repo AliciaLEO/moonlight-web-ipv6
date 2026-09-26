@@ -66,7 +66,7 @@ using namespace mw::native;
 
 struct Options
 {
-    int adapter = -1;
+    std::string adapter;
     int seconds = 30;
     int rate = 120;
     int warmup = 60;
@@ -765,7 +765,7 @@ bool parse(int argc, wchar_t** argv, Options& o)
         const std::wstring arg = argv[i];
         auto next = [&]() -> std::string { return i + 1 < argc ? utf8(argv[++i]) : std::string(); };
         if (arg == L"--adapter") {
-            o.adapter = std::atoi(next().c_str());
+            o.adapter = next();
         } else if (arg == L"--seconds") {
             o.seconds = std::max(1, std::atoi(next().c_str()));
         } else if (arg == L"--rate") {
@@ -826,7 +826,7 @@ void queuesUsage()
         "  pointer) at a steady rate on D3D11, on D3D12 DIRECT (pixel shaders) and on D3D12\n"
         "  COMPUTE, the D3D12 ones at each queue priority and CreatorID. Wall, GPU and\n"
         "  queue-wait times per submission. Run it under the load you want to measure.\n"
-        "  --adapter <n>            DXGI index (see caps); default the first hardware GPU\n"
+        "  --adapter <gpu>          a DXGI index or a piece of the name (RTX, Arc...)\n"
         "  --seconds <s>            per variant (default 30), after --warmup <n> (default 60)\n"
         "  --rate <n>               submissions per second (default 120)\n"
         "  --size WxH:wxh           source and stream (default 2560x1440:1920x1080)\n"
@@ -860,13 +860,7 @@ int runQueues(int argc, wchar_t** argv)
     const bool privilege = enableBasePriorityPrivilege();
 
     const std::vector<Adapter> all = adapters(false);
-    const Adapter* a = nullptr;
-    for (const Adapter& candidate : all)
-        if (o.adapter < 0 ? !(candidate.desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
-                          : static_cast<int>(candidate.index) == o.adapter) {
-            a = &candidate;
-            break;
-        }
+    const Adapter* a = pickAdapter(all, o.adapter);
     if (!a) {
         say("no such adapter\n");
         return 2;

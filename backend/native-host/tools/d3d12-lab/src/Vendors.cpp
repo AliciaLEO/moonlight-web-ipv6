@@ -51,7 +51,7 @@ using namespace mw::native;
 
 struct Options
 {
-    int adapter = -1;
+    std::string adapter;
     int width = 1920, height = 1080;
     int fps = 60;
     int frames = 300;
@@ -402,7 +402,7 @@ bool parse(int argc, wchar_t** argv, Options& o)
         const std::wstring arg = argv[i];
         auto next = [&]() -> std::string { return i + 1 < argc ? utf8(argv[++i]) : std::string(); };
         if (arg == L"--adapter") {
-            o.adapter = std::atoi(next().c_str());
+            o.adapter = next();
         } else if (arg == L"--size") {
             if (sscanf_s(next().c_str(), "%dx%d", &o.width, &o.height) != 2) return false;
         } else if (arg == L"--fps") {
@@ -429,7 +429,7 @@ void vendorsUsage()
     std::puts("mw-d3d12-lab vendors [options]\n"
               "  Whether NVENC (D3D12 interface) and AMF (InitDX12) encode a D3D12 NV12\n"
               "  picture, and how fast: HEVC CBR, one-frame VBV, low-latency presets.\n"
-              "  --adapter <n>        DXGI index; default the first hardware GPU\n"
+              "  --adapter <gpu>      a DXGI index or a piece of the name (RTX, Arc...)\n"
               "  --size WxH --fps <n> --frames <n> --kbps <n>\n"
               "  --only nvenc|amf");
 }
@@ -445,13 +445,7 @@ int runVendors(int argc, wchar_t** argv)
         if (level >= 2) std::printf("    %s\n", message.c_str());
     });
     const std::vector<Adapter> all = adapters(false);
-    const Adapter* a = nullptr;
-    for (const Adapter& candidate : all)
-        if (o.adapter < 0 ? !(candidate.desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
-                          : static_cast<int>(candidate.index) == o.adapter) {
-            a = &candidate;
-            break;
-        }
+    const Adapter* a = pickAdapter(all, o.adapter);
     if (!a) {
         say("no such adapter\n");
         return 2;
