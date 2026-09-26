@@ -44,6 +44,7 @@ if(WIN32)
         src/platform/windows/StreamPriority.cpp
         src/platform/windows/video/D3d11VideoPipeline.cpp
         src/platform/windows/d3d12/D3d12Device.cpp
+        src/platform/windows/d3d12/DdaInterop.cpp
         src/capture/windows/DxgiDuplication.cpp
         src/capture/windows/WgcCapture.cpp
         src/capture/windows/CursorShape.cpp
@@ -379,6 +380,7 @@ if(MW_BUILD_TESTS)
         tests/test_color_convert.cpp
         tests/test_d3d11_video_pipeline.cpp
         tests/test_d3d12_device.cpp
+        tests/test_dda_interop.cpp
         tests/test_win32_cursor.cpp
         tests/test_host_mute.cpp
         tests/test_evdev_keymap.cpp
