@@ -4974,3 +4974,110 @@ de regarder un écran noir en attendant ; et le bouton Ctrl+Alt+Suppr de la barr
 de touches ouvre l'écran de sécurité, ce qu'aucune combinaison au clavier n'a
 jamais pu faire depuis un navigateur. Si le service n'est pas installé ou a été
 arrêté, rien ne casse : on retrouve exactement le comportement précédent.
+
+## 32. Pipeline vidéo D3D12, deuxième essai (ouvert le 26/09/2026)
+
+> Ébauche, complétée à chaque porte du chantier (branche `feat/d3d12-pipeline`).
+> D3D11 reste le défaut partout tant que le banc et Bruno n'en décident pas
+> autrement.
+
+### 32.1 Ce que la première tentative a appris (21/09)
+
+La v1 n'a fait tourner dans le produit qu'un **hybride** : la conversion passait
+en D3D12, sur une file COMPUTE de priorité HIGH, et l'image revenait à D3D11
+pour les encodeurs d'aujourd'hui. Aucun encodeur D3D12 n'a tourné dans le
+produit. L'hybride a perdu partout, et `84524e7f` l'a retiré :
+
+| GPU | Condition | D3D11 (total hôte moy. / p99) | Hybride |
+|---|---|---|---|
+| Arc A380 | RE9, stream réel | 19,8 / 61,4 ms | 30,5 / 90,1 ms : la file COMPUTE est préemptée par le jeu |
+| Arc A380 | banc 1080p120 | 5,4 ms | 11-13 ms : 3,5 ms de travail + 2,5 ms d'attente de file |
+| iGPU AMD | charge synthétique | 16,8 / 41 ms | 117 / 249 ms, 8 i/s : la file COMPUTE est affamée |
+| RTX 5060 Ti | RE9 | 5,2 / 13,3 ms | 6,6 / 14,3 ms, 9 % d'images en moins |
+
+Toutes ces mesures datent d'avant la classe GPU REALTIME (`ee7de92b`) et le
+worker élevé. Deux sondes, en revanche, ont gagné : sur l'Arc sous RE9, D3D12
+Video Encode encode en 2,3 ms (p99 3,6) là où oneVPL prend 7,2 ms (p99 15,4) ;
+et la lecture par la file COPY est devenue `CrossGpuBridge` (`acdcda49`).
+
+Les pièges relevés, gardés pour la v2 :
+- un timestamp pris sur une file préemptée compte la préemption ;
+- le `convert_us` de D3D11 ne mesure que la soumission CPU : le travail GPU de
+  la conversion est facturé à `encode_us` ;
+- le pilote Arc plante sur un `CopyTextureRegion` d'une texture planaire
+  **partagée** dans une liste COMPUTE ;
+- binding tier 1 : il faut des descripteurs nuls en bouche-trous ; pas d'UAV
+  sRGB ;
+- les BOOL rendus par le pilote Intel ne valent pas toujours 1 (tester `!= 0`) ;
+- D3D12 Video Encode n'écrit que les slices : un PPS faux se décode en bouillie
+  **sans erreur** ;
+- le 4:4:4 (AYUV) est refusé partout en D3D12 Video Encode ;
+- les surfaces de Desktop Duplication s'ouvrent en D3D12 par handle NT, pas
+  celles de Windows.Graphics.Capture.
+
+### 32.2 Pourquoi recommencer peut marcher
+
+1. **Plus de renvoi à D3D11** : l'encodeur est lui aussi en D3D12. Ce qui a tué
+   l'hybride, rendre l'image à D3D11 pour qu'un encodeur se resynchronise sur la
+   file 3D, disparaît.
+2. **La conversion sur la file DIRECT**, avec les mêmes pixel shaders que D3D11
+   (sortie identique à l'octet), au lieu d'une file COMPUTE que l'Arc préempte et
+   que l'iGPU AMD affame.
+3. **Des priorités de file mesurées** : sous HAGS, les files DIRECT/COMPUTE d'un
+   même créateur sont groupées et leur priorité de création est ignorée ; la file
+   HIGH de la v1 ne valait sans doute rien sur la RTX. Un `CreatorID` propre et la
+   priorité `GLOBAL_REALTIME` (le worker élevé ou SYSTEM des §30-31 tient le
+   privilège) n'ont jamais été essayés.
+4. **Sur Intel, l'encodeur est la vraie cible** : oneVPL est lent, sans
+   invalidation de référence effective, et ne peut pas monter au-dessus de son
+   débit de départ. L'Arc a le delta QP : un contrôle de débit maison devient
+   possible sans reconfigurer l'encodeur.
+5. **Le vrai jeu dès la première mesure** (RE9), jamais la charge synthétique
+   seule.
+
+### 32.3 La chaîne visée
+
+Une image, un thread, aucune file ni tampon ajouté :
+
+1. `AcquireNextFrame` sur le device D3D11 de capture ;
+2. le contexte de capture signale une fence partagée (A) ;
+3. la file de conversion D3D12 l'attend, convertit (mise à l'échelle, curseur,
+   tone map) dans l'entrée de l'encodeur, puis signale une fence (B) ;
+4. le contexte de capture attend B **sur le GPU**, puis `ReleaseFrame` : Desktop
+   Duplication ne réécrit pas la surface trop tôt, et la CPU n'attend pas ;
+5. la file d'encodage attend B, encode, puis signale C ;
+6. la CPU attend C : c'est la seule attente CPU de l'image ;
+7. le bitstream part, en-têtes compris sur une IDR.
+
+Les étapes horodatées gardent leur sens : le total hôte se compare tel quel à
+D3D11.
+
+### 32.4 Ce qui protège D3D11
+
+- Un réglage `native_video_pipeline` (`auto`, `d3d11`, `d3d12`) et un choix
+  « Avancé » dans l'admin ; `auto` reste sur D3D11 pour tous les GPU tant que
+  Bruno n'a pas décidé d'une ligne par vendeur.
+- Un refus à la construction (Windows.Graphics.Capture, pont inter-GPU, 4:4:4,
+  étage logiciel, codec pas encore fait…) repasse en D3D11 pour cette
+  construction, avec la raison au journal. Un échec en cours de stream repasse en
+  D3D11 pour la session, en une image clé, sans couper le stream.
+- Le chemin D3D11 passe d'abord derrière une interface (`WindowsVideoPipeline`)
+  **sans changement de comportement**, prouvé au banc avant toute ligne D3D12
+  (porte G0).
+
+### 32.5 Les portes
+
+G0 (refactor sans régression), G1 (sondes : files, poignée de main DDA,
+encodeurs), G2 (bout en bout avec D3D12 Video Encode), G3 (contrôle de débit
+maison), G4 (NVENC et AMF en entrée D3D12). Chaque porte donne un rapport
+chiffré et une recommandation ; Bruno tranche. Les résultats seront consignés
+ici, porte par porte.
+
+**Concrètement, pour l'utilisateur** : rien ne change tant qu'un type de GPU n'a
+pas été basculé. Ensuite, sur un PC Intel, le plus répandu, l'image doit partir
+plus vite de l'hôte quand un jeu charge la carte, le débit pouvoir remonter
+au-dessus de celui du départ, et une perte réseau se réparer sans l'à-coup d'une
+image clé, ce qui se sent surtout par Internet. Sur NVIDIA, l'objectif est de ne
+rien perdre face à un chemin déjà très bon ; sur AMD, la mesure dira. Si quelque
+chose échoue, le stream repasse seul en D3D11 sans se couper, et l'overlay comme
+le journal disent quel chemin tourne et pourquoi.
