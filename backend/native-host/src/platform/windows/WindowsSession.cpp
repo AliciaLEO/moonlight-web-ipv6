@@ -31,15 +31,10 @@
 #include "../../encode/EncodeLoadCap.h"
 #include "../../encode/RateControl.h"
 #include "../../encode/RateGovernor.h"
-#include "../../encode/windows/AmfEncoder.h"
-#include "../../encode/windows/MfEncoder.h"
-#include "../../encode/windows/NvencEncoder.h"
-#include "../../encode/windows/SoftwareEncoder.h"
-#include "../../encode/windows/VplEncoder.h"
 #include "../../input/windows/Win32Input.h"
-#include "CrossGpuBridge.h"
 #include "InputDesktop.h"
 #include "StreamPriority.h"
+#include "video/D3d11VideoPipeline.h"
 
 // GetCursorInfo/LoadCursorW, for naming the pointer — see currentCursorKind().
 #include <windows.h>
@@ -222,22 +217,15 @@ public:
             return false;
         }
 
-        // Encoding on an adapter other than the one scanning the display out:
-        // the frame crosses through system memory (CrossGpuBridge says what
-        // that costs). The converter and the encoder are then built on the
-        // encoder's device, and every picture passes the bridge on its way to
-        // them. Opened once, here: the encoder's adapter does not change when
-        // the duplication is lost and reopened.
-        m_Bridge.reset();
-        if (m_Target.crossGpuCopy) {
-            auto bridge = std::make_unique<CrossGpuBridge>(m_Target.encodeAdapterHandle);
-            if (!bridge->open(error)) return false;
-            m_Bridge = std::move(bridge);
-            log::warning("[native] cross-GPU copy: the display's frames are carried to '" +
-                         m_Target.encodeGpuName +
-                         "' through system memory — every zero-copy "
-                         "figure of this engine is off on this session");
-        }
+        // Everything between the captured picture and the bitstream — the
+        // conversion, the encoder, and the cross-GPU bridge when the encoder
+        // sits on another adapter — is the video pipeline's (design §32).
+        // Opened once, here: what it keeps across capture restarts, it keeps
+        // from now on.
+        m_Pipeline = std::make_unique<D3d11VideoPipeline>();
+        if (!m_Pipeline->open(m_Target.crossGpuCopy, m_Target.encodeAdapterHandle,
+                              m_Target.encodeGpuName, error))
+            return false;
 
         // HDR is carried only when the whole chain can. The Selector has checked
         // the display, the GPU and the codec; the capture has the last word,
@@ -324,8 +312,8 @@ public:
 
         m_Info = SessionInfo{};
         m_Info.displayId = display->id;
-        m_Info.width = m_Converter->outputWidth();
-        m_Info.height = m_Converter->outputHeight();
+        m_Info.width = m_Pipeline->outputWidth();
+        m_Info.height = m_Pipeline->outputHeight();
         // What the cap scales from, fixed for the session.
         m_FullWidth = m_Info.width;
         m_FullHeight = m_Info.height;
@@ -351,25 +339,25 @@ public:
         }
         // Reported, not requested: an encoder that declined it says so, and the
         // receiver must then keep its usual keyframe recovery.
-        m_Info.intraRefresh = m_Encoder->intraRefreshEnabled();
+        m_Info.intraRefresh = m_Pipeline->intraRefreshEnabled();
         if (m_Config.intraRefresh && !m_Info.intraRefresh)
             log::info("[native] intra-refresh requested but this encoder declined it");
         // The wave's period, in frames of the rate the encoder was built for —
         // the same number the three encoders configured themselves with — or,
         // where the encoder leaves a gap between waves (oneVPL), the gap: it is
         // how long the receiver's ride-out watchdog must wait for a repair.
-        const int horizon = m_Encoder->intraRefreshHorizonFrames();
+        const int horizon = m_Pipeline->intraRefreshHorizonFrames();
         m_Info.intraRefreshFrames = !m_Info.intraRefresh ? 0
                                     : horizon > 0        ? horizon
                                                   : encode::intraRefreshPeriodFrames(m_EncodeFps);
         // Reported the same way: the receiver decodes through a gap only when
         // the encoder really heals it (NVENC today; AMF and oneVPL answer an
         // invalidation with a keyframe).
-        m_Info.referenceInvalidation = m_Encoder->supportsReferenceInvalidation();
+        m_Info.referenceInvalidation = m_Pipeline->supportsReferenceInvalidation();
         // Counted, not estimated: one GPU→CPU read of the bitstream. Everything
         // upstream of it stays in VRAM on the capturing adapter — unless the
         // bridge is in, which adds the readback and the upload of every frame.
-        m_Info.copiesPerFrame = m_Bridge ? 3 : 1;
+        m_Info.copiesPerFrame = m_Pipeline->copiesPerFrame();
         m_Info.crossGpuCopy = m_Target.crossGpuCopy;
 
         // Input comes up last, and its failure is NOT fatal. A session that
@@ -464,13 +452,10 @@ public:
         restoreDisplayMode();
         m_Priority.release();
 
-        if (!wasRunning && !m_Encoder && !m_Capture) return;
+        if (!wasRunning && !(m_Pipeline && m_Pipeline->hasEncoder()) && !m_Capture) return;
 
-        m_Encoder.reset();
-        m_Converter.reset();
-        m_DesktopCopy.Reset();
-        // After the converter and the encoder, which live on its device.
-        m_Bridge.reset();
+        // Encoder, converter, held desktop, then the bridge they may live on.
+        if (m_Pipeline) m_Pipeline->close();
         m_Capture.reset();
     }
 
@@ -626,22 +611,6 @@ private:
         return true;
     }
 
-    /// The device the converter and the encoder are built on: the capture's,
-    /// or the bridge's when the encoder sits on another GPU.
-    ID3D11Device* pipelineDevice() const
-    {
-        if (m_Bridge) return m_Bridge->device();
-        return m_Capture ? m_Capture->device() : nullptr;
-    }
-
-    /// The texture the converter is to read for @p captured — the texture
-    /// itself in the ordinary case, or its copy on the encoder's GPU when the
-    /// two differ. Null, with @p error set, when the copy failed.
-    ID3D11Texture2D* pictureFor(ID3D11Texture2D* captured, std::string& error)
-    {
-        if (!m_Bridge) return captured;
-        return m_Bridge->transfer(m_Capture->device(), m_Capture->context(), captured, error);
-    }
     /// Build the converter and the encoder against whatever the capture is
     /// handing out RIGHT NOW — its device, its size, its format.
     ///
@@ -836,26 +805,21 @@ private:
         return true;
     }
 
-    bool buildPipeline(int outputWidth, int outputHeight, std::string& error)
+    ///
+    /// @p keepHeld keeps the desktop copy the pointer-only and still-screen
+    /// paths redraw from: the load cap rebuilds on the same capture, whose
+    /// picture is still the right one.
+    bool buildPipeline(int outputWidth, int outputHeight, std::string& error, bool keepHeld = false)
     {
-        // Released before the replacements are built, not after. Both hold a
-        // reference to the D3D device they were made on, and an encoder holds a
-        // hardware session — of which a consumer GPU has famously few. Building
-        // the new one while the old is still open is how a rebuild fails with a
-        // vendor error that says nothing about the real cause.
-        m_DesktopCopy.Reset();
-        m_Encoder.reset();
-        m_Converter.reset();
+        // Released before the replacements are built, not after — see
+        // WindowsVideoPipeline::teardown.
+        m_Pipeline->teardown(keepHeld);
 
         // Ahead of the game in the GPU's queue, on every (re)build: a lost
         // duplication comes back on a new device. See StreamPriority.
         StreamPriority::raiseDevice(m_Capture->device(), "capture");
-        if (m_Bridge) StreamPriority::raiseDevice(m_Bridge->device(), "encoder");
+        m_Pipeline->raisePriority();
 
-        // On the encoder's device — the capture's, unless a bridge carries the
-        // frames to another GPU, in which case both stages live over there and
-        // read the bridge's copy.
-        m_Converter = std::make_unique<convert::ColorConvert>();
         // HDR only while the capture REALLY hands FP16 over, whatever was
         // negotiated: a rebuild happens after a mode change, and turning
         // Windows HDR off is one of the changes that triggers it. The
@@ -891,39 +855,34 @@ private:
             }
         }
 
-        if (!m_Converter->init(pipelineDevice(), m_Capture->format(), m_Capture->width(),
-                               m_Capture->height(), outputWidth, outputHeight,
-                               m_Target.yuv444 ? convert::ColorConvert::Chroma::C444
-                                               : convert::ColorConvert::Chroma::C420,
-                               hdr, filter, error))
-            return false;
-        if (m_Converter->toneMapsToSdr())
+        WindowsVideoPipeline::ConverterBuild converter;
+        converter.outputWidth = outputWidth;
+        converter.outputHeight = outputHeight;
+        converter.yuv444 = m_Target.yuv444;
+        converter.hdr = hdr;
+        converter.filter = filter;
+        if (!m_Pipeline->buildConverter(*m_Capture, converter, error)) return false;
+        if (m_Pipeline->toneMapsToSdr())
             log::info("[native] SDR stream of an HDR desktop — tone-mapped on the GPU");
         // A new converter starts at the 80-nit default; the display's real
         // level goes in before the first frame, and the log says what it was.
         m_SdrWhite = 0.0f;
-        if (m_Converter->scRgbSource()) applySdrWhite(readSdrWhite());
+        if (m_Pipeline->scRgbSource()) applySdrWhite(readSdrWhite());
         // A new converter is back on the filter chosen above: the guard judges
         // it afresh rather than on the previous pipeline's frames.
         m_ScalerWindowUs = 0;
         m_ScalerWindowFrames = 0;
 
-        // The encoder the Selector chose, not one guessed from the display.
-        switch (m_Target.encoder) {
-        case EncoderApi::Nvenc: m_Encoder = std::make_unique<encode::NvencEncoder>(); break;
-        case EncoderApi::Amf: m_Encoder = std::make_unique<encode::AmfEncoder>(); break;
-        case EncoderApi::Vpl: m_Encoder = std::make_unique<encode::VplEncoder>(); break;
-        case EncoderApi::MediaFoundation: m_Encoder = std::make_unique<encode::MfEncoder>(); break;
-        case EncoderApi::Software: m_Encoder = std::make_unique<encode::SoftwareEncoder>(); break;
-        default:
-            error =
-                std::string("no encoder implementation for ") + toString(m_Target.encoder) + " yet";
-            return false;
-        }
-
-        return m_Encoder->init(pipelineDevice(), m_Target.codec, m_Converter->outputWidth(),
-                               m_Converter->outputHeight(), m_EncodeFps, m_Config.bitrateKbps,
-                               m_Target.yuv444, hdr, m_Config.intraRefresh, m_Config.tuning, error);
+        WindowsVideoPipeline::EncoderBuild encoder;
+        encoder.encoder = m_Target.encoder;
+        encoder.codec = m_Target.codec;
+        encoder.fps = m_EncodeFps;
+        encoder.bitrateKbps = m_Config.bitrateKbps;
+        encoder.yuv444 = m_Target.yuv444;
+        encoder.hdr = hdr;
+        encoder.intraRefresh = m_Config.intraRefresh;
+        encoder.tuning = m_Config.tuning;
+        return m_Pipeline->buildEncoder(*m_Capture, encoder, error);
     }
 
     /// The duplication was lost — a resolution change, a mode set, a desktop
@@ -1001,8 +960,14 @@ private:
         // failed start() leaves none at all — and the size of what was being
         // captured, which is what the converter is set up to take. Failing to
         // make one is not fatal: the last picture is re-sent instead, as the
-        // idle floor does.
-        Microsoft::WRL::ComPtr<ID3D11Texture2D> blank = makeBlank(error);
+        // idle floor does. Held by the pipeline until this function returns,
+        // whichever way it does — after the rebuild, as it always was.
+        struct BlankRelease
+        {
+            WindowsVideoPipeline& pipeline;
+            ~BlankRelease() { pipeline.releaseBlank(); }
+        } blankRelease{*m_Pipeline};
+        bool blank = m_Pipeline->prepareBlank(m_Capture.get(), error);
         if (!blank)
             log::warning("[native] no blank picture for the wait, re-sending the last: " + error);
         bool blankShown = false;
@@ -1039,15 +1004,14 @@ private:
 
             // The floor, from the very first failure: the viewer's screen goes
             // dark the moment the host's did, not half a second later.
-            if (m_Converter && m_Encoder &&
-                (lastSentUs == 0 || nowUs - lastSentUs >= floorIntervalUs)) {
+            if (m_Pipeline->built() && (lastSentUs == 0 || nowUs - lastSentUs >= floorIntervalUs)) {
                 if (blank && !blankShown) {
-                    static const capture::CursorState kNoCursor;
-                    if (m_Converter->convert(blank.Get(), kNoCursor, cursorDraw(), error)) {
+                    if (m_Pipeline->convertBlank(cursorDraw(), error)) {
                         blankShown = true;
                     } else {
                         log::warning("[native] could not draw the blank picture: " + error);
-                        blank.Reset();
+                        m_Pipeline->releaseBlank();
+                        blank = false;
                     }
                 }
                 if (!emit(frameNumber, resendStamps(nowUs), error)) return Restart::Ended;
@@ -1113,8 +1077,8 @@ private:
             m_FullWidth = full.width;
             m_FullHeight = full.height;
         }
-        m_Info.width = m_Converter->outputWidth();
-        m_Info.height = m_Converter->outputHeight();
+        m_Info.width = m_Pipeline->outputWidth();
+        m_Info.height = m_Pipeline->outputHeight();
 
         // Absolute mouse input is aimed at the display's rectangle on the
         // virtual desktop, and a resolution change is exactly what moves it.
@@ -1232,12 +1196,12 @@ private:
         if (white < 1.0f) white = 1.0f;
         if (white == m_SdrWhite) return;
         m_SdrWhite = white;
-        m_Converter->setSdrWhite(white);
+        m_Pipeline->setSdrWhite(white);
         char nits[16] = {};
         std::snprintf(nits, sizeof(nits), "%.0f", static_cast<double>(white) * 80.0);
         log::info("[native] the desktop's SDR white is " + std::string(nits) + " nits" +
-                  (m_Converter->toneMapsToSdr() ? " — the tone map brings it to white"
-                                                : " — the pointer is drawn at it"));
+                  (m_Pipeline->toneMapsToSdr() ? " — the tone map brings it to white"
+                                               : " — the pointer is drawn at it"));
     }
 
     /// Tell the viewer what the display became, once the capture runs on it
@@ -1268,57 +1232,12 @@ private:
         if (m_OnDisplayFormat) m_OnDisplayFormat(format);
     }
 
-    /// A black picture the size and format of what the capture was delivering,
-    /// on the converter's device (the capture's, or the bridge's) so it can be
-    /// converted directly. See restartCapture for what it is for.
     /// The frame a display change is measured from — see restartCapture.
     FrameSize shapeBase() const
     {
         return m_Config.width > 0 && m_Config.height > 0
                    ? FrameSize{m_Config.width, m_Config.height}
                    : FrameSize{m_FullWidth, m_FullHeight};
-    }
-
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> makeBlank(std::string& error)
-    {
-        Microsoft::WRL::ComPtr<ID3D11Texture2D> blank;
-        ID3D11Device* device = pipelineDevice();
-        const int width = m_Capture ? m_Capture->width() : 0;
-        const int height = m_Capture ? m_Capture->height() : 0;
-        if (!device || width <= 0 || height <= 0) {
-            error = "the capture has no device to make it on";
-            return blank;
-        }
-
-        // Zero in every channel: black in either 8-bit layout, and 0.0 in FP16
-        // scRGB. Alpha is zero too, and the converter ignores it.
-        //
-        // ⚠️ The pitch follows the format. An HDR session captures FP16, eight
-        // bytes a pixel: sized for four, the initial data was half the texture,
-        // the driver read past it, and turning Windows HDR off during an HDR
-        // stream killed the worker inside nvwgf2umx (15/09/2026, M27Q and a
-        // virtual display alike).
-        const size_t bytesPerPixel = m_Capture->format() == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8 : 4;
-        D3D11_TEXTURE2D_DESC desc = {};
-        desc.Width = static_cast<UINT>(width);
-        desc.Height = static_cast<UINT>(height);
-        desc.MipLevels = 1;
-        desc.ArraySize = 1;
-        desc.Format = m_Capture->format();
-        desc.SampleDesc.Count = 1;
-        desc.Usage = D3D11_USAGE_IMMUTABLE;
-        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-
-        const size_t pitch = static_cast<size_t>(width) * bytesPerPixel;
-        std::vector<uint8_t> zeros(pitch * static_cast<size_t>(height), 0);
-        D3D11_SUBRESOURCE_DATA initial = {};
-        initial.pSysMem = zeros.data();
-        initial.SysMemPitch = static_cast<UINT>(pitch);
-        if (FAILED(device->CreateTexture2D(&desc, &initial, blank.GetAddressOf()))) {
-            error = "the GPU refused a blank picture";
-            blank.Reset();
-        }
-        return blank;
     }
 
     /// The thread entry point. Nothing may escape it.
@@ -1517,7 +1436,7 @@ private:
         effective.start(m_EncodeFps, steadyNowUs());
         auto applyBitrate = [&](int kbps) {
             if (kbps <= 0) return;
-            if (!m_Encoder->setBitrate(effective.scaledKbps(kbps), error))
+            if (!m_Pipeline->setBitrate(effective.scaledKbps(kbps), error))
                 log::warning("[native] bitrate change refused: " + error);
         };
         int cadenceLogged = 0;
@@ -1674,7 +1593,7 @@ private:
             // the settling delay as well, so a pass is not up to 100 ms late.
             const int64_t sinceRealUs = steadyNowUs() - lastRealUs;
             const bool refineSoon = sinceRealUs < (kRefineDelayUs + kRefineWindowUs) &&
-                                    !refineDone && m_Converter->outputWidth() != 0;
+                                    !refineDone && m_Pipeline->outputWidth() != 0;
             const bool refining = refineSoon && sinceRealUs >= kRefineDelayUs;
             // The window ran out on a burst still going: say so, once.
             if (!refineSoon && !refineDone) closeBurst("window closed");
@@ -1700,10 +1619,9 @@ private:
             // copy goes in first; without one, nothing is re-sent until a
             // capture has.
             if (m_PendingResize.exchange(false) && applyLoadCap()) {
-                if (m_DesktopCopy) {
-                    ID3D11Texture2D* picture = pictureFor(m_DesktopCopy.Get(), error);
-                    if (!picture ||
-                        !m_Converter->convert(picture, pointerToDraw(), cursorDraw(), error)) {
+                if (m_Pipeline->hasHeld()) {
+                    if (!m_Pipeline->convertHeld(*m_Capture, pointerToDraw(), cursorDraw(),
+                                                 error)) {
                         finish("colour conversion failed: " + error);
                         return;
                     }
@@ -1717,7 +1635,7 @@ private:
             // The SDR brightness slider is live, and it is the one thing about
             // an HDR desktop the frames do not carry. Once a second, and only
             // on the paths that read it.
-            if (m_Converter->scRgbSource()) {
+            if (m_Pipeline->scRgbSource()) {
                 const int64_t nowUs = steadyNowUs();
                 if (nowUs - lastSdrWhiteUs >= kSdrWhitePollUs) {
                     lastSdrWhiteUs = nowUs;
@@ -1771,10 +1689,10 @@ private:
                 // this loop would ever notice. A viewer pinch-zooming a still
                 // screen is exactly that: no present, no pointer motion, and a
                 // cursor that has to resize anyway.
-                if (m_CursorDirty.exchange(false) && m_CompositeCursor.load() && m_DesktopCopy) {
-                    ID3D11Texture2D* picture = pictureFor(m_DesktopCopy.Get(), error);
-                    if (!picture ||
-                        !m_Converter->convert(picture, pointerToDraw(), cursorDraw(), error)) {
+                if (m_CursorDirty.exchange(false) && m_CompositeCursor.load() &&
+                    m_Pipeline->hasHeld()) {
+                    if (!m_Pipeline->convertHeld(*m_Capture, pointerToDraw(), cursorDraw(),
+                                                 error)) {
                         finish("colour conversion failed: " + error);
                         return;
                     }
@@ -1788,7 +1706,7 @@ private:
                 // either "prove the stream is alive" or whatever faster rate the
                 // client asked to keep settling at. Both re-encode what is
                 // already converted, so this costs an encode and not a capture.
-                if (!m_Converter->outputWidth() || awaitingPicture) continue;
+                if (!m_Pipeline->outputWidth() || awaitingPicture) continue;
 
                 // A keyframe the receiver asked for goes out NOW, not at the
                 // next floor tick. On a still screen the floor is the only
@@ -1861,16 +1779,15 @@ private:
             // at its new place.
             if (status == capture::AcquireStatus::PointerOnly) {
                 if (!m_CompositeCursor.load()) continue;
-                if (!m_DesktopCopy) continue;
+                if (!m_Pipeline->hasHeld()) continue;
                 // A pointer Windows paints into the desktop itself moves with
                 // the desktop, not apart from it: there is nothing of ours to
                 // redraw, and our copy is the picture from before it moved.
                 if (m_Capture->cursor().inImage) continue;
                 m_CursorDirty.store(false);
                 const int64_t submittedUs = steadyNowUs();
-                ID3D11Texture2D* picture = pictureFor(m_DesktopCopy.Get(), error);
-                if (!picture ||
-                    !m_Converter->convert(picture, m_Capture->cursor(), cursorDraw(), error)) {
+                if (!m_Pipeline->convertHeld(*m_Capture, m_Capture->cursor(), cursorDraw(),
+                                             error)) {
                     finish("colour conversion failed: " + error);
                     return;
                 }
@@ -1927,15 +1844,6 @@ private:
             // the client-drawn mode keeps the picture clean.
             const bool composite = m_CompositeCursor.load();
             m_CursorDirty.store(false);
-            // Through the bridge first when the encoder is on another GPU;
-            // the texture itself otherwise. Counted in the convert stage.
-            ID3D11Texture2D* picture = pictureFor(frame.texture, error);
-            if (!picture || !m_Converter->convert(picture, pointerToDraw(), cursorDraw(), error)) {
-                m_Capture->release();
-                finish("colour conversion failed: " + error);
-                return;
-            }
-
             // Keep a copy of the desktop for the pointer-only path above — only
             // when compositing, and only when the pointer is on this display.
             // When the client draws its own, or the pointer is hidden or on
@@ -1946,15 +1854,21 @@ private:
             // Also on the CPU encoder, whatever the pointer: that is the tier
             // the load cap resizes, and a rebuilt converter needs a picture to
             // start from on a still screen (see the resize above).
+            const bool retain = (composite && m_Capture->cursor().visible) ||
+                                m_Target.encoder == EncoderApi::Software;
+            if (!m_Pipeline->convert(*m_Capture, frame.texture, pointerToDraw(), cursorDraw(),
+                                     retain, error)) {
+                m_Pipeline->beforeCaptureRelease();
+                m_Capture->release();
+                finish("colour conversion failed: " + error);
+                return;
+            }
             awaitingPicture = false;
-            if (((composite && m_Capture->cursor().visible) ||
-                 m_Target.encoder == EncoderApi::Software) &&
-                !retainDesktop(frame.texture, error))
-                log::warning("[native] could not keep a desktop copy: " + error);
 
             // Released before encoding: Desktop Duplication refuses the next
             // acquire while a frame is held, and the conversion has already
             // copied what it needs into the NV12 texture.
+            m_Pipeline->beforeCaptureRelease();
             m_Capture->release();
 
             // t₂ once the capture is given back, so the stage reads as the
@@ -1985,7 +1899,7 @@ private:
             }
             for (uint32_t n : lost) {
                 std::string why;
-                if (m_Encoder->invalidateReference(n, why)) {
+                if (m_Pipeline->invalidateReference(n, why)) {
                     m_Invalidated++;
                     if (m_Invalidated <= 5 || m_Invalidated % 50 == 0)
                         log::info("[native] reference invalidated: frame " + std::to_string(n) +
@@ -2002,7 +1916,10 @@ private:
 
         const bool forceKeyframe = m_ForceKeyframe.exchange(false);
         encode::EncoderOutput encoded;
-        if (!m_Encoder->encode(m_Converter->output(), forceKeyframe, frameNumber, encoded, error)) {
+        // Lost is a D3D12 answer (the device went away), never a D3D11 one;
+        // until a pipeline can fall back, it ends the session like any failure.
+        if (m_Pipeline->encode(forceKeyframe, frameNumber, encoded, error) !=
+            WindowsVideoPipeline::EncodeResult::Ok) {
             finish("encode failed: " + error);
             return false;
         }
@@ -2041,7 +1958,7 @@ private:
             noteEncodeLoad(out, stamps);
             noteScalerLoad(out, stamps);
         }
-        m_Encoder->releaseOutput();
+        m_Pipeline->releaseOutput();
         return true;
     }
 
@@ -2103,16 +2020,16 @@ private:
         constexpr int64_t kBudgetPercent = 75;
 
         if (m_Target.encoder == EncoderApi::Software) return;
-        if (m_Converter->scaleFilter() == convert::ColorConvert::ScaleFilter::Bilinear) return;
+        if (m_Pipeline->scaleFilter() == convert::ColorConvert::ScaleFilter::Bilinear) return;
 
         int64_t costUs = 0;
-        if (m_Converter->takeResampleCost(costUs)) {
+        if (m_Pipeline->takeResampleCost(costUs)) {
             char ms[16], budget[16];
             std::snprintf(ms, sizeof(ms), "%.1f", costUs / 1000.0);
             std::snprintf(budget, sizeof(budget), "%.1f",
                           convert::ResampleCost::kBudgetUs / 1000.0);
             const bool affordable = convert::ResampleCost::affordable(costUs);
-            if (!affordable && !m_ScalerPinned && m_Converter->dropResample()) {
+            if (!affordable && !m_ScalerPinned && m_Pipeline->dropResample()) {
                 log::info(std::string("[native] resample dropped: Lanczos-2 costs ") + ms +
                           " ms of GPU a frame here, over the " + budget +
                           " ms it may add to every frame — the stream goes on scaled bilinear "
@@ -2142,7 +2059,7 @@ private:
         m_ScalerWindowFrames = 0;
         if (meanUs * 100 <= intervalUs * kBudgetPercent) return;
 
-        if (m_Converter->dropResample())
+        if (m_Pipeline->dropResample())
             log::info("[native] resample dropped: conversion + encode took " +
                       std::to_string(meanUs / 1000) + " ms a frame against a " +
                       std::to_string(intervalUs / 1000) +
@@ -2165,23 +2082,21 @@ private:
         std::string error;
         const int wasWidth = m_Info.width;
         const int wasHeight = m_Info.height;
-        const Microsoft::WRL::ComPtr<ID3D11Texture2D> desktop = m_DesktopCopy;
-        if (!buildPipeline(width, height, error)) {
+        // The held desktop survives the rebuild: same capture, same picture.
+        if (!buildPipeline(width, height, error, /*keepHeld=*/true)) {
             // Keep streaming at the size that worked rather than ending the
             // session over an optimisation.
             log::warning("[native] cpu cap: cannot encode at " + std::to_string(width) + "x" +
                          std::to_string(height) + " (" + error + ") — staying at " +
                          std::to_string(wasWidth) + "x" + std::to_string(wasHeight));
-            if (!buildPipeline(wasWidth, wasHeight, error)) {
+            if (!buildPipeline(wasWidth, wasHeight, error, /*keepHeld=*/true)) {
                 finish("encoder restart failed: " + error);
                 return false;
             }
-            m_DesktopCopy = desktop;
             return true;
         }
-        m_DesktopCopy = desktop;
-        m_Info.width = m_Converter->outputWidth();
-        m_Info.height = m_Converter->outputHeight();
+        m_Info.width = m_Pipeline->outputWidth();
+        m_Info.height = m_Pipeline->outputHeight();
         m_ForceKeyframe.store(true);
         log::info("[native] cpu cap: " + std::to_string(wasWidth) + "x" +
                   std::to_string(wasHeight) + " -> " + std::to_string(m_Info.width) + "x" +
@@ -2371,7 +2286,7 @@ private:
     float cursorScale() const
     {
         const int captured = m_Capture ? m_Capture->width() : 0;
-        const int framed = m_Converter ? m_Converter->outputWidth() : 0;
+        const int framed = m_Pipeline ? m_Pipeline->outputWidth() : 0;
         if (captured <= 0 || framed <= 0) return 1.0f;
         return static_cast<float>(framed) / static_cast<float>(captured);
     }
@@ -2489,34 +2404,6 @@ private:
 
         for (size_t i = 0; i < cursor.invert.size(); ++i)
             if (cursor.invert[i]) paint(i, 0xFF);
-    }
-
-    /// Keep a private copy of the captured desktop, so a later frame that only
-    /// moved the cursor can be rebuilt without a fresh capture.
-    bool retainDesktop(ID3D11Texture2D* source, std::string& error)
-    {
-        if (!source) return false;
-
-        if (!m_DesktopCopy) {
-            D3D11_TEXTURE2D_DESC desc = {};
-            source->GetDesc(&desc);
-            desc.Usage = D3D11_USAGE_DEFAULT;
-            desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-            desc.CPUAccessFlags = 0;
-            desc.MiscFlags = 0;
-            if (FAILED(m_Capture->device()->CreateTexture2D(&desc, nullptr,
-                                                            m_DesktopCopy.GetAddressOf()))) {
-                error = "the GPU refused a scratch copy of the desktop";
-                return false;
-            }
-        }
-
-        // GPU to GPU, no system memory involved. It is a real cost — roughly a
-        // tenth of a millisecond at 1440p — paid only while the pointer is on
-        // this screen, and it is what buys a cursor that moves on a still
-        // desktop.
-        m_Capture->context()->CopyResource(m_DesktopCopy.Get(), source);
-        return true;
     }
 
     /// Choose the loop's gate for the viewer's setting against the client's
@@ -2659,17 +2546,9 @@ private:
                       waited + " % of the time waiting in the acquire");
         }
 
-        // What the bridge cost, when there was one: the figure that says how
-        // much of this session's convert stage was the copy and not the pass.
-        if (m_Bridge && m_Bridge->transfers() > 0) {
-            char mean[32], peak[32];
-            std::snprintf(mean, sizeof(mean), "%.2f", m_Bridge->meanUs() / 1000.0);
-            std::snprintf(peak, sizeof(peak), "%.2f", m_Bridge->maxUs() / 1000.0);
-            log::info("[native] cross-GPU copy: " + std::to_string(m_Bridge->transfers()) +
-                      " frames of " + std::to_string(m_Bridge->bytesPerFrame() / (1024 * 1024)) +
-                      " MB, " + mean + " ms mean, " + peak + " ms max, " +
-                      std::to_string(m_Bridge->dmaTransfers()) + " on the copy engine");
-        }
+        // The pipeline's own figures: what the cross-GPU bridge cost, when
+        // there was one.
+        if (m_Pipeline) m_Pipeline->logEndOfSession();
     }
 
     void finish(const std::string& reason) noexcept
@@ -2727,23 +2606,17 @@ private:
     /// Desktop Duplication was found to paint the pointer into the picture on
     /// this display: every (re)open goes straight to WGC. Capture thread only.
     bool m_DuplicationPaintsPointer = false;
-    /// Present only when the encoder sits on another GPU than the display's:
-    /// carries every frame across, and owns the device the converter and the
-    /// encoder are then built on. See CrossGpuBridge.
-    std::unique_ptr<CrossGpuBridge> m_Bridge;
     /// Held from start() to stop(); see StreamPriority.
     StreamPriority m_Priority;
-    std::unique_ptr<convert::ColorConvert> m_Converter;
+    /// Everything between the captured picture and the bitstream: the
+    /// converter, the encoder, the held desktop, and the cross-GPU bridge when
+    /// there is one. Held by interface: the loop below neither knows nor needs
+    /// to know which pipeline this is. See WindowsVideoPipeline.
+    std::unique_ptr<WindowsVideoPipeline> m_Pipeline;
     /// The SDR white the converter holds, in scRGB; 0 until a pipeline has
     /// read one, so the first read after a rebuild is always applied and
     /// logged. Capture thread only — see applySdrWhite.
     float m_SdrWhite = 0.0f;
-    /// The last captured desktop, kept only while the pointer is on this
-    /// screen — see retainDesktop().
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> m_DesktopCopy;
-    /// Held by interface: which vendor path this is was decided by the
-    /// Selector, and the loop below neither knows nor needs to.
-    std::unique_ptr<encode::IVideoEncoder> m_Encoder;
 
     /// Optional: a session with no input sink still streams, view-only. Guarded
     /// because it is created and destroyed on the session's thread but used on

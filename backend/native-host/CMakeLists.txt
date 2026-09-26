@@ -42,6 +42,7 @@ if(WIN32)
         src/platform/windows/InputDesktop.cpp
         src/platform/windows/CrossGpuBridge.cpp
         src/platform/windows/StreamPriority.cpp
+        src/platform/windows/video/D3d11VideoPipeline.cpp
         src/capture/windows/DxgiDuplication.cpp
         src/capture/windows/WgcCapture.cpp
         src/capture/windows/CursorShape.cpp
