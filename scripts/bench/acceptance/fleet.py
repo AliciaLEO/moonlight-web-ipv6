@@ -677,6 +677,114 @@ print("MWPROBE " + json.dumps(out))
     return parsed
 
 
+_SETTINGS_PS = r"""
+$ErrorActionPreference = 'SilentlyContinue'
+$port = __PORT__
+$body = @'
+__BODY__
+'@
+function Call($method, $path, $admin, $data) {
+    $headers = @{}
+    if ($admin) { $headers['X-MW-Admin-Key'] = $admin }
+    $uri = "http://127.0.0.1:$port$path"
+    try {
+        if ($data) {
+            $r = Invoke-WebRequest -UseBasicParsing -Method $method -TimeoutSec 20 -Headers $headers `
+                 -ContentType 'application/json' -Body ([System.Text.Encoding]::UTF8.GetBytes($data)) -Uri $uri
+        } else {
+            $r = Invoke-WebRequest -UseBasicParsing -Method $method -TimeoutSec 20 -Headers $headers -Uri $uri
+        }
+        return $r.Content
+    } catch { return '{"error":"' + ($_.Exception.Message -replace '"', '') + '"}' }
+}
+$admin = ''
+try { $admin = (Call GET '/api/admin/token' $null $null | ConvertFrom-Json).token } catch { }
+$before = Call GET '/api/settings/streaming' $admin $null
+$after = Call POST '/api/settings/streaming' $admin $body
+'MWSETTINGS ' + (@{ before = $before; after = $after; admin = [bool]$admin } | ConvertTo-Json -Compress -Depth 4)
+"""
+
+_SETTINGS_PY = r'''
+import json, sys, urllib.request
+port, body = int(sys.argv[1]), sys.argv[2]
+
+
+def call(method, path, admin="", data=None):
+    req = urllib.request.Request("http://127.0.0.1:%d%s" % (port, path), method=method,
+                                 data=data.encode("utf-8") if data is not None else None)
+    if admin:
+        req.add_header("X-MW-Admin-Key", admin)
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return r.read().decode("utf-8", "replace")
+    except Exception as e:
+        return json.dumps({"error": str(e)[:200]})
+
+
+admin = ""
+try:
+    admin = json.loads(call("GET", "/api/admin/token")).get("token", "")
+except Exception:
+    pass
+before = call("GET", "/api/settings/streaming", admin)
+after = call("POST", "/api/settings/streaming", admin, body)
+print("MWSETTINGS " + json.dumps({"before": before, "after": after, "admin": bool(admin)}))
+'''
+
+
+def host_settings(mid, http_port, settings):
+    """Write streaming settings on the HOST, through its own loopback API.
+
+    Some settings live on the host and not in the browser: the native engine's
+    video pipeline (native_video_pipeline) is one, the latency flag another.
+    drive.apply_settings() only reaches the client's localStorage, so a pass
+    that changes one of these declares it as `hostSettings`, and run.py puts
+    the previous values back after the pass with a second call to this.
+
+    Returns the values the given keys had before — only those the host
+    reported, so a key it did not know is not "restored" to something it never
+    was. Raises RuntimeError when the host refused the change: a pass run with
+    a setting silently not applied would measure the wrong thing.
+    """
+    if not settings:
+        return {}
+    if not http_port:
+        raise RuntimeError("no HTTP port known for %s: cannot reach its settings" % mid)
+    body = json.dumps(settings)
+    m = MACHINES[mid]
+    if m["os"] == "windows":
+        script = _SETTINGS_PS.replace("__PORT__", str(int(http_port))).replace(
+            "__BODY__", body)
+    else:
+        script = "python3 - %d %s <<'MWPY'\n%s\nMWPY\n" % (
+            int(http_port), shlex.quote(body), _SETTINGS_PY)
+    rc, out, err = run_script(mid, script, timeout=120)
+    result = None
+    for line in (out or "").splitlines():
+        line = line.strip()
+        if line.startswith("MWSETTINGS "):
+            try:
+                result = json.loads(line[len("MWSETTINGS "):])
+            except ValueError:
+                pass
+    if not result:
+        raise RuntimeError("no answer from %s's settings API (rc %s): %s" % (
+            mid, rc, (err or out or "").strip()[:200]))
+    try:
+        after = json.loads(result.get("after") or "{}")
+    except ValueError:
+        after = {"error": (result.get("after") or "")[:200]}
+    if isinstance(after, dict) and after.get("error"):
+        raise RuntimeError("%s refused the host settings %s: %s" % (mid, body, after["error"]))
+    try:
+        before = json.loads(result.get("before") or "{}")
+    except ValueError:
+        before = {}
+    return {k: before[k] for k in settings if isinstance(before, dict) and k in before}
+
+
 def https_port_from_here(address, candidates, timeout=4):
     """Which port serves the web UI over TLS, asked from the measuring station.
 

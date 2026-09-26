@@ -500,8 +500,8 @@ int runNativeBenchCommand(const QString& specText)
     out << "native-bench: " << QString::fromStdString(info.gpuName) << " · "
         << mw::native::toString(info.encoder) << " " << mw::native::toString(info.codec)
         << (info.yuv444 ? " 4:4:4" : " 4:2:0") << (info.hdr ? " HDR (BT.2020 PQ)" : " SDR") << " · "
-        << info.width << "x" << info.height << " · fps "
-        << (info.fps > 0 ? QString::number(info.fps) : QString("display")) << " · "
+        << info.width << "x" << info.height << " · capture " << mw::native::toString(info.capture)
+        << " · fps " << (info.fps > 0 ? QString::number(info.fps) : QString("display")) << " · "
         << spec.bitrateKbps << " kbps" << (info.intraRefresh ? " · intra-refresh" : "") << " · "
         << spec.seconds << " s on " << QString::fromStdString(display->label)
         << (info.crossGpuCopy ? " · cross-GPU copy" : "")
