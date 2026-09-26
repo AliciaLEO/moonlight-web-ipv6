@@ -38,6 +38,7 @@ void run_portal_tests();
 void run_encode_load_cap_tests();
 void run_h264_vui_tests();
 void run_parameter_sets_tests();
+void run_hevc_slice_parser_tests();
 void run_linux_session_tests();
 void run_linux_virtual_display_tests();
 void run_mac_keymap_tests();
@@ -83,6 +84,7 @@ int main()
     run_encode_load_cap_tests();
     run_h264_vui_tests();
     run_parameter_sets_tests();
+    run_hevc_slice_parser_tests();
     run_vpl_params_tests();
 #ifdef MW_NATIVE_OPENH264
     run_openh264_tests();
