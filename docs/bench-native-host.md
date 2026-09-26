@@ -1098,6 +1098,86 @@ connaît sa grille de rafraîchissement et la phase d'arrivée de chaque image.
   frontière, seulement dans la fenêtre de dérive. Cela suppose de connaître
   le décalage du compositeur. Plus incertain.
 
+## 8n. Pipeline vidéo D3D12, deuxième essai (26/09/2026 →)
+
+Le chemin D3D11 passe derrière une interface (`WindowsVideoPipeline`) avant
+qu'un chemin D3D12 ne vienne à côté (design §32). Cette section garde la
+référence D3D11 et les portes du chantier.
+
+### 8n.0 La référence D3D11 et la porte G0 (26/09/2026)
+
+**Montage.**
+- DualRTX : RTX 5060 Ti (HAGS actif), Arc A380 et iGPU AMD. Les pilotes de
+  ces deux derniers ne gèrent pas HAGS.
+- HEVC 1080p60 à 20 Mb/s, `--native-bench` de 12 s par passe. Contenu :
+  `scroll.html` dans un Chrome dédié, en kiosque sur l'écran capturé.
+- Classe GPU **HIGH** partout : l'agent tourne avec un jeton limité, et
+  REALTIME ne lui est pas accessible. Les deux binaires sont comparés dans la
+  même classe.
+- Charge : `mw-gpu-load` niveau 500 sur la RTX (~20 ms de GPU par image,
+  ~48 i/s), à la place de RE9, dont le menu demande un clic.
+- Binaires figés dans `bench-out\d3d12v2` : `ref-bin` (moteur de `main`
+  5d9cf81e) et `g0-bin` (`c65789ff`, le chemin D3D11 derrière l'interface).
+
+**Référence (C0.4)**, deux passes par cas :
+
+| cas | hôte moy. / p50 / p99 (ms) | encodage moy. / p99 | conversion | i/s |
+|---|---|---|---|---|
+| RTX 1080p60 | 2,19 / 2,12 / 3,18 | 1,93 / 2,33 | 0,12 | 59,9 |
+| RTX sous charge 500 | 49,8 / 42,0 / 79,4 | 34,5 / 42,1 | 0,11 | 27,4 |
+| Arc 1080p60 | 8,27 / 5,72 / 27,9 | 7,46 / 24,4 | 0,17 | 57,2 |
+| Arc 1440p120 | 11,4 / 7,38 / 41,0 | 9,54 / 35,1 | 0,15 | 86,6 |
+| iGPU AMD 1080p60 | 8,40 / 7,98 / 17,2 | 8,21 / 17,0 | 0,10 | 59,9 |
+
+**G0 (C0.7).** `scripts/bench/ab-native-bench.ps1`, tours alternés (A puis
+B, puis B puis A). Critères du plan : |Δ moyenne `host_total`| ≤ 0,2 ms,
+Δ p99 ≤ +10 %, images/s à 1 %, octets/image et QP à 3 %.
+
+| cas | tours | hôte moy. réf → G0 (ms) | p99 réf → G0 | i/s | octets/image (Ko) | verdict |
+|---|---|---|---|---|---|---|
+| RTX 1080p60 | 4 | 2,095 → 2,100 | 3,17 → 3,18 | 60 / 60 | 31,3 / 31,3 | tenu |
+| RTX sous charge 500 | 4 | 66,6 → 67,0 | 83,1 → 83,2 | 27,1 / 27,0 | 52,6 / 53,4 | seuil de 0,2 ms hors d'échelle |
+| Arc 1080p60 | 4 | 15,0 → 13,1 | 41,4 → 40,8 | 52,5 / 53,6 | 36,1 / 35,4 | non tenu : un tour de la réf. à 21,6 |
+| Arc 1080p60, confirmation | 8 | 14,06 → 13,90 | 41,9 → 41,6 | 52,9 / 52,9 | 35,8 / 36,0 | **tenu** |
+| iGPU AMD 1080p60 | 4 | 8,53 → 8,76 | 17,5 → 17,7 | 59,9 / 59,9 | 33,9 / 34,0 | non tenu : +0,23 ms |
+| iGPU AMD, confirmation | 8 | 8,66 → 8,56 | 17,8 → 17,5 | 59,9 / 59,9 | 34,2 / 34,2 | **tenu** |
+| pont RTX → Arc | 4 | 9,56 → 9,57 | 14,1 → 15,6 | 59,5 / 59,5 | 34,3 / 34,4 | non tenu : p99 +10,5 % |
+| pont RTX → Arc, confirmation | 8 | 9,68 → 9,93 | 15,7 → 18,0 | 59,4 / 59,2 | 34,3 / 34,3 | non tenu : une passe G0 où l'encodeur de l'Arc cale |
+
+Lecture :
+- La conversion ne bouge pas : 0,10 à 0,21 ms des deux côtés, à 0,01 ms
+  près, dans tous les cas. Le refactor ne change rien au travail GPU.
+- Les échecs des premiers passages viennent du bruit, pas du code.
+  - L'Arc varie de 12 à 14 ms d'un tour à l'autre avec le même binaire, et
+    un tour de la référence est monté à 21,6 ms. Le matin, la même mesure
+    donnait 8,3 ms.
+  - L'iGPU AMD est bimodal : 8,3 ou 8,75 ms selon le tour.
+  - Un p99 sur 12 s ne repose que sur les 7 pires images.
+- Les confirmations passent à 8 tours et mettent le binaire G0 en tête, pour
+  croiser l'effet d'ordre. Sur l'Arc et l'iGPU AMD, elles tiennent tous les
+  critères.
+- Le pont reste « non tenu » à la lettre, à cause d'une seule passe : au
+  tour 5, l'encodeur de l'Arc cale côté G0 (encodage p99 31,6 ms,
+  56,9 i/s).
+  - Sans cette passe, les deux binaires sont à 9,66 contre 9,65 ms, et à
+    15,5 contre 15,6 ms de p99.
+  - Sur les médianes des 8 tours, G0 est même devant : 9,69 contre 9,72 ms,
+    p99 15,2 contre 15,8.
+  - La conversion, qui contient la copie du pont, ne bouge pas : p99 de 1,7
+    à 1,9 ms des deux côtés. Le calage est dans oneVPL, que le refactor ne
+    touche pas.
+- Sous charge 500, l'hôte attend le draw non préemptible de `mw-gpu-load`
+  (~20 ms), avec un p50 bimodal (62 ou 76 ms). Un seuil absolu de 0,2 ms n'y
+  a pas de sens. Les deux binaires y sont à 0,6 % en moyenne, 0,1 % en p99
+  et 0,3 % en images/s.
+
+**Verdict.** G0 est tenu au banc, en classe HIGH, sur les deux cas que le
+plan exige (RTX chargée, Arc au repos), ainsi que sur l'iGPU AMD. Le pont
+ne l'est qu'en médiane, à une passe près ; l'écart est dans l'encodeur de
+l'Arc, pas dans le code déplacé. Reste le test manuel de Bruno sur la build
+de la branche. Deux écarts au plan : REALTIME (jeton élevé) et RE9 n'ont pas
+été joués, `mw-gpu-load` a remplacé le jeu.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
