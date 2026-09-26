@@ -1178,6 +1178,137 @@ l'Arc, pas dans le code déplacé. Reste le test manuel de Bruno sur la build
 de la branche. Deux écarts au plan : REALTIME (jeton élevé) et RE9 n'ont pas
 été joués, `mw-gpu-load` a remplacé le jeu.
 
+### 8n.1 Les sondes de la phase 1, jeton limité (26/09/2026)
+
+**Pourquoi une interop D3D11 → D3D12, et pas un pipeline purement D3D12.**
+C'est une contrainte de Windows, pas un choix. Les deux API de capture
+d'écran ne livrent leurs images qu'à un device D3D11 : Desktop Duplication
+(`DuplicateOutput` refuse un device D3D12) et Windows.Graphics.Capture
+(`IDirect3DDevice` bâti sur D3D11). Il n'existe pas de capture du bureau
+native D3D12. Le pipeline fait donc un seul saut, le plus tôt possible :
+- le device D3D11 ne fait plus qu'acquérir et relâcher l'image, et signaler
+  ou attendre deux fences partagées ;
+- la surface capturée est ouverte en D3D12 par handle NT, mis en cache ;
+- conversion et encodage sont en D3D12, sans copie.
+
+La poignée de main coûte 8 à 18 µs au repos et 0,2 à 0,3 ms sous charge
+(tableau C). Écartés : le hook du `Present` D3D12 des jeux (intrusif,
+anti-triche), la capture par un pilote d'affichage indirect (surfaces D3D11
+elles aussi, et un pilote signé à livrer), D3D11On12 (une couche de
+traduction, pas un chemin plus direct).
+
+**Montage.**
+- DualRTX : RTX 5060 Ti (HAGS actif), Arc A380, iGPU AMD.
+- `mw-d3d12-lab` lancé par `scripts/bench/d3d12-lab-campaign.ps1`
+  (`50df96fb`, `bbfb897e`), sorties dans `bench-out\d3d12v2\g1b`.
+- Charge : `mw-gpu-load` calé à ~45 images/s sur le GPU testé (~22 ms de GPU
+  par image, la saturation d'un jeu). Une passe de charge par variante, et
+  chaque sonde bornée dans le temps.
+- Jeton limité : classe GPU **HIGH** ; `GLOBAL_REALTIME` refusé
+  (`0x887A002B`).
+- Une première passe (`g1`) est écartée : des variantes y tournaient hors de
+  la fenêtre de 60 s de la charge (repérables à l'absence de `loadFps`).
+
+**A. La conversion** — 1440p → 1080p, Lanczos-2, pointeur, 120 soumissions/s.
+Temps mur moyen / p99, en ms.
+
+| GPU | file | repos | sous charge | dont GPU sous charge |
+|---|---|---|---|---|
+| RTX | D3D11 | 0,62 / 2,31 | 20,84 / 23,22 | 0,21 / 0,22 |
+| RTX | PS DIRECT HIGH | 0,50 / 2,57 | 22,19 / 22,89 | 0,20 / 0,21 |
+| RTX | PS DIRECT NORMAL | 0,51 / 2,05 | 22,19 / 22,82 | 0,20 / 0,21 |
+| RTX | CS COMPUTE HIGH | 0,57 / 2,03 | 22,39 / 22,89 | 0,27 / 0,44 |
+| Arc | D3D11 | 2,27 / 3,06 | 22,98 / 24,79 | 1,32 / 3,10 |
+| Arc | PS DIRECT HIGH | 2,18 / 2,27 | 22,69 / 24,34 | 1,25 / 2,83 |
+| Arc | PS DIRECT NORMAL | 2,18 / 2,47 | 22,69 / 23,47 | 1,11 / 1,33 |
+| Arc | CS COMPUTE HIGH | 1,58 / 1,88 | 34,95 / 69,73 | 26,15 / 69,41 |
+| iGPU AMD | D3D11 | 6,96 / 7,67 | 35,69 / 63,48 | 14,92 / 42,57 |
+| iGPU AMD | PS DIRECT HIGH | 6,92 / 7,67 | 38,75 / 69,33 | 15,83 / 45,89 |
+| iGPU AMD | PS DIRECT NORMAL | 6,91 / 7,61 | 35,45 / 61,91 | 14,94 / 39,19 |
+| iGPU AMD | CS COMPUTE HIGH | 6,46 / 7,78 | 27,08 / 33,01 | 26,93 / 32,81 |
+
+**B. Les encodeurs** — HEVC 1080p60 CBR 20 Mb/s, temps mur par image P
+(moyenne / p99, ms).
+
+| GPU | encodeur | repos | sous charge |
+|---|---|---|---|
+| RTX | D3D12 VE | 9,97 / 17,25 | 44,89 / 45,40 |
+| RTX | D3D12 VE après la conversion | 9,43 / 15,83 | 66,48 / 67,59 |
+| RTX | NVENC-D3D12 | 3,22 / 6,67 | 22,39 / 22,76 |
+| Arc | D3D12 VE | 6,09 / 29,25 | 4,46 / 21,82 |
+| Arc | D3D12 VE après la conversion | 7,39 / 26,64 | 34,07 / 88,60 |
+| iGPU AMD | D3D12 VE | 9,03 / 9,40 | 9,06 / 9,61 |
+| iGPU AMD | D3D12 VE après la conversion | 16,88 / 17,50 | 33,35 / 62,13 |
+| iGPU AMD | AMF-DX12 | 5,32 / 5,87 | 22,70 / 23,86 |
+
+**C. La poignée de main DDA** — `interop`, bande codée de `scroll.html` sur
+l'écran du GPU. Tenue de l'image (moyenne / p99, ms), et lectures fausses sous
+charge.
+
+| GPU | `ddasync` | repos | sous charge | lectures fausses sous charge |
+|---|---|---|---|---|
+| RTX | none | 0,25 / 1,09 | 0,15 / 0,29 | 0 sur 516 |
+| RTX | gpu | 0,28 / 0,96 | 0,22 / 0,42 | 0 sur 267 |
+| RTX | cpu | 0,68 / 1,10 | 42,36 / 64,87 | 0 sur 268 |
+| Arc | none | 0,24 / 0,44 | 0,26 / 0,40 | 99 sur 457 |
+| Arc | gpu | 0,27 / 0,49 | 0,33 / 0,48 | 0 sur 286 |
+| Arc | cpu | 2,21 / 3,03 | 23,11 / 47,27 | 0 sur 246 |
+| iGPU AMD | none | 0,17 / 0,30 | 0,19 / 0,43 | 0 sur 551 |
+| iGPU AMD | gpu | 0,22 / 0,41 | 0,25 / 0,52 | 0 sur 432 |
+| iGPU AMD | cpu | 4,26 / 5,54 | 25,98 / 42,54 | 0 sur 430 |
+
+**Lecture.**
+- **Au repos, la conversion D3D12 vaut la D3D11**, et la bat un peu : PS
+  DIRECT à 0,50 / 2,18 / 6,92 ms contre 0,62 / 2,27 / 6,96 (RTX / Arc /
+  AMD). Le compute est plus rapide sur l'Arc et l'AMD (1,58 et 6,46 ms).
+- **Sous charge, en classe HIGH, tout attend l'image du jeu.** Le travail GPU
+  de la conversion ne change pas (0,2 ms sur la RTX, 1,1 à 1,3 ms sur l'Arc),
+  mais le temps mur monte à ~22 ms, une image de `mw-gpu-load`, en D3D11
+  comme en D3D12. NORMAL ou HIGH, `CreatorID` propre ou non : aucune
+  différence. Dans cette classe, la priorité de file ne sert à rien contre une
+  charge saturante.
+- **Le compute sous charge dépend du GPU** :
+  - RTX : égal au PS (22,4 ms) ;
+  - Arc : bien pire (35 ms, p99 70 ms), le moteur compute n'obtient pas sa
+    part ;
+  - iGPU AMD : meilleur que le PS (27 ms, p99 33, contre 35-39 et 62-69).
+    C'est le seul cas où le détour par COMPUTE (C3.4) aurait un intérêt.
+- **Les encodeurs sous charge** :
+  - D3D12 VE sur l'Arc et l'AMD ne voit pas la charge (4,5 et 9,1 ms ; sur
+    l'Arc, plus vite qu'au repos, les horloges restant hautes) ;
+  - D3D12 VE sur la RTX passe à 45 ms (deux images du jeu), contre 22 ms
+    pour NVENC-D3D12 : la route D3D12 de la RTX reste NVENC-D3D12 (phase 7),
+    comme au repos ;
+  - sur l'AMD, AMF-DX12 gagne au repos (5,3 contre 9,0 ms) et perd sous
+    charge (22,7 contre 9,1) : il attend l'image du jeu, VE non. G4
+    tranchera ;
+  - VE après la conversion hérite de l'attente de la conversion (33 à 66 ms).
+- **La poignée de main DDA sous charge** :
+  - `ddasync=gpu` garde l'image 0,2 à 0,3 ms côté CPU et ne lit rien de
+    faux ;
+  - sans synchro, l'Arc lit faux 99 images sur 457 (22 %) ;
+  - `cpu` bloque le fil de capture le temps d'une image du jeu (23 à 42 ms).
+    La synchro GPU est donc obligatoire, et gratuite.
+- **La cadence de capture sous charge** : avec la poignée de main, la RTX ne
+  capture plus que ~22 images/s (267 en 12 s), contre ~43 sans. DWM ne
+  réécrit l'image qu'après la lecture D3D12, qui attend l'image du jeu. Le
+  chemin D3D11 obéit au même ordre (keyed mutex) : la référence D3D11 sous
+  charge tenait 27 i/s (§8n.0). La limite est la classe de priorité, pas
+  l'interop.
+
+**Verdict partiel (G1).** En classe HIGH, D3D12 ne change rien sous une
+charge saturante : conversion et capture attendent l'image du jeu comme en
+D3D11. Ce qui est acquis quelle que soit la classe :
+- la poignée de main `ddasync=gpu` ;
+- la conversion en PS sur DIRECT (égale à D3D11), le compute (C3.4)
+  seulement pour l'iGPU AMD, à confirmer ;
+- les encodeurs : NVENC-D3D12 pour la RTX, D3D12 VE pour l'Arc (insensible
+  à la charge, mais il lui faut le contrôle de débit maison, phase 6),
+  D3D12 VE ou AMF-DX12 pour l'AMD (G4).
+
+La décision sur les files attend la passe au jeton élevé (classe REALTIME,
+files `GLOBAL_REALTIME`) et RE9, qui reviennent à Bruno.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
