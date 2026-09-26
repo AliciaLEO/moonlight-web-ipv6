@@ -24,6 +24,7 @@ void run_color_convert12_tests();
 void run_d3d11_video_pipeline_tests();
 void run_d3d12_device_tests();
 void run_dda_interop_tests();
+void run_video_encode_caps12_tests();
 void run_win32_cursor_tests();
 void run_host_mute_tests();
 void run_evdev_keymap_tests();
@@ -40,6 +41,7 @@ void run_h264_vui_tests();
 void run_parameter_sets_tests();
 void run_hevc_slice_parser_tests();
 void run_hevc_dpb_tests();
+void run_hevc_negotiation_tests();
 void run_linux_session_tests();
 void run_linux_virtual_display_tests();
 void run_mac_keymap_tests();
@@ -87,6 +89,7 @@ int main()
     run_parameter_sets_tests();
     run_hevc_slice_parser_tests();
     run_hevc_dpb_tests();
+    run_hevc_negotiation_tests();
     run_vpl_params_tests();
 #ifdef MW_NATIVE_OPENH264
     run_openh264_tests();
@@ -113,6 +116,7 @@ int main()
     run_d3d11_video_pipeline_tests();
     run_d3d12_device_tests();
     run_dda_interop_tests();
+    run_video_encode_caps12_tests();
     run_win32_cursor_tests();
     run_host_mute_tests();
     run_evdev_keymap_tests();

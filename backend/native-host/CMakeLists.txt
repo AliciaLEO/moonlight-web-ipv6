@@ -70,6 +70,7 @@ if(WIN32)
         src/encode/windows/MfCapabilities.cpp
         src/encode/windows/MfEncoder.cpp
         src/encode/windows/SoftwareEncoder.cpp
+        src/encode/windows/d3d12/VideoEncodeCaps12.cpp
         src/audio/windows/WasapiLoopback.cpp
         src/audio/windows/HostMute.cpp
     )
@@ -384,6 +385,7 @@ if(MW_BUILD_TESTS)
         tests/test_d3d11_video_pipeline.cpp
         tests/test_d3d12_device.cpp
         tests/test_dda_interop.cpp
+        tests/test_video_encode_caps12.cpp
         tests/test_win32_cursor.cpp
         tests/test_host_mute.cpp
         tests/test_evdev_keymap.cpp
@@ -412,6 +414,7 @@ if(MW_BUILD_TESTS)
         tests/test_parameter_sets.cpp
         tests/test_hevc_slice_parser.cpp
         tests/test_hevc_dpb.cpp
+        tests/test_hevc_negotiation.cpp
         tests/test_reference_slots.cpp
         tests/test_audio_pacer.cpp
         tests/test_audio_interleave.cpp
