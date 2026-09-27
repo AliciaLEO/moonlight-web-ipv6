@@ -28,9 +28,10 @@ using Microsoft::WRL::ComPtr;
 
 namespace {
 
-/// A GPU that takes half a second over one picture is gone, not slow (plan
-/// §3.1): the session goes back to D3D11 rather than freezing on it.
-constexpr uint32_t kWaitMs = 500;
+/// A GPU that takes this long over one picture is gone, not slow (plan §3.1,
+/// d3d12::kGpuGoneMs): the session goes back to D3D11 rather than freezing on
+/// it.
+constexpr uint32_t kWaitMs = d3d12::kGpuGoneMs;
 
 /// Pictures whose slice headers are read back with our SPS and PPS: the IDR
 /// and the P pictures after it. HevcSliceParser is a sieve — a wrong PPS can

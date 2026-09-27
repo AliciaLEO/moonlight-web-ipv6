@@ -151,10 +151,19 @@ private:
     bool m_Debug = false;
 };
 
+/// How long the chain's CPU waits on its own GPU work before it calls the GPU
+/// gone. A session waiting for ever on it is a stream that freezes with no
+/// line in the log; one that gives up on a GPU that is merely busy leaves
+/// D3D12 for nothing. Under a game that fills the Arc, the D3D11 chain waits
+/// up to 1.5 s on a picture, 47 times in 30 min, and goes on (G2 soak,
+/// 27/09/2026): half a second, the first limit, took one such wait for a
+/// dead GPU. Windows resets a GPU whose work runs 2 s (TDR, TdrDelay's
+/// default) and the device is then removed, which the wait reports as such;
+/// past that, a fence that has not moved will not.
+constexpr uint32_t kGpuGoneMs = 3000;
+
 /// A D3D12 fence and the value this side last asked of it, with a CPU wait
-/// that gives up. A GPU that takes half a second over one frame is not slow,
-/// it is gone — and a session waiting for ever on it is a stream that freezes
-/// with no line in the log.
+/// that gives up (kGpuGoneMs, for the chain's own waits).
 class GpuFence
 {
 public:

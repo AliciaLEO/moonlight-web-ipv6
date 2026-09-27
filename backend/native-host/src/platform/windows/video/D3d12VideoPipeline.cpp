@@ -54,8 +54,8 @@ const char* syncName(d3d12::DdaSync sync)
 }
 
 /// The CPU's longest wait on the conversion queue: for the capture's release
-/// under ddasync=cpu, and before a list is recorded again.
-constexpr uint32_t kWaitMs = 500;
+/// under ddasync=cpu, and before a list is recorded again (d3d12::kGpuGoneMs).
+constexpr uint32_t kWaitMs = d3d12::kGpuGoneMs;
 
 } // namespace
 
