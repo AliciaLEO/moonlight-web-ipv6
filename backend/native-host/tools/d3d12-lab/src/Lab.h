@@ -30,6 +30,10 @@
 #include <string>
 #include <vector>
 
+namespace mw::native {
+class StreamPriority;
+}
+
 namespace lab {
 
 using Microsoft::WRL::ComPtr;
@@ -58,6 +62,26 @@ std::string tokenKind();
 /// SeIncreaseBasePriorityPrivilege switched on for this process. Held is not
 /// enabled: an elevated token carries it off.
 bool enableBasePriorityPrivilege();
+
+/// The process's GPU scheduling class as a probe took it.
+struct GpuScheduling
+{
+    std::string token;      ///< tokenKind()
+    bool privilege = false; ///< enableBasePriorityPrivilege()
+    std::string gpuClass;   ///< what was obtained: "REALTIME", "HIGH", "left alone"...
+};
+
+/// The process's GPU scheduling class, taken the product's way
+/// (StreamPriority::engage) before a probe makes its devices: REALTIME where
+/// the token allows it and HIGH otherwise (@p option "auto"), HIGH at most
+/// ("high"), or left alone ("normal"). @p priority holds it for the probe's
+/// life, and the queues asked for at QueuePriority::Auto follow it
+/// (GLOBAL_REALTIME under REALTIME). Every probe that runs under load takes
+/// it, so that a run at a limited token and an elevated one differ by the
+/// class only.
+GpuScheduling takeGpuClass(mw::native::StreamPriority& priority, const std::string& option);
+/// "auto", "high" or "normal".
+bool isGpuClassOption(const std::string& option);
 
 /// Microseconds on the performance counter.
 int64_t nowUs();

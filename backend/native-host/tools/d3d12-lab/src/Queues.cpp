@@ -832,7 +832,7 @@ bool parse(int argc, wchar_t** argv, Options& o)
             return false;
         }
     }
-    return true;
+    return isGpuClassOption(o.gpuClass);
 }
 
 void jsonStats(Json& j, const char* key, const std::vector<double>& v)
@@ -880,12 +880,8 @@ int runQueues(int argc, wchar_t** argv)
     });
 
     // The process's GPU class, the product's way.
-    if (o.gpuClass == "high") ::SetEnvironmentVariableA("MW_GPU_PRIORITY", "high");
-    if (o.gpuClass == "normal") ::SetEnvironmentVariableA("MW_GPU_PRIORITY", "normal");
     StreamPriority priority;
-    priority.engage();
-    const std::string token = tokenKind();
-    const bool privilege = enableBasePriorityPrivilege();
+    const GpuScheduling scheduling = takeGpuClass(priority, o.gpuClass);
 
     const std::vector<Adapter> all = adapters(false);
     const Adapter* a = pickAdapter(all, o.adapter);
@@ -898,9 +894,8 @@ int runQueues(int argc, wchar_t** argv)
     say("%s (LUID %s, HAGS %s), driver %s, Windows %s\n", a->name.c_str(),
         luidHex(a->desc.AdapterLuid).c_str(), hagsState(a->desc.AdapterLuid).c_str(),
         umdVersion(a->adapter.Get()).c_str(), osBuild().c_str());
-    say("token %s, base-priority privilege %s, GPU class %s\n", token.c_str(),
-        privilege ? "enabled" : "not held",
-        StreamPriority::toString(StreamPriority::grantedClass()));
+    say("token %s, base-priority privilege %s, GPU class %s\n", scheduling.token.c_str(),
+        scheduling.privilege ? "enabled" : "not held", scheduling.gpuClass.c_str());
     say("%dx%d -> %dx%d %s%s, %d submissions/s for %d s each (+%d warm-up)\n\n", o.sourceW,
         o.sourceH, o.outputW, o.outputH,
         o.filter == convert::ScaleFilter::Lanczos2 ? "Lanczos-2" : "bilinear",
@@ -1010,8 +1005,8 @@ int runQueues(int argc, wchar_t** argv)
         j.field("gpu", a->name).field("luid", luidHex(a->desc.AdapterLuid));
         j.field("hags", hagsState(a->desc.AdapterLuid))
             .field("driver", umdVersion(a->adapter.Get()));
-        j.field("token", token).field("basePriorityPrivilege", privilege);
-        j.field("gpuClass", StreamPriority::toString(StreamPriority::grantedClass()));
+        j.field("token", scheduling.token).field("basePriorityPrivilege", scheduling.privilege);
+        j.field("gpuClass", scheduling.gpuClass);
         j.field("source", std::to_string(o.sourceW) + "x" + std::to_string(o.sourceH));
         j.field("output", std::to_string(o.outputW) + "x" + std::to_string(o.outputH));
         j.field("filter", o.filter == convert::ScaleFilter::Lanczos2 ? "lanczos2" : "bilinear");

@@ -17,6 +17,8 @@
 
 #include "Lab.h"
 
+#include "platform/windows/StreamPriority.h"
+
 #include <cctype>
 #include <cstdlib>
 
@@ -175,6 +177,24 @@ bool enableBasePriorityPrivilege()
                     ::GetLastError() != ERROR_NOT_ALL_ASSIGNED;
     ::CloseHandle(token);
     return ok;
+}
+
+GpuScheduling takeGpuClass(mw::native::StreamPriority& priority, const std::string& option)
+{
+    using mw::native::StreamPriority;
+    if (option == "high") ::SetEnvironmentVariableA("MW_GPU_PRIORITY", "high");
+    if (option == "normal") ::SetEnvironmentVariableA("MW_GPU_PRIORITY", "normal");
+    priority.engage();
+    GpuScheduling out;
+    out.token = tokenKind();
+    out.privilege = enableBasePriorityPrivilege();
+    out.gpuClass = StreamPriority::toString(StreamPriority::grantedClass());
+    return out;
+}
+
+bool isGpuClassOption(const std::string& option)
+{
+    return option == "auto" || option == "high" || option == "normal";
 }
 
 int64_t nowUs()

@@ -40,6 +40,7 @@
 
 #include "convert/windows/d3d12/ColorConvert12.h"
 #include "mw/native/NativeHost.h"
+#include "platform/windows/StreamPriority.h"
 #include "platform/windows/d3d12/D3d12Device.h"
 
 #include <d3d12video.h>
@@ -81,6 +82,7 @@ struct Options
     std::string bitstream = "auto";
     bool checkSizes = false;
     std::wstring dump;
+    std::string gpuClass = "auto";
     std::wstring jsonPath;
     bool json = true;
 };
@@ -164,6 +166,8 @@ bool parse(int argc, wchar_t** argv, Options& o)
             o.checkSizes = true;
         } else if (arg == L"--dump") {
             o.dump = i + 1 < argc ? argv[++i] : L"";
+        } else if (arg == L"--class") {
+            o.gpuClass = next();
         } else if (arg == L"--json") {
             o.jsonPath = i + 1 < argc ? argv[++i] : L"";
         } else if (arg == L"--no-json") {
@@ -174,6 +178,7 @@ bool parse(int argc, wchar_t** argv, Options& o)
     }
     if (o.rc != "cbr" && o.rc != "cqp" && o.rc != "delta" && o.rc != "absolute") return false;
     if (o.convert != "none" && o.convert != "ps") return false;
+    if (!isGpuClassOption(o.gpuClass)) return false;
     if (o.sourceW <= 0) {
         o.sourceW = o.width;
         o.sourceH = o.height;
@@ -210,6 +215,9 @@ void encodeUsage()
         "  --check-sizes           sysmem: zero the buffer before each frame, then check the\n"
         "                          written size against the data and the subregion metadata\n"
         "  --dump <file.hevc>      the stream with our VPS/SPS/PPS (check with ffmpeg)\n"
+        "  --class auto|high|normal the process's GPU scheduling class (auto = REALTIME\n"
+        "                          where the token allows it, as the product asks); the\n"
+        "                          queues follow it\n"
         "  --json <file> | --no-json");
 }
 
@@ -223,6 +231,10 @@ int runEncode(int argc, wchar_t** argv)
     NativeHost::setLogSink([](int level, const std::string& message) {
         if (level >= 2) std::printf("    %s\n", message.c_str());
     });
+
+    // The process's GPU class, the product's way; the queues below follow it.
+    StreamPriority priority;
+    const GpuScheduling scheduling = takeGpuClass(priority, o.gpuClass);
 
     const std::vector<Adapter> all = adapters(false);
     const Adapter* a = pickAdapter(all, o.adapter);
@@ -245,6 +257,8 @@ int runEncode(int argc, wchar_t** argv)
     }
     say("mw-d3d12-lab encode - %s on %s\n%s, driver %s\n", nowText().c_str(),
         computerName().c_str(), a->name.c_str(), umdVersion(a->adapter.Get()).c_str());
+    say("token %s, base-priority privilege %s, GPU class %s\n", scheduling.token.c_str(),
+        scheduling.privilege ? "enabled" : "not held", scheduling.gpuClass.c_str());
 
     // ── What the driver takes ──────────────────────────────────────────────
     D3D12_VIDEO_ENCODER_PROFILE_HEVC profile = D3D12_VIDEO_ENCODER_PROFILE_HEVC_MAIN;
@@ -478,7 +492,7 @@ int runEncode(int argc, wchar_t** argv)
     d3d12::Queue encodeQueue;
     d3d12::QueueRequest request;
     request.type = D3D12_COMMAND_LIST_TYPE_VIDEO_ENCODE;
-    request.priority = d3d12::QueuePriority::High;
+    request.priority = d3d12::QueuePriority::Auto;
     ComPtr<ID3D12CommandAllocator> allocator;
     ComPtr<ID3D12VideoEncodeCommandList2> list;
     if (!device->createQueue(request, encodeQueue, error) ||
@@ -606,7 +620,7 @@ int runEncode(int argc, wchar_t** argv)
     if (!sysmem) {
         d3d12::QueueRequest cr;
         cr.type = D3D12_COMMAND_LIST_TYPE_COPY;
-        cr.priority = d3d12::QueuePriority::High;
+        cr.priority = d3d12::QueuePriority::Auto;
         if (!device->createQueue(cr, copyQueue, error) ||
             FAILED(d->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COPY,
                                              IID_PPV_ARGS(&copyAllocator))) ||
@@ -971,6 +985,8 @@ int runEncode(int argc, wchar_t** argv)
         j.field("tool", "mw-d3d12-lab").field("command", "encode").field("schema", 1);
         j.field("date", nowText()).field("computer", computerName()).field("gpu", a->name);
         j.field("driver", umdVersion(a->adapter.Get()));
+        j.field("token", scheduling.token).field("basePriorityPrivilege", scheduling.privilege);
+        j.field("gpuClass", scheduling.gpuClass);
         j.field("rc", o.rc).field("rcFlags", static_cast<unsigned>(rc.Flags));
         j.field("kbps", o.kbps).field("qp", o.qp).field("fps", o.fps).field("seconds", o.seconds);
         j.field("coded", std::to_string(codedW) + "x" + std::to_string(codedH));

@@ -37,6 +37,7 @@
 
 #include "capture/windows/DxgiDuplication.h"
 #include "mw/native/NativeHost.h"
+#include "platform/windows/StreamPriority.h"
 #include "platform/windows/d3d12/DdaInterop.h"
 #include "platform/windows/d3d12/D3d12Device.h"
 
@@ -69,6 +70,7 @@ struct Options
     int seconds = 15;
     std::vector<std::string> modes = {"none", "gpu", "cpu"};
     std::vector<int> delaysMs = {0, 8};
+    std::string gpuClass = "auto";
     std::wstring jsonPath;
     bool json = true;
 };
@@ -245,6 +247,8 @@ bool parse(int argc, wchar_t** argv, Options& o)
             o.delaysMs.clear();
             for (const std::string& d : split(next()))
                 o.delaysMs.push_back(std::atoi(d.c_str()));
+        } else if (arg == L"--class") {
+            o.gpuClass = next();
         } else if (arg == L"--json") {
             o.jsonPath = i + 1 < argc ? argv[++i] : L"";
         } else if (arg == L"--no-json") {
@@ -253,7 +257,7 @@ bool parse(int argc, wchar_t** argv, Options& o)
             return false;
         }
     }
-    return true;
+    return isGpuClassOption(o.gpuClass);
 }
 
 d3d12::DdaSync syncOf(const std::string& mode)
@@ -277,6 +281,9 @@ void interopUsage()
               "  --seconds <s>         per run (default 15)\n"
               "  --modes none,gpu,cpu  ddasync variants (default all three)\n"
               "  --delays 0,8          ms of busy shader in front of the D3D12 read (default 0,8)\n"
+              "  --class auto|high|normal  the process's GPU scheduling class (auto = REALTIME\n"
+              "                        where the token allows it, as the product asks); the\n"
+              "                        queue and the capture device follow it\n"
               "  --json <file> | --no-json");
 }
 
@@ -290,6 +297,11 @@ int runInterop(int argc, wchar_t** argv)
     NativeHost::setLogSink([](int level, const std::string& message) {
         if (level >= 2) std::printf("    %s\n", message.c_str());
     });
+
+    // The process's GPU class, the product's way; the queue and the capture
+    // device below follow it.
+    StreamPriority priority;
+    const GpuScheduling scheduling = takeGpuClass(priority, o.gpuClass);
 
     const Capabilities caps = NativeHost::probe();
     if (caps.displays.empty()) {
@@ -328,6 +340,8 @@ int runInterop(int argc, wchar_t** argv)
 
     say("mw-d3d12-lab interop - %s on %s\n", nowText().c_str(), computerName().c_str());
     say("%s on %s, %d s per run\n", target->label.c_str(), gpu->name.c_str(), o.seconds);
+    say("token %s, base-priority privilege %s, GPU class %s\n", scheduling.token.c_str(),
+        scheduling.privilege ? "enabled" : "not held", scheduling.gpuClass.c_str());
 
     std::string error;
     std::shared_ptr<d3d12::D3d12Device> device =
@@ -338,7 +352,7 @@ int runInterop(int argc, wchar_t** argv)
     }
     d3d12::Queue queue;
     d3d12::QueueRequest request;
-    request.priority = d3d12::QueuePriority::High;
+    request.priority = d3d12::QueuePriority::Auto;
     if (!device->createQueue(request, queue, error)) {
         say("%s\n", error.c_str());
         return 1;
@@ -415,6 +429,7 @@ int runInterop(int argc, wchar_t** argv)
                 runs.push_back(run);
                 continue;
             }
+            StreamPriority::raiseDevice(duplication.device(), "capture");
             if (duplication.format() != DXGI_FORMAT_B8G8R8A8_UNORM) {
                 run.refused = "the display is not SDR 8-bit";
                 runs.push_back(run);
@@ -586,6 +601,8 @@ int runInterop(int argc, wchar_t** argv)
         j.field("tool", "mw-d3d12-lab").field("command", "interop").field("schema", 1);
         j.field("date", nowText()).field("computer", computerName()).field("os", osBuild());
         j.field("display", target->label).field("gpu", gpu->name);
+        j.field("token", scheduling.token).field("basePriorityPrivilege", scheduling.privilege);
+        j.field("gpuClass", scheduling.gpuClass);
         j.field("busyIterationsPerMs", busy.iterationsPerMs);
         j.key("runs").beginArray();
         for (const Run& r : runs) {

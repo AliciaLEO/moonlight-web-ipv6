@@ -32,6 +32,7 @@
 #include "encode/windows/AmfApi.h"
 #include "encode/windows/NvencApi.h"
 #include "mw/native/NativeHost.h"
+#include "platform/windows/StreamPriority.h"
 #include "platform/windows/d3d12/D3d12Device.h"
 
 #include <components/VideoEncoderHEVC.h>
@@ -58,6 +59,7 @@ struct Options
     int kbps = 20000;
     bool nvenc = true;
     bool amf = true;
+    std::string gpuClass = "auto";
 };
 
 void say(const char* format, ...)
@@ -415,11 +417,13 @@ bool parse(int argc, wchar_t** argv, Options& o)
             const std::string which = next();
             o.nvenc = which == "nvenc";
             o.amf = which == "amf";
+        } else if (arg == L"--class") {
+            o.gpuClass = next();
         } else {
             return false;
         }
     }
-    return true;
+    return isGpuClassOption(o.gpuClass);
 }
 
 } // namespace
@@ -431,7 +435,9 @@ void vendorsUsage()
               "  picture, and how fast: HEVC CBR, one-frame VBV, low-latency presets.\n"
               "  --adapter <gpu>      a DXGI index or a piece of the name (RTX, Arc...)\n"
               "  --size WxH --fps <n> --frames <n> --kbps <n>\n"
-              "  --only nvenc|amf");
+              "  --only nvenc|amf\n"
+              "  --class auto|high|normal  the process's GPU scheduling class (auto = REALTIME\n"
+              "                       where the token allows it, as the product asks)");
 }
 
 int runVendors(int argc, wchar_t** argv)
@@ -444,6 +450,9 @@ int runVendors(int argc, wchar_t** argv)
     NativeHost::setLogSink([](int level, const std::string& message) {
         if (level >= 2) std::printf("    %s\n", message.c_str());
     });
+    // The process's GPU class, the product's way.
+    StreamPriority priority;
+    const GpuScheduling scheduling = takeGpuClass(priority, o.gpuClass);
     const std::vector<Adapter> all = adapters(false);
     const Adapter* a = pickAdapter(all, o.adapter);
     if (!a) {
@@ -461,6 +470,8 @@ int runVendors(int argc, wchar_t** argv)
     say("mw-d3d12-lab vendors - %s on %s\n%s, driver %s, %dx%d @ %d, %d kbps\n", nowText().c_str(),
         computerName().c_str(), a->name.c_str(), umdVersion(a->adapter.Get()).c_str(), o.width,
         o.height, o.fps, o.kbps);
+    say("token %s, base-priority privilege %s, GPU class %s\n", scheduling.token.c_str(),
+        scheduling.privilege ? "enabled" : "not held", scheduling.gpuClass.c_str());
 
     std::vector<ComPtr<ID3D12Resource>> inputs;
     for (int f = 0; f < 8; ++f) {

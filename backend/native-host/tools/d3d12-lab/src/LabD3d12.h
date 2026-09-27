@@ -46,7 +46,8 @@ ComPtr<ID3D12Resource> makeBuffer(ID3D12Device* d, UINT64 size, D3D12_HEAP_TYPE 
 ComPtr<ID3D12Resource> makeTexture(ID3D12Device* d, UINT w, UINT h, UINT16 slices,
                                    DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags);
 
-/// A one-shot DIRECT list, run and waited for: the uploads.
+/// A one-shot DIRECT list, run and waited for: the uploads. At the priority
+/// the process's GPU class gives the product's queues (takeGpuClass).
 struct Direct
 {
     ComPtr<ID3D12CommandQueue> queue;
@@ -58,7 +59,7 @@ struct Direct
     {
         d3d12::Queue q;
         d3d12::QueueRequest request;
-        request.priority = d3d12::QueuePriority::High;
+        request.priority = d3d12::QueuePriority::Auto;
         if (!device.createQueue(request, q, error)) return false;
         queue = q.queue;
         if (FAILED(device.device()->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
