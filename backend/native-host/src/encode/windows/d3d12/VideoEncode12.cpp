@@ -170,6 +170,8 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
     m_Gop = {0, 1, static_cast<UCHAR>(m_Setup.sequence.log2MaxPocLsb - 4)};
     m_Fps = request.fps;
     m_VbvFrames = tuning.vbvFrames;
+    m_QueueRequest = d3d12::queueRequestFor(D3D12_COMMAND_LIST_TYPE_VIDEO_ENCODE, tuning,
+                                            L"MoonlightWeb video encode");
     m_Format = hdr ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12;
     m_Rate = std::make_unique<VideoEncodeCaps12::RateControl>(
         m_Setup.rate, m_Fps, static_cast<uint32_t>(bitrateKbps) * 1000u);
@@ -266,10 +268,7 @@ bool VideoEncode12::createResources(std::string& error)
         return false;
     }
 
-    d3d12::QueueRequest request;
-    request.type = D3D12_COMMAND_LIST_TYPE_VIDEO_ENCODE;
-    request.name = L"MoonlightWeb video encode";
-    if (!m_Device->createQueue(request, m_Queue, error)) return false;
+    if (!m_Device->createQueue(m_QueueRequest, m_Queue, error)) return false;
     if (FAILED(h = d->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_VIDEO_ENCODE,
                                              IID_PPV_ARGS(&m_Allocator))) ||
         FAILED(h = d->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_VIDEO_ENCODE, m_Allocator.Get(),

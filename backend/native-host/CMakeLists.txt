@@ -43,6 +43,7 @@ if(WIN32)
         src/platform/windows/CrossGpuBridge.cpp
         src/platform/windows/StreamPriority.cpp
         src/platform/windows/video/D3d11VideoPipeline.cpp
+        src/platform/windows/video/D3d12VideoPipeline.cpp
         src/platform/windows/d3d12/D3d12Device.cpp
         src/platform/windows/d3d12/DdaInterop.cpp
         src/capture/windows/DxgiDuplication.cpp

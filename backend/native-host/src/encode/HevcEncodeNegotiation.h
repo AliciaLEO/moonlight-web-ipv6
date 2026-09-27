@@ -217,9 +217,9 @@ inline int hevcMaxDpbSize(int levelIdc, uint64_t lumaSamples)
 {
     const uint64_t maxLumaPs = hevcneg_detail::maxLumaPictureSize(levelIdc);
     constexpr int maxDpbPicBuf = 6;
-    if (lumaSamples <= (maxLumaPs >> 2)) return std::min(4 * maxDpbPicBuf, 16);
-    if (lumaSamples <= (maxLumaPs >> 1)) return std::min(2 * maxDpbPicBuf, 16);
-    if (lumaSamples <= ((3 * maxLumaPs) >> 2)) return std::min((4 * maxDpbPicBuf) / 3, 16);
+    if (lumaSamples <= (maxLumaPs >> 2)) return (std::min)(4 * maxDpbPicBuf, 16);
+    if (lumaSamples <= (maxLumaPs >> 1)) return (std::min)(2 * maxDpbPicBuf, 16);
+    if (lumaSamples <= ((3 * maxLumaPs) >> 2)) return (std::min)((4 * maxDpbPicBuf) / 3, 16);
     return maxDpbPicBuf;
 }
 
@@ -324,7 +324,7 @@ inline HevcEncodeSetup negotiateHevc(const HevcEncodeRequest& request, HevcDrive
         rung = climb(true);
         const int most = rung >= 0 ? static_cast<int>(s.support.maxIntraRefreshFrames) : 0;
         if (most >= kIntraRefreshMinFrames) {
-            s.intraRefreshFrames = std::min(intraRefreshPeriodFrames(request.fps), most);
+            s.intraRefreshFrames = (std::min)(intraRefreshPeriodFrames(request.fps), most);
         } else {
             add(s.reason, rung < 0 ? "no intra refresh taken: keyframes on demand"
                                    : "no intra refresh (the driver sweeps " + std::to_string(most) +
@@ -349,7 +349,7 @@ inline HevcEncodeSetup negotiateHevc(const HevcEncodeRequest& request, HevcDrive
         hevcMaxDpbSize(level, static_cast<uint64_t>(s.codedWidth) * s.codedHeight) - 1;
     if (capacity > levelDpb) {
         add(s.reason, std::to_string(levelDpb) + " pictures kept, the level's most");
-        capacity = std::max(levelDpb, 1);
+        capacity = (std::max)(levelDpb, 1);
     }
     s.dpbCapacity = capacity;
 

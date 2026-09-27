@@ -28,6 +28,7 @@
 #include "../../core/RestartBackoff.h"
 #include "../../core/Selector.h"
 #include "../../core/Session.h"
+#include "../../core/VideoPipelineChoice.h"
 #include "../../encode/EncodeLoadCap.h"
 #include "../../encode/RateControl.h"
 #include "../../encode/RateGovernor.h"
@@ -35,6 +36,7 @@
 #include "InputDesktop.h"
 #include "StreamPriority.h"
 #include "video/D3d11VideoPipeline.h"
+#include "video/D3d12VideoPipeline.h"
 
 // GetCursorInfo/LoadCursorW, for naming the pointer — see currentCursorKind().
 #include <windows.h>
@@ -359,6 +361,9 @@ public:
         // bridge is in, which adds the readback and the upload of every frame.
         m_Info.copiesPerFrame = m_Pipeline->copiesPerFrame();
         m_Info.crossGpuCopy = m_Target.crossGpuCopy;
+        m_Info.videoPipeline = m_PipelineChoice.pipeline;
+        m_Info.videoRoute = m_PipelineChoice.route;
+        m_Info.videoPipelineReason = m_PipelineChoice.reason;
 
         // Input comes up last, and its failure is NOT fatal. A session that
         // streams but cannot inject is degraded; a session that refuses to
@@ -805,11 +810,110 @@ private:
         return true;
     }
 
+    /// What the choice of a chain needs to know about this build.
+    VideoPipelineFacts pipelineFacts() const
+    {
+        VideoPipelineFacts f;
+        f.benchKey = m_Config.tuning.pipeline;
+        f.setting = m_Config.videoPipeline;
+        f.encoder = m_Target.encoder;
+        f.codec = m_Target.codec;
+        f.conv12 = m_Config.tuning.conv12;
+        f.enc12 = m_Config.tuning.enc12;
+        f.capture = m_CaptureApi;
+        f.crossGpuCopy = m_Target.crossGpuCopy;
+        f.yuv444 = m_Target.yuv444;
+        // Taken for granted here, found out by the build: a GPU without it
+        // (Windows 10, a driver that takes no HEVC) refuses the D3D12 build,
+        // which says why, and D3D11 carries on.
+        f.videoEncode12 = true;
+        return f;
+    }
+
+    /// @p kind in place, opened: the pipeline already there, or its
+    /// replacement — the old one closed first, its encoder and converter
+    /// with it.
+    bool usePipeline(VideoPipeline kind, std::string& error)
+    {
+        const char* wanted = kind == VideoPipeline::D3d12 ? "d3d12" : "d3d11";
+        if (m_Pipeline && std::strcmp(m_Pipeline->kind(), wanted) == 0) return true;
+        if (m_Pipeline) m_Pipeline->close();
+        if (kind == VideoPipeline::D3d12)
+            m_Pipeline = std::make_unique<D3d12VideoPipeline>(m_Config.tuning);
+        else
+            m_Pipeline = std::make_unique<D3d11VideoPipeline>();
+        return m_Pipeline->open(m_Target.crossGpuCopy, m_Target.encodeAdapterHandle,
+                                m_Target.encodeGpuName, error);
+    }
+
+    /// The pipeline for this build — the chain VideoPipelineChoice says, D3D12
+    /// refused for this build only when it will not build, D3D11 for the rest
+    /// of the session once D3D12 failed while streaming — built at
+    /// @p outputWidth × @p outputHeight.
     ///
     /// @p keepHeld keeps the desktop copy the pointer-only and still-screen
     /// paths redraw from: the load cap rebuilds on the same capture, whose
     /// picture is still the right one.
     bool buildPipeline(int outputWidth, int outputHeight, std::string& error, bool keepHeld = false)
+    {
+        VideoPipelineChoice choice = chooseVideoPipeline(pipelineFacts());
+        if (choice.pipeline == VideoPipeline::D3d12 && m_D3d12Failed) {
+            choice.pipeline = VideoPipeline::D3d11;
+            choice.route = "D3D11";
+            choice.refused = true;
+            choice.reason +=
+                ", D3D11 runs: D3D12 failed earlier in this session (" + m_D3d12FailedWhy + ")";
+        }
+        if (choice.pipeline == VideoPipeline::D3d12) {
+            std::string why;
+            if (usePipeline(VideoPipeline::D3d12, why) &&
+                buildOn(outputWidth, outputHeight, why, keepHeld)) {
+                notePipeline(choice);
+                return true;
+            }
+            if (m_Config.tuning.strict12) {
+                error = "strict12: the D3D12 chain does not build: " + why;
+                return false;
+            }
+            choice.pipeline = VideoPipeline::D3d11;
+            choice.route = "D3D11";
+            choice.refused = true;
+            choice.reason += ", D3D11 runs: the D3D12 build failed (" + why + ")";
+            // The held copy, if any, was the D3D12 chain's.
+            keepHeld = false;
+        } else if (choice.refused && m_Config.tuning.strict12) {
+            error = "strict12: " + choice.reason;
+            return false;
+        }
+        if (!usePipeline(VideoPipeline::D3d11, error) ||
+            !buildOn(outputWidth, outputHeight, error, keepHeld))
+            return false;
+        notePipeline(choice);
+        return true;
+    }
+
+    /// The chain a build settled on, in SessionInfo and — when it changed —
+    /// in the log.
+    void notePipeline(const VideoPipelineChoice& choice)
+    {
+        const bool changed = choice.pipeline != m_PipelineChoice.pipeline ||
+                             choice.route != m_PipelineChoice.route ||
+                             choice.reason != m_PipelineChoice.reason;
+        m_PipelineChoice = choice;
+        m_PipelineLost = false;
+        m_Info.videoPipeline = choice.pipeline;
+        m_Info.videoRoute = choice.route;
+        m_Info.videoPipelineReason = choice.reason;
+        if (changed)
+            log::info(std::string("[native] video pipeline: ") +
+                      (choice.pipeline == VideoPipeline::D3d12 ? "D3D12 (" + choice.route + ")"
+                                                               : std::string("D3D11")) +
+                      ", because " + choice.reason);
+    }
+
+    /// Both halves of the current pipeline, built at @p outputWidth ×
+    /// @p outputHeight — see buildPipeline.
+    bool buildOn(int outputWidth, int outputHeight, std::string& error, bool keepHeld)
     {
         // Released before the replacements are built, not after — see
         // WindowsVideoPipeline::teardown.
@@ -961,12 +1065,17 @@ private:
         // captured, which is what the converter is set up to take. Failing to
         // make one is not fatal: the last picture is re-sent instead, as the
         // idle floor does. Held by the pipeline until this function returns,
-        // whichever way it does — after the rebuild, as it always was.
+        // whichever way it does — after the rebuild, as it always was. Through
+        // the pointer, not the object: the rebuild may replace the pipeline
+        // (D3D12 to D3D11), and the one released is whichever is in place.
         struct BlankRelease
         {
-            WindowsVideoPipeline& pipeline;
-            ~BlankRelease() { pipeline.releaseBlank(); }
-        } blankRelease{*m_Pipeline};
+            std::unique_ptr<WindowsVideoPipeline>& pipeline;
+            ~BlankRelease()
+            {
+                if (pipeline) pipeline->releaseBlank();
+            }
+        } blankRelease{m_Pipeline};
         bool blank = m_Pipeline->prepareBlank(m_Capture.get(), error);
         if (!blank)
             log::warning("[native] no blank picture for the wait, re-sending the last: " + error);
@@ -1542,6 +1651,30 @@ private:
         m_LoopStartUs = steadyNowUs();
         m_LoadCap.start(m_LoopStartUs);
         while (m_Running.load()) {
+            if (m_PipelineLost) {
+                // The D3D12 chain failed while streaming (see emit): back to
+                // D3D11 over a capture opened again — whose first frame is
+                // the whole desktop, so the viewer's next picture is a full
+                // one — with what a lost display goes through below.
+                switch (restartCapture(frameNumber, floorIntervalUs(), error)) {
+                case Restart::Restarted: break;
+                case Restart::Ended: return;
+                case Restart::Stopped:
+                    finish("the session was stopped while the video pipeline was rebuilt");
+                    return;
+                case Restart::Failed:
+                    finish("the video pipeline could not go back to D3D11: " + error);
+                    return;
+                }
+                m_ForceKeyframe.store(true);
+                boosted = false;
+                applyBitrate(baseKbps);
+                closeBurst("D3D12 lost");
+                lastRealUs = steadyNowUs();
+                resetBurst();
+                continue;
+            }
+
             if (const int kbps = m_PendingBitrate.exchange(0); kbps > 0) {
                 // The ladder moves the CEILING, not the still-screen budget.
                 // Applying it while boosted would drop the burst back to normal
@@ -1916,10 +2049,23 @@ private:
 
         const bool forceKeyframe = m_ForceKeyframe.exchange(false);
         encode::EncoderOutput encoded;
-        // Lost is a D3D12 answer (the device went away), never a D3D11 one;
-        // until a pipeline can fall back, it ends the session like any failure.
-        if (m_Pipeline->encode(forceKeyframe, frameNumber, encoded, error) !=
-            WindowsVideoPipeline::EncodeResult::Ok) {
+        const WindowsVideoPipeline::EncodeResult result =
+            m_Pipeline->encode(forceKeyframe, frameNumber, encoded, error);
+        if (result == WindowsVideoPipeline::EncodeResult::Lost) {
+            // D3D12 only, never D3D11: the chain failed while streaming — a
+            // device gone, a fence past its deadline, an encoder error, the
+            // header guard. The session goes back to D3D11 for good (plan
+            // §3.3): nothing goes out for this picture, and the loop rebuilds
+            // before its next capture.
+            if (!m_D3d12Failed)
+                log::warning("[native] video pipeline: D3D12 lost (" + error +
+                             ") — back to D3D11 for the rest of the session");
+            m_D3d12Failed = true;
+            m_D3d12FailedWhy = error;
+            m_PipelineLost = true;
+            return true;
+        }
+        if (result != WindowsVideoPipeline::EncodeResult::Ok) {
             finish("encode failed: " + error);
             return false;
         }
@@ -2615,6 +2761,15 @@ private:
     /// there is one. Held by interface: the loop below neither knows nor needs
     /// to know which pipeline this is. See WindowsVideoPipeline.
     std::unique_ptr<WindowsVideoPipeline> m_Pipeline;
+    /// Which chain the last build runs, and why (VideoPipelineChoice).
+    VideoPipelineChoice m_PipelineChoice;
+    /// The D3D12 chain failed while streaming: this session stays on D3D11,
+    /// and says why (plan pipeline-video-d3d12-v2 §3.3).
+    bool m_D3d12Failed = false;
+    std::string m_D3d12FailedWhy;
+    /// The chain answered Lost: the loop goes back to D3D11 before its next
+    /// capture. Capture thread only.
+    bool m_PipelineLost = false;
     /// The SDR white the converter holds, in scRGB; 0 until a pipeline has
     /// read one, so the first read after a rebuild is always applied and
     /// logged. Capture thread only — see applySdrWhite.

@@ -17,6 +17,7 @@
 
 #include "D3d12Device.h"
 
+#include "mw/native/EncoderTuning.h"
 #include "../../../core/Log.h"
 #include "../StreamPriority.h"
 
@@ -220,6 +221,24 @@ bool D3d12Device::open(IDXGIAdapter1* adapter, std::string& error)
         m_InfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, FALSE);
     }
     return true;
+}
+
+QueueRequest queueRequestFor(D3D12_COMMAND_LIST_TYPE type, const EncoderTuning& tuning,
+                             const wchar_t* name)
+{
+    QueueRequest request;
+    request.type = type;
+    request.name = name;
+    switch (tuning.prio12) {
+    case EncoderTuning::Priority12::Normal: request.priority = QueuePriority::Normal; break;
+    case EncoderTuning::Priority12::High: request.priority = QueuePriority::High; break;
+    case EncoderTuning::Priority12::GlobalRealtime:
+        request.priority = QueuePriority::GlobalRealtime;
+        break;
+    default: request.priority = QueuePriority::Auto; break;
+    }
+    request.ownCreator = tuning.ownCreator12 != EncoderTuning::Choice::Off;
+    return request;
 }
 
 bool D3d12Device::createQueue(const QueueRequest& request, Queue& out, std::string& error)

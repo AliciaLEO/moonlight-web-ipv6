@@ -30,6 +30,10 @@
 #include <memory>
 #include <string>
 
+namespace mw::native {
+struct EncoderTuning;
+}
+
 namespace mw::native::d3d12 {
 
 /// "0x887A0005", the way every D3D12 failure of this directory is logged.
@@ -63,6 +67,12 @@ struct QueueRequest
     /// For PIX and the debug layer's messages.
     const wchar_t* name = nullptr;
 };
+
+/// What a queue of the D3D12 chain asks for under the bench's knobs
+/// (EncoderTuning::prio12, ownCreator12), whose defaults are the engine's
+/// own: the priority the GPU class gives (Auto) and a CreatorID of its own.
+QueueRequest queueRequestFor(D3D12_COMMAND_LIST_TYPE type, const EncoderTuning& tuning,
+                             const wchar_t* name);
 
 /// A queue as it was obtained, which is not always as it was asked for: a
 /// priority the token cannot have is stepped down, never fatal.

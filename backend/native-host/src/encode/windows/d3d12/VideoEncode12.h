@@ -111,6 +111,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D12VideoDevice3> m_Video;
     Microsoft::WRL::ComPtr<ID3D12VideoEncoder> m_Encoder;
     Microsoft::WRL::ComPtr<ID3D12VideoEncoderHeap> m_Heap;
+    /// The queue as the bench's knobs ask it (prio12, creator12).
+    d3d12::QueueRequest m_QueueRequest;
     d3d12::Queue m_Queue;
     Microsoft::WRL::ComPtr<ID3D12CommandAllocator> m_Allocator;
     Microsoft::WRL::ComPtr<ID3D12VideoEncodeCommandList2> m_List;
