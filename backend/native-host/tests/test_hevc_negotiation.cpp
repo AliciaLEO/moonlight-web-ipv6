@@ -183,6 +183,53 @@ void run_hevc_negotiation_tests()
         }
     }
 
+    SECTION("HevcEncodeNegotiation — the coded size is a whole number of coding tree blocks");
+    {
+        // 1440 is 45 CTBs of 32 on the RTX, 22.5 of 64 on the others: coded
+        // 1472 there, 16 chroma rows cropped (27/09/2026: over an SPS of 1440,
+        // every picture of the Arc and the AMD iGPU decoded wrong).
+        HevcEncodeRequest r = request1080p();
+        r.width = 2560;
+        r.height = 1440;
+        Gpu gpus[] = {rtx(), amd(), arc()};
+        const uint32_t heights[] = {1440, 1472, 1472};
+        for (int i = 0; i < 3; ++i) {
+            const HevcEncodeSetup s = negotiateHevc(r, gpus[i]);
+            CHECK(s.ok);
+            CHECK_EQ(s.codedWidth, 2560u);
+            CHECK_EQ(s.codedHeight, heights[i]);
+            const auto sps = paramsets::hevcSps(s.sequence);
+            HevcSpsFields f;
+            CHECK(parseHevcSps(sps.data(), sps.size(), f).empty());
+            CHECK_EQ(f.height, heights[i]);
+            CHECK_EQ(f.cropBottom, (heights[i] - 1440u) / 2);
+        }
+        // The width as well: an ultrawide 3440 is 107.5 CTBs of 32, 53.75 of 64.
+        r.width = 3440;
+        Gpu wide[] = {rtx(), arc()};
+        for (Gpu& g : wide) {
+            const HevcEncodeSetup s = negotiateHevc(r, g);
+            CHECK(s.ok);
+            CHECK_EQ(s.codedWidth, 3456u);
+            const auto sps = paramsets::hevcSps(s.sequence);
+            HevcSpsFields f;
+            CHECK(parseHevcSps(sps.data(), sps.size(), f).empty());
+            CHECK_EQ(f.cropRight, 8u);
+        }
+        // Past the driver's limits once aligned: 4352 lines are 68 CTBs of 64.
+        HevcEncodeRequest tall = request1080p();
+        tall.height = 4340;
+        Gpu a = amd();
+        const HevcEncodeSetup t = negotiateHevc(tall, a);
+        CHECK(t.ok);
+        CHECK_EQ(t.codedHeight, 4352u);
+        tall.height = 4354;
+        Gpu a2 = amd();
+        const HevcEncodeSetup u = negotiateHevc(tall, a2);
+        CHECK(!u.ok);
+        CHECK(u.reason.find("4416 is outside") != std::string::npos);
+    }
+
     SECTION("HevcEncodeNegotiation — intra refresh only over a real sweep");
     {
         HevcEncodeRequest r = request1080p();
@@ -253,8 +300,10 @@ void run_hevc_negotiation_tests()
         Gpu w = rtx();
         const HevcEncodeSetup m = negotiateHevc(small, w);
         CHECK(m.ok);
-        CHECK_EQ(m.codedWidth, 1376u); // 16-aligned; the SPS crops 5 chroma columns
+        CHECK_EQ(m.codedWidth, 1376u); // 43 CTBs of 32; the SPS crops 5 chroma columns
         CHECK_EQ(m.codedHeight, 768u);
+        Gpu w64 = arc();
+        CHECK_EQ(negotiateHevc(small, w64).codedWidth, 1408u); // 22 CTBs of 64
 
         HevcEncodeRequest huge = request1080p();
         huge.width = 8192;

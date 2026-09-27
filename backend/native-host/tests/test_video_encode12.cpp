@@ -287,6 +287,50 @@ void runOn(const std::shared_ptr<d3d12::D3d12Device>& device, bool tenBit)
     encoder.stop();
 }
 
+/// 1440 lines end inside a coding tree block of 64 (the Arc's, the AMD
+/// iGPU's): the driver takes the size in whole CTBs, and encodes at it.
+void wholeBlocksOn(const std::shared_ptr<d3d12::D3d12Device>& device)
+{
+    VideoEncode12 encoder;
+    std::string error;
+    EncoderTuning tuning;
+    if (!encoder.init(device, Codec::Hevc, 2560, 1440, 120, 20000, false, false, tuning, error)) {
+        std::fprintf(stderr, "  %s, 2560x1440: %s\n", device->name().c_str(), error.c_str());
+        CHECK(false);
+        return;
+    }
+    const int ctb = 1 << encoder.setup().blocks.log2MaxCodingBlock;
+    CHECK_EQ(encoder.codedWidth(), 2560);
+    CHECK_EQ(encoder.codedHeight() % ctb, 0);
+    CHECK(encoder.codedHeight() >= 1440 && encoder.codedHeight() < 1440 + ctb);
+    ComPtr<ID3D12Resource> input =
+        picture(device->device(), encoder.codedWidth(), encoder.codedHeight(), false);
+    Uploader uploader;
+    if (!input || !uploader.init(*device, input.Get(), error)) {
+        std::fprintf(stderr, "  %s: the test's upload: %s\n", device->name().c_str(),
+                     error.c_str());
+        CHECK(false);
+        return;
+    }
+    int encoded = 0;
+    for (int n = 0; n < 4; ++n) {
+        encoder.releaseOutput();
+        const uint64_t ready = uploader.upload(input.Get(), n, false, error);
+        EncoderOutput out;
+        if (ready && encoder.encode(input.Get(), uploader.fence.fence(), ready, false,
+                                    static_cast<uint32_t>(n), out, error))
+            ++encoded;
+        else
+            std::fprintf(stderr, "  %s, 2560x1440 frame %d: %s\n", device->name().c_str(), n,
+                         error.c_str());
+    }
+    CHECK_EQ(encoded, 4);
+    encoder.releaseOutput();
+    std::fprintf(stderr, "  %s: 2560x1440 coded %dx%d (CTB %d)\n", device->name().c_str(),
+                 encoder.codedWidth(), encoder.codedHeight(), ctb);
+    encoder.stop();
+}
+
 } // namespace
 #endif
 
@@ -294,8 +338,8 @@ void runOn(const std::shared_ptr<d3d12::D3d12Device>& device, bool tenBit)
 // has it: the IDR with its parameter sets in front, P pictures numbered in
 // order and predicting from the picture HevcDpb chose — after a loss too —
 // the header guard passed, a forced keyframe, a bitrate change where the
-// driver takes one; a short Main 10 run. MW_TEST_DUMP_HEVC=<dir> writes the
-// streams out for ffmpeg.
+// driver takes one; a short Main 10 run; 2560x1440 in whole coding tree
+// blocks. MW_TEST_DUMP_HEVC=<dir> writes the streams out for ffmpeg.
 void run_video_encode12_tests()
 {
 #if defined(_WIN32)
@@ -322,6 +366,7 @@ void run_video_encode12_tests()
         ++ran;
         runOn(device, false);
         runOn(device, true);
+        wholeBlocksOn(device);
     }
     if (ran == 0) std::fprintf(stderr, "  no GPU with D3D12 Video Encode here — skipped\n");
 #endif

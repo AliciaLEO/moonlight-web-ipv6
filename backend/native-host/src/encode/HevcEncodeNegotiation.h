@@ -42,8 +42,9 @@
 //   one L0 reference; reconstructed pictures in a texture array.
 // - Arc A380: 8..64, depth 2, AMP required, P pictures sent as low-delay B;
 //   no rate change without a new sequence.
-// And all three code whole 16-row blocks whatever size the query accepts: the
-// SPS says the aligned size and crops (ParameterSets.h, HevcDialect::D3d12).
+// And all three code whole coding tree blocks, whatever size the query
+// accepts: the stream is coded at a whole number of them, and the SPS says so
+// and crops (ParameterSets.h, HevcDialect::D3d12).
 //
 // The order the proposals are tried in is the product's preference, written
 // here; the questions themselves are VideoEncodeCaps12's, on a device. Pure
@@ -235,20 +236,10 @@ inline HevcEncodeSetup negotiateHevc(const HevcEncodeRequest& request, HevcDrive
         return s;
     }
 
-    // The size: 4:2:0 wants it even; the drivers code whole 16×16 blocks.
+    // The size: 4:2:0 wants it even.
     if (request.width == 0 || request.height == 0 || (request.width | request.height) & 1) {
         s.reason = "a size of " + std::to_string(request.width) + "x" +
                    std::to_string(request.height) + ": 4:2:0 wants it even";
-        return s;
-    }
-    s.codedWidth = (request.width + 15) & ~15u;
-    s.codedHeight = (request.height + 15) & ~15u;
-    if (s.codedWidth < limits.minWidth || s.codedHeight < limits.minHeight ||
-        s.codedWidth > limits.maxWidth || s.codedHeight > limits.maxHeight) {
-        s.reason = std::to_string(s.codedWidth) + "x" + std::to_string(s.codedHeight) +
-                   " is outside what the driver encodes (" + std::to_string(limits.minWidth) + "x" +
-                   std::to_string(limits.minHeight) + " to " + std::to_string(limits.maxWidth) +
-                   "x" + std::to_string(limits.maxHeight) + ")";
         return s;
     }
 
@@ -272,6 +263,27 @@ inline HevcEncodeSetup negotiateHevc(const HevcEncodeRequest& request, HevcDrive
                     }
     if (!found) {
         s.reason = "no block configuration taken";
+        return s;
+    }
+
+    // The coded size, in whole coding tree blocks. The drivers code every CTB
+    // whole, whatever size their support query accepts: over a size that ends
+    // inside one, the decoder infers the splits HEVC makes at a picture's
+    // edge, the driver's slices do not have them, and every picture decodes
+    // wrong from that row or column of blocks on, while ffmpeg flags a few in
+    // a thousand. The lab's pixels against its input (27/09/2026): 1440 lines
+    // over CTBs of 64 (Arc, AMD iGPU), 1080 over 32 or 64, 3440 columns over
+    // either — every picture wrong; in whole CTBs, none. The converter pads
+    // the band past the picture; the SPS crops it.
+    const uint32_t ctb = 1u << s.blocks.log2MaxCodingBlock;
+    s.codedWidth = (request.width + ctb - 1) / ctb * ctb;
+    s.codedHeight = (request.height + ctb - 1) / ctb * ctb;
+    if (s.codedWidth < limits.minWidth || s.codedHeight < limits.minHeight ||
+        s.codedWidth > limits.maxWidth || s.codedHeight > limits.maxHeight) {
+        s.reason = std::to_string(s.codedWidth) + "x" + std::to_string(s.codedHeight) +
+                   " is outside what the driver encodes (" + std::to_string(limits.minWidth) + "x" +
+                   std::to_string(limits.minHeight) + " to " + std::to_string(limits.maxWidth) +
+                   "x" + std::to_string(limits.maxHeight) + ")";
         return s;
     }
 

@@ -30,6 +30,16 @@
 // time is submit to bitstream in hand; --dump writes the stream with our
 // parameter sets, for ffmpeg to check (and `-bsf:v trace_headers` to read the
 // slice headers).
+//
+// ffmpeg's error count is no proof: over a coded size that ended inside a
+// coding tree block, every picture of the Arc's and the AMD iGPU's 1440p
+// streams decoded wrong, and ffmpeg flagged a few in a thousand (27/09/2026).
+// The pixels are the proof: --dump-input writes the eight input pictures (raw
+// NV12, the coded size), frame n being input n % 8, and
+// scripts/bench/hevc-psnr.py compares the decoded stream with them, picture by
+// picture and band by band. A stream decoded as coded holds the same PSNR from
+// its first picture to its last; one that does not falls to noise past the
+// first wrong row of blocks.
 
 #include "Encode.h"
 
@@ -81,7 +91,9 @@ struct Options
     std::string convert = "none";
     std::string bitstream = "auto";
     bool checkSizes = false;
+    std::string align = "ctb";
     std::wstring dump;
+    std::wstring dumpInput;
     std::string gpuClass = "auto";
     std::wstring jsonPath;
     bool json = true;
@@ -164,8 +176,12 @@ bool parse(int argc, wchar_t** argv, Options& o)
             o.bitstream = next();
         } else if (arg == L"--check-sizes") {
             o.checkSizes = true;
+        } else if (arg == L"--align") {
+            o.align = next();
         } else if (arg == L"--dump") {
             o.dump = i + 1 < argc ? argv[++i] : L"";
+        } else if (arg == L"--dump-input") {
+            o.dumpInput = i + 1 < argc ? argv[++i] : L"";
         } else if (arg == L"--class") {
             o.gpuClass = next();
         } else if (arg == L"--json") {
@@ -178,6 +194,8 @@ bool parse(int argc, wchar_t** argv, Options& o)
     }
     if (o.rc != "cbr" && o.rc != "cqp" && o.rc != "delta" && o.rc != "absolute") return false;
     if (o.convert != "none" && o.convert != "ps") return false;
+    if (o.align != "ctb" && o.align != "16" && o.align != "asked") return false;
+    if (!o.dumpInput.empty() && o.convert != "none") return false;
     if (!isGpuClassOption(o.gpuClass)) return false;
     if (o.sourceW <= 0) {
         o.sourceW = o.width;
@@ -214,7 +232,12 @@ void encodeUsage()
         "  --bitstream auto|sysmem|copy\n"
         "  --check-sizes           sysmem: zero the buffer before each frame, then check the\n"
         "                          written size against the data and the subregion metadata\n"
+        "  --align ctb|16|asked    the size the driver codes: whole coding tree blocks (the\n"
+        "                          product's), whole blocks of 16 or the size as asked; the\n"
+        "                          SPS says it and crops (default ctb)\n"
         "  --dump <file.hevc>      the stream with our VPS/SPS/PPS (check with ffmpeg)\n"
+        "  --dump-input <file>     --convert none: the eight input pictures, raw NV12 at the\n"
+        "                          coded size, for a PSNR check of the decoded stream\n"
         "  --class auto|high|normal the process's GPU scheduling class (auto = REALTIME\n"
         "                          where the token allows it, as the product asks); the\n"
         "                          queues follow it\n"
@@ -393,8 +416,16 @@ int runEncode(int argc, wchar_t** argv)
     const D3D12_VIDEO_ENCODER_INTRA_REFRESH_MODE refreshMode =
         o.intraRefresh > 0 ? D3D12_VIDEO_ENCODER_INTRA_REFRESH_MODE_ROW_BASED
                            : D3D12_VIDEO_ENCODER_INTRA_REFRESH_MODE_NONE;
-    D3D12_VIDEO_ENCODER_PICTURE_RESOLUTION_DESC res = {static_cast<UINT>(o.width),
-                                                       static_cast<UINT>(o.height)};
+    // The size the driver codes: whole coding tree blocks, as the product
+    // codes (HevcEncodeNegotiation.h). The drivers code every CTB whole
+    // whatever size they accept, so --align 16 or asked shows what an SPS
+    // that ends inside one does to the pictures.
+    const UINT unit = o.align == "ctb"  ? 8u << cfg.MaxLumaCodingUnitSize
+                      : o.align == "16" ? 16u
+                                        : 1u;
+    D3D12_VIDEO_ENCODER_PICTURE_RESOLUTION_DESC res = {
+        (static_cast<UINT>(o.width) + unit - 1) / unit * unit,
+        (static_cast<UINT>(o.height) + unit - 1) / unit * unit};
     // SUPPORT1 (it knows QualityVsSpeed), the original SUPPORT where a runtime
     // or driver refuses it: the same structure without its last members.
     D3D12_FEATURE_DATA_VIDEO_ENCODER_SUPPORT1 sup = {};
@@ -402,44 +433,38 @@ int runEncode(int argc, wchar_t** argv)
     D3D12_VIDEO_ENCODER_PROFILE_HEVC suggestedProfile = {};
     D3D12_VIDEO_ENCODER_LEVEL_TIER_CONSTRAINTS_HEVC suggestedLevel = {};
     bool ok = false;
-    // The height as asked, then rounded up to 16 (the Arc codes whole
-    // 16-row blocks); each with the flag chain.
-    for (UINT codedH : {res.Height, (res.Height + 15u) & ~15u}) {
-        for (D3D12_VIDEO_ENCODER_RATE_CONTROL_FLAGS flags : flagChain) {
-            rc.Flags = flags;
-            res.Height = codedH;
-            sup = {};
-            sup.Codec = D3D12_VIDEO_ENCODER_CODEC_HEVC;
-            sup.InputFormat = DXGI_FORMAT_NV12;
-            sup.CodecConfiguration = codecCfg;
-            sup.CodecGopSequence = gopDesc;
-            sup.RateControl = rc;
-            sup.IntraRefresh = refreshMode;
-            sup.SubregionFrameEncoding = D3D12_VIDEO_ENCODER_FRAME_SUBREGION_LAYOUT_MODE_FULL_FRAME;
-            sup.ResolutionsListCount = 1;
-            sup.pResolutionList = &res;
-            sup.MaxReferenceFramesInDPB = static_cast<UINT>(o.refs);
-            sup.SuggestedProfile.DataSize = sizeof(suggestedProfile);
-            sup.SuggestedProfile.pHEVCProfile = &suggestedProfile;
-            sup.SuggestedLevel.DataSize = sizeof(suggestedLevel);
-            sup.SuggestedLevel.pHEVCLevelSetting = &suggestedLevel;
-            sup.pResolutionDependentSupport = &limits;
-            HRESULT asked =
-                video->CheckFeatureSupport(D3D12_FEATURE_VIDEO_ENCODER_SUPPORT1, &sup, sizeof(sup));
-            if (FAILED(asked))
-                asked =
-                    video->CheckFeatureSupport(D3D12_FEATURE_VIDEO_ENCODER_SUPPORT, &sup,
+    for (D3D12_VIDEO_ENCODER_RATE_CONTROL_FLAGS flags : flagChain) {
+        rc.Flags = flags;
+        sup = {};
+        sup.Codec = D3D12_VIDEO_ENCODER_CODEC_HEVC;
+        sup.InputFormat = DXGI_FORMAT_NV12;
+        sup.CodecConfiguration = codecCfg;
+        sup.CodecGopSequence = gopDesc;
+        sup.RateControl = rc;
+        sup.IntraRefresh = refreshMode;
+        sup.SubregionFrameEncoding = D3D12_VIDEO_ENCODER_FRAME_SUBREGION_LAYOUT_MODE_FULL_FRAME;
+        sup.ResolutionsListCount = 1;
+        sup.pResolutionList = &res;
+        sup.MaxReferenceFramesInDPB = static_cast<UINT>(o.refs);
+        sup.SuggestedProfile.DataSize = sizeof(suggestedProfile);
+        sup.SuggestedProfile.pHEVCProfile = &suggestedProfile;
+        sup.SuggestedLevel.DataSize = sizeof(suggestedLevel);
+        sup.SuggestedLevel.pHEVCLevelSetting = &suggestedLevel;
+        sup.pResolutionDependentSupport = &limits;
+        HRESULT asked =
+            video->CheckFeatureSupport(D3D12_FEATURE_VIDEO_ENCODER_SUPPORT1, &sup, sizeof(sup));
+        if (FAILED(asked))
+            asked = video->CheckFeatureSupport(D3D12_FEATURE_VIDEO_ENCODER_SUPPORT, &sup,
                                                sizeof(D3D12_FEATURE_DATA_VIDEO_ENCODER_SUPPORT));
-            if (SUCCEEDED(asked) &&
-                (sup.SupportFlags & D3D12_VIDEO_ENCODER_SUPPORT_FLAG_GENERAL_SUPPORT_OK)) {
-                ok = true;
-                break;
-            }
+        if (SUCCEEDED(asked) &&
+            (sup.SupportFlags & D3D12_VIDEO_ENCODER_SUPPORT_FLAG_GENERAL_SUPPORT_OK)) {
+            ok = true;
+            break;
         }
-        if (ok) break;
     }
     if (!ok) {
-        say("the driver takes none of it (validation 0x%x)\n", sup.ValidationFlags);
+        say("the driver takes none of it at %ux%u (validation 0x%x)\n", res.Width, res.Height,
+            sup.ValidationFlags);
         return 1;
     }
     const int codedW = static_cast<int>(res.Width);
@@ -451,9 +476,10 @@ int runEncode(int argc, wchar_t** argv)
         (sup.SupportFlags &
          D3D12_VIDEO_ENCODER_SUPPORT_FLAG_RECONSTRUCTED_FRAMES_REQUIRE_TEXTURE_ARRAYS) != 0;
     const UINT region = limits.QPMapRegionPixelsSize ? limits.QPMapRegionPixelsSize : 16;
-    say("coded %dx%d, rc %s flags 0x%x, support 0x%x, qp-map region %u px, recon %s, rate "
-        "reconfiguration %s, quality vs speed <= %u%s\n",
-        codedW, codedH, o.rc.c_str(), static_cast<unsigned>(rc.Flags), sup.SupportFlags, region,
+    say("coded %dx%d (CTB %u, --align %s), rc %s flags 0x%x, support 0x%x, qp-map region %u px, "
+        "recon %s, rate reconfiguration %s, quality vs speed <= %u%s\n",
+        codedW, codedH, 8u << cfg.MaxLumaCodingUnitSize, o.align.c_str(), o.rc.c_str(),
+        static_cast<unsigned>(rc.Flags), sup.SupportFlags, region,
         reconArrays ? "texture array" : "textures", reconfigurable ? "yes" : "no",
         sup.MaxQualityVsSpeed, ext1 ? (" (asked " + std::to_string(o.qvs) + ")").c_str() : "");
 
@@ -517,14 +543,20 @@ int runEncode(int argc, wchar_t** argv)
     convert::ColorConvert12 converter;
     d3d12::GpuFence converted;
     if (o.convert == "none") {
+        std::ofstream inputDump;
+        if (!o.dumpInput.empty()) inputDump.open(o.dumpInput, std::ios::binary);
         for (int f = 0; f < kFrames; ++f) {
             ComPtr<ID3D12Resource> t =
                 makeTexture(d, static_cast<UINT>(codedW), static_cast<UINT>(codedH), 1,
                             DXGI_FORMAT_NV12, D3D12_RESOURCE_FLAG_NONE);
-            if (!t || !upload(d, direct, t.Get(), nv12Frame(codedW, codedH, f), error)) {
+            const std::vector<std::vector<uint8_t>> planes = nv12Frame(codedW, codedH, f);
+            if (!t || !upload(d, direct, t.Get(), planes, error)) {
                 say("input frames: %s\n", error.c_str());
                 return 1;
             }
+            for (const std::vector<uint8_t>& plane : planes)
+                inputDump.write(reinterpret_cast<const char*>(plane.data()),
+                                static_cast<std::streamsize>(plane.size()));
             inputs.push_back(t);
         }
     } else {
@@ -640,12 +672,9 @@ int runEncode(int argc, wchar_t** argv)
     HevcShape shape;
     shape.width = o.width;
     shape.height = o.height;
-    // Whatever size the driver accepts, the three (NVIDIA, AMD, Intel) code
-    // whole 16-row blocks: 1080 is coded as 1088. An SPS that says 1080 lets
-    // the decoder split the last row of blocks differently, and about one
-    // frame in 300 decodes wrong (26/09/2026). The SPS says 1088 and crops.
-    shape.codedWidth = (codedW + 15) & ~15;
-    shape.codedHeight = (codedH + 15) & ~15;
+    // The size the driver was asked to code, cropped to the size asked.
+    shape.codedWidth = codedW;
+    shape.codedHeight = codedH;
     shape.levelIdc = levelIdc(level.Level);
     shape.log2MinCodingBlock = 3 + static_cast<int>(cfg.MinLumaCodingUnitSize);
     shape.log2MaxCodingBlock = 3 + static_cast<int>(cfg.MaxLumaCodingUnitSize);
@@ -991,7 +1020,7 @@ int runEncode(int argc, wchar_t** argv)
         j.field("kbps", o.kbps).field("qp", o.qp).field("fps", o.fps).field("seconds", o.seconds);
         j.field("coded", std::to_string(codedW) + "x" + std::to_string(codedH));
         j.field("intraRefresh", o.intraRefresh).field("refs", o.refs).field("convert", o.convert);
-        j.field("bitstream", sysmem ? "sysmem" : "copy");
+        j.field("bitstream", sysmem ? "sysmem" : "copy").field("align", o.align);
         j.field("reconfigurable", reconfigurable).field("qpMapRegion", region);
         j.field("frames", frames).field("errors", errors).field("cut", cut);
         j.field("wallPMean", p.mean).field("wallPP50", p.p50).field("wallPP99", p.p99);

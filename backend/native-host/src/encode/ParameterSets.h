@@ -274,10 +274,12 @@ inline std::vector<uint8_t> h264SliceHeader(const H264Sequence& s, const H264Sli
 /// and deblocking control present. What the caller did choose — block sizes,
 /// AMP, SAO, long-term references — comes from the configuration the encoder
 /// was created with. Checked with ffmpeg over the Arc's slices (21/09/2026) and
-/// over the three GPUs of DualRTX (26/09/2026): not one decode error, once the
-/// coded height is a multiple of 16 — the three code whole 16-row blocks
-/// whatever size their support query accepted, and one frame in ~300 decodes
-/// wrong over an SPS that says 1080.
+/// over the three GPUs of DualRTX (26/09/2026), once the coded size is a whole
+/// number of coding tree blocks: the three code every CTB whole, whatever size
+/// their support query accepted. Over an SPS that ends inside them — 1080
+/// lines, 1440 over CTBs of 64, 3440 columns — every picture decodes wrong
+/// from there on, and ffmpeg flags only a few (27/09/2026): its error count is
+/// no proof, the pixels are (the lab's encode probe, --dump-input).
 enum class HevcDialect
 {
     MesaVaapi,
@@ -290,7 +292,8 @@ struct HevcSequence
     uint32_t width = 0;
     uint32_t height = 0;
     /// The picture as coded — a whole number of the blocks the encoder works
-    /// in. The difference goes in the conformance window, in chroma samples.
+    /// in (D3D12: its coding tree blocks). The difference goes in the
+    /// conformance window, in chroma samples.
     uint32_t codedWidth = 0;
     uint32_t codedHeight = 0;
     int levelIdc = 153; ///< 30 × the level number: 153 = 5.1

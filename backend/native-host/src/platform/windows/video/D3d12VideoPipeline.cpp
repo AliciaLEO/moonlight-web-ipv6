@@ -27,8 +27,9 @@ namespace mw::native {
 
 namespace {
 
-/// Every D3D12 Video Encode driver measured codes whole 16x16 blocks,
-/// whatever size it accepts (plan §4.5): the size the converter starts at.
+/// The size the converter starts at: whole blocks of 16. The encoder settles
+/// on whole coding tree blocks (32 or 64, HevcEncodeNegotiation.h), and the
+/// converter is made again at that size.
 int align16(int value)
 {
     return (value + 15) & ~15;
