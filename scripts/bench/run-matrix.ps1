@@ -91,6 +91,10 @@ function New-Row {
         convertMean = $null; convertP50 = $null; convertP99 = $null
         encodeP50 = $null; totalP50 = $null
         pipeline = ''; capture = ''; hags = ''; gpuClass = ''
+        # What the captured display produced, whatever the stream carried:
+        # with a game as the content, the game's own frame rate, up to the
+        # refresh.
+        presents = $null; folded = $null; displayFps = $null
     }
 }
 
@@ -114,7 +118,23 @@ function Read-EngineFacts {
         if ($class -match 'refused|needs') { $gpuClass = '' }
         if ($class -match 'ABOVE_NORMAL instead') { $gpuClass = 'ABOVE_NORMAL' }
     }
-    return @{ hags = ($hags -join '; '); gpuClass = $gpuClass }
+    # The display's rate over the capture loop's span: the presents the loop
+    # woke for, plus those an acquire folded in while the loop was busy
+    # converting or encoding. The stream's cadence takes no part in it.
+    $presents = $null; $span = $null; $folded = $null
+    foreach ($line in $Lines) {
+        if ($line -match 'cadence: .+ (\d+) presents in ([\d.]+) s') {
+            $presents = [int]$Matches[1]
+            $span = [double]::Parse($Matches[2], [Globalization.CultureInfo]::InvariantCulture)
+        }
+        if ($line -match 'capture loop: (\d+) presents folded') { $folded = [int]$Matches[1] }
+    }
+    $displayFps = $null
+    if ($null -ne $presents -and $span -gt 0) {
+        $displayFps = [math]::Round(($presents + [int]$folded) / $span, 1)
+    }
+    return @{ hags = ($hags -join '; '); gpuClass = $gpuClass
+              presents = $presents; folded = $folded; displayFps = $displayFps }
 }
 
 function Measure-Pass {
@@ -250,12 +270,16 @@ foreach ($spec in $Specs) {
         $facts = Read-EngineFacts $(if (Test-Path $errPath) { @(Get-Content $errPath -Encoding UTF8) } else { @() })
         $row.hags = $facts.hags
         $row.gpuClass = $facts.gpuClass
+        $row.presents = $facts.presents
+        $row.folded = $facts.folded
+        $row.displayFps = $facts.displayFps
         foreach ($k in $stats.Keys) { $row[$k] = $stats[$k] }
         $results += [pscustomobject]$row
         Write-Host ("  convert {0} / {1}   encode {2} / {3} / {4}   total {5} / {6} ms   {7} KB   QP {8}   {9} fps" -f `
             $stats.convertMean, $stats.convertP99, $stats.encodeMean, $stats.encodeP50, $stats.encodeP99,
             $stats.totalMean, $stats.totalP99, $stats.deltaKB, $stats.avgQp, $stats.captureFps)
-        Write-Host ("  capture {0}   GPU class {1}   HAGS {2}" -f $row.capture, $row.gpuClass, $row.hags)
+        Write-Host ("  capture {0}   GPU class {1}   HAGS {2}   display {3} fps" -f `
+            $row.capture, $row.gpuClass, $row.hags, $row.displayFps)
     } finally {
         if ($hdrPass) { Exit-PassHdr $HdrDevice $hdrWas }
     }

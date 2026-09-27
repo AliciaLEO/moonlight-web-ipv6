@@ -20,10 +20,21 @@
 # argument into positional ones, and a spec is full of commas already.
 #
 # The summary judges the first arm against each other one on the criteria of
-# gate G0 (plan pipeline-video-d3d12-v2 section 5): host total within 0.2 ms on
-# average and p99 no more than 10 % worse; frames per second within 1 %;
-# bytes per frame and average QP within 3 %. It says which criterion failed -
-# a verdict is for the reader to take or leave, never a reason to stop.
+# a gate of the plan pipeline-video-d3d12-v2 (section 5), -Gate:
+#   G0      the refactor: host total within 0.2 ms on average and p99 no more
+#           than 10 % worse; frames per second within 1 %; bytes per frame
+#           and average QP within 3 %.
+#   G2      a route under a game: host total no worse on average, p99 no more
+#           than 5 % worse, one of the two better by 10 % or 0.5 ms; frames
+#           per second no more than 1 % lower, the display's (the game's) no
+#           more than 2 % lower.
+#   G2rest  the desktop at rest: host total no more than 0.2 ms worse on
+#           average; frames per second no more than 1 % lower.
+# It says which criterion failed - a verdict is for the reader to take or
+# leave, never a reason to stop.
+#
+# -Content none leaves the display as it is: a game in front of it, say,
+# whose frame rate is then the display's (the displayFps column).
 # ============================================================================
 param(
     [Parameter(Mandatory = $true)] [int] $Display,
@@ -34,7 +45,8 @@ param(
     [ValidateSet('scroll', 'still', 'none')] [string] $Content = 'scroll',
     [string] $KioskRect = '',
     [string] $ResultsDir = "$PSScriptRoot\results-ab",
-    [int] $SettleMs = 3500
+    [int] $SettleMs = 3500,
+    [ValidateSet('G0', 'G2', 'G2rest')] [string] $Gate = 'G0'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -90,8 +102,8 @@ for ($round = 1; $round -le $Rounds; $round++) {
         $row | Add-Member -NotePropertyName round -NotePropertyValue $round
         if ($row.error) { Write-Warning "  $($arm.label): $($row.error)" }
         else {
-            Write-Host ("  total {0} / p99 {1} ms   {2} fps   {3} KB   QP {4}" -f `
-                $row.totalMean, $row.totalP99, $row.captureFps, $row.deltaKB, $row.avgQp)
+            Write-Host ("  total {0} / p99 {1} ms   {2} fps (display {3})   {4} KB   QP {5}" -f `
+                $row.totalMean, $row.totalP99, $row.captureFps, $row.displayFps, $row.deltaKB, $row.avgQp)
         }
         $rows += $row
     }
@@ -123,6 +135,7 @@ foreach ($arm in $armList) {
         encodeMean = Mean ($mine | ForEach-Object { Num $_.encodeMean })
         encodeP99  = Mean ($mine | ForEach-Object { Num $_.encodeP99 })
         fps        = Mean ($mine | ForEach-Object { Num $_.captureFps })
+        displayFps = Mean ($mine | ForEach-Object { Num $_.displayFps })
         deltaKB    = Mean ($mine | ForEach-Object { Num $_.deltaKB })
         avgQp      = Mean ($mine | ForEach-Object { Num $_.avgQp })
         gpuClass   = (@($mine | ForEach-Object { $_.gpuClass } | Sort-Object -Unique) -join '/')
@@ -130,24 +143,47 @@ foreach ($arm in $armList) {
 }
 
 Write-Host ''
-$summary | Format-Table arm, passes, totalMean, totalP99, encodeMean, encodeP99, fps, deltaKB, avgQp, gpuClass -AutoSize
+$summary | Format-Table arm, passes, totalMean, totalP99, encodeMean, encodeP99, fps, displayFps, deltaKB, avgQp, gpuClass -AutoSize
 
-# The gate G0 criteria, first arm against each other one.
+# The gate's criteria, first arm against each other one.
 function Pct($a, $b) { if ($null -eq $a -or $null -eq $b -or $a -eq 0) { return $null } ; return 100.0 * ($b - $a) / $a }
+# At least this much better: 10 % of the reference, or 0.5 ms.
+function Gains($a, $b) { $null -ne $a -and $null -ne $b -and ($a - $b -ge 0.5 -or $a - $b -ge 0.1 * $a) }
 $ref = $summary[0]
 $verdicts = @()
 foreach ($other in @($summary | Select-Object -Skip 1)) {
-    $checks = [ordered]@{
-        'host total mean within 0.2 ms' = ($null -ne $ref.totalMean -and $null -ne $other.totalMean -and
-                                          [math]::Abs($other.totalMean - $ref.totalMean) -le 0.2)
-        'host total p99 at most +10 %'  = ((Pct $ref.totalP99 $other.totalP99) -le 10)
-        'frames per second within 1 %'  = ([math]::Abs((Pct $ref.fps $other.fps)) -le 1)
-        'bytes per frame within 3 %'    = ([math]::Abs((Pct $ref.deltaKB $other.deltaKB)) -le 3)
-        'average QP within 3 %'         = ($null -eq $ref.avgQp -or [math]::Abs((Pct $ref.avgQp $other.avgQp)) -le 3)
+    $both = $null -ne $ref.totalMean -and $null -ne $other.totalMean
+    $checks = switch ($Gate) {
+        'G0' {
+            [ordered]@{
+                'host total mean within 0.2 ms' = ($both -and [math]::Abs($other.totalMean - $ref.totalMean) -le 0.2)
+                'host total p99 at most +10 %'  = ((Pct $ref.totalP99 $other.totalP99) -le 10)
+                'frames per second within 1 %'  = ([math]::Abs((Pct $ref.fps $other.fps)) -le 1)
+                'bytes per frame within 3 %'    = ([math]::Abs((Pct $ref.deltaKB $other.deltaKB)) -le 3)
+                'average QP within 3 %'         = ($null -eq $ref.avgQp -or [math]::Abs((Pct $ref.avgQp $other.avgQp)) -le 3)
+            }
+        }
+        'G2' {
+            [ordered]@{
+                'host total mean no worse'               = ($both -and $other.totalMean -le $ref.totalMean)
+                'host total p99 at most +5 %'            = ((Pct $ref.totalP99 $other.totalP99) -le 5)
+                'mean or p99 better by 10 % or 0.5 ms'   = ((Gains $ref.totalMean $other.totalMean) -or
+                                                            (Gains $ref.totalP99 $other.totalP99))
+                'frames per second at most 1 % lower'    = ((Pct $ref.fps $other.fps) -ge -1)
+                'display frames per second at most 2 % lower' = ($null -eq $ref.displayFps -or
+                                                                 (Pct $ref.displayFps $other.displayFps) -ge -2)
+            }
+        }
+        'G2rest' {
+            [ordered]@{
+                'host total mean at most 0.2 ms worse' = ($both -and $other.totalMean - $ref.totalMean -le 0.2)
+                'frames per second at most 1 % lower'  = ((Pct $ref.fps $other.fps) -ge -1)
+            }
+        }
     }
     $failed = @($checks.Keys | Where-Object { -not $checks[$_] })
     $line = "{0} against {1}: {2}" -f $other.arm, $ref.arm,
-        $(if ($failed.Count -eq 0) { 'all G0 criteria met' } else { 'NOT met: ' + ($failed -join '; ') })
+        $(if ($failed.Count -eq 0) { "all $Gate criteria met" } else { 'NOT met: ' + ($failed -join '; ') })
     Write-Host $line
     $verdicts += $line
 }
