@@ -1123,6 +1123,18 @@ void printAnswer(const char* id, const SupportAnswer& a, Json& j)
     j.endObject();
 }
 
+/// A driver that faults inside the question is reported, not fatal: it
+/// answers with the exception's code (0xC0000005 for the N95's UHD Graphics
+/// on the absolute QP map, driver 32.0.101.7088, 27/09).
+HRESULT askGuarded(ID3D12VideoDevice3* v, D3D12_FEATURE_VIDEO feature, void* data, UINT size)
+{
+    __try {
+        return v->CheckFeatureSupport(feature, data, size);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return static_cast<HRESULT>(GetExceptionCode());
+    }
+}
+
 /// SUPPORT1 first; a runtime or driver that refuses it is asked the original
 /// SUPPORT, and the report says which one answered.
 template <typename Fill>
@@ -1137,7 +1149,7 @@ SupportAnswer askSupport(ID3D12VideoDevice3* v,
     s1.ResolutionsListCount = static_cast<UINT>(res.size());
     s1.pResolutionList = res.data();
     s1.pResolutionDependentSupport = a.limits.data();
-    a.result = v->CheckFeatureSupport(D3D12_FEATURE_VIDEO_ENCODER_SUPPORT1, &s1, sizeof(s1));
+    a.result = askGuarded(v, D3D12_FEATURE_VIDEO_ENCODER_SUPPORT1, &s1, sizeof(s1));
     if (SUCCEEDED(a.result)) {
         a.usedSupport1 = true;
         a.support = s1.SupportFlags;
@@ -1152,7 +1164,7 @@ SupportAnswer askSupport(ID3D12VideoDevice3* v,
     s.ResolutionsListCount = static_cast<UINT>(res.size());
     s.pResolutionList = res.data();
     s.pResolutionDependentSupport = a.limits.data();
-    a.result = v->CheckFeatureSupport(D3D12_FEATURE_VIDEO_ENCODER_SUPPORT, &s, sizeof(s));
+    a.result = askGuarded(v, D3D12_FEATURE_VIDEO_ENCODER_SUPPORT, &s, sizeof(s));
     a.support = s.SupportFlags;
     a.validation = s.ValidationFlags;
     a.level = levelName();
