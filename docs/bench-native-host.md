@@ -1576,6 +1576,144 @@ dans ffmpeg sans erreur.
   sortait deux fois par pause de la souris.
 - Reste : le changement de mode, qui demande un écran virtuel.
 
+### 8n.4 G2 : la chaîne D3D12 contre D3D11, en REALTIME (27/09/2026)
+
+**Montage.**
+- Un seul binaire pour les deux bras : `pipeline=d3d11` contre
+  `pipeline=d3d12,strict12=1`. Il est figé dans `bench-out\d3d12v2\g2-bin`
+  (`987575cf`), et les sorties sont dans `bench-out\d3d12v2\g2`. Le fichier
+  `NOTES.txt` y dit quel binaire a fait quel cas.
+- Classe GPU REALTIME : un exécuteur élevé, lancé par un clic UAC de Bruno,
+  ne fait tourner que `ab-native-bench.ps1`, avec des paramètres vérifiés.
+  HAGS actif sur la RTX.
+- HEVC à 20 Mb/s, passes de 12 s. Tours alternés : 4 sur la RTX, 8 sur
+  l'Arc et au repos.
+- Sous RE9, le contenu est le jeu lui-même : sa fenêtre au premier plan
+  sur l'écran capturé, rien d'autre qui bouge (`-Content none`). La
+  cadence de l'écran est alors celle du jeu, sous les 120 Hz de l'écran.
+  Le banc la lit dans le journal du moteur : présentations vues plus
+  regroupées, sur la durée de la boucle (colonne `displayFps`, `29fe015a`).
+- RTX : réglages de la copie (ray tracing haut). Le jeu tourne à ~63 i/s.
+- Arc : avec les mêmes réglages, le jeu y tombe à 6 i/s, et une passe de
+  12 s n'a plus que ~75 images, dont le p99 est la pire. Pour ses passes,
+  ray tracing coupé et FSR1 en mode performance, le reste au préréglage
+  « Highest » : le jeu tourne à ~25 i/s, GPU à 97-100 %. `config.ini` est
+  restauré après chaque essai, empreinte vérifiée.
+- iGPU AMD : au repos seulement (RE9 n'y tourne pas).
+
+**Deux défauts trouvés par G2**, corrigés avant les chiffres ci-dessous.
+- `5e1e0630` : la session prenait sa classe GPU **après** avoir construit
+  sa chaîne.
+  - Les files D3D12 naissaient donc en HIGH sous REALTIME. Le journal
+    disait « DIRECT queue HIGH », et la ligne de classe venait après.
+  - Le labo de G1 prenait la classe en premier, d'où l'écart.
+  - Les files sont maintenant en `GLOBAL_REALTIME` sur la RTX et l'Arc ;
+    l'AMD retombe en HIGH, comme prévu.
+  - Sur la RTX, les chiffres ne bougent pas : 5,68 ms en HIGH, 5,70 en
+    `GLOBAL_REALTIME`.
+- `987575cf` : la chaîne déclarait le GPU perdu après 500 ms sur une
+  attente, et la session repassait en D3D11 pour de bon.
+  - La première endurance l'a fait au bout de 88 s.
+  - Or D3D11, dans les 28 minutes qui ont suivi, a attendu plus de 500 ms
+    à 47 reprises, jusqu'à 1,5 s, et a continué : le GPU était occupé, pas
+    perdu.
+  - La limite passe à 3 s, au-delà du TDR de Windows (2 s), qui retire le
+    device d'un GPU vraiment bloqué.
+
+**Sous RE9.** `host_total` moyen / p99 en ms (moyenne des passes), images
+capturées par seconde, cadence du jeu.
+
+| cas | tours | D3D11 | D3D12 | écart moyenne / p99 | i/s capturées | jeu (i/s) | critères G2 |
+|---|---|---|---|---|---|---|---|
+| RTX 1080p60 | 4 | 2,24 / 3,53 | 5,70 / 7,02 | +3,46 / +3,49 | 56,0 → 56,4 | 62,4 → 62,8 | moyenne et p99 non tenus |
+| RTX 1080p120 | 4 | 2,24 / 3,53 | 5,69 / 7,01 | +3,45 / +3,48 | 62,0 → 61,5 | 62,4 → 62,4 | moyenne et p99 non tenus |
+| Arc 1080p60 | 8 | 10,79 / 48,7 | 5,94 / 29,6 | −45 % / −39 % | 23,6 → 24,3 | 25,2 → 25,1 | tous tenus |
+| Arc 1080p120 | 8 | 11,59 / 39,3 | 5,59 / 25,1 | −52 % / −36 % | 23,6 → 24,1 | 24,9 → 24,8 | tous tenus |
+
+- Sur toutes les images de chaque bras, le p99 dit la même chose : RTX
+  3,5 → 7,0 ms, Arc 40,4 → 28,7 (60 i/s) et 40,1 → 22,0 (120 i/s).
+- Sur la RTX, D3D12 Video Encode coûte 5,3 ms par image, contre 1,9 pour
+  NVENC. La conversion D3D12 (0,28 ms) n'y est pour rien.
+- Sur l'Arc, la plus longue image D3D12 de ses 16 passes fait 237 ms ;
+  côté D3D11, 855 ms.
+- Le jeu ne perd rien avec D3D12 : sa cadence reste à 0,7 % près sur les
+  deux GPU.
+
+**Au repos** (page qui défile à 120 Hz), 8 tours.
+
+| cas | D3D11 | D3D12 | écart moyenne | i/s capturées | critère « repos » (+0,2 ms) |
+|---|---|---|---|---|---|
+| RTX 1080p60 | 2,13 / 3,56 | 7,92 / 9,50 | +5,79 | 60,0 → 60,0 | non tenu |
+| Arc 1080p60 | 6,30 / 18,6 | 6,25 / 21,3 | −0,05 | 58,6 → 58,9 | tenu |
+| iGPU AMD 1080p60 | 8,67 / 14,7 | 15,34 / 21,3 | +6,67 | 59,9 → 59,9 | non tenu |
+| iGPU AMD 1080p120 | 8,50 / 14,6 | 16,61 / 22,6 | +8,11 | 116,1 → 79,8 | non tenu |
+
+- Arc : le p99 est bruité (+14 % en moyenne des passes, −4 % sur toutes
+  les images). Au tour 7 (bras D3D12) et au tour 8 (les deux bras), l'Arc
+  monte à 10-12 ms, quelle que soit la route.
+- iGPU AMD : Video Encode prend 12 à 13 ms par image. À 120 i/s, la
+  chaîne ne tient plus la cadence.
+- Au repos, la cadence de l'écran diffère de 5,8 % sur l'Arc (121,8 contre
+  114,7). Ce n'est pas le bureau qui ralentit : les présentations vues sont
+  les mêmes (~1350 par passe), seules les regroupées changent (~120 contre
+  ~46), et leur nombre suit le rythme de la boucle. D3D11 compte même 123
+  i/s sur un écran à 120 Hz. À 25 i/s sous RE9, où presque rien n'est
+  regroupé, la mesure est juste.
+
+**Endurance** : Arc sous RE9, 1080p60, 30 min, route D3D12 telle que le
+produit la prend (sans `strict12`), flux enregistré.
+- 1re (`5e1e0630`) : D3D12 tient 88 s (5,16 ms, p99 10,5, max 55), puis
+  une attente passe 500 ms et la session repasse en D3D11 (défaut corrigé
+  par `987575cf`, plus haut). D3D11 fait ensuite 10,46 ms, p99 28,6,
+  p99,9 542, max 1486.
+- 2e (`987575cf`) : pas de repli sur délai. À 160 s, la duplication est
+  perdue, puis refusée (`0x80070005`, la réponse de Windows quand le bureau
+  affiché n'est pas celui de l'utilisateur : invite UAC, verrouillage,
+  Ctrl+Alt+Suppr). La capture passe alors sur Windows.Graphics.Capture,
+  qui ne livre qu'à D3D11, et y reste jusqu'à la fin.
+  - Le worker du produit installé est SYSTEM et suit le bureau sécurisé
+    (`attachThread`). Ce repli ne touche que les workers non SYSTEM : le
+    banc, l'édition `--dev`.
+  - Défaut à part, pour la phase 8 : après un seul refus, un worker non
+    SYSTEM ne revient jamais à la duplication, ni à D3D12.
+- 3e (`987575cf`) : **27 min de D3D12 sans repli** (1622 s, 36 143
+  images). Moyenne 7,26 ms, p99 12,0, p99,9 59,9, max 185 ; aucune
+  attente au-delà de 500 ms. À 27 min, le même refus fait passer la
+  capture sur WGC, donc en D3D11, pour les 3 dernières minutes. Les
+  overlays de NVIDIA et d'AMD redémarrent dans les 20 s qui suivent : c'est
+  un événement de la session, pas du banc.
+- Les trois flux se décodent sans erreur dans ffmpeg (39 000 à 43 000
+  images chacun). Les images relevées toutes les 5 min sont propres
+  jusqu'à la dernière ligne.
+
+**Ce que G2 ne mesure pas encore.**
+- Le clic → photon : seule la part de l'hôte (`host_total`) est mesurée.
+  Le reste de la chaîne (réseau, décodage, affichage) reçoit le même flux.
+  À mesurer en C5.7, sur l'édition installée, dont le worker SYSTEM a
+  REALTIME.
+- La qualité sur l'Arc : son QP est inconnu (-1), et ses images D3D12 sont
+  à la taille plafond (32,5 Ko en 1080p60, contre 40,0 pour oneVPL ; 20,3
+  contre 12,9 en 1080p120). À juger avec le contrôle de débit maison
+  (phase 6, G3).
+- La colonne `pipeline` du banc donne la route de départ, pas la route
+  courante : un repli ne se voit que dans le journal.
+
+**Verdict G2 (recommandation ; Bruno tranche).**
+- **RTX** : D3D12 Video Encode n'est pas candidat au défaut. Il coûte
+  +3,5 ms sous RE9, +5,8 ms au repos, et double le p99. Le jeu n'y perd
+  aucune image. La RTX reste en D3D11 (NVENC) ; sa route D3D12 est
+  NVENC-D3D12 (phase 7, G4).
+- **Arc** : candidat. Sous RE9, −45 à −52 % sur la moyenne et −36 à −39 %
+  sur le p99, pour un jeu qui ne perd rien ; au repos, égal en moyenne.
+  En endurance, 27 min sans repli ni image fausse. Les 30 min du critère
+  n'ont pas été atteintes : deux fois, la duplication a été refusée hors
+  du bureau de l'utilisateur, ce qu'un worker SYSTEM aurait traversé.
+- Le passage de l'Arc à D3D12 par défaut attend de toute façon le contrôle
+  de débit maison (phase 6, G3) : D3D12 Video Encode ne change pas de
+  débit sur l'Arc.
+- **iGPU AMD** : pas candidat. +6,7 ms à 60 i/s, +8,1 ms et 31 % d'images
+  en moins à 120 i/s. Reste AMF-DX12 (G4).
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
