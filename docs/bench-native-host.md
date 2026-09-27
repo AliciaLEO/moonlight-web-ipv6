@@ -2004,11 +2004,20 @@ du plan).
 - Tests natifs des groupes D3D12 sur le N95 : 622 vérifications, 0 échec
   (négociation, device, interop DDA, conversion, encodeur sur le vrai
   pilote).
-- ⚠️ La sonde `caps` du labo plante dans le pilote (`igd12dxva64.dll`,
-  violation d'accès), après la ligne `cbr+vbv+maxframe` de HEVC Main.
-  Première suspecte : la requête `absolute-qp-map`, que le N95 annonce et que
-  l'Arc refuse. Le produit ne fait pas cette requête. Pour trouver la ligne
-  exacte, il faut un labo qui vide sa sortie à chaque ligne.
+- ⚠️ La sonde `caps` du labo plantait dans le pilote (`igd12dxva64.dll`,
+  violation d'accès).
+  - Le labo sans tampon de sortie (`7a9974c2`) a trouvé la requête : le
+    support du mode `absolute-qp-map` en HEVC. La même requête avec le
+    drapeau EXTENSION1 obtient une réponse. Le produit ne fait ni l'une ni
+    l'autre.
+  - Depuis `a0fd976f`, le labo rapporte la faute comme réponse
+    (0xC0000005) et continue : Main 10 comme Main, 4:4:4 sans configuration
+    acceptée, H.264 High.
+- Le N95 énumère l'UHD quatre fois : quatre LUID distincts, un seul avec
+  les écrans. Trois pilotes d'écran virtuel IddCx y sont actifs (Parsec,
+  Virtual Display Driver, SudoMaker).
+  - Les tests natifs « sur chaque GPU » y tournent donc quatre fois.
+  - La sonde du produit liste quatre UHD.
 - Flux : 10 s de défilement enregistrées, décodées par ffmpeg sans erreur ;
   image nette jusqu'en bas (1088 recadré en 1080).
 
@@ -2163,15 +2172,15 @@ p99.
   flux est valide (ffmpeg, image nette), mais il paie le débit sans rien
   coder de plus.
 - Sous ce CBR, le pilote rapporte un `AverageQP` de 184, hors de la plage
-  HEVC. La télémétrie doit l'ignorer au-delà de 51 et lire la tranche
-  (correctif à venir). Ce chemin n'est pas celui du produit sur Intel.
+  HEVC. Depuis `e66a4b56`, la télémétrie l'ignore au-delà de 51 et lit la
+  tranche. Ce chemin n'est pas celui du produit sur Intel.
 
 **Critères G3 sur le N95.**
 - Débit à ±10 % : non tenu.
   - Sur du texte : 0 fenêtre sur 9, toutes sous la cible.
   - Sur le clip : 2 sur 9 (0,85 à 0,92).
-  - Deux causes : le ré-encodage (corrigeable, §9-14), et les 5 à 8 %
-    d'images que le N95 ne capture pas.
+  - Deux causes : le ré-encodage (corrigeable, §9-14 ; 0,68 → 0,83 avec
+    `refit=1`, §8n.9), et les 5 à 8 % d'images que le N95 ne capture pas.
 - p95 ≤ 2 × budget : tenu sur le clip (1,29), limite sur le texte (2,01 à
   2,08).
 - Marches suivies en 3 images : 7 fois sur 10 (D3D11 : 5 sur 10).
@@ -2184,11 +2193,82 @@ p99.
 - Aucun repli, flux valide.
 
 **Reste.**
-- Le correctif du ré-encodage (§9-14), puis ses passes sur le N95 et l'Arc.
+- Le correctif du ré-encodage (§9-14) : fait, passé au banc du N95 (§8n.9).
+  Restent ses passes sur l'Arc.
 - Le SFC sur le N95, si Bruno le retient (§9-15).
 - Le témoin RTX.
 - Le profil « Internet ».
 - Le test de Bruno.
+
+### 8n.9 Le ré-encodage « sous la ligne » (`refit=1`) au banc du N95 (27/09/2026)
+
+**Montage.**
+- Binaires de `e66a4b56`, qui ajoute la clé de banc `refit=0|1` (désactivée
+  par défaut). Même exécuteur élevé qu'au §8n.8 : classe REALTIME, HEVC
+  1080p60, 20 Mb/s, `governor=0`.
+- Passes seules, alternées A-B puis B-A :
+  - défilement : 4 passes de 30 s par bras ;
+  - pause puis défilement : 2 × 24 s ;
+  - rampe 20 ↔ 5 Mb/s : 2 × 20 s ;
+  - clip de jeu : 2 × 20 s.
+- Sorties dans `bench-out\d3d12v2\n95\refit`.
+
+| contenu | mesure | `refit=0` (aujourd'hui) | `refit=1` |
+|---|---|---|---|
+| défilement | débit / cible, fenêtres de 2 s | 0,68 ; 0 / 56 à ±10 % | 0,83 ; 6 / 56 |
+| | taille / budget : moy. / p95 | 0,72 / 2,03 | 0,89 / 2,07 |
+| | images recodées ; recodées deux fois | 15,7 % ; — | 9,5 % ; 25 (0,4 %) |
+| | très au-dessus (> 2,5 budgets) | 12 | 0 |
+| pause puis défilement | débit / cible | 0,59 | 0,79 |
+| | première image après l'arrêt : moy. / max | 0,61 / 1,71 budget | 0,69 / 1,60 |
+| | très au-dessus | 2 | 0 |
+| rampe | marches suivies en 3 images | 13 / 20 (montées : 3 / 10) | 18 / 20 (montées : 8 / 10) |
+| | très au-dessus | 4 | 0 |
+| clip de jeu | débit / cible ; taille / budget | 0,86 ; 0,93 | 0,86 ; 0,93 |
+| toutes les passes | `host_total` moy. / p95 / p99 | 9,55 / 15,7 / 33,7 ms | 9,58 / 16,5 / 33,3 ms |
+
+(« Très au-dessus » : le compte de l'encodeur, voir plus bas. Latence sur
+12 600 images par bras.)
+
+- Le rejeu du §8n.8 est confirmé : il prédisait 0,893 du budget par image
+  sur le texte, le banc mesure 0,889.
+- Sur le fil, le texte passe de 0,68 à 0,83 de la cible. Chaque image reste
+  à 0,89 de son budget, et la capture coûte le reste : le N95 livre 56 à 57
+  images sur 60, et 0,94 × 0,89 ≈ 0,84.
+- Le critère ±10 % n'est toujours pas tenu sur ce N95 (6 fenêtres sur 56).
+- Rampe : les montées sont suivies bien plus vite. À 5 Mb/s, le ré-encodage
+  d'aujourd'hui pousse le QP jusqu'à 40-51, et après la montée il faut
+  plusieurs images pour en redescendre. Avec `refit=1`, la phase basse
+  finit vers QP 36-38. Les descentes étaient déjà suivies (10 sur 10 dans
+  les deux bras).
+- Le clip de jeu ne bouge pas : 0,5 % d'images recodées dans les deux bras.
+- La latence ne bouge pas. Le coût, c'est un troisième encodage sur 0,4 %
+  des images de texte (environ 6 ms de plus chacune sur le N95).
+
+**Le compte des images très au-dessus.**
+- `rate-report.py` en trouve 32 dans les passes de rampe `refit=1`,
+  l'encodeur aucune.
+- 5 sont des images de marche : codées juste avant une descente, elles
+  portent déjà la nouvelle cible dans le CSV. Les passes `refit=0` en ont
+  aussi.
+- Les 27 autres sont dans une passe où Chrome a ralenti : les images sont
+  arrivées à 33, puis 54 par seconde. La session donne alors à l'encodeur
+  le budget des images qui arrivent vraiment (`EffectiveCadence`) : 36 363,
+  puis 22 222 kb/s par seconde d'images, pour 20 000 sur le fil.
+- L'outil, lui, divise toujours la cible du banc par 60. Ces images, à 2,5
+  à 3,5 fois ce budget nominal, restaient sous 2,5 fois le budget réel.
+- Le compte juste est donc celui de l'encodeur. Il faudra donner à l'outil
+  le budget de l'encodeur, image par image (une colonne du CSV).
+- Ces ralentissements de Chrome touchent 4 passes `refit=1` et 1 passe
+  `refit=0`. Les présentations par seconde diffèrent peu : 57,1 contre
+  56,2 sur le défilement (`refit=0` puis `refit=1`), égales ou meilleures
+  avec `refit=1` sur les autres contenus. Et `refit=1` recode moins
+  d'images. Rien n'accuse l'encodeur, mais c'est à surveiller sur l'Arc.
+
+**Conclusion.** Le correctif tient ce que le rejeu promettait : 22 % de
+débit en plus sur le texte, plus aucune image très au-dessus, les marches
+mieux suivies, le clip et la latence inchangés. → Décision §9-14 du plan :
+l'activer par défaut après ses passes sur l'Arc.
 
 ## 9. Pour l'A/B
 
