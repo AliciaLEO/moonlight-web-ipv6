@@ -54,6 +54,12 @@ namespace mw::native::platform {
 /// on such an adapter should be captured AND encoded there, since DXGI routes
 /// both to the same silicon.
 ///
+/// Since 27/09/2026 the probe leaves out the ones without a screen
+/// (WindowsProbe.cpp, IndirectDisplay.h): DXGI puts a virtual display's screens
+/// under the GPU rendering for it, so a screenless one is that GPU listed
+/// twice, and asking it again cost every probe one encoder session per virtual
+/// display driver. One that carries a screen is still asked like any GPU.
+///
 /// The lesson is narrower than "filter the fakes": it is that the vendor id
 /// picks WHICH API to ask, and only the API's own answer says what a codec list
 /// contains. NVIDIA does that now. AMD and Intel do not yet, so they claim no

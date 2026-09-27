@@ -8,6 +8,7 @@
 
 #ifdef _WIN32
 #include "encode/windows/MfCapabilities.h"
+#include "platform/windows/IndirectDisplay.h"
 #endif
 
 #include <string>
@@ -198,6 +199,23 @@ void run_capabilities_tests()
         // Selector down the cross-GPU path on a machine that does not need it.
         for (const DisplayInfo& d : caps.displays)
             CHECK(caps.gpuFor(d) != nullptr);
+
+#ifdef _WIN32
+        // A virtual display driver's adapter goes by the name of the GPU that
+        // renders for it; listed without a screen, it is that GPU twice (four
+        // "UHD Graphics" on the N95, a second Arc A380 beside Parsec on
+        // DualRTX), and each probe asked its encoders again.
+        for (const GpuInfo& gpu : caps.gpus) {
+            LUID luid = {};
+            luid.LowPart = static_cast<DWORD>(gpu.nativeHandle & 0xFFFFFFFFu);
+            luid.HighPart = static_cast<LONG>(gpu.nativeHandle >> 32);
+            if (!platform::isIndirectDisplayOnly(luid)) continue;
+            bool drivesOne = false;
+            for (const DisplayInfo& d : caps.displays)
+                drivesOne = drivesOne || d.gpuId == gpu.id;
+            CHECK(drivesOne);
+        }
+#endif
     }
 
 #ifdef _WIN32

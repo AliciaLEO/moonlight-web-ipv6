@@ -8,6 +8,7 @@
 #include "encode/HevcDpb.h"
 #include "encode/HevcSliceParser.h"
 #include "encode/windows/d3d12/VideoEncode12.h"
+#include "platform/windows/IndirectDisplay.h"
 #include "platform/windows/d3d12/D3d12Device.h"
 
 #include <dxgi1_4.h>
@@ -514,7 +515,11 @@ void run_video_encode12_tests()
         DXGI_ADAPTER_DESC1 desc = {};
         adapter->GetDesc1(&desc);
         const uint64_t luid = d3d12::luidValue(desc.AdapterLuid);
-        if ((desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) || !seen.insert(luid).second) continue;
+        // A virtual display driver's adapter is the GPU rendering for it,
+        // listed again under a LUID of its own (IndirectDisplay.h).
+        if ((desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) || !seen.insert(luid).second ||
+            mw::native::platform::isIndirectDisplayOnly(desc.AdapterLuid))
+            continue;
         std::string error;
         const std::shared_ptr<d3d12::D3d12Device> device =
             d3d12::D3d12Device::forAdapter(adapter.Get(), error);

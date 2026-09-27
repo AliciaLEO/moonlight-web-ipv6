@@ -6,6 +6,7 @@
 
 #if defined(_WIN32)
 #include "encode/windows/d3d12/VideoEncodeCaps12.h"
+#include "platform/windows/IndirectDisplay.h"
 #include "platform/windows/d3d12/D3d12Device.h"
 
 #include <dxgi1_4.h>
@@ -53,7 +54,11 @@ void run_video_encode_caps12_tests()
         const uint64_t luid =
             (static_cast<uint64_t>(static_cast<uint32_t>(desc.AdapterLuid.HighPart)) << 32) |
             desc.AdapterLuid.LowPart;
-        if ((desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) || !seen.insert(luid).second) continue;
+        // A virtual display driver's adapter is the GPU rendering for it,
+        // listed again under a LUID of its own (IndirectDisplay.h).
+        if ((desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) || !seen.insert(luid).second ||
+            mw::native::platform::isIndirectDisplayOnly(desc.AdapterLuid))
+            continue;
         std::string error;
         const std::shared_ptr<d3d12::D3d12Device> device =
             d3d12::D3d12Device::forAdapter(adapter.Get(), error);

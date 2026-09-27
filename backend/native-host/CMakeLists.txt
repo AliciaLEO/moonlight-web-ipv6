@@ -38,6 +38,7 @@ if(WIN32)
     target_sources(mw-native-host PRIVATE
         src/platform/windows/WindowsProbe.cpp
         src/platform/windows/WindowsEncoderProbe.cpp
+        src/platform/windows/IndirectDisplay.cpp
         src/platform/windows/WindowsSession.cpp
         src/platform/windows/InputDesktop.cpp
         src/platform/windows/CrossGpuBridge.cpp
