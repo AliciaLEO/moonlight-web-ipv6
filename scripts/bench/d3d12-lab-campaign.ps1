@@ -11,8 +11,12 @@
 # from an elevated one (REALTIME, GLOBAL_REALTIME queues). -Loads external
 # measures under whatever already runs (a game started by hand: RE9).
 #
-#   .\d3d12-lab-campaign.ps1 [-Gpus rtx,arc,amd] [-Loads rest,load]
+#   .\d3d12-lab-campaign.ps1 [-Gpus rtx,arc,amd|n95] [-Loads rest,load]
 #                            [-Seconds 12] [-Out <dir>] [-Build <dir>]
+#
+# n95 is the Intel UHD Graphics of the N95 bench (mw-intel): no temperature
+# sensor, and a load calibrated to 45 fps settles at a level that runs at 52,
+# so the load there is the level measured on 24/09/2026 (1.05, ~47 fps).
 #
 # mw-gpu-load never runs more than 60 s and stops itself when its GPU runs
 # hot, so every probe call below fits one load run of its own: the load
@@ -44,12 +48,14 @@ foreach ($f in @($lab, $loadExe)) { if (-not (Test-Path $f)) { throw "missing $f
 
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 $token = if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { 'elevated' } else { 'limited' }
-$names = @{ rtx = 'RTX'; arc = 'Arc'; amd = 'AMD' }
+$names = @{ rtx = 'RTX'; arc = 'Arc'; amd = 'AMD'; n95 = 'UHD' }
+$loadExtra = @{ n95 = @('--level', '1.05', '--allow-no-sensor') }
 Write-Host "d3d12-lab campaign: token $token, GPUs $($Gpus -join ','), loads $($Loads -join ','), $Seconds s per variant"
 
 function Start-Load($gpu, $json) {
-    $p = Start-Process -FilePath $loadExe -PassThru -ArgumentList @(
-        '--gpu', $names[$gpu], '--autostart', '--duration', '60', '--no-music', '--json', $json)
+    $loadArgs = @('--gpu', $names[$gpu], '--autostart', '--duration', '60', '--no-music', '--json', $json)
+    if ($loadExtra.ContainsKey($gpu)) { $loadArgs += $loadExtra[$gpu] }
+    $p = Start-Process -FilePath $loadExe -PassThru -ArgumentList $loadArgs
     # Calibration (8 s) and the first steady second.
     Start-Sleep -Seconds 10
     return $p
@@ -112,7 +118,7 @@ foreach ($gpu in $Gpus) {
             '--seconds', $s)
         Probe $gpu $loadName $dir 'encode-convert' @('encode', '--adapter', $n, '--rc', 'cbr', '--qvs', '0',
             '--seconds', $s, '--convert', 'ps', '--source', '2560x1440')
-        if ($gpu -ne 'arc') {
+        if ($gpu -in @('rtx', 'amd')) {
             Probe $gpu $loadName $dir 'vendors' @('vendors', '--adapter', $n, '--frames', "$([Math]::Min(180 * $Seconds / 3, 2400))")
         }
 
