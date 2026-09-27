@@ -1872,6 +1872,107 @@ pilote Intel tient en REALTIME ; le N95 ; la RTX en témoin ; le profil
 gouverneur actif) ; puis le test manuel de Bruno sur une édition dev
 installée.
 
+### 8n.7 G3, deuxième partie : en REALTIME et sous RE9 (27/09/2026)
+
+**Montage.**
+- Exécuteur élevé (un clic UAC de Bruno), classe GPU REALTIME. Binaires
+  figés dans `bench-out\d3d12v2\g3-bin` (`b3d9aefb`, ré-encodage actif par
+  défaut). Écran de l'Arc, 1920×1080, 20 Mb/s, `governor=0`. Sorties dans
+  `bench-out\d3d12v2\g3rt`.
+- Bureau : les passes de la première partie, plus leurs références D3D11
+  (oneVPL) et D3D12 avec le débit du pilote.
+- RE9 (la copie) sur l'Arc, en réglages légers (~25 i/s) : A/B D3D11 contre
+  D3D12 en 4 tours à 60 et 120 i/s, passes de débit, rampe et pertes, puis
+  une endurance de 15 min avec le flux enregistré.
+
+**Bureau, en REALTIME.**
+
+| contenu | fenêtres à ±10 % | taille / budget : moy. / p95 | très au-dessus (> 2,5×) | `host_total` moy. / p99 (ms) |
+|---|---|---|---|---|
+| défilement 60 i/s | 5 / 9 (0,78 à 0,96) | 0,90 / 1,74 | 2 | 4,0 / 6,5 |
+| défilement 60 i/s, `reencode=0` | 7 / 9 (0,84 à 0,96) | 0,93 / 1,97 | 21 | 3,9 / 4,7 |
+| défilement 120 i/s | 4 / 9 (0,82 à 0,94) | 0,90 / 1,86 | 1 | 4,1 / 6,4 |
+| clip de jeu 60 i/s | 9 / 9 (0,90 à 0,95) | 0,94 / 1,33 | 0 | 4,0 / 4,8 |
+| `lose=45` | 2 / 5 (0,80 à 0,95) | 0,88 / 1,84 | 0 | 4,1 / 10,6 |
+| D3D11, défilement 60 i/s | 2 / 9 (0,71 à 0,98) | 0,94 / 1,50 | 0 | 17,9 / 42,3 |
+| D3D11, défilement 120 i/s | 2 / 3 (0,56 à 0,96) | 0,90 / 1,47 | 0 | 15,4 / 43,2 |
+| D3D11, clip de jeu | 3 / 9 (0,76 à 0,98) | 0,99 / 1,32 | 0 | 10,7 / 30,1 |
+| D3D12 au débit du pilote, défilement 60 i/s | 0 / 9 (0,71 à 0,80) | 0,80 / 0,80 | 0 | 11,3 / 31,7 |
+
+- Rampe 20 ↔ 5 Mb/s : marches suivies en 3 images 8 fois sur 9, 4 images
+  très au-dessus. D3D11 : 7 sur 10, et 49 images très au-dessus.
+- Pause puis défilement : la première image après l'arrêt fait au plus 1,1
+  budget (jusqu'à 8 sans ré-encodage, en première partie).
+- Écran fixe : QP 45 → 18, puis des renvois de 2,3 Ko à QP 18.
+- La lenteur du contrôle de débit Intel existe aussi en REALTIME. En D3D11
+  (oneVPL), l'encodage passe de 5-7 ms à 19 ms à partir de 6 s de
+  défilement, à 11-12 ms sur le clip. En D3D12 au débit du pilote, il passe
+  de 4-6 ms à 13-15 ms à partir de 8 s. Notre QP constant reste à 3,7 ms du
+  début à la fin. C'est l'essentiel de l'écart de latence, et le chemin
+  D3D11 que l'Arc prend aujourd'hui par défaut en souffre sur tout contenu
+  animé.
+
+**Le débit reste sous la cible, et c'est structurel.** Toutes les fenêtres
+hors des ±10 % sont sous la cible. Le contrôleur tient pourtant son budget
+(taille / budget de 1,01 à 1,04). Mais ce budget ne vaut en moyenne que
+0,86 à 0,91 fois la cible, pour trois raisons :
+- le seau n'est presque jamais vide (0,2 à 0,3 image en moyenne) ;
+- le budget en retranche la moitié ;
+- une image sous son budget quand le seau est vide ne se rattrape jamais.
+
+Un rejeu en boucle fermée des images réelles
+(`bench-out\d3d12v2\g3rt\replay\loop.cpp`, hors dépôt) reproduit la
+moyenne : 0,895, contre 0,897 mesuré. Il chiffre aussi une variante : un « crédit » d'un quart d'image
+sous le seau vide.
+- Gain : la moyenne passe à 0,94-0,97, avec 7 à 9 fenêtres sur 9 dans les
+  ±10 %.
+- Coût : des images plus grosses (p95 +0,1 ; à 120 i/s, 15 images au-delà
+  de 2,5 budgets au lieu d'une), donc de la latence sur ces images.
+
+Recommandation : garder le budget actuel, latence d'abord (décision §9-13
+du plan).
+
+**Sous RE9, en REALTIME.**
+
+| passe | D3D12, notre débit : moy. / p99 | D3D11 : moy. / p99 | G2, D3D12 au débit du pilote |
+|---|---|---|---|
+| A/B 1080p60, 4 tours | 5,7 / 16,5 ms | 12,8 / 62,0 ms | 5,9 / 29,5 ms |
+| A/B 1080p120, 4 tours | 4,5 / 14,1 ms | 9,1 / 33,4 ms | 5,6 / 25,0 ms |
+
+- À 60 i/s, tous les critères de G2 sont tenus. À 120 i/s aussi, sauf la
+  cadence du jeu : −2,5 % (25,8 contre 26,5 i/s). C'est du bruit de tour à
+  tour : l'A/B à 60 i/s donnait l'écart inverse (+15 %).
+- Le jeu ne livre que ~25 images par seconde, et la session double le
+  budget de l'encodeur (`EffectiveCadence` : « frames arrive at 30 fps for
+  a 60 fps stream »).
+  - À 20 Mb/s, le contenu tient au plancher : QP 18, 31 Ko par image, ~6
+    Mb/s sur le fil.
+  - Rampe 20 ↔ 5 Mb/s : chaque marche est suivie en 1 à 2 images, contre le
+    budget de l'encodeur (~20 Ko à QP 20-22).
+  - `rate-report.py` compte contre le débit du fil : il se trompe sur ces
+    passes.
+- Endurance de 15 min : 22 540 images, 4,2 / 8,6 ms. Aucun repli, aucun
+  écart de QP du pilote, aucun dépassement fort. ffmpeg décode les 742 Mo
+  sans erreur.
+
+**Critères G3 sur l'Arc.**
+- Débit à ±10 % : tenu sur le clip de jeu (9 sur 9). Sur du texte, 4 à 5
+  fenêtres sur 9, toutes sous la cible (0,78 à 0,89) : c'est structurel
+  (voir plus haut). D3D11 fait moins bien (2 à 3 sur 9).
+- p95 ≤ 2 × budget : tenu en REALTIME à 60 et 120 i/s (1,33 à 1,86). La
+  rampe monte à 2,07, à cause des images de transition.
+- Marches suivies en 3 images : tenu (8 sur 9 ; sous RE9, 1 à 2 images).
+- Écran fixe à QP 18 : tenu.
+- Latence pas pire qu'en G2 : tenu, et de loin. Au p99 sous RE9 : 16,5
+  contre 29,5 ms à 60 i/s, 14,1 contre 25,0 ms à 120 i/s.
+- Pompage : c'est le test de Bruno qui le dira.
+
+**Reste pour G3.**
+- Le N95 (mw-intel).
+- La RTX en témoin : son écran est l'écran principal de Bruno.
+- Le profil « Internet » sur un vrai stream, gouverneur actif.
+- Le test de Bruno sur l'édition dev.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
