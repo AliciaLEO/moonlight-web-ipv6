@@ -1714,6 +1714,56 @@ produit la prend (sans `strict12`), flux enregistré.
 - **iGPU AMD** : pas candidat. +6,7 ms à 60 i/s, +8,1 ms et 31 % d'images
   en moins à 120 i/s. Reste AMF-DX12 (G4).
 
+### 8n.5 C5.3 bis et C5.4 : changement de mode et HDR, sur l'écran virtuel du produit (27/09/2026)
+
+**Montage.**
+- L'édition dev de la branche est installée sur le poste de banc
+  (`0.3.1-4948717d-dev`, installeur construit en local comme en CI). Son
+  worker est celui du produit, avec la classe REALTIME. Le réglage C5.6
+  (`native_video_pipeline=d3d12`) passe par l'API locale, clé d'admin
+  comprise. Il a été remis sur `auto` après les passes.
+- L'écran virtuel du produit est rendu par l'Arc : c'est la chaîne D3D12 de
+  l'Arc qui est testée. La RTX et l'iGPU AMD restent en D3D11 (G2).
+- Le client kiosque décode sur l'iGPU AMD. Aucun écran physique n'a changé
+  de mode ni de HDR.
+
+**C5.3 bis — changement de mode (`display-follow.ps1`, `bench-out\d3d12v2\c53bis`).**
+- 7 changements, 0 KO : lancement, passage en 16:9 en plein stream, retour
+  en 4:3, HDR de l'hôte allumé puis éteint (flux SDR, tone-mappé sur
+  l'hôte), lancement sur un écran déjà en HDR.
+- Les délais sont ceux de D3D11 dans les mêmes conditions (`results-c51`,
+  25/09) : 17,7 s pour un changement de forme, 8,7 s pour un lancement.
+  C'est la cadence de sondage de l'instrument.
+- Le journal du worker dit « video pipeline: D3D12 (DIRECT conversion →
+  D3D12 Video Encode HEVC), because the setting (d3d12) » et « streaming …
+  · D3D12 VE HEVC » : le réglage du produit arrive jusqu'au moteur.
+- Huit reconstructions de l'encodeur, toutes en D3D12, toutes en CTB
+  entiers (1472×1088, puis 1472×832 en 16:9). Aucun repli.
+- Deux reconstructions par changement : la nouvelle forme, puis le
+  redémarrage de la duplication. C'est C11.4.
+
+**C5.4 — vrai flux HDR (`--native-bench hdr=1`, `bench-out\d3d12v2\c54`).**
+- Un stream de l'édition dev tient l'écran virtuel allumé, passé en HDR.
+  Deux passes de 8 s du banc sur la même image fixe (`still.html`) : D3D11
+  (oneVPL) puis D3D12 (`strict12=1`).
+- Les deux flux ont la même VUI : HEVC Main 10, 4:2:0 10 bits, primaires
+  BT.2020, transfert PQ (SMPTE 2084), matrice BT.2020 NCL, plage TV. Aucun
+  n'a de SEI HDR10. Zéro erreur de décodage dans ffmpeg.
+- Les niveaux sont les mêmes. Moyennes Y 554,3 contre 554,8 (le blanc du
+  bureau, 240 nits), U et V neutres. Les moyennes par blocs s'accordent à
+  57 dB (8×8) et 64 dB (32×32).
+- Sur le détail, l'écart est de 39 dB. La cause est le débit du pilote de
+  l'Arc, pas la chaîne HDR : chaque renvoi de l'écran fixe fait ~33 Ko,
+  l'image ne s'affine pas, et un trait d'un pixel reste effacé. En D3D11,
+  les renvois tombent à 0-1 Ko une fois l'image convergée. C'est le constat
+  de C5.3 en SDR ; la phase 6 (G3) le corrige.
+- Piège : sondé 4 s après la bascule en HDR, l'écran virtuel passe encore
+  pour SDR, et les deux bras sortent en SDR. 8 s suffisent.
+
+**Reste.** Le HDR de la chaîne D3D12 sur la RTX et l'iGPU AMD, qui ne sont
+pas candidats (G2). Le test manuel de Bruno (C5.7), sur cette même
+installation.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
