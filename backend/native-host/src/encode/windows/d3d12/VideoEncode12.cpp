@@ -121,6 +121,21 @@ std::string levelText(int idc)
     return std::to_string(idc / 30) + (idc % 30 ? "." + std::to_string(idc % 30 / 3) : "");
 }
 
+/// The QP of the picture's first slice (SliceQpY), -1 if it does not read.
+/// Only its header is read, and the scan stops there.
+int firstSliceQp(const uint8_t* data, size_t size, const HevcSpsFields& sps,
+                 const HevcPpsFields& pps)
+{
+    for (size_t i = 0; i + 3 < size; ++i) {
+        if (data[i] != 0 || data[i + 1] != 0 || data[i + 2] != 1) continue;
+        const uint8_t* unit = data + i + 3;
+        if (((unit[0] >> 1) & 0x3f) > 31) continue; // an AUD or an SEI in front
+        HevcSliceFields f;
+        return parseHevcSliceHeader(unit, size - i - 3, sps, pps, f).empty() ? f.qp : -1;
+    }
+    return -1;
+}
+
 } // namespace
 
 VideoEncode12::~VideoEncode12()
@@ -209,6 +224,7 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
         return false;
     }
     m_GuardLeft = kGuardedPictures;
+    m_SliceQpMoves = false;
     m_IntraRefreshIndex = 0;
 
     const HevcBlocks& b = m_Setup.blocks;
@@ -540,6 +556,18 @@ bool VideoEncode12::encode(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
     out.size = static_cast<size_t>(bytes) + (plan.idr ? m_Headers.size() : 0);
     out.keyframe = plan.idr;
     out.avgQp = static_cast<int>(metadata->EncodeStats.AverageQP);
+    // The Arc and the AMD iGPU leave the average at 0 under CBR (the AMD
+    // under CQP too, 27/09/2026). The AMD writes the QP its rate control
+    // chose in the slice header; the Arc writes slice_qp_delta 0 and moves
+    // its QP in the coding units, out of reach without the CABAC. So the
+    // slice's QP counts once it has left the PPS's; until then the QP is
+    // unknown (-1), which the overlay and the still-screen refinement
+    // (RefineConvergence) take as an encoder that does not say.
+    if (out.avgQp <= 0) {
+        const int qp = firstSliceQp(slices, static_cast<size_t>(bytes), m_SpsFields, m_PpsFields);
+        if (qp >= 0 && qp != m_PpsFields.initQp) m_SliceQpMoves = true;
+        out.avgQp = m_SliceQpMoves ? qp : -1;
+    }
     m_OutputHeld = true;
     return true;
 }
@@ -681,6 +709,7 @@ void VideoEncode12::stop()
     m_Headers.clear();
     m_Setup = HevcEncodeSetup();
     m_GuardLeft = 0;
+    m_SliceQpMoves = false;
     m_RateChanged = false;
     m_OutputHeld = false;
 }

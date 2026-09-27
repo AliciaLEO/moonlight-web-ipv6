@@ -1543,10 +1543,18 @@ private:
         int64_t lastSdrWhiteUs = steadyNowUs();
         encode::EffectiveCadence effective;
         effective.start(m_EncodeFps, steadyNowUs());
+        // A refusal is said once: D3D12 Video Encode on the Arc refuses every
+        // change (a new sequence or our own rate control, Phase 6), and the
+        // still-screen boost asks twice per pause of the mouse.
+        std::string bitrateRefused;
         auto applyBitrate = [&](int kbps) {
             if (kbps <= 0) return;
-            if (!m_Pipeline->setBitrate(effective.scaledKbps(kbps), error))
+            if (m_Pipeline->setBitrate(effective.scaledKbps(kbps), error)) {
+                bitrateRefused.clear();
+            } else if (error != bitrateRefused) {
+                bitrateRefused = error;
                 log::warning("[native] bitrate change refused: " + error);
+            }
         };
         int cadenceLogged = 0;
         int governorLogged = 0;

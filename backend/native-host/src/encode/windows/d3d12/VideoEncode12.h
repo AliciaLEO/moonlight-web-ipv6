@@ -144,6 +144,8 @@ private:
     HevcSpsFields m_SpsFields;
     HevcPpsFields m_PpsFields;
     int m_GuardLeft = 0;
+    /// A slice QP has left the PPS's: the driver says its QP there (encode()).
+    bool m_SliceQpMoves = false;
     uint32_t m_IntraRefreshIndex = 0;
     bool m_OutputHeld = false;
 };

@@ -13,6 +13,7 @@
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
@@ -211,7 +212,8 @@ void runOn(const std::shared_ptr<d3d12::D3d12Device>& device, bool tenBit)
     // The same DPB, run beside the encoder: what the driver was asked for.
     HevcDpb expected(encoder.setup().dpbCapacity, 60);
     const int frames = tenBit ? 8 : 40;
-    int keyframes = 0, errors = 0, wrongPoc = 0, wrongReference = 0;
+    int keyframes = 0, errors = 0, wrongPoc = 0, wrongReference = 0, badQp = 0, unknownQp = 0;
+    int lowQp = 99, highQp = -1;
     for (int n = 0; n < frames; ++n) {
         encoder.releaseOutput(); // the last picture's buffer, read below
         const bool force = n == 30;
@@ -235,6 +237,16 @@ void runOn(const std::shared_ptr<d3d12::D3d12Device>& device, bool tenBit)
             dump.write(reinterpret_cast<const char*>(out.data),
                        static_cast<std::streamsize>(out.size));
         CHECK_EQ(out.keyframe, plan.idr);
+        // The driver's average QP, its slice's, or -1 where neither says
+        // (the Arc): never a number that is not a QP.
+        if (out.avgQp == -1) {
+            ++unknownQp;
+        } else if (out.avgQp < 1 || out.avgQp > 51) {
+            ++badQp;
+        } else {
+            lowQp = (std::min)(lowQp, out.avgQp);
+            highQp = (std::max)(highQp, out.avgQp);
+        }
         if (out.keyframe) {
             ++keyframes;
             // The parameter sets go out in front of the slices, in one run.
@@ -267,6 +279,7 @@ void runOn(const std::shared_ptr<d3d12::D3d12Device>& device, bool tenBit)
     CHECK_EQ(errors, 0);
     CHECK_EQ(wrongPoc, 0);
     CHECK_EQ(wrongReference, 0);
+    CHECK_EQ(badQp, 0);
     CHECK_EQ(keyframes, tenBit ? 1 : 2);
     CHECK_EQ(encoder.guardLeft(), 0);
 
@@ -281,9 +294,10 @@ void runOn(const std::shared_ptr<d3d12::D3d12Device>& device, bool tenBit)
                              static_cast<uint32_t>(frames), out, error));
     }
     encoder.releaseOutput();
-    std::fprintf(stderr, "  %s%s: %d frames, %d keyframes, bitrate change %s\n",
-                 device->name().c_str(), tenBit ? " (Main 10)" : "", frames, keyframes,
-                 changed ? "taken" : refused.c_str());
+    std::fprintf(stderr,
+                 "  %s%s: %d frames, %d keyframes, QP %d..%d (%d unknown), bitrate change %s\n",
+                 device->name().c_str(), tenBit ? " (Main 10)" : "", frames, keyframes, lowQp,
+                 highQp, unknownQp, changed ? "taken" : refused.c_str());
     encoder.stop();
 }
 
