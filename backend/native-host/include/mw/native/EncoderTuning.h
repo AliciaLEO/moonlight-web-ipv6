@@ -173,6 +173,12 @@ struct EncoderTuning
     /// possible on either vendor — for the cost of the feature.
     int dpbFrames = 0;
 
+    /// The link governor (encode::RateGovernor). Off, the encoder's target is
+    /// the setting, moved both ways at once by setTargetBitrate: a bench has
+    /// no receiver, so the governor would cut the rate for the silence and
+    /// never pass a step back up. Every other value is the engine's own: on.
+    Choice linkGovernor = Choice::Default;
+
     /// The VBV, in frames at the stream's own rate — exactly, with no floor.
     /// 0 is the engine's rule: one frame, never less than a sixtieth of a
     /// second's worth (RateControl.h says why). 1 and 2 are the two bounds the
@@ -278,8 +284,8 @@ struct EncoderTuning
                vplExtBrc == Choice::Default && vplLowDelayBrc == Choice::Default &&
                vplGamingScenario == Choice::Default && vplWinBrcFrames == 0 &&
                vplRateControl == VplRateControl::Default && vplIntraRefreshQpDelta == 0 &&
-               vplIntraRefreshDist == 0 && vbvFrames == 0 && dpbFrames == 0 &&
-               fallback == Fallback::None && pipeline == VideoPipeline::Auto &&
+               vplIntraRefreshDist == 0 && linkGovernor == Choice::Default && vbvFrames == 0 &&
+               dpbFrames == 0 && fallback == Fallback::None && pipeline == VideoPipeline::Auto &&
                conv12 == ConvertQueue12::Default && enc12 == Encoder12::Default &&
                rc12 == RateControl12::Default && !reencode12 && prio12 == Priority12::Default &&
                ownCreator12 == Choice::Default && ddaSync == DdaSync::Default && !gpuTiming &&
@@ -329,6 +335,7 @@ struct EncoderTuning
         if (vplRateControl == VplRateControl::Qvbr) add("rc=qvbr" + std::to_string(vplQvbrQuality));
         if (vplIntraRefreshQpDelta != 0) add("irqp=" + std::to_string(vplIntraRefreshQpDelta));
         if (vplIntraRefreshDist != 0) add("irdist=" + std::to_string(vplIntraRefreshDist));
+        if (linkGovernor != Choice::Default) add(std::string("governor=") + choice(linkGovernor));
         if (vbvFrames > 0) add("vbv=" + std::to_string(vbvFrames) + "f");
         if (dpbFrames > 0) add("dpb=" + std::to_string(dpbFrames));
         if (fallback == Fallback::Tier) add("fallback=1");

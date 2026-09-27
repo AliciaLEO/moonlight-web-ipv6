@@ -125,6 +125,8 @@ const char* const kUsage =
     "  irdist=<frames>  oneVPL frames between intra-refresh cycle starts (with intra=1);\n"
     "                   -1 = back to back, default = four periods\n"
     "  vbv=<frames>     VBV of exactly N frames at the stream rate, no floor\n"
+    "  governor=0|1     the link governor; 0: the encoder gets bitrate= (and ramp=) as\n"
+    "                   they are — no receiver here to report on the link\n"
     "  dpb=<frames>     NVENC decoded picture buffer (default 4, for reference invalidation)\n"
     "  fallback=1|mf|mfsw|mfcpu|cpu  pretend no GPU encodes: the fallback tier (1), Media\n"
     "                   Foundation (mf), Microsoft's software transform even where a hardware\n"
@@ -248,6 +250,8 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
         ok = parseChoice(value, tuning.vplLowDelayBrc);
     else if (key == "gaming")
         ok = parseChoice(value, tuning.vplGamingScenario);
+    else if (key == "governor")
+        ok = parseChoice(value, tuning.linkGovernor);
     else if (key == "aq")
         ok = parseChoice(value, tuning.spatialAq);
     else if (key == "taq")

@@ -1546,7 +1546,8 @@ private:
         // Every change goes through applyBitrate(), so the three never disagree
         // about what the encoder holds.
         encode::RateGovernor governor;
-        governor.start(m_Config.bitrateKbps, steadyNowUs() / 1000);
+        governor.start(m_Config.bitrateKbps, steadyNowUs() / 1000,
+                       m_Config.tuning.linkGovernor == EncoderTuning::Choice::Off);
         int baseKbps = governor.targetKbps();
         m_LinkKbps = baseKbps;
         bool boosted = false;

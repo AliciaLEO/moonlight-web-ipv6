@@ -659,6 +659,28 @@ void run_rate_control_tests()
         CHECK_EQ(g.targetKbps(), 10000);
     }
 
+    SECTION("RateGovernor — the bench's governor=off: the setting, both ways, at once");
+    {
+        RateGovernor g;
+        g.start(20000, 0, /*followSetting=*/true);
+        // No receiver: the silence cuts nothing.
+        CHECK(!g.tick(10000));
+        CHECK_EQ(g.targetKbps(), 20000);
+        // Down and back up, each on the spot — a ramp= step reaches the encoder.
+        g.setSetting(5000);
+        CHECK_EQ(g.targetKbps(), 5000);
+        g.setSetting(20000);
+        CHECK_EQ(g.targetKbps(), 20000);
+        CHECK_EQ(g.changes(), 2);
+        // A report of overuse moves nothing either.
+        LinkFeedback lossy;
+        lossy.gaps = 3;
+        lossy.owdRiseMs = 80;
+        CHECK(!g.report(lossy, 11000));
+        CHECK_EQ(g.targetKbps(), 20000);
+        CHECK_EQ(g.overuses(), 0);
+    }
+
     SECTION("EffectiveCadence — the clock closes windows of one second");
     {
         EffectiveCadence c;
