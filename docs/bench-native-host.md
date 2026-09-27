@@ -1204,8 +1204,12 @@ traduction, pas un chemin plus direct).
 - Charge : `mw-gpu-load` calé à ~45 images/s sur le GPU testé (~22 ms de GPU
   par image, la saturation d'un jeu). Une passe de charge par variante, et
   chaque sonde bornée dans le temps.
-- Jeton limité : classe GPU **HIGH** ; `GLOBAL_REALTIME` refusé
-  (`0x887A002B`).
+- Jeton limité : classe GPU **HIGH** pour la conversion (tableau A) ;
+  `GLOBAL_REALTIME` refusé (`0x887A002B`).
+- ⚠️ **Corrigé le 27/09** : les sondes `encode`, `vendors` et `interop` ne
+  prenaient pas la classe du produit. Elles tournaient en classe **NORMAL**,
+  avec leurs files en HIGH (`d600bbea`). Les tableaux B et C sont donc en
+  NORMAL ; ils sont rejoués en HIGH et en REALTIME au §8n.2.
 - Une première passe (`g1`) est écartée : des variantes y tournaient hors de
   la fenêtre de 60 s de la charge (repérables à l'absence de `loadFps`).
 
@@ -1307,7 +1311,195 @@ D3D11. Ce qui est acquis quelle que soit la classe :
   D3D12 VE ou AMF-DX12 pour l'AMD (G4).
 
 La décision sur les files attend la passe au jeton élevé (classe REALTIME,
-files `GLOBAL_REALTIME`) et RE9, qui reviennent à Bruno.
+files `GLOBAL_REALTIME`) et RE9 : voir §8n.2.
+
+### 8n.2 Les sondes de la phase 1 en REALTIME, et sous RE9 (27/09/2026)
+
+**Montage.**
+- Mêmes GPU, même campagne, binaires figés dans
+  `bench-out\d3d12v2\g1-bin`, sorties dans `bench-out\d3d12v2\g1c`.
+- Deux corrections du labo d'abord :
+  - `d600bbea` : les sondes `encode`, `vendors` et `interop` prennent la
+    classe GPU comme le produit (REALTIME si le jeton le permet, HIGH
+    sinon), et leurs files la suivent (`GLOBAL_REALTIME` en REALTIME) ;
+  - `232825ac` : une lecture D3D12 pas finie n'est plus comparée. La sonde
+    attendait la fence B 2 s sans vérifier, puis relisait le tampon de
+    l'image d'avant, compté « périmé ».
+- **Jeton élevé (REALTIME)** : un exécuteur lancé une fois par UAC, qui ne
+  lance que la campagne, avec des paramètres vérifiés. **Jeton limité
+  (HIGH)** : la même campagne, depuis la session.
+- **RE9**, la copie propre (`Resident Evil Requiem - Copy`) : scène
+  d'ouverture sous la pluie, réglages de la copie (ray tracing haut, qualité
+  « Highest », 2048×1152 natif sans upscaling, fenêtré). Le GPU est choisi
+  par la préférence graphique Windows (RTX, puis Arc), remise à l'identique
+  après ; `config.ini` est restauré, empreinte vérifiée. Fenêtre du jeu sur
+  l'écran de l'Arc (DISPLAY1), rendue par la RTX pour sa passe, par l'Arc
+  pour la sienne.
+- Occupation 3D relevée chaque seconde : RTX 98-99 %, Arc 97-99 %, y compris
+  quand la page de test de l'interop a le focus ou recouvre le jeu.
+
+**D. La conversion sous RE9** — celle du tableau A. Temps mur moyen / p99,
+en ms.
+
+| GPU | file | REALTIME | HIGH |
+|---|---|---|---|
+| RTX | D3D11 | 0,48 / 0,92 | 2,59 / 16,41 |
+| RTX | PS DIRECT GLOBAL_REALTIME | 0,46 / 0,83 | refusé |
+| RTX | PS DIRECT HIGH | 0,47 / 0,87 | 2,55 / 16,39 |
+| RTX | PS DIRECT NORMAL | 0,47 / 0,87 | 2,65 / 16,55 |
+| RTX | CS COMPUTE GLOBAL_REALTIME | 0,49 / 0,86 | refusé |
+| RTX | CS COMPUTE HIGH | 0,48 / 0,84 | 2,87 / 16,47 |
+| Arc | D3D11 | 1,97 / 5,75 | 20,20 / 60,40 |
+| Arc | PS DIRECT GLOBAL_REALTIME | 1,64 / 3,54 | refusé |
+| Arc | PS DIRECT HIGH | 1,84 / 7,02 | 22,81 / 72,30 |
+| Arc | PS DIRECT NORMAL | 1,77 / 4,82 | 22,88 / 72,09 |
+| Arc | CS COMPUTE GLOBAL_REALTIME | 20,70 / 70,02 | refusé |
+| Arc | CS COMPUTE HIGH | 22,80 / 77,67 | 88,13 / 340,98 |
+
+**E. Les encodeurs sous RE9** — HEVC 1080p60 CBR 20 Mb/s, temps mur par
+image P (moyenne / p99, ms).
+
+| GPU | encodeur | REALTIME | HIGH |
+|---|---|---|---|
+| RTX | D3D12 VE | 4,75 / 5,25 | 7,56 / 32,51 |
+| RTX | D3D12 VE après la conversion | 5,20 / 5,63 | 9,48 / 34,93 |
+| RTX | NVENC-D3D12 | 1,76 / 2,43 | 3,36 / 16,78 |
+| Arc | D3D12 VE | 3,71 / 8,69 | 3,67 / 8,16 |
+| Arc | D3D12 VE après la conversion | 4,51 / 9,07 | 30,37 / 94,55 |
+
+**F. La poignée de main DDA sous RE9** — tenue de l'image (moyenne / p99,
+ms), lectures fausses, images capturées par seconde.
+
+| GPU | `ddasync` | REALTIME | fausses | i/s | HIGH | fausses | i/s |
+|---|---|---|---|---|---|---|---|
+| RTX | none | 0,22 / 0,34 | 1100 sur 1285 | 107 | 0,23 / 0,37 | 466 sur 1038 | 86 |
+| RTX | gpu | 0,27 / 0,46 | 0 sur 1159 | 97 | 0,26 / 0,43 | 0 sur 1020 | 85 |
+| RTX | cpu | 1,48 / 2,64 | 0 sur 1158 | 96 | 2,97 / 16,81 | 0 sur 1037 | 86 |
+| Arc | none | 0,24 / 0,47 | 1202 sur 1344 | 112 | 1,71 / 11,48 | 0 sur 8 | 0,7 |
+| Arc | gpu | 0,27 / 0,66 | 0 sur 1328 | 111 | 0,73 / 7,38 | 0 sur 19 | 1,6 |
+| Arc | cpu | 2,64 / 10,44 | 0 sur 1307 | 109 | 94,16 / 1016,22 | 0 sur 17 | 1,2 |
+
+En HIGH sur l'Arc, le mode `cpu` atteint son délai d'une seconde une fois
+(relâchement avant la lecture). Avant `232825ac`, la même passe comptait 5
+lectures « périmées » sur 10 en `gpu` : l'artefact décrit plus haut.
+
+**G. La conversion sous `mw-gpu-load`** — temps mur moyen / p99, en ms. La
+ligne « PS DIRECT » est en `GLOBAL_REALTIME` en REALTIME, en HIGH en jeton
+limité (qui refuse `GLOBAL_REALTIME`) ; de même pour « CS COMPUTE ».
+
+| GPU | file | repos, REALTIME | charge, REALTIME | charge, HIGH |
+|---|---|---|---|---|
+| RTX | D3D11 | 0,54 / 1,08 | 7,68 / 22,22 | 18,04 / 22,76 |
+| RTX | PS DIRECT | 0,51 / 1,03 | 9,42 / 22,32 | 21,40 / 22,82 |
+| RTX | CS COMPUTE | 0,58 / 1,07 | 9,19 / 22,31 | 20,33 / 22,93 |
+| Arc | D3D11 | 2,29 / 2,65 | 9,40 / 16,40 | 19,80 / 45,30 |
+| Arc | PS DIRECT | 1,22 / 1,55 | 9,32 / 16,37 | 20,42 / 45,49 |
+| Arc | CS COMPUTE | 1,58 / 1,66 | 35,74 / 70,75 | 32,08 / 61,42 |
+| iGPU AMD | D3D11 | 6,97 / 7,75 | 12,65 / 37,56 | 36,69 / 63,88 |
+| iGPU AMD | PS DIRECT (HIGH : `GLOBAL_REALTIME` refusé) | 6,94 / 7,73 | 15,54 / 37,65 | 35,48 / 62,32 |
+| iGPU AMD | CS COMPUTE | 6,50 / 7,87 | 11,28 / 23,56 | 27,44 / 31,18 |
+
+**H. Les encodeurs sous `mw-gpu-load`** — temps mur par image P (moyenne /
+p99, ms).
+
+| GPU | encodeur | repos, REALTIME | charge, REALTIME | charge, HIGH |
+|---|---|---|---|---|
+| RTX | D3D12 VE | 9,66 / 16,60 | 39,59 / 44,73 | 44,80 / 66,62 |
+| RTX | D3D12 VE après la conversion | 8,38 / 11,27 | 31,99 / 45,17 | 62,55 / 67,79 |
+| RTX | NVENC-D3D12 | 2,70 / 6,26 | 22,29 / 22,69 | 22,35 / 22,83 |
+| Arc | D3D12 VE | 6,02 / 29,10 | 4,35 / 23,36 | 4,15 / 21,22 |
+| Arc | D3D12 VE après la conversion | 4,55 / 21,84 | 24,56 / 45,92 | 31,83 / 90,23 |
+| iGPU AMD | D3D12 VE | 9,03 / 9,41 | 9,03 / 9,42 | 9,03 / 9,46 |
+| iGPU AMD | D3D12 VE après la conversion | 16,93 / 17,75 | 29,19 / 43,65 | 39,99 / 71,54 |
+| iGPU AMD | AMF-DX12 | 5,30 / 5,81 | 21,91 / 24,28 | 21,12 / 22,92 |
+
+**I. La poignée de main sous `mw-gpu-load`** — tenue (moyenne / p99, ms),
+lectures fausses, images capturées par seconde.
+
+| GPU | `ddasync` | REALTIME | fausses | i/s | HIGH | fausses | i/s |
+|---|---|---|---|---|---|---|---|
+| RTX | gpu | 0,18 / 0,33 | 0 sur 499 | 41,5 | 0,20 / 0,35 | 0 sur 266 | 22,1 |
+| RTX | none | 0,16 / 0,30 | 514 sur 515 | 42,9 | 0,16 / 0,27 | 0 sur 519 | 43,2 |
+| RTX | cpu | 18,81 / 38,20 | 0 sur 507 | 42,2 | 42,28 / 62,37 | 0 sur 267 | 22,2 |
+| Arc | gpu | 0,29 / 0,43 | 0 sur 487 | 40,6 | 0,30 / 0,49 | 0 sur 352 | 29,3 |
+| Arc | none | 0,28 / 0,41 | 480 sur 482 | 40,2 | 0,26 / 0,43 | 112 sur 486 | 40,4 |
+| Arc | cpu | 20,09 / 23,65 | 0 sur 479 | 39,9 | 21,76 / 42,66 | 0 sur 266 | 22,2 |
+| iGPU AMD | gpu | 0,22 / 0,49 | 0 sur 774 | 64,5 | 0,23 / 0,57 | 0 sur 456 | 38,0 |
+| iGPU AMD | none | 0,18 / 0,42 | 777 sur 822 | 68,4 | 0,19 / 0,44 | 0 sur 560 | 46,6 |
+| iGPU AMD | cpu | 13,59 / 34,88 | 0 sur 765 | 63,7 | 24,80 / 40,29 | 0 sur 452 | 37,7 |
+
+Au repos, sans poignée de main et en REALTIME, les lectures fausses sont
+déjà 658 sur 1439 (RTX), 1136 sur 1424 (Arc), 1420 sur 1439 (iGPU AMD).
+
+**Lecture.**
+- **C'est la classe REALTIME qui compte, pas l'API.** Sous RE9, la
+  conversion ne voit plus le jeu : 0,46 à 0,49 ms sur la RTX (p99 < 0,93),
+  1,6 à 2,0 ms sur l'Arc (p99 3,5 à 5,8). En HIGH, elle attend l'image du
+  jeu : p99 de 16 ms sur la RTX, de 60 à 72 ms sur l'Arc. D3D11 et D3D12
+  suivent le même ordre dans chaque classe.
+- **Sur l'Arc, qui n'a pas HAGS, HIGH s'effondre sous un vrai jeu** :
+  conversion à 20-23 ms de moyenne, capture de la sonde d'interop à 1-2
+  images/s, lectures qui attendent plus d'une seconde. Le produit n'est pas
+  dans ce cas : son worker obtient REALTIME (jeton élevé, journaux de la
+  prod du 26/09). Seul un worker sans élévation le serait.
+- **La meilleure file de conversion en REALTIME est PS sur DIRECT en
+  `GLOBAL_REALTIME`** : 0,83 ms de p99 contre 0,92 pour D3D11 sous RE9 sur la
+  RTX, et 3,54 contre 5,75 sur l'Arc. Au repos sur l'Arc, elle gagne encore
+  plus d'une milliseconde (1,22 contre 2,29).
+- **Le compute ne vaut rien sur l'Arc** : p99 de 70 ms, sous RE9 comme sous
+  charge synthétique. Sur la RTX, il égale le PS.
+- **iGPU AMD** : le pilote refuse `GLOBAL_REALTIME` sur les files DIRECT et
+  VIDEO_ENCODE (`0x887A0004`, la file retombe en HIGH) mais l'accepte sur
+  COMPUTE. Sous charge synthétique, le compute en `GLOBAL_REALTIME` est la
+  meilleure variante : 11,3 / 23,6 contre 12,7 / 37,6 pour D3D11. RE9 ne
+  tourne pas sur cet iGPU (plan, §9-4).
+- **`mw-gpu-load` reste un pire cas** : même en REALTIME, ses images d'un
+  seul dessin non préemptible font attendre la conversion jusqu'à ~22 ms au
+  p99 sur la RTX, là où RE9 laisse 0,83 ms. REALTIME y divise quand même la
+  moyenne par deux (7,7-9,4 contre 18-21 ms).
+- **Les encodeurs** :
+  - RTX : D3D12 VE reste plus lent que NVENC, au repos (9,7 contre 2,7 ms)
+    et sous RE9 (4,75 contre 1,76). La route D3D12 de la RTX est
+    NVENC-D3D12 (phase 7).
+  - Arc : D3D12 VE ne dépend pas de la classe (3,7 ms sous RE9 en REALTIME
+    comme en HIGH) : il n'utilise que le moteur vidéo. Sa moyenne bat celle
+    d'oneVPL-D3D11 au repos (6,0 contre 7,5 ms, §8n.0), son p99 non (29
+    contre 24, le bruit connu de l'Arc au repos).
+  - iGPU AMD : D3D12 VE ne voit pas la charge (9,0 ms) ; AMF-DX12 gagne au
+    repos (5,3) et perd sous charge (21-22 ms, il attend la 3D). G4
+    tranchera.
+- **La poignée de main** : `ddasync=gpu` ne lit jamais faux — 0 sur 14 879
+  lectures, en REALTIME comme en HIGH, au repos, sous charge synthétique et
+  sous RE9 — pour 0,2 à 0,3 ms de tenue. Sans elle, en
+  REALTIME, la lecture D3D12 passe devant l'écriture de DWM : de 46 à 99 %
+  d'images fausses dès le repos. `cpu` bloque le fil de capture (jusqu'à 1 s
+  en HIGH sur l'Arc sous RE9).
+- **La cadence de capture sous charge** revient avec REALTIME : 41,5 i/s au
+  lieu de 22,1 sur la RTX, 64,5 au lieu de 38 sur l'iGPU AMD. Le §8n.1 le
+  supposait : la limite était la classe, pas l'interop.
+
+**Verdict G1 (recommandation ; Bruno tranche).** Selon les critères du plan
+(§5) :
+- **RTX** : conversion D3D12 gardée (PS DIRECT en `GLOBAL_REALTIME`, à
+  égalité avec D3D11 sous RE9, 0,83 contre 0,92 ms de p99) ; encodeur
+  NVENC-D3D12 (phase 7), D3D12 VE en repli seulement. Pas de compute.
+- **Arc** : conversion D3D12 gardée, avec de la marge (p99 3,54 contre 5,75
+  ms sous RE9) ; encodeur D3D12 VE, avec le contrôle de débit maison (phase
+  6). Pas de compute : C3.4 est abandonné pour Intel.
+- **iGPU AMD** : conversion D3D12 à égalité en PS (HIGH, faute de
+  `GLOBAL_REALTIME`), meilleure en compute `GLOBAL_REALTIME` sous charge
+  synthétique. C3.4 ne sert qu'ici, à confirmer en G2 ; encodeur D3D12 VE
+  ou AMF-DX12 (G4).
+- **Files** : `CreatorID` propre et `GLOBAL_REALTIME` quand le processus a
+  REALTIME, avec repli en HIGH (la politique de `D3d12Device`, décision
+  §9-1 du plan).
+- **Poignée de main** : `ddasync=gpu`, obligatoire.
+- **Route scindée** (conversion D3D11 puis VE D3D12) : inutile, la
+  conversion D3D12 ne perd nulle part.
+- **Scaler matériel d'Intel (SFC)** : pas justifié sur l'Arc. En REALTIME,
+  la conversion ne fait plus la queue derrière le jeu (1,6 ms, p99 3,5 sous
+  RE9). À revoir si le N95 montre le contraire.
+- **Reste de C1.4** : le N95 (bench-intel), pas encore passé.
 
 ## 9. Pour l'A/B
 
