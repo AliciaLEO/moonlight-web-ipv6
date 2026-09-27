@@ -207,26 +207,30 @@ std::atomic<bool> g_ProcessDone{false};
 
 } // namespace
 
+void StreamPriority::engageProcess()
+{
+    if (g_ProcessDone.exchange(true)) return;
+    leaveEcoQos();
+    if (!envIs("MW_GPU_PRIORITY", "normal")) {
+        raiseGpuScheduling();
+    } else {
+        g_GrantedClass = GpuClass::LeftAlone;
+        log::info("[native] priority: MW_GPU_PRIORITY=normal — GPU scheduling left as is");
+    }
+    // Bench switch, off by default: the whole process one class up on the
+    // CPU. Never REALTIME, which can starve the input stack itself.
+    if (envIs("MW_CPU_PRIORITY", "high")) {
+        if (::SetPriorityClass(::GetCurrentProcess(), HIGH_PRIORITY_CLASS))
+            log::info("[native] priority: CPU priority class HIGH");
+        else
+            log::info("[native] priority: CPU priority class HIGH refused (error " +
+                      std::to_string(::GetLastError()) + ")");
+    }
+}
+
 void StreamPriority::engage()
 {
-    if (!g_ProcessDone.exchange(true)) {
-        leaveEcoQos();
-        if (!envIs("MW_GPU_PRIORITY", "normal")) {
-            raiseGpuScheduling();
-        } else {
-            g_GrantedClass = GpuClass::LeftAlone;
-            log::info("[native] priority: MW_GPU_PRIORITY=normal — GPU scheduling left as is");
-        }
-        // Bench switch, off by default: the whole process one class up on the
-        // CPU. Never REALTIME, which can starve the input stack itself.
-        if (envIs("MW_CPU_PRIORITY", "high")) {
-            if (::SetPriorityClass(::GetCurrentProcess(), HIGH_PRIORITY_CLASS))
-                log::info("[native] priority: CPU priority class HIGH");
-            else
-                log::info("[native] priority: CPU priority class HIGH refused (error " +
-                          std::to_string(::GetLastError()) + ")");
-        }
-    }
+    engageProcess();
 
     if (m_PowerRequest) return;
     REASON_CONTEXT reason = {};

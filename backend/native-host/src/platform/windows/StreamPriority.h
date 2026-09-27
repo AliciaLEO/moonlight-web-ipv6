@@ -63,8 +63,13 @@ public:
     StreamPriority(const StreamPriority&) = delete;
     StreamPriority& operator=(const StreamPriority&) = delete;
 
-    /// For the session's life: the process-wide opt-outs (applied once per
-    /// process, they are harmless when idle) and the power request.
+    /// The process-wide part, once per process and harmless when idle: out of
+    /// EcoQoS, the GPU scheduling class. Before the session makes any D3D12
+    /// queue: a queue asks its priority from the class (queuePriority) when
+    /// it is made, and keeps it.
+    static void engageProcess();
+
+    /// For the session's life: engageProcess() and the power request.
     void engage();
 
     /// Drops the power request. Idempotent.

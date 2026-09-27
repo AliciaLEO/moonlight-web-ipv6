@@ -219,6 +219,12 @@ public:
             return false;
         }
 
+        // Out of EcoQoS and ahead of the game on the GPU before anything is
+        // built: a D3D12 queue takes the priority of the class it is made
+        // under, for good. Taken after the first build, the class left every
+        // D3D12 session's queues at HIGH under REALTIME (G2 bench, 27/09/2026).
+        StreamPriority::engageProcess();
+
         // Everything between the captured picture and the bitstream — the
         // conversion, the encoder, and the cross-GPU bridge when the encoder
         // sits on another adapter — is the video pipeline's (design §32).
@@ -420,7 +426,8 @@ public:
         // The first frame must be a keyframe — a client has nothing to decode
         // against otherwise.
         m_ForceKeyframe.store(true);
-        // Out of EcoQoS, ahead of the game on the GPU, awake: see StreamPriority.
+        // Awake for the stream's life (the process-wide part was taken before
+        // the build): see StreamPriority.
         m_Priority.engage();
         m_Running.store(true);
         m_Thread = std::thread([this] { run(); });
