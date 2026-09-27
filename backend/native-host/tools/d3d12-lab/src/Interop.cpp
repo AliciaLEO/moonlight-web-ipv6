@@ -133,6 +133,9 @@ struct Run
     int frames = 0, timeouts = 0;
     int truthInvalid = 0, truthTorn = 0;
     int readInvalid = 0, readDiffers = 0, readNewer = 0, readOlder = 0, readTorn = 0;
+    /// A D3D12 read still queued 10 s after the release (not compared), and a
+    /// release that went ahead before the read (cpu: fence B not in 1 s).
+    int readLate = 0, releasedEarly = 0;
     std::vector<double> holdMs, releaseMs;
     double seconds = 0;
 };
@@ -520,14 +523,20 @@ int runInterop(int argc, wchar_t** argv)
                 const uint64_t b = interop.conversionSignals(queue.queue.Get(), error);
 
                 const int64_t releasing = nowUs();
-                interop.beforeRelease(context, b, sync, 1000, error);
+                if (!interop.beforeRelease(context, b, sync, 1000, error)) ++run.releasedEarly;
                 duplication.release();
                 const int64_t released = nowUs();
                 run.holdMs.push_back(ms(released - acquired));
                 run.releaseMs.push_back(ms(released - releasing));
 
-                // Both reads, now that both are done.
-                interop.converted().wait(b, 2000, error);
+                // Both reads, now that both are done. A read not done in 10 s
+                // is not compared (its buffer still holds the previous one),
+                // and ends the run: its list may still be queued, so the
+                // allocator cannot be reset under it.
+                if (interop.converted().wait(b, 10000, error) != d3d12::GpuFence::Wait::Done) {
+                    ++run.readLate;
+                    break;
+                }
                 Frame f;
                 uint8_t* mapped = nullptr;
                 const D3D12_RANGE range = {0, static_cast<SIZE_T>(2 * kBottomOffset)};
@@ -570,9 +579,9 @@ int runInterop(int argc, wchar_t** argv)
         }
     }
 
-    say("\n%-24s %6s %6s | %-13s | %-9s %-9s %-9s %-7s | %-13s | %-13s\n", "run", "frames", "i/s",
-        "truth bad/torn", "D3D12 bad", "differs", "new/old", "torn", "hold mean/p99",
-        "release mean/p99");
+    say("\n%-24s %6s %6s | %-13s | %-9s %-9s %-9s %-7s %-10s | %-13s | %-13s\n", "run", "frames",
+        "i/s", "truth bad/torn", "D3D12 bad", "differs", "new/old", "torn", "late/early",
+        "hold mean/p99", "release mean/p99");
     for (const Run& r : runs) {
         char name[48];
         std::snprintf(name, sizeof(name), "ddasync=%s +%d ms", r.mode.c_str(), r.delayMs);
@@ -581,12 +590,13 @@ int runInterop(int argc, wchar_t** argv)
             continue;
         }
         const Stats hold = stats(r.holdMs), rel = stats(r.releaseMs);
-        char truth[24], newOld[24];
+        char truth[24], newOld[24], lateEarly[24];
         std::snprintf(truth, sizeof(truth), "%d/%d", r.truthInvalid, r.truthTorn);
         std::snprintf(newOld, sizeof(newOld), "%d/%d", r.readNewer, r.readOlder);
-        say("%-24s %6d %6.1f | %-13s | %-9d %-9d %-9s %-7d | %5.2f %6.2f  | %5.2f %6.2f\n", name,
-            r.frames, r.frames / std::max(0.001, r.seconds), truth, r.readInvalid, r.readDiffers,
-            newOld, r.readTorn, hold.mean, hold.p99, rel.mean, rel.p99);
+        std::snprintf(lateEarly, sizeof(lateEarly), "%d/%d", r.readLate, r.releasedEarly);
+        say("%-24s %6d %6.1f | %-13s | %-9d %-9d %-9s %-7d %-10s | %5.2f %6.2f  | %5.2f %6.2f\n",
+            name, r.frames, r.frames / std::max(0.001, r.seconds), truth, r.readInvalid,
+            r.readDiffers, newOld, r.readTorn, lateEarly, hold.mean, hold.p99, rel.mean, rel.p99);
     }
     for (const Run& r : runs) {
         if (r.refused.empty() && r.truthInvalid > r.frames / 2) {
@@ -617,6 +627,7 @@ int runInterop(int argc, wchar_t** argv)
                 j.field("readInvalid", r.readInvalid).field("readDiffers", r.readDiffers);
                 j.field("readNewer", r.readNewer).field("readOlder", r.readOlder);
                 j.field("readTorn", r.readTorn);
+                j.field("readLate", r.readLate).field("releasedEarly", r.releasedEarly);
                 j.field("holdMeanMs", hold.mean).field("holdP99Ms", hold.p99);
                 j.field("releaseMeanMs", rel.mean).field("releaseP99Ms", rel.p99);
             }

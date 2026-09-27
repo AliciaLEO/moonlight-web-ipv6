@@ -75,7 +75,7 @@ function Probe($gpu, $loadName, $dir, $name, [string[]] $probeArgs) {
     & $lab @all 2>&1 | Out-File -FilePath $txt -Encoding utf8
     Stop-Load $p
     $summary = [string](Get-Content $txt |
-        Where-Object { $_ -match 'refused|wall ms, P|NVENC-D3D12|AMF-DX12|ddasync=gpu|^(d3d11|ps|cs) .*\|' } |
+        Where-Object { $_ -match 'refused|wall ms, P|NVENC-D3D12|AMF-DX12|^ddasync=gpu \+|^(d3d11|ps|cs) .*\|' } |
         Select-Object -First 1)
     Write-Host ("  {0,-16} {1}" -f $name, ($summary -replace '\s+', ' '))
 }
