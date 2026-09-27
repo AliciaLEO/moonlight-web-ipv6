@@ -74,8 +74,10 @@ struct Uploader
     }
 
     /// A moving picture: a diagonal ramp scrolling, and a bright square
-    /// crossing it — enough motion for every P to carry something.
-    uint64_t upload(ID3D12Resource* target, int frame, bool tenBit, std::string& error)
+    /// crossing it — enough motion for every P to carry something. Or a flat
+    /// grey (@p flat), which costs next to nothing.
+    uint64_t upload(ID3D12Resource* target, int frame, bool tenBit, std::string& error,
+                    bool flat = false)
     {
         uint8_t* p = nullptr;
         if (FAILED(staging->Map(0, nullptr, reinterpret_cast<void**>(&p)))) return 0;
@@ -87,7 +89,9 @@ struct Uploader
                                 y * static_cast<size_t>(feet[plane].Footprint.RowPitch);
                 for (UINT x = 0; x < width; ++x) {
                     int v;
-                    if (plane == 0) {
+                    if (flat) {
+                        v = 128;
+                    } else if (plane == 0) {
                         const bool square =
                             (x + static_cast<UINT>(frame) * 12) % 1920 < 200 && y % 1088 < 200;
                         v = square ? 235
@@ -283,9 +287,13 @@ void runOn(const std::shared_ptr<d3d12::D3d12Device>& device, bool tenBit)
     CHECK_EQ(keyframes, tenBit ? 1 : 2);
     CHECK_EQ(encoder.guardLeft(), 0);
 
+    // The driver's rate control where it moves its target in flight, ours
+    // where it does not: either way the bitrate changes.
+    CHECK_EQ(encoder.ownRateControl(), !encoder.setup().support.rateReconfigurable);
+    CHECK_EQ(encoder.qpNotFollowed(), 0);
     std::string refused;
     const bool changed = encoder.setBitrate(10000, refused);
-    CHECK_EQ(changed, encoder.setup().support.rateReconfigurable);
+    CHECK(changed);
     if (changed) {
         const uint64_t ready = uploader.upload(input.Get(), frames, tenBit, error);
         EncoderOutput out;
@@ -294,10 +302,120 @@ void runOn(const std::shared_ptr<d3d12::D3d12Device>& device, bool tenBit)
                              static_cast<uint32_t>(frames), out, error));
     }
     encoder.releaseOutput();
+    std::fprintf(
+        stderr, "  %s%s: %d frames, %d keyframes, QP %d..%d (%d unknown), %s, bitrate change %s\n",
+        device->name().c_str(), tenBit ? " (Main 10)" : "", frames, keyframes, lowQp, highQp,
+        unknownQp, encoder.ownRateControl() ? "our rate control" : "the driver's rate control",
+        changed ? "taken" : refused.c_str());
+    encoder.stop();
+}
+
+/// Our rate control on a constant QP (plan §4.6), wherever the driver's own
+/// could do (rc12=qp): the driver codes the QP asked; a bitrate change moves
+/// it without a new sequence; a still picture — encoded again without a new
+/// upload, as the still-screen passes do — is sharpened to QP 18 inside
+/// RefineConvergence's cap. Then reencode=: flat pictures, then movement, and
+/// the picture far over its budget is coded again.
+void ownRateOn(const std::shared_ptr<d3d12::D3d12Device>& device)
+{
+    VideoEncode12 encoder;
+    std::string error;
+    EncoderTuning tuning;
+    tuning.rc12 = EncoderTuning::RateControl12::Qp;
+    if (!encoder.init(device, Codec::Hevc, 1920, 1080, 60, 20000, false, false, tuning, error)) {
+        std::fprintf(stderr, "  %s, our rate control: %s\n", device->name().c_str(), error.c_str());
+        CHECK(false);
+        return;
+    }
+    CHECK(encoder.ownRateControl());
+    ComPtr<ID3D12Resource> input =
+        picture(device->device(), encoder.codedWidth(), encoder.codedHeight(), false);
+    Uploader uploader;
+    if (!input || !uploader.init(*device, input.Get(), error)) {
+        std::fprintf(stderr, "  %s: the test's upload: %s\n", device->name().c_str(),
+                     error.c_str());
+        CHECK(false);
+        return;
+    }
+    uint32_t n = 0;
+    int failures = 0, outOfRange = 0, said = 0;
+    // One picture, ready at @p ready: a new upload's value, or the last one's
+    // again — the same picture, as the still-screen passes encode it.
+    const auto encode = [&](uint64_t ready, EncoderOutput& out) {
+        encoder.releaseOutput();
+        if (!encoder.encode(input.Get(), uploader.fence.fence(), ready, false, n++, out, error)) {
+            std::fprintf(stderr, "  %s, our rate control, frame %u: %s\n", device->name().c_str(),
+                         n - 1, error.c_str());
+            ++failures;
+            return false;
+        }
+        if (out.avgQp < QpRateController::kMinQp || out.avgQp > QpRateController::kMaxQp)
+            ++outOfRange;
+        if (encoder.driverQp() >= 0) ++said;
+        return true;
+    };
+
+    EncoderOutput out;
+    int moving = -1;
+    for (int i = 0; i < 30 && failures == 0; ++i)
+        if (encode(uploader.upload(input.Get(), i, false, error), out)) moving = out.avgQp;
+
+    // The still-screen burst: x3, the same picture pass after pass.
+    std::string refused;
+    CHECK(encoder.setBitrate(60000, refused));
+    const uint64_t still = uploader.upload(input.Get(), 30, false, error);
+    encode(still, out);
+    RefineConvergence conv;
+    RefineConvergence::Verdict verdict = RefineConvergence::Verdict::Continue;
+    int passes = 0, lastQp = out.avgQp;
+    size_t passBytes = 0;
+    while (verdict == RefineConvergence::Verdict::Continue && failures == 0 && passes < 12) {
+        if (!encode(still, out)) break;
+        ++passes;
+        passBytes += out.size;
+        lastQp = out.avgQp;
+        verdict = conv.notePass(out.size, out.avgQp);
+    }
+    CHECK(verdict == RefineConvergence::Verdict::Converged);
+    CHECK_EQ(lastQp, QpRateController::kMinQp);
+    CHECK_EQ(failures, 0);
+    CHECK_EQ(outOfRange, 0);
+    CHECK_EQ(encoder.qpNotFollowed(), 0);
+    CHECK(said > 0); // all three say their QP under CQP, one way or another
+    encoder.releaseOutput();
     std::fprintf(stderr,
-                 "  %s%s: %d frames, %d keyframes, QP %d..%d (%d unknown), bitrate change %s\n",
-                 device->name().c_str(), tenBit ? " (Main 10)" : "", frames, keyframes, lowQp,
-                 highQp, unknownQp, changed ? "taken" : refused.c_str());
+                 "  %s, our rate control: moving at QP %d, the still picture sharpened to %d in "
+                 "%d passes (%zu KB), the driver's QP said on %d of %u pictures\n",
+                 device->name().c_str(), moving, lastQp, passes, passBytes / 1024, said, n);
+    encoder.stop();
+
+    // reencode=: a flat run makes every new picture look cheap; the movement
+    // after it is far over its budget, and is coded again.
+    tuning.reencode12 = true;
+    if (!encoder.init(device, Codec::Hevc, 1920, 1080, 60, 20000, false, false, tuning, error)) {
+        std::fprintf(stderr, "  %s, reencode: %s\n", device->name().c_str(), error.c_str());
+        CHECK(false);
+        return;
+    }
+    n = 0;
+    failures = 0;
+    for (int i = 0; i < 10 && failures == 0; ++i)
+        encode(uploader.upload(input.Get(), i, false, error, /*flat=*/true), out);
+    size_t burst = 0;
+    for (int i = 0; i < 5 && failures == 0; ++i) {
+        encode(uploader.upload(input.Get(), i, false, error), out);
+        burst = (std::max)(burst, out.size);
+    }
+    CHECK_EQ(failures, 0);
+    CHECK(encoder.reencoded() >= 1);
+    CHECK_EQ(encoder.qpNotFollowed(), 0);
+    encoder.releaseOutput();
+    std::fprintf(stderr,
+                 "  %s, reencode: %d picture(s) coded again, %d sent far over budget, largest "
+                 "%zu KB against %llu KB a frame\n",
+                 device->name().c_str(), encoder.reencoded(),
+                 encoder.rateController().strongOvershoots(), burst / 1024,
+                 static_cast<unsigned long long>(encoder.rateController().frameBits() / 8192));
     encoder.stop();
 }
 
@@ -351,9 +469,10 @@ void wholeBlocksOn(const std::shared_ptr<d3d12::D3d12Device>& device)
 // D3D12 Video Encode as the product drives it (plan C4.6), on every GPU that
 // has it: the IDR with its parameter sets in front, P pictures numbered in
 // order and predicting from the picture HevcDpb chose — after a loss too —
-// the header guard passed, a forced keyframe, a bitrate change where the
-// driver takes one; a short Main 10 run; 2560x1440 in whole coding tree
-// blocks. MW_TEST_DUMP_HEVC=<dir> writes the streams out for ffmpeg.
+// the header guard passed, a forced keyframe, a bitrate change (the driver's
+// rate control or ours); a short Main 10 run; 2560x1440 in whole coding tree
+// blocks; our rate control forced on, a still picture sharpened, an overshoot
+// coded again. MW_TEST_DUMP_HEVC=<dir> writes the streams out for ffmpeg.
 void run_video_encode12_tests()
 {
 #if defined(_WIN32)
@@ -381,6 +500,7 @@ void run_video_encode12_tests()
         runOn(device, false);
         runOn(device, true);
         wholeBlocksOn(device);
+        ownRateOn(device);
     }
     if (ran == 0) std::fprintf(stderr, "  no GPU with D3D12 Video Encode here — skipped\n");
 #endif

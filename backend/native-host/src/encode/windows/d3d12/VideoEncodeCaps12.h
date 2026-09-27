@@ -65,6 +65,10 @@ public:
         /// A new CBR target; the VBV by the rule every encoder follows
         /// (RateControl.h), or @p vbvFrames frames' worth when the bench asks.
         void setBitrate(uint32_t bitsPerSecond, int fps, int vbvFrames);
+        /// A new constant QP, for every kind of picture: which one a driver
+        /// reads for its P pictures is its own business (the Arc codes them
+        /// as low-delay B).
+        void setQp(UINT qp);
     };
 
 private:

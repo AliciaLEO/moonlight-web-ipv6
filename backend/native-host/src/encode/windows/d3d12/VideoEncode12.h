@@ -20,6 +20,7 @@
 #include "encode/HevcDpb.h"
 #include "encode/HevcEncodeNegotiation.h"
 #include "encode/HevcSliceParser.h"
+#include "encode/QpRateController.h"
 #include "encode/windows/d3d12/IVideoEncoder12.h"
 #include "encode/windows/d3d12/VideoEncodeCaps12.h"
 #include "platform/windows/d3d12/D3d12Device.h"
@@ -40,7 +41,7 @@ namespace mw::native::encode {
 ///
 /// HevcDpb says what the picture is and what it keeps; one command list on the
 /// VIDEO_ENCODE queue waits for the conversion's fence, encodes, resolves the
-/// metadata, and signals; the CPU waits for that signal and nothing else (500 ms
+/// metadata, and signals; the CPU waits for that signal and nothing else (3 s
 /// at most — beyond, the GPU is gone, not slow). The bitstream lands in system
 /// memory, read in place: no copy on the GPU, one on the way out, as
 /// everywhere.
@@ -54,10 +55,21 @@ namespace mw::native::encode {
 /// (HevcSliceParser) — a driver whose slices say something else sends the
 /// session back to D3D11 before a viewer sees noise.
 ///
+/// ── The rate control ────────────────────────────────────────────────────────
+///
+/// The driver's CBR where it can move its target in flight (the RTX, the AMD
+/// iGPU); where it cannot (the Arc), a constant QP that our QpRateController
+/// moves picture by picture — the bench's rc12= forces either. The driver is
+/// held to it: the QP it says it coded must follow the one asked, at a
+/// constant distance, or the session goes back to D3D11 (plan §4.6: the Arc
+/// applies a QP changed without being told, which nothing documents). A
+/// picture encoded again without a new conversion — the same fence value as
+/// the last one — is the same picture: a still-screen pass or the idle floor,
+/// which the controller sizes apart from new pictures.
+///
 /// ── What it does not do yet ────────────────────────────────────────────────
 ///
-/// HEVC only (H.264 and AV1 are Phase 9); no bitrate change on a driver that
-/// needs a new sequence for it (the Arc: our own rate control, Phase 6).
+/// HEVC only (H.264 and AV1 are Phase 9).
 class VideoEncode12 : public IVideoEncoder12
 {
 public:
@@ -88,6 +100,16 @@ public:
     const std::vector<uint8_t>& parameterSets() const { return m_Headers; }
     /// How many pictures' slice headers are still read back.
     int guardLeft() const { return m_GuardLeft; }
+    /// Whether our rate control moves the QP (a CQP encoder), and its state.
+    bool ownRateControl() const { return m_OwnRate; }
+    const QpRateController& rateController() const { return m_Controller; }
+    /// Pictures coded again for a strong overshoot (reencode=).
+    int reencoded() const { return m_Reencoded; }
+    /// Pictures whose QP, as the driver said it, did not follow the one asked.
+    int qpNotFollowed() const { return m_QpNotFollowed; }
+    /// The QP the driver said it coded the last picture at, -1 when it does
+    /// not say.
+    int driverQp() const { return m_DriverQp; }
 
 private:
     bool createResources(std::string& error);
@@ -102,6 +124,15 @@ private:
     /// The slice headers of @p data read with our SPS and PPS, and checked
     /// against @p plan; false, with the reason, when they do not agree.
     bool guard(const uint8_t* data, size_t size, const HevcDpb::Plan& plan, std::string& error);
+    /// The QP the driver says it coded the picture at: its average, or its
+    /// first slice's once slices have been seen to move; -1 when neither says.
+    int reportedQp(const uint8_t* slices, size_t size);
+    /// The next picture's constant QP, said to a driver that takes a change
+    /// in flight.
+    void applyQp(int qp);
+    /// Whether the driver coded @p asked, going by @p said; false, with the
+    /// reason, once it has not for kQpMisses pictures in a row.
+    bool qpFollowed(int asked, int said, std::string& error);
     D3D12_RESOURCE_BARRIER reconBarrier(int texture, UINT plane, D3D12_RESOURCE_STATES before,
                                         D3D12_RESOURCE_STATES after) const;
     ID3D12Resource* reconResource(int texture) const;
@@ -128,6 +159,22 @@ private:
     int m_Fps = 60;
     int m_VbvFrames = 0; ///< the bench's vbv=, 0 for the shared rule
     DXGI_FORMAT m_Format = DXGI_FORMAT_NV12;
+
+    /// Our rate control, on a CQP encoder (plan §4.6).
+    bool m_OwnRate = false;
+    bool m_Reencode = false; ///< the bench's reencode=
+    QpRateController m_Controller;
+    int m_SubmittedQp = 0; ///< the constant QP the encoder was last given
+    /// The picture last encoded, by the fence value its conversion signalled.
+    ID3D12Fence* m_LastReady = nullptr;
+    uint64_t m_LastReadyValue = 0;
+    /// How far the driver's QP sits from ours, once it has said one.
+    bool m_QpOffsetKnown = false;
+    int m_QpOffset = 0;
+    int m_QpMisses = 0;
+    int m_QpNotFollowed = 0;
+    int m_DriverQp = -1;
+    int m_Reencoded = 0;
 
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> m_Recon;
     int m_ReconCount = 0;

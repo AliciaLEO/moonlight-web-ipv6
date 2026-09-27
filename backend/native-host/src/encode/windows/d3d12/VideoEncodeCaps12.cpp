@@ -134,6 +134,14 @@ void VideoEncodeCaps12::RateControl::setBitrate(uint32_t bitsPerSecond, int fps,
     cbr1.MaxFrameBitSize = cbr.MaxFrameBitSize;
 }
 
+void VideoEncodeCaps12::RateControl::setQp(UINT qp)
+{
+    cqp = {qp, qp, qp};
+    cqp1.ConstantQP_FullIntracodedFrame = qp;
+    cqp1.ConstantQP_InterPredictedFrame_PrevRefOnly = qp;
+    cqp1.ConstantQP_InterPredictedFrame_BiDirectionalRef = qp;
+}
+
 HevcDriverLimits VideoEncodeCaps12::limits(bool tenBit)
 {
     HevcDriverLimits l;

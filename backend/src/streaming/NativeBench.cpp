@@ -135,6 +135,8 @@ const char* const kUsage =
     "  conv12=direct|compute       the D3D12 conversion's queue\n"
     "  enc12=ve|nvenc|amf          the D3D12 route's encoder\n"
     "  rc12=driver|qp              D3D12 Video Encode's rate control; qp = the in-house one\n"
+    "  reencode=0|1                in-house rate control: code a picture far over its budget\n"
+    "                              again, at the QP that fits it\n"
     "  prio12=normal|high|realtime the D3D12 queues' priority (default: the GPU class's)\n"
     "  creator12=own|default       each queue's own CreatorID, or the runtime's shared one\n"
     "  ddasync=gpu|none|cpu        how the capture and the D3D12 read are ordered\n"
@@ -313,6 +315,8 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
             tuning.rc12 = R::Qp;
         else
             ok = false;
+    } else if (key == "reencode") {
+        tuning.reencode12 = value.toInt(&ok) != 0;
     } else if (key == "prio12") {
         using P = mw::native::EncoderTuning::Priority12;
         const QString p = value.toLower();

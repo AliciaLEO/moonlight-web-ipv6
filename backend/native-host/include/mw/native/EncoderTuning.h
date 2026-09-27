@@ -230,6 +230,10 @@ struct EncoderTuning
         Qp
     };
     RateControl12 rc12 = RateControl12::Default;
+    /// The in-house rate control only: a picture far over its budget is coded
+    /// again at the QP that fits it — an encode more on that picture, against
+    /// a burst on the link. Off until the bench's figures decide (plan §9-5).
+    bool reencode12 = false;
     /// The priority of the D3D12 queues. The engine's own follows the
     /// process's GPU class: GLOBAL_REALTIME under REALTIME, HIGH otherwise.
     enum class Priority12
@@ -277,7 +281,7 @@ struct EncoderTuning
                vplIntraRefreshDist == 0 && vbvFrames == 0 && dpbFrames == 0 &&
                fallback == Fallback::None && pipeline == VideoPipeline::Auto &&
                conv12 == ConvertQueue12::Default && enc12 == Encoder12::Default &&
-               rc12 == RateControl12::Default && prio12 == Priority12::Default &&
+               rc12 == RateControl12::Default && !reencode12 && prio12 == Priority12::Default &&
                ownCreator12 == Choice::Default && ddaSync == DdaSync::Default && !gpuTiming &&
                !strict12;
     }
@@ -340,6 +344,7 @@ struct EncoderTuning
         if (enc12 == Encoder12::Amf) add("enc12=amf");
         if (rc12 == RateControl12::Driver) add("rc12=driver");
         if (rc12 == RateControl12::Qp) add("rc12=qp");
+        if (reencode12) add("reencode=1");
         if (prio12 == Priority12::Normal) add("prio12=normal");
         if (prio12 == Priority12::High) add("prio12=high");
         if (prio12 == Priority12::GlobalRealtime) add("prio12=realtime");

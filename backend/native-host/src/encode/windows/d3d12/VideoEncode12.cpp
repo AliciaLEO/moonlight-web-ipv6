@@ -20,6 +20,8 @@
 #include "core/Log.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace mw::native::encode {
@@ -37,6 +39,11 @@ constexpr uint32_t kWaitMs = d3d12::kGpuGoneMs;
 /// and the P pictures after it. HevcSliceParser is a sieve — a wrong PPS can
 /// land on one header's alignment by chance, it does not land on six.
 constexpr int kGuardedPictures = 6;
+
+/// Pictures in a row whose QP, as the driver says it, is not the one asked,
+/// before our rate control is taken to have lost its lever: one may be a
+/// driver rounding an average, three are a driver that stopped listening.
+constexpr int kQpMisses = 3;
 
 D3D12_RESOURCE_BARRIER transition(ID3D12Resource* resource, D3D12_RESOURCE_STATES before,
                                   D3D12_RESOURCE_STATES after,
@@ -172,6 +179,7 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
     request.hdr = hdr;
     request.intraRefresh = intraRefresh;
     request.dpbFrames = tuning.dpbFrames;
+    request.ownRateControl = tuning.rc12 == EncoderTuning::RateControl12::Qp;
     m_Setup = negotiateHevc(request, caps);
     if (!m_Setup.ok) {
         error = "D3D12 Video Encode takes no HEVC " + std::to_string(width) + "x" +
@@ -179,6 +187,28 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
         stop();
         return false;
     }
+    // The driver's CBR where it can move its target in flight; ours where it
+    // cannot, on a constant QP (plan §4.6). A driver that takes no constant
+    // QP either keeps its CBR, at the bitrate it starts with.
+    std::string rateWhy = request.ownRateControl ? "the bench's rc12=qp" : "";
+    if (tuning.rc12 == EncoderTuning::RateControl12::Default &&
+        !m_Setup.support.rateReconfigurable) {
+        HevcEncodeRequest own = request;
+        own.ownRateControl = true;
+        const HevcEncodeSetup ownSetup = negotiateHevc(own, caps);
+        if (ownSetup.ok) {
+            m_Setup = ownSetup;
+            rateWhy = "the driver moves its bitrate only with a new sequence";
+        } else {
+            log::warning("[native] D3D12 Video Encode on " + device->name() +
+                         " takes no constant QP (" + ownSetup.reason +
+                         "): the bitrate stays where it starts");
+            // The level the driver suggests is the last "yes" it gave.
+            m_Setup = negotiateHevc(request, caps);
+        }
+    }
+    m_OwnRate = m_Setup.rate.mode == HevcRate::Mode::Cqp;
+    m_Reencode = m_OwnRate && tuning.reencode12;
     m_Level = caps.suggestedLevel();
     m_Profile = VideoEncodeCaps12::profile(hdr);
     m_Config = VideoEncodeCaps12::configuration(m_Setup.blocks, m_Setup.blocksAnswer);
@@ -189,9 +219,15 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
     m_QueueRequest = d3d12::queueRequestFor(D3D12_COMMAND_LIST_TYPE_VIDEO_ENCODE, tuning,
                                             L"MoonlightWeb video encode");
     m_Format = hdr ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12;
-    m_Rate = std::make_unique<VideoEncodeCaps12::RateControl>(
-        m_Setup.rate, m_Fps, static_cast<uint32_t>(bitrateKbps) * 1000u);
-    m_Rate->setBitrate(static_cast<uint32_t>(bitrateKbps) * 1000u, m_Fps, m_VbvFrames);
+    const uint32_t bitsPerSecond = static_cast<uint32_t>((std::max)(bitrateKbps, 1)) * 1000u;
+    m_Rate = std::make_unique<VideoEncodeCaps12::RateControl>(m_Setup.rate, m_Fps, bitsPerSecond);
+    if (m_OwnRate) {
+        m_Controller.start(bitsPerSecond, m_Fps, m_VbvFrames,
+                           static_cast<uint64_t>(m_Setup.codedWidth) * m_Setup.codedHeight);
+        m_SubmittedQp = static_cast<int>(m_Rate->cqp.ConstantQP_FullIntracodedFrame);
+    } else {
+        m_Rate->setBitrate(bitsPerSecond, m_Fps, m_VbvFrames);
+    }
     m_Dpb = HevcDpb(m_Setup.dpbCapacity, m_Fps);
 
     // The parameter sets, once for the session — and read back at once: a
@@ -227,15 +263,20 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
     m_GuardLeft = kGuardedPictures;
     m_SliceQpMoves = false;
     m_IntraRefreshIndex = 0;
+    m_LastReady = nullptr;
+    m_LastReadyValue = 0;
 
     const HevcBlocks& b = m_Setup.blocks;
     log::info("[native] D3D12 Video Encode ready on " + device->name() + ": HEVC " +
               (hdr ? "Main 10 (BT.2020 PQ) " : "Main ") + std::to_string(width) + "x" +
               std::to_string(height) + " coded " + std::to_string(m_Setup.codedWidth) + "x" +
               std::to_string(m_Setup.codedHeight) + "@" + std::to_string(m_Fps) + ", " +
-              m_Setup.rate.describe() + " " + std::to_string(bitrateKbps) + " kbps, level " +
-              levelText(m_Setup.sequence.levelIdc) + ", blocks " +
-              std::to_string(1 << b.log2MinCodingBlock) + ".." +
+              m_Setup.rate.describe() +
+              (m_OwnRate ? " moved by our own rate control (" + rateWhy + ")" +
+                               (m_Reencode ? ", overshoots coded again" : "") + " at "
+                         : std::string(" ")) +
+              std::to_string(bitrateKbps) + " kbps, level " + levelText(m_Setup.sequence.levelIdc) +
+              ", blocks " + std::to_string(1 << b.log2MinCodingBlock) + ".." +
               std::to_string(1 << b.log2MaxCodingBlock) + " depth " + std::to_string(b.depth) +
               (m_Setup.blocksAnswer.ampRequired ? ", AMP" : "") +
               (m_Setup.blocksAnswer.pAsLowDelayB ? ", P as low-delay B" : "") + ", " +
@@ -540,14 +581,40 @@ bool VideoEncode12::encode(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
     }
     const HevcDpb::Plan plan = m_Dpb.plan(frameNumber, forceKeyframe);
     if (plan.idr) m_IntraRefreshIndex = 0;
+    // The conversion signals a new value for every picture it writes: the
+    // value of the last one encoded again is the same picture again.
+    const bool newPicture =
+        readyValue == 0 || ready != m_LastReady || readyValue != m_LastReadyValue;
+    m_LastReady = ready;
+    m_LastReadyValue = readyValue;
+    QpRateController::Picture asked;
+    if (m_OwnRate) {
+        asked = m_Controller.plan(plan.idr, newPicture);
+        applyQp(asked.qp);
+    }
     uint64_t bytes = 0;
     if (!submit(picture, ready, readyValue, plan, error) || !written(bytes, error)) return false;
+    // Far over its budget, the picture is coded again where it fits: the
+    // same plan, the same reference, its reconstruction written over.
+    if (m_Reencode && m_Controller.strongOvershoot(asked, bytes * 8)) {
+        asked = m_Controller.reencode(asked, bytes * 8);
+        applyQp(asked.qp);
+        if (!submit(picture, ready, readyValue, plan, error) || !written(bytes, error))
+            return false;
+        ++m_Reencoded;
+    }
     const auto* metadata =
         reinterpret_cast<const D3D12_VIDEO_ENCODER_OUTPUT_METADATA*>(m_MetadataCpu);
     const uint8_t* slices = m_BitstreamCpu + m_SliceOffset;
     if (m_GuardLeft > 0) {
         if (!guard(slices, static_cast<size_t>(bytes), plan, error)) return false;
         --m_GuardLeft;
+    }
+    m_DriverQp = static_cast<int>(metadata->EncodeStats.AverageQP);
+    if (m_DriverQp <= 0) m_DriverQp = reportedQp(slices, static_cast<size_t>(bytes));
+    if (m_OwnRate) {
+        m_Controller.encoded(asked, bytes * 8);
+        if (!qpFollowed(asked.qp, m_DriverQp, error)) return false;
     }
     m_Dpb.encoded(plan);
     m_RateChanged = false;
@@ -556,7 +623,15 @@ bool VideoEncode12::encode(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
     out.data = plan.idr ? slices - m_Headers.size() : slices;
     out.size = static_cast<size_t>(bytes) + (plan.idr ? m_Headers.size() : 0);
     out.keyframe = plan.idr;
-    out.avgQp = static_cast<int>(metadata->EncodeStats.AverageQP);
+    // Ours is the QP asked, and the driver was held to it; the driver's own
+    // otherwise, -1 where it does not say (reportedQp).
+    out.avgQp = m_OwnRate ? asked.qp : m_DriverQp;
+    m_OutputHeld = true;
+    return true;
+}
+
+int VideoEncode12::reportedQp(const uint8_t* slices, size_t size)
+{
     // The Arc and the AMD iGPU leave the average at 0 under CBR (the AMD
     // under CQP too, 27/09/2026). The AMD writes the QP its rate control
     // chose in the slice header; the Arc writes slice_qp_delta 0 and moves
@@ -564,13 +639,46 @@ bool VideoEncode12::encode(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
     // slice's QP counts once it has left the PPS's; until then the QP is
     // unknown (-1), which the overlay and the still-screen refinement
     // (RefineConvergence) take as an encoder that does not say.
-    if (out.avgQp <= 0) {
-        const int qp = firstSliceQp(slices, static_cast<size_t>(bytes), m_SpsFields, m_PpsFields);
-        if (qp >= 0 && qp != m_PpsFields.initQp) m_SliceQpMoves = true;
-        out.avgQp = m_SliceQpMoves ? qp : -1;
+    const int qp = firstSliceQp(slices, size, m_SpsFields, m_PpsFields);
+    if (qp >= 0 && qp != m_PpsFields.initQp) m_SliceQpMoves = true;
+    return m_SliceQpMoves ? qp : -1;
+}
+
+void VideoEncode12::applyQp(int qp)
+{
+    if (qp == m_SubmittedQp) return;
+    m_Rate->setQp(static_cast<UINT>(qp));
+    // Said to a driver that takes a change in flight — the AMD iGPU ignores
+    // one it is not told of (26/09/2026). The Arc takes it untold, and would
+    // refuse the telling: it has no rate change without a new sequence.
+    if (m_Setup.support.rateReconfigurable) m_RateChanged = true;
+    m_SubmittedQp = qp;
+}
+
+bool VideoEncode12::qpFollowed(int asked, int said, std::string& error)
+{
+    // A driver that does not say is taken on its word — none of the three
+    // does not.
+    if (said < 0) return true;
+    // A driver may say its QP in units of its own (Main 10's offset, say):
+    // what counts is that it moves with ours, at the distance it said first.
+    if (!m_QpOffsetKnown) {
+        m_QpOffsetKnown = true;
+        m_QpOffset = said - asked;
+        if (m_QpOffset != 0)
+            log::info("[native] D3D12 Video Encode says its QP " + std::to_string(m_QpOffset) +
+                      " away from the one asked");
     }
-    m_OutputHeld = true;
-    return true;
+    if (std::abs(said - asked - m_QpOffset) <= 1) {
+        m_QpMisses = 0;
+        return true;
+    }
+    ++m_QpNotFollowed;
+    if (++m_QpMisses < kQpMisses) return true;
+    error = "the driver does not code the QP asked any more (asked " + std::to_string(asked) +
+            ", coded " + std::to_string(said - m_QpOffset) + ", " + std::to_string(kQpMisses) +
+            " pictures in a row)";
+    return false;
 }
 
 bool VideoEncode12::written(uint64_t& bytes, std::string& error) const
@@ -670,19 +778,33 @@ bool VideoEncode12::setBitrate(int bitrateKbps, std::string& error)
         error = "the encoder is not initialized";
         return false;
     }
+    const uint32_t bitsPerSecond = static_cast<uint32_t>((std::max)(bitrateKbps, 1)) * 1000u;
+    // Ours: a new budget from the next picture, nothing said to the driver.
+    if (m_OwnRate) {
+        m_Controller.setBitrate(bitsPerSecond);
+        return true;
+    }
     if (!m_Setup.support.rateReconfigurable) {
-        error = "this driver changes its bitrate only with a new sequence (our own rate control "
-                "is still to come)";
+        error = "this driver changes its bitrate only with a new sequence, and runs its own rate "
+                "control here";
         return false;
     }
-    m_Rate->setBitrate(static_cast<uint32_t>((std::max)(bitrateKbps, 1)) * 1000u, m_Fps,
-                       m_VbvFrames);
+    m_Rate->setBitrate(bitsPerSecond, m_Fps, m_VbvFrames);
     m_RateChanged = true;
     return true;
 }
 
 void VideoEncode12::stop()
 {
+    if (m_OwnRate && m_Controller.pictures() > 0) {
+        char mean[16];
+        std::snprintf(mean, sizeof(mean), "%.1f", m_Controller.meanQp());
+        log::info("[native] D3D12 Video Encode, our rate control: " +
+                  std::to_string(m_Controller.pictures()) + " pictures at QP " + mean +
+                  " on average, " + std::to_string(m_Controller.strongOvershoots()) +
+                  " far over their budget, " + std::to_string(m_Reencoded) + " coded again, " +
+                  std::to_string(m_QpNotFollowed) + " whose QP the driver did not follow");
+    }
     if (m_Queue.queue && m_Encoded.fence()) {
         std::string ignored;
         const uint64_t value = m_Encoded.signal(m_Queue.queue.Get(), ignored);
@@ -713,6 +835,18 @@ void VideoEncode12::stop()
     m_SliceQpMoves = false;
     m_RateChanged = false;
     m_OutputHeld = false;
+    m_OwnRate = false;
+    m_Reencode = false;
+    m_Controller = QpRateController();
+    m_SubmittedQp = 0;
+    m_LastReady = nullptr;
+    m_LastReadyValue = 0;
+    m_QpOffsetKnown = false;
+    m_QpOffset = 0;
+    m_QpMisses = 0;
+    m_QpNotFollowed = 0;
+    m_DriverQp = -1;
+    m_Reencoded = 0;
 }
 
 } // namespace mw::native::encode
