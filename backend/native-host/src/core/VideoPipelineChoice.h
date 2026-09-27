@@ -73,6 +73,10 @@ struct VideoPipelineChoice
     /// "D3D11", or the D3D12 route: "DIRECT conversion → D3D12 Video Encode
     /// HEVC".
     std::string route = "D3D11";
+    /// The D3D12 route's encoder as the stats overlay names it — "D3D12 VE",
+    /// "NVENC (D3D12)", "AMF (D3D12)" — and empty on D3D11, where the
+    /// Selector's own encoder speaks for itself.
+    std::string encoder;
     /// Why, for the log: which of the bench key, the setting and the table
     /// decided — and, when D3D12 was asked for and D3D11 runs, what refused.
     std::string reason;
@@ -88,6 +92,17 @@ inline const char* encoderName(EncoderTuning::Encoder12 e)
     case EncoderTuning::Encoder12::Nvenc: return "NVENC (D3D12)";
     case EncoderTuning::Encoder12::Amf: return "AMF (D3D12)";
     default: return "D3D12 Video Encode";
+    }
+}
+
+/// The same encoder in the fewest characters: the overlay's value column is a
+/// phone's width.
+inline const char* encoderLabel(EncoderTuning::Encoder12 e)
+{
+    switch (e) {
+    case EncoderTuning::Encoder12::Nvenc: return "NVENC (D3D12)";
+    case EncoderTuning::Encoder12::Amf: return "AMF (D3D12)";
+    default: return "D3D12 VE";
     }
 }
 
@@ -153,6 +168,7 @@ inline VideoPipelineChoice chooseVideoPipeline(const VideoPipelineFacts& f)
     c.route =
         std::string(f.conv12 == EncoderTuning::ConvertQueue12::Compute ? "COMPUTE" : "DIRECT") +
         " conversion → " + videopipeline_detail::encoderName(encoder) + " " + toString(f.codec);
+    c.encoder = videopipeline_detail::encoderLabel(encoder);
     c.reason = why;
     return c;
 }

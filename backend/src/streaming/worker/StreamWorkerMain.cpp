@@ -295,6 +295,7 @@ int runStreamWorker(QCoreApplication& app)
     // Absent (an older parent, or a machine that never met a portal) → empty,
     // and the user is asked. Never a failure: a dialog is the fallback.
     session->setPortalRestoreToken(cfg["portalRestoreToken"].toString());
+    session->setNativeVideoPipeline(cfg["nativeVideoPipeline"].toString());
     session->setClientPresentation(cfg["clientRefreshMilliHz"].toInt(0),
                                    cfg["clientVsync"].toBool(false));
     // Absent (an older parent, or a rate the viewer named) → no ceiling, and

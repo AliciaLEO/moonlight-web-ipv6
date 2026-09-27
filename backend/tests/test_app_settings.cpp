@@ -4,6 +4,8 @@
 #include "test_framework.h"
 #include "server/AppSettings.h"
 
+#include "mw/native/VideoPipeline.h"
+
 #include <QTemporaryDir>
 #include <QFile>
 #include <QJsonDocument>
@@ -81,6 +83,48 @@ void run_app_settings_tests()
     CHECK_EQ(s.stunServer(), QString("stun:example.org:3478"));
     s.setTransportMode("webrtc-dc-udp");
     CHECK_EQ(s.transportMode(), QString("webrtc-dc-udp"));
+
+    // The picture chain of a native Windows session (admin → Advanced): auto
+    // until the admin picks one, the three names in any case, nothing else. A
+    // refused value leaves the stored one in place, and a file edited by hand
+    // to something else reads as the default, not as a chain that does not
+    // exist.
+    CHECK_EQ(s.nativeVideoPipeline(), QString("auto"));
+    CHECK(s.setNativeVideoPipeline("d3d12"));
+    CHECK_EQ(s.nativeVideoPipeline(), QString("d3d12"));
+    CHECK(s.setNativeVideoPipeline(" D3D11 "));
+    CHECK_EQ(s.nativeVideoPipeline(), QString("d3d11"));
+    CHECK(!s.setNativeVideoPipeline("d3d13"));
+    CHECK(!s.setNativeVideoPipeline(""));
+    CHECK_EQ(s.nativeVideoPipeline(), QString("d3d11"));
+    {
+        QFile f(s.m_FilePath);
+        CHECK(f.open(QIODevice::ReadOnly));
+        QJsonObject edited = QJsonDocument::fromJson(f.readAll()).object();
+        f.close();
+        edited["native_video_pipeline"] = "d3d10";
+        CHECK(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        f.write(QJsonDocument(edited).toJson());
+        f.close();
+        CHECK_EQ(s.nativeVideoPipeline(), QString("auto"));
+    }
+    // What the worker is handed is what the engine reads: every name the
+    // setting can answer parses on the native side, to the chain it names.
+    {
+        const struct
+        {
+            const char* stored;
+            mw::native::VideoPipeline engine;
+        } names[] = {{"auto", mw::native::VideoPipeline::Auto},
+                     {"d3d11", mw::native::VideoPipeline::D3d11},
+                     {"d3d12", mw::native::VideoPipeline::D3d12}};
+        for (const auto& n : names) {
+            CHECK(s.setNativeVideoPipeline(n.stored));
+            mw::native::VideoPipeline parsed = mw::native::VideoPipeline::Auto;
+            CHECK(mw::native::parseVideoPipeline(s.nativeVideoPipeline().toStdString(), parsed));
+            CHECK(parsed == n.engine);
+        }
+    }
     s.setUniqueId("abcd1234");
     CHECK_EQ(s.uniqueId(), QString("abcd1234"));
 

@@ -3306,6 +3306,8 @@ int main(int argc, char* argv[])
             const bool portalVirtual = host->backendType == NativeHostBackend::typeName() &&
                                        appId == NativeHostBackend::virtualDisplayAppId();
             s->setPortalRestoreToken(appSettings.portalRestoreToken(portalVirtual));
+            // The admin's picture chain for a native Windows session.
+            s->setNativeVideoPipeline(appSettings.nativeVideoPipeline());
             QObject::connect(s, &StreamSession::portalGrantReceived, qApp,
                              [&appSettings, portalVirtual](const QString& token) {
                                  appSettings.setPortalRestoreToken(token, portalVirtual);
@@ -3448,6 +3450,8 @@ int main(int argc, char* argv[])
             const bool portalVirtual = host->backendType == NativeHostBackend::typeName() &&
                                        appId == NativeHostBackend::virtualDisplayAppId();
             cfg["portalRestoreToken"] = appSettings.portalRestoreToken(portalVirtual);
+            // The admin's picture chain for a native Windows session.
+            cfg["nativeVideoPipeline"] = appSettings.nativeVideoPipeline();
             cfg["clientUniqueId"] = reqClientUniqueId;
             cfg["clientKind"] = NetClassify::toString(clientKind);
             cfg["autoMode"] = true;
@@ -4735,6 +4739,9 @@ int main(int argc, char* argv[])
         const bool portalVirtual = host->backendType == NativeHostBackend::typeName() &&
                                    appId == NativeHostBackend::virtualDisplayAppId();
         cfg["portalRestoreToken"] = appSettings.portalRestoreToken(portalVirtual);
+        // The host's own setting, whoever the viewer is: the chain is the
+        // machine's, not the session's.
+        cfg["nativeVideoPipeline"] = appSettings.nativeVideoPipeline();
         // Gamepads from different sessions would all arrive as controller 0;
         // offset each player so they land on distinct virtual pads.
         cfg["gamepadOffset"] = slot - kOwnerSlots + 1;

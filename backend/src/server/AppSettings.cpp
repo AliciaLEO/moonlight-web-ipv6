@@ -962,6 +962,35 @@ void AppSettings::setTransportMode(const QString& mode)
     writeAll(obj);
 }
 
+namespace {
+
+/// "auto", "d3d11" or "d3d12", lower-cased; empty for anything else.
+QString videoPipelineName(const QString& value)
+{
+    const QString v = value.trimmed().toLower();
+    return v == QLatin1String("auto") || v == QLatin1String("d3d11") || v == QLatin1String("d3d12")
+               ? v
+               : QString();
+}
+
+} // namespace
+
+QString AppSettings::nativeVideoPipeline() const
+{
+    const QString v = videoPipelineName(readAll().value("native_video_pipeline").toString());
+    return v.isEmpty() ? QStringLiteral("auto") : v;
+}
+
+bool AppSettings::setNativeVideoPipeline(const QString& pipeline)
+{
+    const QString v = videoPipelineName(pipeline);
+    if (v.isEmpty()) return false;
+    QJsonObject obj = readAll();
+    obj["native_video_pipeline"] = v;
+    writeAll(obj);
+    return true;
+}
+
 // ── Video enhancement ───────────────────────────────────────────────────────
 
 QString AppSettings::videoEnhancement() const

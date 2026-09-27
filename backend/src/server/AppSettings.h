@@ -538,6 +538,18 @@ public:
     QString transportMode() const;
     void setTransportMode(const QString& mode);
 
+    /// The chain a native Windows session carries its pictures on, from the
+    /// capture to the encoder (plan pipeline-video-d3d12-v2, §3.3): "auto" —
+    /// the engine's table, measured GPU by GPU — "d3d11" or "d3d12". The
+    /// admin's "Advanced" choice. A D3D12 the session cannot build runs D3D11
+    /// and says why; ignored off Windows.
+    /// Default: "auto", which is also what a value the file holds that is not
+    /// one of the three reads as.
+    QString nativeVideoPipeline() const;
+    /// Stores one of the three names, in any case. False, with the file left
+    /// as it was, for anything else.
+    bool setNativeVideoPipeline(const QString& pipeline);
+
     // ── HMAC key for session tokens ──────────────────────────────────────────
 
     /// Persisted HMAC signing key. Generated once, reused across restarts.

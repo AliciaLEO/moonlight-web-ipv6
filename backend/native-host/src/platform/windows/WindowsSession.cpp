@@ -370,6 +370,10 @@ public:
         m_Info.videoPipeline = m_PipelineChoice.pipeline;
         m_Info.videoRoute = m_PipelineChoice.route;
         m_Info.videoPipelineReason = m_PipelineChoice.reason;
+        m_Info.videoEncoder = m_PipelineChoice.pipeline == VideoPipeline::D3d12
+                                  ? m_PipelineChoice.encoder
+                                  : std::string();
+        m_Info.videoPipelineRefused = m_PipelineChoice.refused;
 
         // Input comes up last, and its failure is NOT fatal. A session that
         // streams but cannot inject is degraded; a session that refuses to
@@ -911,6 +915,11 @@ private:
         m_Info.videoPipeline = choice.pipeline;
         m_Info.videoRoute = choice.route;
         m_Info.videoPipelineReason = choice.reason;
+        // A choice turned D3D11 by its build still names the D3D12 encoder it
+        // was for: only a running D3D12 chain has one to show.
+        m_Info.videoEncoder =
+            choice.pipeline == VideoPipeline::D3d12 ? choice.encoder : std::string();
+        m_Info.videoPipelineRefused = choice.refused;
         if (changed)
             log::info(std::string("[native] video pipeline: ") +
                       (choice.pipeline == VideoPipeline::D3d12 ? "D3D12 (" + choice.route + ")"

@@ -87,6 +87,20 @@ int formatFromSession(const mw::native::SessionInfo& info)
     return info.yuv444 ? kVideoFormatH264High444 : kVideoFormatH264;
 }
 
+/// The encoder as the overlay names it: the D3D12 route's own ("D3D12 VE",
+/// "NVENC (D3D12)") while that chain runs, the Selector's ("NVENC", "AMF",
+/// "oneVPL") otherwise — followed by "(D3D11)" when D3D12 was asked for and
+/// D3D11 runs, so whoever picked D3D12 in the admin sees at a glance that it
+/// did not take. Why is the log's to say.
+QString encoderLabel(const mw::native::SessionInfo& info)
+{
+    if (info.videoPipeline == mw::native::VideoPipeline::D3d12 && !info.videoEncoder.empty())
+        return QString::fromStdString(info.videoEncoder);
+    QString name = QString::fromUtf8(mw::native::toString(info.encoder));
+    if (info.videoPipelineRefused) name += QStringLiteral(" (D3D11)");
+    return name;
+}
+
 } // namespace
 
 NativeMediaEngine::NativeMediaEngine(QObject* parent)
@@ -167,6 +181,9 @@ void NativeMediaEngine::startCapture(const StartParams& params)
     // first session of an install that captures through the portal, which is
     // the one time the user sees a dialog.
     config.portalRestoreToken = params.portalRestoreToken.toStdString();
+    // The picture chain the admin chose. A bench's MW_NATIVE_TUNING below
+    // still wins over it with its pipeline= key (VideoPipelineChoice.h).
+    config.videoPipeline = params.videoPipeline;
     // The client's screen: what /start carried, unless a `clientrefresh`
     // message already said otherwise (a session that starts after the
     // client's window moved).
@@ -645,7 +662,7 @@ QString NativeMediaEngine::describeSession() const
     const mw::native::SessionInfo& info = m_Session->info();
 
     QString text = QString::fromStdString(info.gpuName) + QStringLiteral(" · ") +
-                   QString::fromUtf8(mw::native::toString(info.encoder)) + QLatin1Char(' ') +
+                   encoderLabel(info) + QLatin1Char(' ') +
                    QString::fromUtf8(mw::native::toString(info.codec));
     if (info.yuv444) text += QStringLiteral(" 4:4:4");
     if (info.hdr) text += QStringLiteral(" HDR");
@@ -658,7 +675,7 @@ QString NativeMediaEngine::describeSession() const
 QString NativeMediaEngine::describeEncoder() const
 {
     if (!m_Session) return {};
-    return QString::fromUtf8(mw::native::toString(m_Session->info().encoder));
+    return encoderLabel(m_Session->info());
 }
 
 // ── Input ───────────────────────────────────────────────────────────────────

@@ -139,6 +139,11 @@ export class AdminView {
         this._instanceName = '';
         this._defaultInstanceName = '';
         this._instanceNameMax = 32;
+        // The picture chain of a native Windows session (Advanced): what is
+        // stored, and whether this machine has a choice to make at all — a GPU
+        // whose encoder has a D3D12 route. The section is hidden otherwise.
+        this._videoPipeline = 'auto';
+        this._videoPipelineSupported = false;
 
         // Dirty tracking: snapshot of values at load time
         this._cleanState = {};
@@ -166,6 +171,7 @@ export class AdminView {
             return;
         }
         await this._loadState();
+        await this._loadStreamingState();
         await this._loadInternetState();
         await this._loadSessions();
         this.render();
@@ -223,6 +229,16 @@ export class AdminView {
             this._instanceNameMax = admin.instance_name_max || 32;
         } catch (err) {
             console.warn('[Admin] Failed to load server settings:', err);
+        }
+    }
+
+    async _loadStreamingState() {
+        try {
+            const settings = await BackendClient.getStreamingSettings();
+            this._videoPipeline = settings.native_video_pipeline || 'auto';
+            this._videoPipelineSupported = settings.native_video_pipeline_supported === true;
+        } catch (err) {
+            console.warn('[Admin] Failed to load streaming settings:', err);
         }
     }
 
@@ -1078,6 +1094,7 @@ export class AdminView {
                         </div>
                     </div>
                 </div>
+                ${this._renderAdvanced()}
             </div>
         `;
 
@@ -1391,6 +1408,14 @@ export class AdminView {
         if (transportSelect) {
             transportSelect.addEventListener('change', () => {
                 this._saveInternetPrefs();
+            });
+        }
+
+        // Picture chain (Advanced): saved as soon as it changes
+        const pipelineSelect = this.container.querySelector('#select-video-pipeline');
+        if (pipelineSelect) {
+            pipelineSelect.addEventListener('change', () => {
+                this._saveVideoPipeline(pipelineSelect.value);
             });
         }
 
@@ -2093,6 +2118,62 @@ export class AdminView {
         } catch (err) {
             console.warn('[Admin] Failed to save transport prefs:', err);
             Toast.error(t('admin.transportSaveFailed'));
+        }
+    }
+
+    // --- Advanced: the picture chain of a native Windows session ---
+
+    _videoPipelineOptions() {
+        return [
+            ['auto', t('admin.videoPipelineAuto')],
+            ['d3d11', t('admin.videoPipelineD3d11')],
+            ['d3d12', t('admin.videoPipelineD3d12')],
+        ];
+    }
+
+    // Only where the choice means something: the server says whether this
+    // machine has a GPU with a D3D12 route, and a section with nothing to
+    // change is not shown.
+    _renderAdvanced() {
+        if (!this._videoPipelineSupported) return '';
+        return `
+                <!-- Advanced -->
+                <div class="settings-section" id="admin-section-advanced">
+                    <h3 class="settings-section-title">${t('admin.advanced')}</h3>
+                    <div class="settings-field">
+                        <label class="settings-label" for="select-video-pipeline">
+                            ${t('admin.videoPipeline')}
+                        </label>
+                        <select id="select-video-pipeline" class="settings-select">
+                            ${this._videoPipelineOptions()
+                                .map(
+                                    ([value, label]) =>
+                                        `<option value="${value}" ${value === this._videoPipeline ? 'selected' : ''}>${this.esc(label)}</option>`,
+                                )
+                                .join('')}
+                        </select>
+                        <p class="settings-hint">
+                            ${t('admin.videoPipelineHint')}
+                        </p>
+                    </div>
+                </div>
+        `;
+    }
+
+    // Saved at once, like the transport mode. It applies to the next stream: a
+    // running one keeps the chain it was built on.
+    async _saveVideoPipeline(value) {
+        try {
+            await BackendClient.saveStreamingSettings({ native_video_pipeline: value });
+            this._videoPipeline = value;
+            const option = this._videoPipelineOptions().find(([v]) => v === value);
+            Toast.success(t('admin.videoPipelineSaved', { pipeline: option ? option[1] : value }));
+        } catch (err) {
+            console.warn('[Admin] Failed to save the video pipeline:', err);
+            Toast.error(t('admin.videoPipelineSaveFailed'));
+            // The select shows what is stored, not what failed to be.
+            const select = this.container.querySelector('#select-video-pipeline');
+            if (select) select.value = this._videoPipeline;
         }
     }
 

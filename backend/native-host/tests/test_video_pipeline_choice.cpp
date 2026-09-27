@@ -78,6 +78,7 @@ void run_video_pipeline_choice_tests()
         const VideoPipelineChoice c = chooseVideoPipeline(arc());
         CHECK(c.pipeline == VideoPipeline::D3d11);
         CHECK_EQ(c.route, std::string("D3D11"));
+        CHECK(c.encoder.empty()); // the Selector's encoder names itself
         CHECK(!c.refused);
         CHECK(contains(c.reason, "vendor table"));
         CHECK(contains(c.reason, "oneVPL"));
@@ -104,11 +105,13 @@ void run_video_pipeline_choice_tests()
         CHECK(contains(c.reason, "pipeline=d3d12"));
     }
 
-    SECTION("VideoPipeline — the route names the queue, the encoder and the codec");
+    SECTION("VideoPipeline — the route names the queue, the encoder and the codec; the overlay, "
+            "the encoder alone");
     {
         VideoPipelineFacts f = forcedD3d12();
         CHECK_EQ(chooseVideoPipeline(f).route,
                  std::string("DIRECT conversion → D3D12 Video Encode HEVC"));
+        CHECK_EQ(chooseVideoPipeline(f).encoder, std::string("D3D12 VE"));
         f.conv12 = EncoderTuning::ConvertQueue12::Compute;
         CHECK_EQ(chooseVideoPipeline(f).route,
                  std::string("COMPUTE conversion → D3D12 Video Encode HEVC"));
@@ -119,12 +122,14 @@ void run_video_pipeline_choice_tests()
         rtx.nvenc12 = true;
         CHECK_EQ(chooseVideoPipeline(rtx).route,
                  std::string("DIRECT conversion → NVENC (D3D12) HEVC"));
+        CHECK_EQ(chooseVideoPipeline(rtx).encoder, std::string("NVENC (D3D12)"));
         VideoPipelineFacts amd = forcedD3d12();
         amd.encoder = EncoderApi::Amf;
         amd.enc12 = EncoderTuning::Encoder12::Amf;
         amd.amf12 = true;
         CHECK_EQ(chooseVideoPipeline(amd).route,
                  std::string("DIRECT conversion → AMF (D3D12) HEVC"));
+        CHECK_EQ(chooseVideoPipeline(amd).encoder, std::string("AMF (D3D12)"));
     }
 
     SECTION("VideoPipeline — what rules D3D12 out for a build, each one named");
@@ -171,6 +176,7 @@ void run_video_pipeline_choice_tests()
             CHECK(c.pipeline == VideoPipeline::D3d11);
             CHECK(c.refused);
             CHECK_EQ(c.route, std::string("D3D11"));
+            CHECK(c.encoder.empty());
             CHECK(contains(c.reason, "the setting (d3d12) asks for D3D12, D3D11 runs: "));
             if (!contains(c.reason, k.named))
                 std::fprintf(stderr, "  %s: \"%s\"\n", k.what, c.reason.c_str());
