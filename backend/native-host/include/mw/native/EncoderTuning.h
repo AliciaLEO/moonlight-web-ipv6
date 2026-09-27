@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include "VideoPipeline.h"
+
 #include <string>
 
 namespace mw::native {
@@ -192,6 +194,74 @@ struct EncoderTuning
     };
     Fallback fallback = Fallback::None;
 
+    // ── The D3D12 pipeline (plan pipeline-video-d3d12-v2) ───────────────────
+    //
+    // Each one defaults to the engine's own choice, like everything above;
+    // none means anything to a session running D3D11.
+
+    /// The chain, over the setting and the vendor table (VideoPipeline.h).
+    VideoPipeline pipeline = VideoPipeline::Auto;
+    /// The D3D12 conversion's queue: DIRECT with the pixel shaders D3D11 runs
+    /// (the engine's own), or COMPUTE.
+    enum class ConvertQueue12
+    {
+        Default,
+        Direct,
+        Compute
+    };
+    ConvertQueue12 conv12 = ConvertQueue12::Default;
+    /// The D3D12 route's encoder: D3D12 Video Encode (the engine's own), or
+    /// the vendor's SDK fed D3D12 pictures.
+    enum class Encoder12
+    {
+        Default,
+        VideoEncode,
+        Nvenc,
+        Amf
+    };
+    Encoder12 enc12 = Encoder12::Default;
+    /// D3D12 Video Encode's rate control: the driver's CBR where it can move
+    /// its target, the in-house QP controller where it cannot (Intel). Qp
+    /// runs the in-house one everywhere, as a witness where it is not needed.
+    enum class RateControl12
+    {
+        Default,
+        Driver,
+        Qp
+    };
+    RateControl12 rc12 = RateControl12::Default;
+    /// The priority of the D3D12 queues. The engine's own follows the
+    /// process's GPU class: GLOBAL_REALTIME under REALTIME, HIGH otherwise.
+    enum class Priority12
+    {
+        Default,
+        Normal,
+        High,
+        GlobalRealtime
+    };
+    Priority12 prio12 = Priority12::Default;
+    /// A CreatorID of each queue's own (the engine's) rather than the
+    /// runtime's shared one, whose priority hardware scheduling ignores.
+    Choice ownCreator12 = Choice::Default;
+    /// How the capture and the D3D12 read of its surface are ordered: fences
+    /// on the GPU both ways (the engine's own), none, or the CPU waiting for
+    /// the read before ReleaseFrame. Measured: without it, reads come out
+    /// stale or from the next frame.
+    enum class DdaSync
+    {
+        Default,
+        None,
+        Gpu,
+        Cpu
+    };
+    DdaSync ddaSync = DdaSync::Default;
+    /// Timestamps on the D3D12 queues, into EncodedFrame's GPU times. Off by
+    /// default: a query pair per pass is not free.
+    bool gpuTiming = false;
+    /// A session asked to run D3D12 that has to run D3D11 ends instead: a
+    /// bench row labelled D3D12 is never a D3D11 one.
+    bool strict12 = false;
+
     bool isDefault() const
     {
         return nvencPreset == 0 && nvencTuning == Latency::Default &&
@@ -205,7 +275,11 @@ struct EncoderTuning
                vplGamingScenario == Choice::Default && vplWinBrcFrames == 0 &&
                vplRateControl == VplRateControl::Default && vplIntraRefreshQpDelta == 0 &&
                vplIntraRefreshDist == 0 && vbvFrames == 0 && dpbFrames == 0 &&
-               fallback == Fallback::None;
+               fallback == Fallback::None && pipeline == VideoPipeline::Auto &&
+               conv12 == ConvertQueue12::Default && enc12 == Encoder12::Default &&
+               rc12 == RateControl12::Default && prio12 == Priority12::Default &&
+               ownCreator12 == Choice::Default && ddaSync == DdaSync::Default && !gpuTiming &&
+               !strict12;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -258,6 +332,24 @@ struct EncoderTuning
         if (fallback == Fallback::MediaFoundationSoftware) add("fallback=mfsw");
         if (fallback == Fallback::MediaFoundationCpuInput) add("fallback=mfcpu");
         if (fallback == Fallback::Cpu) add("fallback=cpu");
+        if (pipeline != VideoPipeline::Auto) add(std::string("pipeline=") + toString(pipeline));
+        if (conv12 == ConvertQueue12::Direct) add("conv12=direct");
+        if (conv12 == ConvertQueue12::Compute) add("conv12=compute");
+        if (enc12 == Encoder12::VideoEncode) add("enc12=ve");
+        if (enc12 == Encoder12::Nvenc) add("enc12=nvenc");
+        if (enc12 == Encoder12::Amf) add("enc12=amf");
+        if (rc12 == RateControl12::Driver) add("rc12=driver");
+        if (rc12 == RateControl12::Qp) add("rc12=qp");
+        if (prio12 == Priority12::Normal) add("prio12=normal");
+        if (prio12 == Priority12::High) add("prio12=high");
+        if (prio12 == Priority12::GlobalRealtime) add("prio12=realtime");
+        if (ownCreator12 == Choice::On) add("creator12=own");
+        if (ownCreator12 == Choice::Off) add("creator12=default");
+        if (ddaSync == DdaSync::None) add("ddasync=none");
+        if (ddaSync == DdaSync::Gpu) add("ddasync=gpu");
+        if (ddaSync == DdaSync::Cpu) add("ddasync=cpu");
+        if (gpuTiming) add("gputiming=1");
+        if (strict12) add("strict12=1");
         return s;
     }
 };

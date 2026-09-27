@@ -83,6 +83,14 @@ struct EncodedFrame
     /// When the encoder's bitstream became readable (t₃).
     int64_t encodedUs = 0;
 
+    /// What the GPU itself spent on this frame's conversion and encode, from
+    /// timestamps on the D3D12 queues (EncoderTuning::gpuTiming); -1 when not
+    /// measured, which is always on D3D11. The stamps above are wall times
+    /// and include the waits in the queues; these do not, so the difference
+    /// is what a busy GPU made the frame wait.
+    int64_t gpuConvertUs = -1;
+    int64_t gpuEncodeUs = -1;
+
     /// Convenience: the host-side processing latency this frame really cost,
     /// present → encoded. This is what the stats overlay shows, and unlike the
     /// GameStream path it is measured here rather than reported by a third

@@ -1950,6 +1950,8 @@ private:
             out.submittedUs = stamps.submittedUs;
             out.convertedUs = stamps.convertedUs;
             out.encodedUs = steadyNowUs();
+            out.gpuConvertUs = encoded.gpuConvertUs;
+            out.gpuEncodeUs = encoded.gpuEncodeUs;
 
             // Delivered on this thread, and the consumer sends it before
             // returning. The buffer is unlocked immediately after, which is
