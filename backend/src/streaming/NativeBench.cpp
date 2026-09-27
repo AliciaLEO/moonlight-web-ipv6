@@ -139,6 +139,8 @@ const char* const kUsage =
     "  rc12=driver|qp              D3D12 Video Encode's rate control; qp = the in-house one\n"
     "  reencode=0|1                in-house rate control: code a picture far over its budget\n"
     "                              again, at the QP that fits it\n"
+    "  interfloor=<k>|off          in-house rate control: a new picture is never believed\n"
+    "                              to cost under 1/2^k of an intra one (off: no floor)\n"
     "  prio12=normal|high|realtime the D3D12 queues' priority (default: the GPU class's)\n"
     "  creator12=own|default       each queue's own CreatorID, or the runtime's shared one\n"
     "  ddasync=gpu|none|cpu        how the capture and the D3D12 read are ordered\n"
@@ -321,6 +323,13 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
             ok = false;
     } else if (key == "reencode") {
         tuning.reencode12 = value.toInt(&ok) != 0;
+    } else if (key == "interfloor") {
+        if (value.compare("off", Qt::CaseInsensitive) == 0) {
+            tuning.interFloor12 = -1;
+        } else {
+            tuning.interFloor12 = value.toInt(&ok);
+            ok = ok && tuning.interFloor12 >= 1 && tuning.interFloor12 <= 8;
+        }
     } else if (key == "prio12") {
         using P = mw::native::EncoderTuning::Priority12;
         const QString p = value.toLower();

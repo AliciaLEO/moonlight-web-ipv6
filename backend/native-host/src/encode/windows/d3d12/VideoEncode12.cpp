@@ -222,8 +222,10 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
     const uint32_t bitsPerSecond = static_cast<uint32_t>((std::max)(bitrateKbps, 1)) * 1000u;
     m_Rate = std::make_unique<VideoEncodeCaps12::RateControl>(m_Setup.rate, m_Fps, bitsPerSecond);
     if (m_OwnRate) {
+        const double floor = tuning.interFloor12 > 0 ? -static_cast<double>(tuning.interFloor12)
+                                                     : QpRateController::kNoInterFloor;
         m_Controller.start(bitsPerSecond, m_Fps, m_VbvFrames,
-                           static_cast<uint64_t>(m_Setup.codedWidth) * m_Setup.codedHeight);
+                           static_cast<uint64_t>(m_Setup.codedWidth) * m_Setup.codedHeight, floor);
         m_SubmittedQp = static_cast<int>(m_Rate->cqp.ConstantQP_FullIntracodedFrame);
     } else {
         m_Rate->setBitrate(bitsPerSecond, m_Fps, m_VbvFrames);
@@ -597,6 +599,7 @@ bool VideoEncode12::encode(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
     // Far over its budget, the picture is coded again where it fits: the
     // same plan, the same reference, its reconstruction written over.
     if (m_Reencode && m_Controller.strongOvershoot(asked, bytes * 8)) {
+        m_Controller.overshot(asked, bytes * 8);
         asked = m_Controller.reencode(asked, bytes * 8);
         applyQp(asked.qp);
         if (!submit(picture, ready, readyValue, plan, error) || !written(bytes, error))

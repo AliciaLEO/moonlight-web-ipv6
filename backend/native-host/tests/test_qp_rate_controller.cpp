@@ -17,20 +17,27 @@ using Kind = QpRateController::Kind;
 namespace {
 
 /// An encoder as the model sees one (plan C6.1): a picture costs its
-/// complexity × 2^(−(QP − 26)/6), times some noise. A pass over the same
-/// picture codes what separates its QP from the one the picture already has —
-/// the whole picture's information between the two, so a still picture costs
-/// the same in total whatever the passes — and next to nothing at or above it.
+/// complexity × 2^(−(QP − 26)/6), times some noise — a new predicted picture
+/// halving every interSlope of QP instead, for content whose curve is steeper
+/// than the textbook's (text scrolling: ~2.4 on the Arc, 27/09/2026). A pass
+/// over the same picture codes what separates its QP from the one the picture
+/// already has — the whole picture's information between the two, so a still
+/// picture costs the same in total whatever the passes — and next to nothing
+/// at or above it.
 struct Simulator
 {
     double inter = 0.6e6;  ///< bits a new picture costs at QP 26
     double intra = 1.25e6; ///< bits an intra picture costs at QP 26
-    double spread = 0.0;   ///< log2 of the noise's reach, either side
+    double interSlope = 6.0;
+    double spread = 0.0; ///< log2 of the noise's reach, either side
     double skipBits = 4000;
     uint32_t seed = 12345;
     int pictureQp = 51;
 
-    static double at(double complexity, int qp) { return complexity * std::exp2(-(qp - 26) / 6.0); }
+    static double at(double complexity, int qp, double slope = 6.0)
+    {
+        return complexity * std::exp2(-(qp - 26) / slope);
+    }
 
     double noise()
     {
@@ -48,7 +55,7 @@ struct Simulator
             pictureQp = p.qp;
             break;
         case Kind::Inter:
-            bits = at(inter, p.qp) * noise();
+            bits = at(inter, p.qp, interSlope) * noise();
             pictureQp = p.qp;
             break;
         case Kind::Pass:
@@ -80,13 +87,28 @@ Frame step(QpRateController& rc, Simulator& sim, bool intra, bool fresh)
     return f;
 }
 
+/// One new picture, coded again where it overshoots strongly (reencode=).
+Frame stepAgain(QpRateController& rc, Simulator& sim)
+{
+    Frame f;
+    f.picture = rc.plan(false, true);
+    f.bits = sim.encode(f.picture);
+    if (rc.strongOvershoot(f.picture, f.bits)) {
+        rc.overshot(f.picture, f.bits);
+        f.picture = rc.reencode(f.picture, f.bits);
+        f.bits = sim.encode(f.picture);
+    }
+    rc.encoded(f.picture, f.bits);
+    return f;
+}
+
 /// A session: its first IDR, then @p frames new pictures.
-std::vector<Frame> run(QpRateController& rc, Simulator& sim, int frames)
+std::vector<Frame> run(QpRateController& rc, Simulator& sim, int frames, bool again = false)
 {
     std::vector<Frame> out;
     out.push_back(step(rc, sim, true, true));
     for (int i = 0; i < frames; ++i)
-        out.push_back(step(rc, sim, false, true));
+        out.push_back(again ? stepAgain(rc, sim) : step(rc, sim, false, true));
     return out;
 }
 
@@ -308,6 +330,42 @@ void run_qp_rate_controller_tests()
         CHECK(floor.bits <= static_cast<uint64_t>(sim.skipBits));
     }
 
+    SECTION("QpRateController — a heavy page: every pass sharpens, none stalls early");
+    {
+        // A page of text whose first picture is ~3x its budget at QP 42 (the
+        // bench's still.html on the Arc, 27/09/2026): 1.9 MB whole at QP 18,
+        // more than a burst of 8 passes of 125 KB buys.
+        QpRateController rc;
+        rc.start(kRate, kFps, 0, kPixels);
+        Simulator sim;
+        sim.intra = 6.0e6;
+        const Frame idr = step(rc, sim, true, true);
+        rc.setBitrate(static_cast<uint32_t>(stillBitrateKbps(kRate / 1000)) * 1000u);
+        RefineConvergence conv;
+        RefineConvergence::Verdict verdict = RefineConvergence::Verdict::Continue;
+        int lastQp = idr.picture.qp, passes = 0;
+        bool sharpened = true, fits = true;
+        while (verdict == RefineConvergence::Verdict::Continue) {
+            const Frame pass = step(rc, sim, false, false);
+            ++passes;
+            if (pass.picture.qp >= lastQp && lastQp > QpRateController::kMinQp) sharpened = false;
+            if (static_cast<double>(pass.bits) > 1.5 * static_cast<double>(pass.picture.budgetBits))
+                fits = false;
+            lastQp = pass.picture.qp;
+            verdict = conv.notePass(static_cast<size_t>(pass.bits / 8), pass.picture.qp);
+        }
+        CHECK(sharpened); // no "converged" at the first QP
+        CHECK(fits);
+        CHECK(lastQp <= idr.picture.qp - 16);
+        // The idle floor, a frame's worth: a step down where it buys one —
+        // here less than half of one, so the picture stays, for next to
+        // nothing.
+        rc.setBitrate(kRate);
+        const Frame floor = step(rc, sim, false, false);
+        CHECK(floor.picture.qp <= lastQp);
+        CHECK(static_cast<double>(floor.bits) <= 1.5 * frame);
+    }
+
     SECTION("QpRateController — movement after a sharpened desktop is budgeted as movement");
     {
         QpRateController rc;
@@ -327,12 +385,12 @@ void run_qp_rate_controller_tests()
         CHECK(static_cast<double>(next.bits) <= 1.2 * frame);
     }
 
-    SECTION("QpRateController — keystrokes do not lower the belief below a quarter of intra");
+    SECTION("QpRateController — interfloor=2: the belief stays over a quarter of intra");
     {
         for (const uint32_t rate : {kRate, kRate / 4}) {
             const double budget = static_cast<double>(rate) / kFps;
             QpRateController rc;
-            rc.start(rate, kFps, 0, kPixels);
+            rc.start(rate, kFps, 0, kPixels, -2.0);
             Simulator sim;
             sim.intra = 1.25e6;
             step(rc, sim, true, true);
@@ -406,6 +464,7 @@ void run_qp_rate_controller_tests()
         const QpRateController::Picture p = rc.plan(false, true);
         const uint64_t first = sim.encode(p);
         CHECK(rc.strongOvershoot(p, first));
+        rc.overshot(p, first);
         const QpRateController::Picture again = rc.reencode(p, first);
         CHECK(again.qp > p.qp);
         CHECK_EQ(again.budgetBits, p.budgetBits);
@@ -421,6 +480,182 @@ void run_qp_rate_controller_tests()
         CHECK_EQ(rc.strongOvershoots(), 0);
         // A picture within its budget, or merely over it, is not one.
         CHECK(!rc.strongOvershoot(p, p.budgetBits * 2));
+    }
+
+    SECTION("QpRateController — a one-picture cut coded again: the next is back at once");
+    {
+        QpRateController rc;
+        rc.start(kRate, kFps, 0, kPixels);
+        Simulator sim;
+        std::vector<Frame> frames = run(rc, sim, 299);
+        const int steady = frames.back().picture.qp;
+        // An alt-tab, a page wrapping round: one picture that costs an intra
+        // one, coded again where it fits.
+        const auto cut = [&]() {
+            const QpRateController::Picture p = rc.plan(false, true);
+            const uint64_t first = sim.encode(p);
+            CHECK(rc.strongOvershoot(p, first));
+            rc.overshot(p, first);
+            const QpRateController::Picture again = rc.reencode(p, first);
+            rc.encoded(again, sim.encode(again));
+        };
+        sim.inter *= 8;
+        cut();
+        sim.inter /= 8;
+        // The picture after it cannot know yet, and is coded as dear as the
+        // cut (under its budget); once it has said the pictures are back where
+        // they were, the next is believed so at once — not braked down 3 a
+        // picture from what the cut cost.
+        const Frame after = step(rc, sim, false, true);
+        CHECK(static_cast<double>(after.bits) <= frame);
+        const Frame next = step(rc, sim, false, true);
+        CHECK(std::abs(next.picture.qp - steady) <= 1);
+        CHECK(std::fabs(static_cast<double>(next.bits) - frame) <= 0.15 * frame);
+        // A new level is no spike: the second picture up keeps the belief up.
+        sim.inter *= 8;
+        cut();
+        const Frame second = step(rc, sim, false, true);
+        CHECK(second.picture.qp >= steady + 15);
+        CHECK(static_cast<double>(second.bits) <= 1.2 * frame);
+    }
+
+    SECTION("QpRateController — a page of text scrolling: its steep curve is learned");
+    {
+        // Around its operating point the scroll halves every 2.4 of QP, not
+        // 6: at QP 29 it fills the budget, at 24 it is four times over it,
+        // at 36 next to nothing (the Arc, 27/09/2026).
+        for (const bool again : {false, true}) {
+            QpRateController rc;
+            rc.start(kRate, kFps, 0, kPixels);
+            Simulator sim;
+            sim.intra = 6.0e6;
+            sim.interSlope = 2.4;
+            sim.inter = frame * std::exp2(3.0 / 2.4);
+            sim.spread = 0.1;
+            const std::vector<Frame> frames = run(rc, sim, 900, again);
+            bool inside = true;
+            for (size_t w = 1 + 2 * kFps; w + 2 * kFps <= frames.size(); w += 2 * kFps) {
+                const double rate = rateOver(frames, w, 2 * kFps, kFps);
+                if (std::fabs(rate - kRate) > 0.10 * kRate) inside = false;
+            }
+            CHECK(inside);
+            std::vector<double> sizes;
+            int lowest = 99, highest = 0;
+            for (size_t i = 1 + 2 * kFps; i < frames.size(); ++i) {
+                sizes.push_back(static_cast<double>(frames[i].bits));
+                lowest = (std::min)(lowest, frames[i].picture.qp);
+                highest = (std::max)(highest, frames[i].picture.qp);
+            }
+            CHECK(percentile(sizes, 0.95) <= 2.0 * frame);
+            // Settled around 29, not swinging between 24 and 36.
+            CHECK(lowest >= 27);
+            CHECK(highest <= 31);
+            CHECK(rc.slope() < 3.5);
+        }
+    }
+
+    SECTION("QpRateController — the page wraps round: a spike coded again, then back");
+    {
+        QpRateController rc;
+        rc.start(kRate, kFps, 0, kPixels);
+        Simulator sim;
+        sim.intra = 6.0e6;
+        sim.interSlope = 2.4;
+        sim.inter = frame * std::exp2(3.0 / 2.4);
+        const double page = sim.inter;
+        std::vector<Frame> frames = run(rc, sim, 300, true);
+        // The first IDR went out at nearly three times its budget (nothing
+        // codes an IDR again here): what counts is what comes after.
+        const int before = rc.strongOvershoots();
+        // A whole new page, every three seconds: one picture that costs an
+        // intra one.
+        int wraps = 0;
+        bool back = true;
+        for (int i = 0; i < 900; ++i) {
+            const bool wrap = i % 180 == 90;
+            sim.inter = wrap ? sim.intra : page;
+            sim.interSlope = wrap ? 6.0 : 2.4;
+            frames.push_back(stepAgain(rc, sim));
+            if (wrap) ++wraps;
+            // Two pictures after the wrap, the scroll is where it was.
+            if (i % 180 == 92 && std::abs(frames.back().picture.qp - 29) > 1) back = false;
+        }
+        CHECK_EQ(wraps, 5);
+        CHECK(back);
+        CHECK_EQ(rc.strongOvershoots(), before);
+        std::vector<double> sizes;
+        for (size_t i = 301; i < frames.size(); ++i)
+            sizes.push_back(static_cast<double>(frames[i].bits));
+        CHECK(percentile(sizes, 0.95) <= 2.0 * frame);
+    }
+
+    SECTION("QpRateController — a spike sent whole, paid back far above it, is no one-off");
+    {
+        // Text scrolling at 120 fps, a page wrapping round every 3 s, no
+        // picture coded again: the picture after a spike goes out at the
+        // backlog's QP, far above the spike's, and next to nothing. Taken for
+        // a return, it brought back the belief the spike had disproved, and
+        // the QP sank to 18 with every other picture 12x its budget (the Arc,
+        // 27/09/2026).
+        const double budget = static_cast<double>(kRate) / 120;
+        QpRateController rc;
+        rc.start(kRate, 120, 0, kPixels);
+        Simulator sim;
+        sim.intra = 6.0e6;
+        sim.interSlope = 2.4;
+        sim.inter = budget * std::exp2(9.0 / 2.4); // fills the budget at QP 35
+        // At 120 fps a scroll step is 5 px, or 10 when two presents fold into
+        // one capture: at the same QP, one picture costs up to three times
+        // the next.
+        sim.spread = 0.8;
+        const double page = sim.inter;
+        std::vector<Frame> frames;
+        frames.push_back(step(rc, sim, true, true));
+        for (int i = 0; i < 2400; ++i) {
+            const bool wrap = i % 360 == 180;
+            // Every other capture folds two presents: twice the motion.
+            sim.inter = wrap ? sim.intra : page * (i % 2 ? 2.5 : 1.0);
+            sim.interSlope = wrap ? 6.0 : 2.4;
+            frames.push_back(step(rc, sim, false, true));
+        }
+        int at18 = 0;
+        std::vector<double> sizes;
+        for (size_t i = 241; i < frames.size(); ++i) {
+            at18 += frames[i].picture.qp == QpRateController::kMinQp ? 1 : 0;
+            sizes.push_back(static_cast<double>(frames[i].bits) / budget);
+        }
+        CHECK(at18 < 20);
+        CHECK(percentile(sizes, 0.95) <= 2.5);
+        bool inside = true;
+        for (size_t w = 241; w + 240 <= frames.size(); w += 240) {
+            const double rate = rateOver(frames, w, 240, 120);
+            if (std::fabs(rate - kRate) > 0.15 * kRate) inside = false;
+        }
+        CHECK(inside);
+    }
+
+    SECTION("QpRateController — a game's noise bends the slope a little, and no further");
+    {
+        // Read in a closed loop, the slope comes out low: the QP moves most
+        // after the noisiest pictures, and their noise lands in the secant.
+        // A game of the textbook's 6 reads 3.5 to 5.5 — harmless, the rate
+        // holds (above) — and never wanders toward a steep content's 2.
+        QpRateController rc;
+        rc.start(kRate, kFps, 0, kPixels);
+        Simulator sim;
+        sim.inter = 1.2e6;
+        sim.intra = 3.0e6;
+        sim.spread = 0.3;
+        double lowest = 9.0, highest = 0.0;
+        step(rc, sim, true, true);
+        for (int i = 0; i < 6000; ++i) {
+            step(rc, sim, false, true);
+            if (i < 120) continue;
+            lowest = (std::min)(lowest, rc.slope());
+            highest = (std::max)(highest, rc.slope());
+        }
+        CHECK(lowest > 3.0);
+        CHECK(highest < 7.0);
     }
 
     SECTION("QpRateController — the range and the budget's floor hold, whatever the content");

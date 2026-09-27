@@ -240,6 +240,12 @@ struct EncoderTuning
     /// again at the QP that fits it — an encode more on that picture, against
     /// a burst on the link. Off until the bench's figures decide (plan §9-5).
     bool reencode12 = false;
+    /// The in-house rate control only: a new picture is never believed to
+    /// cost under 1/2^k of an intra one. 0 is the engine's own — no floor,
+    /// since 27/09/2026: a page of text scrolling costs a thirtieth of its
+    /// intra picture, and a floor of a quarter held it at QP 38-45 on a 20
+    /// Mbit/s stream; -1 no floor either.
+    int interFloor12 = 0;
     /// The priority of the D3D12 queues. The engine's own follows the
     /// process's GPU class: GLOBAL_REALTIME under REALTIME, HIGH otherwise.
     enum class Priority12
@@ -287,9 +293,9 @@ struct EncoderTuning
                vplIntraRefreshDist == 0 && linkGovernor == Choice::Default && vbvFrames == 0 &&
                dpbFrames == 0 && fallback == Fallback::None && pipeline == VideoPipeline::Auto &&
                conv12 == ConvertQueue12::Default && enc12 == Encoder12::Default &&
-               rc12 == RateControl12::Default && !reencode12 && prio12 == Priority12::Default &&
-               ownCreator12 == Choice::Default && ddaSync == DdaSync::Default && !gpuTiming &&
-               !strict12;
+               rc12 == RateControl12::Default && !reencode12 && interFloor12 == 0 &&
+               prio12 == Priority12::Default && ownCreator12 == Choice::Default &&
+               ddaSync == DdaSync::Default && !gpuTiming && !strict12;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -352,6 +358,8 @@ struct EncoderTuning
         if (rc12 == RateControl12::Driver) add("rc12=driver");
         if (rc12 == RateControl12::Qp) add("rc12=qp");
         if (reencode12) add("reencode=1");
+        if (interFloor12 < 0) add("interfloor=off");
+        if (interFloor12 > 0) add("interfloor=" + std::to_string(interFloor12));
         if (prio12 == Priority12::Normal) add("prio12=normal");
         if (prio12 == Priority12::High) add("prio12=high");
         if (prio12 == Priority12::GlobalRealtime) add("prio12=realtime");

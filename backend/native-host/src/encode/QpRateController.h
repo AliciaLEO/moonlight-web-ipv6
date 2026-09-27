@@ -41,24 +41,39 @@ namespace mw::native::encode {
 /// and say which QP it used: that is the lever, and this is what moves it.
 /// Anywhere else it runs as a witness only (the bench's rc12=qp).
 ///
-/// ── The model ───────────────────────────────────────────────────────────────
+/// ── The model, and why its slope is learned ─────────────────────────────────
 ///
-/// A picture's size halves for every 6 of QP — the quantizer's step doubles —
-/// so bits = C · 2^(−(QP − 26) / 6), C being what the picture would cost at
-/// QP 26: its complexity. In the log domain L = log2(bits) + (QP − 26) / 6 is
-/// read off every picture that goes out, and the next one's QP follows from
-/// its budget: QP = 26 + 6 · (L − log2(budget)). One L per kind of picture,
-/// an intra picture costing several times an inter one of the same content.
-/// Each is smoothed, half the old and half the new, so that one noisy picture
-/// moves the QP by a step or two rather than six; a picture the model missed
-/// by more than twice — a cut, a window opening — replaces it outright.
+/// Around the QP it was last coded at, a picture's size falls by half for
+/// every k of QP: log2(bits) = level − (QP − anchor) / k. The textbook k is
+/// 6 — the quantizer's step doubles — and it holds for a game: the Call of
+/// Duty clip on the bench held its rate to a few percent with it. It does not
+/// hold for a page of text scrolling: on the Arc, 162 KB at QP 24 and next to
+/// nothing at QP 36 (27/09/2026) — the residual of an edge that moved either
+/// clears the quantizer or does not. There k is nearer 2, and a model that
+/// believes 6 swings between pictures four times their budget and empty ones.
+/// So k is read off the pictures: two new pictures whose QPs differ by two or
+/// more, and whose sizes moved the other way, give a secant; the slope moves
+/// a third of the way to it, between 1.5 and 9. A picture coded again for an
+/// overshoot gives the cleanest secant there is: the same picture at two QPs.
+///
+/// The level is anchored at the last new picture's QP and moved there after
+/// each one, so the model never reaches far from where it was measured. It
+/// is smoothed, half the old and half the new, so that one noisy picture moves
+/// the QP by a step or two; two pictures in a row it missed the same way by
+/// more than twice — a new scene, a window opened — replace it outright. One
+/// alone does not: at 120 fps a scroll captured with two presents folded
+/// costs 2.5 times the next, and a model replaced by each in turn codes each
+/// at the QP the other needed. A picture of a few hundred bytes
+/// says little: at a QP above what the content needs, P pictures are skipped
+/// nearly whole and cost the same whatever the QP. It may lower the level by
+/// half at most, and teaches no slope.
 ///
 /// ── The budget ──────────────────────────────────────────────────────────────
 ///
 /// A bucket, the VBV's: every picture pours its bits in, the link takes a
 /// frame's worth (bitrate / fps) out before the next one, and it never holds
 /// less than nothing — a link left idle is capacity gone, not saved. What is
-/// in it is time the next picture waits behind on the wire. So an inter
+/// in it is time the next picture waits behind on the wire. So a predicted
 /// picture's budget is a frame's worth less half of what is in the bucket (a
 /// backlog is paid back in halves), and an intra picture's is the VBV itself,
 /// by the rule every encoder follows (RateControl.h). Never below an eighth of
@@ -69,33 +84,35 @@ namespace mw::native::encode {
 /// Latency first. A picture over its budget delays every picture behind it
 /// and one under it delays nothing, so the two errors are not worth the same:
 /// the QP rises as far as the model says at once, and falls by 3 at most per
-/// picture when pictures got cheaper — a menu over a game, a camera at rest —
-/// because the next one may well cost what they used to. The brake is on what
-/// the model believes, not on the QP: a budget that grows (the governor, the
-/// still-screen boost) is known exactly and is followed on the next picture.
-/// And the belief never falls below a quarter of what an intra picture of the
-/// content costs: the keystrokes of a sharpened desktop make every new picture
-/// cost nearly nothing, and the scroll that follows them should not be coded
-/// as if it did too. A page of text scrolling costs about half its intra
-/// picture, so it lands at twice its budget at worst, not at the four to
-/// eighteen times (20 and 5 Mbit/s) the bottom of the QP range would give it;
-/// the price is keystrokes coded a few QP above where they could be, until
-/// the still-screen passes sharpen them 150 ms after the last one.
+/// new picture when pictures got cheaper — a menu over a game, a camera at
+/// rest — because the next one may well cost what they used to. The brake is
+/// on what the model believes, not on the QP: a budget that grows (the
+/// governor, a backlog paid back) is known exactly and is followed on the
+/// next picture, through the slope learned. One exception: a picture that
+/// jumped far above the others, followed by one back where they were, was a
+/// one-off — a cut, a flash, a page wrapping round — and the belief from
+/// before it comes back whole, without the brake.
 ///
 /// ── The same picture again ─────────────────────────────────────────────────
 ///
 /// The still-screen passes and the idle floor encode the picture that already
-/// went out, and every pass codes what the one before it left out: its size
-/// says what refining costs, not what the next new picture will. So passes
-/// have an L of their own, started from the picture's and replaced by each
-/// pass that refined, and they never move the one new pictures are sized by —
-/// the first movement after a sharpened desktop is budgeted as movement, not
-/// as the nothing the last pass cost. A pass goes down 6 at most (the step
-/// halves) and never above the QP the picture already has: coded there, the
-/// residual is under the quantizer and the pass costs next to nothing, which
-/// is what an idle-floor frame should cost. From where a moving picture leaves
-/// the QP (30 to 45), 18 is three to five passes away, inside the cap of
-/// RefineConvergence with the two quiet passes it wants on top.
+/// went out, and every pass codes what the one before it left out: between the
+/// picture's quantizer and its own, (2^((QP before − QP) / 6) − 1) of the
+/// whole picture at the QP it has — the whole picture costs the same in the
+/// end, however many passes it takes. So a pass is priced against that whole
+/// picture, not as a picture of its own: priced as one, a page of text whose
+/// first picture was three times its budget got no pass below that picture's
+/// QP, and the burst ended there, "converged", at QP 42 (27/09/2026). Passes
+/// keep that whole picture's complexity apart, started from the picture's own
+/// and read again off every pass that refined, and it never moves the model
+/// new pictures are sized by — the first movement after a sharpened desktop
+/// is budgeted as movement, not as the nothing the last pass cost. A pass goes
+/// down 6 at most (the step halves) and never above the QP the picture already
+/// has: coded there, the residual is under the quantizer and the pass costs
+/// next to nothing, which is what an idle-floor frame should cost. A light
+/// picture reaches 18 in three to five passes; a heavy one at a low bitrate
+/// reaches what RefineConvergence's cap of passes buys, and the idle floor
+/// carries on from there.
 ///
 /// ── What it does not do ────────────────────────────────────────────────────
 ///
@@ -110,8 +127,19 @@ public:
     /// spends bits on noise nobody sees.
     static constexpr int kMinQp = 18;
     static constexpr int kMaxQp = 51;
-    /// Where complexity is measured: the model's pivot.
+    /// Where intra complexity is measured.
     static constexpr int kPivotQp = 26;
+    /// QP per halving of the size: the textbook step, and where a learned
+    /// slope starts and stays bounded.
+    static constexpr double kSlope = 6.0;
+    static constexpr double kMinSlope = 1.5;
+    static constexpr double kMaxSlope = 9.0;
+    /// How far one secant moves the slope.
+    static constexpr double kSlopeWeight = 1.0 / 3.0;
+    /// How far apart two QPs must be for their sizes to say a slope: at 2, a
+    /// game's ±23 % from one picture to the next moved the slope between 4.6
+    /// and 7.8.
+    static constexpr int kSlopeSpan = 3;
     /// The most the QP falls in one new picture, on the model's word alone.
     static constexpr int kNewPictureDrop = 3;
     /// The most one pass over the same picture sharpens it.
@@ -120,9 +148,11 @@ public:
     static constexpr double kCut = 1.0;
     /// The budget's floor, as a share of a frame's worth.
     static constexpr int kMinBudgetShare = 8;
-    /// How far a new picture's cost may be believed to fall below an intra
-    /// picture's, log2: a quarter.
-    static constexpr double kInterFloor = -2.0;
+    /// A picture under this, or under 1/32 of a frame's worth, was skipped
+    /// nearly whole: it says little of what the content costs.
+    static constexpr uint64_t kTinyBits = 2048 * 8;
+    /// No floor under intra (the bench's interfloor=k sets one at 1/2^k).
+    static constexpr double kNoInterFloor = -1000.0;
     /// A picture this many times over its budget — and over the VBV — is the
     /// overshoot the bench counts and reencode= codes again.
     static constexpr double kStrongOvershoot = 2.5;
@@ -130,7 +160,7 @@ public:
     /// text sits at or below it — high on purpose: a first picture under its
     /// budget costs a pass of refinement, one over it a stall.
     static constexpr double kIntraBitsPerPixel = 1.0;
-    /// Before the first new inter picture: a third of the intra one, log2.
+    /// Before the first new predicted picture: a third of the intra one, log2.
     static constexpr double kInterShare = -1.585;
 
     enum class Kind
@@ -150,17 +180,20 @@ public:
 
     /// A session starts: @p bitsPerSecond at @p fps, the VBV by the shared
     /// rule (or @p vbvFrames frames' worth, the bench's vbv=), for pictures
-    /// of @p pixels.
-    void start(uint32_t bitsPerSecond, int fps, int vbvFrames, uint64_t pixels)
+    /// of @p pixels. @p interFloor: a new picture is never believed to cost
+    /// under intra × 2^interFloor (the bench's interfloor=); none by default.
+    void start(uint32_t bitsPerSecond, int fps, int vbvFrames, uint64_t pixels,
+               double interFloor = kNoInterFloor)
     {
         *this = QpRateController{};
         m_Fps = fps > 0 ? fps : 60;
         m_VbvFrames = vbvFrames;
+        m_InterFloor = interFloor;
         setBitrate(bitsPerSecond);
         const double px = static_cast<double>(pixels > 0 ? pixels : 1);
         m_Intra = std::log2(px * kIntraBitsPerPixel);
-        m_Inter = m_Intra + kInterShare;
-        m_InterHeld = m_Inter;
+        m_AnchorQp = kPivotQp;
+        m_Level = m_Held = m_Intra + kInterShare;
     }
 
     /// A new target, from the next picture on — no new sequence, no IDR. The
@@ -185,7 +218,8 @@ public:
             p.budgetBits = budget(static_cast<double>(m_VbvBits) - left);
             // An intra picture costs at least what a predicted one of the same
             // content does: the intra estimate may be from another screen.
-            p.qp = clampQp(qpFor((std::max)(m_Intra, believedInter()), p.budgetBits));
+            const double inter = believed() + (m_AnchorQp - kPivotQp) / kSlope;
+            p.qp = clampQp(kPivotQp + kSlope * ((std::max)(m_Intra, inter) - log2Of(p.budgetBits)));
             return p;
         }
         p.budgetBits = budget(static_cast<double>(m_FrameBits) - left);
@@ -194,48 +228,72 @@ public:
             // The fraction rounding leaves goes to the next picture, so a
             // steady picture does not sit half a step off its budget for good:
             // the bucket catches a picture over it, nothing catches one under.
-            const double wanted = qpFor(believedInter(), p.budgetBits) + m_Carry;
+            const double wanted =
+                m_AnchorQp + m_Slope * (believed() - log2Of(p.budgetBits)) + m_Carry;
             p.qp = clampQp(wanted);
             m_Carry = (p.qp == kMinQp || p.qp == kMaxQp) ? 0.0 : wanted - p.qp;
             return p;
         }
         p.kind = Kind::Pass;
+        // A pass codes what lies between the picture's quantizer and its own:
+        // (2^((QP before − QP) / 6) − 1) of the whole picture at the QP it
+        // has. So the budget buys 6 · log2(1 + budget / whole) steps down.
+        const double whole = std::exp2(m_Pass - (m_PictureQp - kPivotQp) / kSlope);
+        const double steps =
+            kSlope * std::log2(1.0 + static_cast<double>(p.budgetBits) / (std::max)(whole, 1.0));
         const int sharpest = (std::max)(kMinQp, m_PictureQp - kPassDrop);
-        p.qp = std::clamp(static_cast<int>(std::lround(qpFor(m_Pass, p.budgetBits))), sharpest,
+        p.qp = std::clamp(static_cast<int>(std::lround(m_PictureQp - steps)), sharpest,
                           (std::max)(sharpest, m_PictureQp));
         return p;
+    }
+
+    /// @p p, a picture over its budget, was not sent: it is coded again (at
+    /// reencode()'s QP), and what it cost at its own QP is the model's to
+    /// learn from, not the bucket's. encoded() follows, for the picture sent.
+    void overshot(const Picture& p, uint64_t bits)
+    {
+        if (p.kind != Kind::Inter) return;
+        learnNew(p.qp, bits);
+        m_AgainOf = true;
     }
 
     /// @p p went out at @p bits.
     void encoded(const Picture& p, uint64_t bits)
     {
-        const double measured = complexity(p.qp, bits);
         const int64_t level = static_cast<int64_t>(m_Fullness) + static_cast<int64_t>(bits) -
                               static_cast<int64_t>(m_FrameBits);
         m_Fullness = level > 0 ? static_cast<uint64_t>(level) : 0;
         switch (p.kind) {
-        case Kind::Intra:
+        case Kind::Intra: {
+            const double measured = pivotComplexity(p.qp, bits);
             // The first measure replaces the guess, whatever the distance.
             m_Intra = m_IntraSeen ? learn(m_Intra, measured) : measured;
             m_IntraSeen = true;
+            m_Spike = false;
             // Until a new picture has been measured, what one costs is only
             // known through the intra one: the guess follows it.
-            if (!m_InterSeen) m_Inter = m_InterHeld = m_Intra + kInterShare;
+            if (!m_InterSeen) {
+                m_AnchorQp = p.qp;
+                m_Level = m_Held =
+                    std::log2(static_cast<double>((std::max)(bits, uint64_t(1)))) + kInterShare;
+            }
             startPicture(p.qp, measured);
             break;
+        }
         case Kind::Inter:
-            m_Inter = m_InterSeen ? learn(m_Inter, measured) : measured;
-            m_InterSeen = true;
-            m_InterHeld = m_Inter >= m_InterHeld
-                              ? m_Inter
-                              : (std::max)(m_Inter, m_InterHeld - kNewPictureDrop / 6.0);
-            startPicture(p.qp, measured);
+            learnNew(p.qp, bits);
+            m_AgainOf = false;
+            startPicture(p.qp, pivotComplexity(p.qp, bits));
             break;
         case Kind::Pass:
             // A pass at the picture's own QP refined nothing, and its size
-            // says nothing of what refining costs.
+            // says nothing of what refining costs. One below it coded its
+            // share of the whole picture: what it cost says what the whole
+            // does.
             if (p.qp < m_PictureQp) {
-                m_Pass = measured;
+                const double share = std::exp2((m_PictureQp - p.qp) / kSlope) - 1.0;
+                m_Pass = std::log2(static_cast<double>((std::max)(bits, uint64_t(1))) / share) +
+                         (m_PictureQp - kPivotQp) / kSlope;
                 m_PictureQp = p.qp;
             }
             break;
@@ -255,13 +313,17 @@ public:
     }
 
     /// @p p again, at the QP that would have fitted its budget, going by what
-    /// it cost at its own.
+    /// it cost at its own — through the slope learned for a new picture,
+    /// never shallower than the textbook's: coded again, a picture must land
+    /// under its budget, and the one far over it is often another content —
+    /// a whole new page in a scroll — whose curve is not the scroll's.
     Picture reencode(const Picture& p, uint64_t bits) const
     {
         Picture again = p;
         const double over =
             static_cast<double>(bits) / static_cast<double>((std::max)(p.budgetBits, uint64_t(1)));
-        const int raise = static_cast<int>(std::ceil(6.0 * std::log2((std::max)(over, 1.0))));
+        const double slope = p.kind == Kind::Inter ? (std::max)(m_Slope, kSlope) : kSlope;
+        const int raise = static_cast<int>(std::ceil(slope * std::log2((std::max)(over, 1.0))));
         again.qp = (std::min)(kMaxQp, p.qp + (std::max)(raise, 1));
         return again;
     }
@@ -272,6 +334,8 @@ public:
     uint64_t fullnessBits() const { return m_Fullness; }
     /// The QP the picture on screen has been sharpened to.
     int pictureQp() const { return m_PictureQp; }
+    /// QP per halving of a new picture's size, as learned.
+    double slope() const { return m_Slope; }
 
     int pictures() const { return m_Pictures; }
     int strongOvershoots() const { return m_StrongOvershoots; }
@@ -281,16 +345,15 @@ public:
     }
 
 private:
-    static double complexity(int qp, uint64_t bits)
+    static double log2Of(uint64_t bits)
     {
-        return std::log2(static_cast<double>((std::max)(bits, uint64_t(1)))) +
-               (qp - kPivotQp) / 6.0;
+        return std::log2(static_cast<double>((std::max)(bits, uint64_t(1))));
     }
 
-    static double qpFor(double complexityLog2, uint64_t budgetBits)
+    /// log2 of what a picture would cost at kPivotQp, by the textbook slope.
+    static double pivotComplexity(int qp, uint64_t bits)
     {
-        return kPivotQp + 6.0 * (complexityLog2 - std::log2(static_cast<double>(
-                                                      (std::max)(budgetBits, uint64_t(1)))));
+        return log2Of(bits) + (qp - kPivotQp) / kSlope;
     }
 
     static int clampQp(double qp)
@@ -309,31 +372,160 @@ private:
         return static_cast<uint64_t>((std::max)(bits, floor));
     }
 
-    /// What a new picture is taken to cost: the brake of kNewPictureDrop, and
-    /// never below kInterFloor under the intra picture.
-    double believedInter() const { return (std::max)(m_InterHeld, m_Intra + kInterFloor); }
+    bool tiny(uint64_t bits) const { return bits < kTinyBits || bits < m_FrameBits / 32; }
 
-    void startPicture(int qp, double measured)
+    /// What a new picture is taken to cost at the anchor: the brake of
+    /// kNewPictureDrop, and the bench's floor under intra, if any.
+    double believed() const
+    {
+        const double floor = m_Intra - (m_AnchorQp - kPivotQp) / kSlope + m_InterFloor;
+        return (std::max)(m_Held, floor);
+    }
+
+    /// Moves the anchor to @p qp, the level and the belief with it.
+    void reanchor(int qp)
+    {
+        const double shift = (qp - m_AnchorQp) / m_Slope;
+        m_Level -= shift;
+        m_Held -= shift;
+        m_AnchorQp = qp;
+    }
+
+    /// A new predicted picture, @p bits at @p qp: the slope, the level, the
+    /// belief, and whether it was a spike or the end of one.
+    void learnNew(int qp, uint64_t bits)
+    {
+        const double measured = log2Of(bits);
+        const bool skipped = tiny(bits);
+        if (!m_InterSeen) {
+            m_InterSeen = true;
+            m_AnchorQp = qp;
+            m_Level = m_Held = measured;
+            if (!skipped) remember(qp, measured);
+            return;
+        }
+        // The picture before jumped far above what new pictures cost. If this
+        // one, coded at about the same QP, costs less than half of it, that
+        // one was a one-off — a cut, a flash, a page wrapping round — and what
+        // was believed before it comes back whole: level, belief and slope.
+        // One that costs as much is a new level, and stays. This one may well
+        // be a few hundred bytes: coded as dear as the spike, the scroll behind
+        // it is, and that is the answer. Coded far above the spike — the
+        // backlog of a spike sent as it was being paid back — it proves
+        // nothing: on a steep curve a picture seventeen QP up costs next to
+        // nothing whatever the content, and taking that for a return brought
+        // the spike back picture after picture, the QP sinking to 18 and every
+        // other picture twelve times its budget (27/09/2026).
+        if (m_Spike && !m_AgainOf) {
+            m_Spike = false;
+            const double atSpike = measured + (qp - m_SpikeAtQp) / kSlope;
+            if (std::abs(qp - m_SpikeAtQp) <= kSlopeSpan && atSpike < m_SpikeMeasured - kCut) {
+                m_AnchorQp = m_SpikeQp;
+                m_Level = m_SpikeLevel;
+                m_Held = m_SpikeHeld;
+                m_Slope = m_SpikeSlope;
+                reanchor(qp);
+                if (!skipped) remember(qp, measured);
+                return;
+            }
+        }
+        // Two pictures that said something, at QPs apart, with sizes that
+        // moved the other way: a secant of the curve.
+        const double slopeBefore = m_Slope;
+        if (!skipped && m_PrevValid && std::abs(qp - m_PrevQp) >= kSlopeSpan) {
+            const double dq = qp - m_PrevQp;
+            const double dl = m_PrevLog2 - measured;
+            if (dq * dl > 0)
+                m_Slope =
+                    std::clamp(m_Slope + kSlopeWeight * (dq / dl - m_Slope), kMinSlope, kMaxSlope);
+        }
+        reanchor(qp);
+        if (!skipped && !m_AgainOf && measured > m_Held + kCut) {
+            m_Spike = true;
+            m_SpikeQp = m_AnchorQp;
+            m_SpikeLevel = m_Level;
+            m_SpikeHeld = m_Held;
+            m_SpikeSlope = slopeBefore;
+        }
+        // The spike as it went out — coded again, the second picture.
+        if (m_Spike) {
+            m_SpikeAtQp = qp;
+            m_SpikeMeasured = measured;
+        }
+        // A level replaced by one picture that missed by more than twice is a
+        // level that changed — unless the picture before missed the other
+        // way: every other capture of a scroll at 120 fps folds two presents
+        // and costs 2.5 times the one before, and a model replaced by each in
+        // turn codes each at the QP the other needed — twice the swing the
+        // content has. Two misses the same way are a change; one is halved.
+        if (skipped) {
+            m_Level = (std::max)((std::min)(m_Level, measured), m_Level - kCut);
+        } else {
+            const double miss = measured - m_Level;
+            const bool changed =
+                std::fabs(miss) > kCut && miss * m_LastMiss > 0 && std::fabs(m_LastMiss) > kCut / 2;
+            m_Level = changed ? measured : (m_Level + measured) / 2.0;
+            m_LastMiss = miss;
+        }
+        m_Held =
+            m_Level >= m_Held ? m_Level : (std::max)(m_Level, m_Held - kNewPictureDrop / m_Slope);
+        if (!skipped) remember(qp, measured);
+    }
+
+    void remember(int qp, double measured)
+    {
+        m_PrevValid = true;
+        m_PrevQp = qp;
+        m_PrevLog2 = measured;
+    }
+
+    void startPicture(int qp, double complexity)
     {
         m_PictureQp = qp;
-        m_Pass = measured;
+        m_Pass = complexity;
         m_HavePicture = true;
     }
 
     int m_Fps = 60;
     int m_VbvFrames = 0;
+    double m_InterFloor = kNoInterFloor;
     uint64_t m_FrameBits = 1;
     uint64_t m_VbvBits = 1;
     uint64_t m_Fullness = 0;
 
+    /// Intra pictures: log2 of what one costs at kPivotQp.
     double m_Intra = 20.0;
-    double m_Inter = 18.4;
-    /// m_Inter as decisions use it: up at once, down by kNewPictureDrop.
-    double m_InterHeld = 18.4;
-    double m_Pass = 18.4;
-    double m_Carry = 0.0;
     bool m_IntraSeen = false;
+
+    /// New predicted pictures: log2 of what one costs at m_AnchorQp — as
+    /// learned (m_Level), and as believed, through the brake (m_Held).
+    int m_AnchorQp = kPivotQp;
+    double m_Level = 18.4;
+    double m_Held = 18.4;
+    double m_Slope = kSlope;
+    double m_Carry = 0.0;
+    /// How far the last new picture that said something missed the level.
+    double m_LastMiss = 0.0;
     bool m_InterSeen = false;
+    /// The last new picture that said something, for the next secant.
+    bool m_PrevValid = false;
+    int m_PrevQp = 0;
+    double m_PrevLog2 = 0.0;
+    /// The last new picture jumped more than kCut above the belief; what the
+    /// model held before it, anchored at m_SpikeQp; and the spike itself, as
+    /// it went out.
+    bool m_Spike = false;
+    int m_SpikeQp = 0;
+    double m_SpikeLevel = 0.0;
+    double m_SpikeHeld = 0.0;
+    double m_SpikeSlope = kSlope;
+    int m_SpikeAtQp = 0;
+    double m_SpikeMeasured = 0.0;
+    /// overshot() came before this encoded(): the same picture, coded again.
+    bool m_AgainOf = false;
+
+    /// Passes: log2 of what the whole picture on screen costs at kPivotQp.
+    double m_Pass = 18.4;
     bool m_HavePicture = false;
     int m_PictureQp = kMaxQp;
 
