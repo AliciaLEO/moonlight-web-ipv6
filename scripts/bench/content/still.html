@@ -40,6 +40,13 @@ if (new URLSearchParams(location.search).get("anim")) {
     requestAnimationFrame(spin);
   })(0);
 }
+
+// ?cursor=1: the pointer shown, for a bench that moves it over the still page.
+// The host draws it into the picture, so every move is a new picture with no
+// present behind it: the held desktop converted again, pointer on top.
+if (new URLSearchParams(location.search).get("cursor")) {
+  document.documentElement.style.cursor = document.body.style.cursor = "default";
+}
 </script>
 <script src="escape.js"></script>
 </body>
