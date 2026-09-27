@@ -390,13 +390,22 @@ void ownRateOn(const std::shared_ptr<d3d12::D3d12Device>& device)
     encoder.stop();
 
     // A flat run makes every new picture look cheap; the movement after it is
-    // far over its budget: coded again by default, sent as it is at the
-    // bench's reencode=0.
-    for (const EncoderTuning::Choice choice :
-         {EncoderTuning::Choice::Default, EncoderTuning::Choice::Off}) {
-        const bool again = choice != EncoderTuning::Choice::Off;
-        const char* what = again ? "coded again" : "reencode=0";
-        tuning.reencode12 = choice;
+    // far over its budget: coded again by default, under the overshoot line
+    // at the bench's refit=1, sent as it is at reencode=0.
+    struct Case
+    {
+        EncoderTuning::Choice reencode;
+        EncoderTuning::Choice fit;
+        const char* what;
+    };
+    for (const Case& c :
+         {Case{EncoderTuning::Choice::Default, EncoderTuning::Choice::Default, "coded again"},
+          Case{EncoderTuning::Choice::Default, EncoderTuning::Choice::On, "refit=1"},
+          Case{EncoderTuning::Choice::Off, EncoderTuning::Choice::Default, "reencode=0"}}) {
+        const bool again = c.reencode != EncoderTuning::Choice::Off;
+        const char* what = c.what;
+        tuning.reencode12 = c.reencode;
+        tuning.reencodeFit12 = c.fit;
         if (!encoder.init(device, Codec::Hevc, 1920, 1080, 60, 20000, false, false, tuning,
                           error)) {
             std::fprintf(stderr, "  %s, %s: %s\n", device->name().c_str(), what, error.c_str());
@@ -414,21 +423,24 @@ void ownRateOn(const std::shared_ptr<d3d12::D3d12Device>& device)
         }
         CHECK_EQ(failures, 0);
         CHECK_EQ(encoder.qpNotFollowed(), 0);
+        CHECK_EQ(encoder.rateController().reencodeFit(), c.fit == EncoderTuning::Choice::On);
         if (again) {
             CHECK(encoder.reencoded() >= 1);
         } else {
             CHECK_EQ(encoder.reencoded(), 0);
             CHECK(encoder.rateController().strongOvershoots() >= 1);
         }
+        if (c.fit != EncoderTuning::Choice::On) CHECK_EQ(encoder.reencodedTwice(), 0);
         encoder.releaseOutput();
         std::fprintf(stderr,
-                     "  %s, %s: %d picture(s) coded again, %d sent far over budget, largest "
-                     "%zu KB against %llu KB a frame\n",
-                     device->name().c_str(), what, encoder.reencoded(),
+                     "  %s, %s: %d picture(s) coded again (%d twice), %d sent far over budget, "
+                     "largest %zu KB against %llu KB a frame\n",
+                     device->name().c_str(), what, encoder.reencoded(), encoder.reencodedTwice(),
                      encoder.rateController().strongOvershoots(), burst / 1024,
                      static_cast<unsigned long long>(encoder.rateController().frameBits() / 8192));
         encoder.stop();
     }
+    tuning.reencodeFit12 = EncoderTuning::Choice::Default;
 }
 
 /// 1440 lines end inside a coding tree block of 64 (the Arc's, the AMD

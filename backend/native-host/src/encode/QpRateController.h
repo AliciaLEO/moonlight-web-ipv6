@@ -156,6 +156,12 @@ public:
     /// A picture this many times over its budget — and over the VBV — is the
     /// overshoot the bench counts and VideoEncode12 codes again.
     static constexpr double kStrongOvershoot = 2.5;
+    /// Under the fitting rule (setReencodeFit), the first try at such a
+    /// picture aims at this many budgets — under the overshoot line, where
+    /// every picture the controller lets through already sits — through the
+    /// slope learned, never shallower than kReencodeMinSlope.
+    static constexpr double kReencodeAim = 2.0;
+    static constexpr double kReencodeMinSlope = 3.0;
     /// Before the first intra picture: bits per pixel at QP 26. A desktop of
     /// text sits at or below it — high on purpose: a first picture under its
     /// budget costs a pass of refinement, one over it a stall.
@@ -185,7 +191,9 @@ public:
     void start(uint32_t bitsPerSecond, int fps, int vbvFrames, uint64_t pixels,
                double interFloor = kNoInterFloor)
     {
+        const bool fit = m_ReencodeFit;
         *this = QpRateController{};
+        m_ReencodeFit = fit;
         m_Fps = fps > 0 ? fps : 60;
         m_VbvFrames = vbvFrames;
         m_InterFloor = interFloor;
@@ -321,20 +329,47 @@ public:
     /// for new pictures, it went above the picture's QP, coded nothing and
     /// taught nothing, and the next pass tried the same step: a dense page
     /// stayed at its moving QP, every pass coded twice (27/09/2026).
-    Picture reencode(const Picture& p, uint64_t bits) const
+    ///
+    /// Under the fitting rule, a new picture's first try aims at kReencodeAim
+    /// budgets through the slope learned (never under kReencodeMinSlope). On
+    /// the N95, where Chrome scrolls in fits and starts and 14 % of the
+    /// pictures were coded again, the textbook's try landed them at a fifth of
+    /// their budget, bits no picture after them made up: the text ran at 0.75
+    /// of its budget, 0.89 under this rule when replayed (bench §8n.8). A
+    /// picture the first try leaves far over — a whole new page, whose curve
+    /// is the textbook's — is worth a last one (lastTryWanted), @p lastTry.
+    Picture reencode(const Picture& p, uint64_t bits, bool lastTry = false) const
     {
         Picture again = p;
         if (p.kind == Kind::Pass) {
             again.qp = (std::min)((std::max)(passQp(p.budgetBits), p.qp + 1), m_PictureQp);
             return again;
         }
-        const double over =
-            static_cast<double>(bits) / static_cast<double>((std::max)(p.budgetBits, uint64_t(1)));
-        const double slope = p.kind == Kind::Inter ? (std::max)(m_Slope, kSlope) : kSlope;
+        const bool fit = m_ReencodeFit && !lastTry && p.kind == Kind::Inter;
+        const double aim = fit ? kReencodeAim : 1.0;
+        const double over = static_cast<double>(bits) /
+                            (aim * static_cast<double>((std::max)(p.budgetBits, uint64_t(1))));
+        double slope = p.kind == Kind::Inter ? (std::max)(m_Slope, kSlope) : kSlope;
+        if (fit) slope = (std::max)(m_Slope, kReencodeMinSlope);
         const int raise = static_cast<int>(std::ceil(slope * std::log2((std::max)(over, 1.0))));
         again.qp = (std::min)(kMaxQp, p.qp + (std::max)(raise, 1));
         return again;
     }
+
+    /// Whether @p p — a new picture coded again under the fitting rule, and
+    /// still @p bits — is far enough over to be worth a last try, by the
+    /// textbook. Never without the fitting rule: its one try already is.
+    bool lastTryWanted(const Picture& p, uint64_t bits) const
+    {
+        return m_ReencodeFit && p.kind == Kind::Inter && strongOvershoot(p, bits);
+    }
+
+    /// How a picture far over its budget is coded again (the bench's refit=,
+    /// plan §9-14). Off, the engine's own: once, at its budget, by the
+    /// textbook's slope. On: at kReencodeAim budgets by the slope learned,
+    /// then by the textbook when that still lands far over. Kept by start().
+    void setReencodeFit(bool on) { m_ReencodeFit = on; }
+    bool reencodeFit() const { return m_ReencodeFit; }
 
     uint64_t frameBits() const { return m_FrameBits; }
     uint64_t vbvCapacityBits() const { return m_VbvBits; }
@@ -552,6 +587,8 @@ private:
     double m_SpikeMeasured = 0.0;
     /// overshot() came before this encoded(): the same picture, coded again.
     bool m_AgainOf = false;
+    /// reencode()'s rule: see setReencodeFit().
+    bool m_ReencodeFit = false;
 
     /// Passes: log2 of what the whole picture on screen costs at kPivotQp.
     double m_Pass = 18.4;

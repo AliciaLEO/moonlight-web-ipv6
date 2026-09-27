@@ -103,6 +103,13 @@ Frame stepAgain(QpRateController& rc, Simulator& sim, bool fresh = true)
         sim.pictureQp = pictureQp;
         f.bits = sim.encode(f.picture);
         f.again = true;
+        // Under the fitting rule, the textbook's try for a picture the first
+        // one left far over.
+        if (rc.lastTryWanted(f.picture, f.bits)) {
+            f.picture = rc.reencode(f.picture, f.bits, true);
+            sim.pictureQp = pictureQp;
+            f.bits = sim.encode(f.picture);
+        }
     }
     rc.encoded(f.picture, f.bits);
     return f;
@@ -599,6 +606,76 @@ void run_qp_rate_controller_tests()
             CHECK(highest <= 31);
             CHECK(rc.slope() < 3.5);
         }
+    }
+
+    SECTION("QpRateController — text in fits and starts, coded again under the line");
+    {
+        // The N95 (27/09/2026): Chrome shares the iGPU with the capture and
+        // scrolls in fits and starts, and at one QP a picture costs anything
+        // from a quarter to four times the last. Coded again by the textbook,
+        // a picture far over its budget lands at a fraction of it, and those
+        // bits are gone; under the line (refit=1), by the slope learned, the
+        // text keeps its rate, and no more pictures go out far over it.
+        double mean[2] = {0, 0};
+        int far[2] = {0, 0};
+        for (const bool fit : {false, true}) {
+            QpRateController rc;
+            rc.setReencodeFit(fit);
+            rc.start(kRate, kFps, 0, kPixels);
+            CHECK_EQ(rc.reencodeFit(), fit);
+            Simulator sim;
+            sim.intra = 6.0e6;
+            sim.interSlope = 2.5;
+            sim.inter = frame * std::exp2(3.0 / 2.5);
+            sim.spread = 2.0;
+            const std::vector<Frame> frames = run(rc, sim, 1200, true);
+            double bits = 0;
+            size_t n = 0;
+            for (size_t i = 1 + 2 * kFps; i < frames.size(); ++i, ++n)
+                bits += static_cast<double>(frames[i].bits);
+            mean[fit] = bits / static_cast<double>(n) / frame;
+            far[fit] = rc.strongOvershoots();
+        }
+        std::fprintf(stderr,
+                     "  text in fits and starts: %.2f of the budget coded again by the textbook, "
+                     "%.2f under the line; far over: %d and %d\n",
+                     mean[0], mean[1], far[0], far[1]);
+        CHECK(mean[1] >= mean[0] + 0.08);
+        CHECK(far[1] <= far[0]);
+
+        // A whole new page, on the textbook's curve: the first try, by the
+        // scroll's slope, leaves it far over; the last one brings it in.
+        QpRateController rc;
+        rc.setReencodeFit(true);
+        rc.start(kRate, kFps, 0, kPixels);
+        Simulator sim;
+        sim.intra = 6.0e6;
+        sim.interSlope = 2.5;
+        sim.inter = frame * std::exp2(3.0 / 2.5);
+        sim.spread = 0.1;
+        run(rc, sim, 299, true);
+        CHECK(rc.slope() < 3.5);
+        const int sentFar = rc.strongOvershoots();
+        sim.inter *= 16;
+        sim.interSlope = 6.0;
+        const QpRateController::Picture p = rc.plan(false, true);
+        const uint64_t first = sim.encode(p);
+        CHECK(rc.strongOvershoot(p, first));
+        rc.overshot(p, first);
+        QpRateController::Picture again = rc.reencode(p, first);
+        CHECK(again.qp > p.qp);
+        uint64_t bits = sim.encode(again);
+        CHECK(rc.lastTryWanted(again, bits));
+        const QpRateController::Picture last = rc.reencode(again, bits, true);
+        CHECK(last.qp > again.qp);
+        bits = sim.encode(last);
+        CHECK(!rc.strongOvershoot(last, bits));
+        rc.encoded(last, bits);
+        CHECK_EQ(rc.strongOvershoots(), sentFar);
+        // Without the fitting rule there is never a last try.
+        QpRateController plain;
+        plain.start(kRate, kFps, 0, kPixels);
+        CHECK(!plain.lastTryWanted(p, first));
     }
 
     SECTION("QpRateController — the page wraps round: a spike coded again, then back");

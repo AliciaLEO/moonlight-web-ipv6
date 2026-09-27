@@ -139,6 +139,8 @@ const char* const kUsage =
     "  rc12=driver|qp              D3D12 Video Encode's rate control; qp = the in-house one\n"
     "  reencode=0|1                in-house rate control: a picture far over its budget is\n"
     "                              coded again, at the QP that fits it (1); 0 sends it as is\n"
+    "  refit=0|1                   how: at its budget by the textbook's slope (0), or at two\n"
+    "                              budgets by the slope learned, then the textbook (1)\n"
     "  interfloor=<k>|off          in-house rate control: a new picture is never believed\n"
     "                              to cost under 1/2^k of an intra one (off: no floor)\n"
     "  prio12=normal|high|realtime the D3D12 queues' priority (default: the GPU class's)\n"
@@ -323,6 +325,8 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
             ok = false;
     } else if (key == "reencode") {
         ok = parseChoice(value, tuning.reencode12);
+    } else if (key == "refit") {
+        ok = parseChoice(value, tuning.reencodeFit12);
     } else if (key == "interfloor") {
         if (value.compare("off", Qt::CaseInsensitive) == 0) {
             tuning.interFloor12 = -1;

@@ -242,6 +242,13 @@ struct EncoderTuning
     /// 27/09/2026 (plan §9-5): scrolling text went from 12 such pictures sent
     /// to 1, for the same mean host time. Off is the bench's "before".
     Choice reencode12 = Choice::Default;
+    /// How that picture is coded again. The engine's own (off): once, at its
+    /// budget, by the textbook's slope. On: at two budgets — under the
+    /// overshoot line — by the slope learned, then by the textbook if it
+    /// still lands far over. Replayed on the N95's scrolling text, where 14 %
+    /// of the pictures were coded again, on keeps 0.89 of the budget instead
+    /// of 0.75 (bench §8n.8, plan §9-14).
+    Choice reencodeFit12 = Choice::Default;
     /// The in-house rate control only: a new picture is never believed to
     /// cost under 1/2^k of an intra one. 0 is the engine's own — no floor,
     /// since 27/09/2026: a page of text scrolling costs a thirtieth of its
@@ -296,9 +303,9 @@ struct EncoderTuning
                dpbFrames == 0 && fallback == Fallback::None && pipeline == VideoPipeline::Auto &&
                conv12 == ConvertQueue12::Default && enc12 == Encoder12::Default &&
                rc12 == RateControl12::Default && reencode12 == Choice::Default &&
-               interFloor12 == 0 && prio12 == Priority12::Default &&
-               ownCreator12 == Choice::Default && ddaSync == DdaSync::Default && !gpuTiming &&
-               !strict12;
+               reencodeFit12 == Choice::Default && interFloor12 == 0 &&
+               prio12 == Priority12::Default && ownCreator12 == Choice::Default &&
+               ddaSync == DdaSync::Default && !gpuTiming && !strict12;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -361,6 +368,7 @@ struct EncoderTuning
         if (rc12 == RateControl12::Driver) add("rc12=driver");
         if (rc12 == RateControl12::Qp) add("rc12=qp");
         if (reencode12 != Choice::Default) add(std::string("reencode=") + choice(reencode12));
+        if (reencodeFit12 != Choice::Default) add(std::string("refit=") + choice(reencodeFit12));
         if (interFloor12 < 0) add("interfloor=off");
         if (interFloor12 > 0) add("interfloor=" + std::to_string(interFloor12));
         if (prio12 == Priority12::Normal) add("prio12=normal");

@@ -226,6 +226,8 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
                                                      : QpRateController::kNoInterFloor;
         m_Controller.start(bitsPerSecond, m_Fps, m_VbvFrames,
                            static_cast<uint64_t>(m_Setup.codedWidth) * m_Setup.codedHeight, floor);
+        m_Controller.setReencodeFit(m_Reencode &&
+                                    tuning.reencodeFit12 == EncoderTuning::Choice::On);
         m_SubmittedQp = static_cast<int>(m_Rate->cqp.ConstantQP_FullIntracodedFrame);
     } else {
         m_Rate->setBitrate(bitsPerSecond, m_Fps, m_VbvFrames);
@@ -275,7 +277,11 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
               std::to_string(m_Setup.codedHeight) + "@" + std::to_string(m_Fps) + ", " +
               m_Setup.rate.describe() +
               (m_OwnRate ? " moved by our own rate control (" + rateWhy + ")" +
-                               (m_Reencode ? ", overshoots coded again" : "") + " at "
+                               (m_Reencode ? m_Controller.reencodeFit()
+                                                 ? ", overshoots coded again under the line"
+                                                 : ", overshoots coded again"
+                                           : "") +
+                               " at "
                          : std::string(" ")) +
               std::to_string(bitrateKbps) + " kbps, level " + levelText(m_Setup.sequence.levelIdc) +
               ", blocks " + std::to_string(1 << b.log2MinCodingBlock) + ".." +
@@ -605,6 +611,16 @@ bool VideoEncode12::encode(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
         if (!submit(picture, ready, readyValue, plan, error) || !written(bytes, error))
             return false;
         ++m_Reencoded;
+        // Under the fitting rule the first try aims under the overshoot line
+        // by the slope learned; a picture it leaves far over — a new page —
+        // gets the textbook's.
+        if (m_Controller.lastTryWanted(asked, bytes * 8)) {
+            asked = m_Controller.reencode(asked, bytes * 8, true);
+            applyQp(asked.qp);
+            if (!submit(picture, ready, readyValue, plan, error) || !written(bytes, error))
+                return false;
+            ++m_ReencodedTwice;
+        }
     }
     const auto* metadata =
         reinterpret_cast<const D3D12_VIDEO_ENCODER_OUTPUT_METADATA*>(m_MetadataCpu);
@@ -613,7 +629,10 @@ bool VideoEncode12::encode(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
         if (!guard(slices, static_cast<size_t>(bytes), plan, error)) return false;
         --m_GuardLeft;
     }
-    m_DriverQp = static_cast<int>(metadata->EncodeStats.AverageQP);
+    // Out of HEVC's range, the average says nothing: the N95's driver reports
+    // 184 under its CBR (27/09/2026), and the slice is read instead.
+    const uint64_t average = metadata->EncodeStats.AverageQP;
+    m_DriverQp = average <= 51 ? static_cast<int>(average) : 0;
     if (m_DriverQp <= 0) m_DriverQp = reportedQp(slices, static_cast<size_t>(bytes));
     if (m_OwnRate) {
         m_Controller.encoded(asked, bytes * 8);
@@ -805,8 +824,11 @@ void VideoEncode12::stop()
         log::info("[native] D3D12 Video Encode, our rate control: " +
                   std::to_string(m_Controller.pictures()) + " pictures at QP " + mean +
                   " on average, " + std::to_string(m_Controller.strongOvershoots()) +
-                  " far over their budget, " + std::to_string(m_Reencoded) + " coded again, " +
-                  std::to_string(m_QpNotFollowed) + " whose QP the driver did not follow");
+                  " far over their budget, " + std::to_string(m_Reencoded) + " coded again" +
+                  (m_Controller.reencodeFit()
+                       ? " (" + std::to_string(m_ReencodedTwice) + " of them twice)"
+                       : std::string()) +
+                  ", " + std::to_string(m_QpNotFollowed) + " whose QP the driver did not follow");
     }
     if (m_Queue.queue && m_Encoded.fence()) {
         std::string ignored;
@@ -850,6 +872,7 @@ void VideoEncode12::stop()
     m_QpNotFollowed = 0;
     m_DriverQp = -1;
     m_Reencoded = 0;
+    m_ReencodedTwice = 0;
 }
 
 } // namespace mw::native::encode

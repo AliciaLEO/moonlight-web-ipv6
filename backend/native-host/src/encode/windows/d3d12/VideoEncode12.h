@@ -105,6 +105,9 @@ public:
     const QpRateController& rateController() const { return m_Controller; }
     /// Pictures coded again for a strong overshoot (all but reencode=0).
     int reencoded() const { return m_Reencoded; }
+    /// Of those, the ones the fitting rule's first try left far over, coded a
+    /// last time by the textbook (refit=1 only).
+    int reencodedTwice() const { return m_ReencodedTwice; }
     /// Pictures whose QP, as the driver said it, did not follow the one asked.
     int qpNotFollowed() const { return m_QpNotFollowed; }
     /// The QP the driver said it coded the last picture at, -1 when it does
@@ -175,6 +178,7 @@ private:
     int m_QpNotFollowed = 0;
     int m_DriverQp = -1;
     int m_Reencoded = 0;
+    int m_ReencodedTwice = 0;
 
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> m_Recon;
     int m_ReconCount = 0;
