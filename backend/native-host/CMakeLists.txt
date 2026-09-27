@@ -411,6 +411,7 @@ if(MW_BUILD_TESTS)
         tests/test_cadence_align.cpp
         tests/test_restart_backoff.cpp
         tests/test_rate_control.cpp
+        tests/test_qp_rate_controller.cpp
         tests/test_virtual_display.cpp
         tests/test_encode_load_cap.cpp
         tests/test_h264_vui.cpp
