@@ -238,8 +238,10 @@ struct EncoderTuning
     RateControl12 rc12 = RateControl12::Default;
     /// The in-house rate control only: a picture far over its budget is coded
     /// again at the QP that fits it — an encode more on that picture, against
-    /// a burst on the link. Off until the bench's figures decide (plan §9-5).
-    bool reencode12 = false;
+    /// a burst on the link. On is the engine's own since the bench of
+    /// 27/09/2026 (plan §9-5): scrolling text went from 12 such pictures sent
+    /// to 1, for the same mean host time. Off is the bench's "before".
+    Choice reencode12 = Choice::Default;
     /// The in-house rate control only: a new picture is never believed to
     /// cost under 1/2^k of an intra one. 0 is the engine's own — no floor,
     /// since 27/09/2026: a page of text scrolling costs a thirtieth of its
@@ -293,9 +295,10 @@ struct EncoderTuning
                vplIntraRefreshDist == 0 && linkGovernor == Choice::Default && vbvFrames == 0 &&
                dpbFrames == 0 && fallback == Fallback::None && pipeline == VideoPipeline::Auto &&
                conv12 == ConvertQueue12::Default && enc12 == Encoder12::Default &&
-               rc12 == RateControl12::Default && !reencode12 && interFloor12 == 0 &&
-               prio12 == Priority12::Default && ownCreator12 == Choice::Default &&
-               ddaSync == DdaSync::Default && !gpuTiming && !strict12;
+               rc12 == RateControl12::Default && reencode12 == Choice::Default &&
+               interFloor12 == 0 && prio12 == Priority12::Default &&
+               ownCreator12 == Choice::Default && ddaSync == DdaSync::Default && !gpuTiming &&
+               !strict12;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -357,7 +360,7 @@ struct EncoderTuning
         if (enc12 == Encoder12::Amf) add("enc12=amf");
         if (rc12 == RateControl12::Driver) add("rc12=driver");
         if (rc12 == RateControl12::Qp) add("rc12=qp");
-        if (reencode12) add("reencode=1");
+        if (reencode12 != Choice::Default) add(std::string("reencode=") + choice(reencode12));
         if (interFloor12 < 0) add("interfloor=off");
         if (interFloor12 > 0) add("interfloor=" + std::to_string(interFloor12));
         if (prio12 == Priority12::Normal) add("prio12=normal");

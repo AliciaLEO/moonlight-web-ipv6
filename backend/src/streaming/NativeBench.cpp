@@ -137,8 +137,8 @@ const char* const kUsage =
     "  conv12=direct|compute       the D3D12 conversion's queue\n"
     "  enc12=ve|nvenc|amf          the D3D12 route's encoder\n"
     "  rc12=driver|qp              D3D12 Video Encode's rate control; qp = the in-house one\n"
-    "  reencode=0|1                in-house rate control: code a picture far over its budget\n"
-    "                              again, at the QP that fits it\n"
+    "  reencode=0|1                in-house rate control: a picture far over its budget is\n"
+    "                              coded again, at the QP that fits it (1); 0 sends it as is\n"
     "  interfloor=<k>|off          in-house rate control: a new picture is never believed\n"
     "                              to cost under 1/2^k of an intra one (off: no floor)\n"
     "  prio12=normal|high|realtime the D3D12 queues' priority (default: the GPU class's)\n"
@@ -322,7 +322,7 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
         else
             ok = false;
     } else if (key == "reencode") {
-        tuning.reencode12 = value.toInt(&ok) != 0;
+        ok = parseChoice(value, tuning.reencode12);
     } else if (key == "interfloor") {
         if (value.compare("off", Qt::CaseInsensitive) == 0) {
             tuning.interFloor12 = -1;

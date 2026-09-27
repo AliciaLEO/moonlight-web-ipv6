@@ -118,8 +118,8 @@ namespace mw::native::encode {
 ///
 /// It sees whole pictures: a picture far over its budget has gone out before
 /// anything can be done about it. reencode() gives the QP that would have
-/// fitted, for an encoder that can afford to code the picture again (the
-/// bench's reencode=, a decision the bench's numbers wait on — plan §9-5).
+/// fitted, for an encoder that can afford to code the picture again —
+/// VideoEncode12 does, since the bench of 27/09/2026 (plan §9-5).
 class QpRateController
 {
 public:
@@ -154,7 +154,7 @@ public:
     /// No floor under intra (the bench's interfloor=k sets one at 1/2^k).
     static constexpr double kNoInterFloor = -1000.0;
     /// A picture this many times over its budget — and over the VBV — is the
-    /// overshoot the bench counts and reencode= codes again.
+    /// overshoot the bench counts and VideoEncode12 codes again.
     static constexpr double kStrongOvershoot = 2.5;
     /// Before the first intra picture: bits per pixel at QP 26. A desktop of
     /// text sits at or below it — high on purpose: a first picture under its
@@ -235,15 +235,7 @@ public:
             return p;
         }
         p.kind = Kind::Pass;
-        // A pass codes what lies between the picture's quantizer and its own:
-        // (2^((QP before − QP) / 6) − 1) of the whole picture at the QP it
-        // has. So the budget buys 6 · log2(1 + budget / whole) steps down.
-        const double whole = std::exp2(m_Pass - (m_PictureQp - kPivotQp) / kSlope);
-        const double steps =
-            kSlope * std::log2(1.0 + static_cast<double>(p.budgetBits) / (std::max)(whole, 1.0));
-        const int sharpest = (std::max)(kMinQp, m_PictureQp - kPassDrop);
-        p.qp = std::clamp(static_cast<int>(std::lround(m_PictureQp - steps)), sharpest,
-                          (std::max)(sharpest, m_PictureQp));
+        p.qp = passQp(p.budgetBits);
         return p;
     }
 
@@ -252,9 +244,18 @@ public:
     /// learn from, not the bucket's. encoded() follows, for the picture sent.
     void overshot(const Picture& p, uint64_t bits)
     {
-        if (p.kind != Kind::Inter) return;
-        learnNew(p.qp, bits);
-        m_AgainOf = true;
+        switch (p.kind) {
+        case Kind::Inter:
+            learnNew(p.qp, bits);
+            m_AgainOf = true;
+            break;
+        case Kind::Pass:
+            // What the whole picture costs, as the try says it; the picture
+            // on screen is still the one before the try.
+            if (p.qp < m_PictureQp) m_Pass = passWhole(p.qp, bits);
+            break;
+        case Kind::Intra: break;
+        }
     }
 
     /// @p p went out at @p bits.
@@ -291,9 +292,7 @@ public:
             // share of the whole picture: what it cost says what the whole
             // does.
             if (p.qp < m_PictureQp) {
-                const double share = std::exp2((m_PictureQp - p.qp) / kSlope) - 1.0;
-                m_Pass = std::log2(static_cast<double>((std::max)(bits, uint64_t(1))) / share) +
-                         (m_PictureQp - kPivotQp) / kSlope;
+                m_Pass = passWhole(p.qp, bits);
                 m_PictureQp = p.qp;
             }
             break;
@@ -316,10 +315,19 @@ public:
     /// it cost at its own — through the slope learned for a new picture,
     /// never shallower than the textbook's: coded again, a picture must land
     /// under its budget, and the one far over it is often another content —
-    /// a whole new page in a scroll — whose curve is not the scroll's.
+    /// a whole new page in a scroll — whose curve is not the scroll's. A pass
+    /// is planned again, off what overshot() learned the whole picture costs:
+    /// a smaller step, or none where the budget buys none. Raised by the rule
+    /// for new pictures, it went above the picture's QP, coded nothing and
+    /// taught nothing, and the next pass tried the same step: a dense page
+    /// stayed at its moving QP, every pass coded twice (27/09/2026).
     Picture reencode(const Picture& p, uint64_t bits) const
     {
         Picture again = p;
+        if (p.kind == Kind::Pass) {
+            again.qp = (std::min)((std::max)(passQp(p.budgetBits), p.qp + 1), m_PictureQp);
+            return again;
+        }
         const double over =
             static_cast<double>(bits) / static_cast<double>((std::max)(p.budgetBits, uint64_t(1)));
         const double slope = p.kind == Kind::Inter ? (std::max)(m_Slope, kSlope) : kSlope;
@@ -373,6 +381,27 @@ private:
     }
 
     bool tiny(uint64_t bits) const { return bits < kTinyBits || bits < m_FrameBits / 32; }
+
+    /// A pass codes what lies between the picture's quantizer and its own:
+    /// (2^((QP before − QP) / 6) − 1) of the whole picture at the QP it has.
+    /// So @p budgetBits buys 6 · log2(1 + budget / whole) steps down.
+    int passQp(uint64_t budgetBits) const
+    {
+        const double whole = std::exp2(m_Pass - (m_PictureQp - kPivotQp) / kSlope);
+        const double steps =
+            kSlope * std::log2(1.0 + static_cast<double>(budgetBits) / (std::max)(whole, 1.0));
+        const int sharpest = (std::max)(kMinQp, m_PictureQp - kPassDrop);
+        return std::clamp(static_cast<int>(std::lround(m_PictureQp - steps)), sharpest,
+                          (std::max)(sharpest, m_PictureQp));
+    }
+
+    /// log2 of what the whole picture costs at kPivotQp, going by a pass at
+    /// @p qp, below the picture's own, that cost @p bits — its share of it.
+    double passWhole(int qp, uint64_t bits) const
+    {
+        const double share = std::exp2((m_PictureQp - qp) / kSlope) - 1.0;
+        return log2Of(bits) - std::log2(share) + (m_PictureQp - kPivotQp) / kSlope;
+    }
 
     /// What a new picture is taken to cost at the anchor: the brake of
     /// kNewPictureDrop, and the bench's floor under intra, if any.

@@ -103,7 +103,7 @@ public:
     /// Whether our rate control moves the QP (a CQP encoder), and its state.
     bool ownRateControl() const { return m_OwnRate; }
     const QpRateController& rateController() const { return m_Controller; }
-    /// Pictures coded again for a strong overshoot (reencode=).
+    /// Pictures coded again for a strong overshoot (all but reencode=0).
     int reencoded() const { return m_Reencoded; }
     /// Pictures whose QP, as the driver said it, did not follow the one asked.
     int qpNotFollowed() const { return m_QpNotFollowed; }
@@ -162,7 +162,7 @@ private:
 
     /// Our rate control, on a CQP encoder (plan §4.6).
     bool m_OwnRate = false;
-    bool m_Reencode = false; ///< the bench's reencode=
+    bool m_Reencode = false; ///< strong overshoots coded again; off at reencode=0
     QpRateController m_Controller;
     int m_SubmittedQp = 0; ///< the constant QP the encoder was last given
     /// The picture last encoded, by the fence value its conversion signalled.

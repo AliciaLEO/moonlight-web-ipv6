@@ -208,7 +208,7 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
         }
     }
     m_OwnRate = m_Setup.rate.mode == HevcRate::Mode::Cqp;
-    m_Reencode = m_OwnRate && tuning.reencode12;
+    m_Reencode = m_OwnRate && tuning.reencode12 != EncoderTuning::Choice::Off;
     m_Level = caps.suggestedLevel();
     m_Profile = VideoEncodeCaps12::profile(hdr);
     m_Config = VideoEncodeCaps12::configuration(m_Setup.blocks, m_Setup.blocksAnswer);

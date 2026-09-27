@@ -1853,6 +1853,17 @@ par `8d2e6bfc`).
 dépassements forts (défilement : 12 → 1, clip : 5 → 0, première image après
 une pause : 8 → 2,7 budgets), pour un encodage de plus sur ces images
 (`host_total` moyen inchangé). Recommandation : l'activer par défaut.
+**Décision de Bruno (27/09) : actif par défaut** ; `reencode=0` le retire
+au banc. En l'activant, un défaut est apparu sur les passes d'écran fixe.
+Une passe très au-dessus de son budget était recodée par la règle des
+nouvelles images, donc au-dessus du QP de l'image : elle ne codait rien et
+n'apprenait rien, et la passe suivante retentait le même pas. Sur le
+simulateur, une page de texte dense restait au QP du défilement (31) au lieu
+de 21, et chaque passe était codée deux fois. Corrigé dans le même commit :
+la passe qui dépasse apprend ce que coûte l'image entière, puis elle est
+replanifiée sans jamais dépasser le QP de l'image. Les passes `pause` du banc
+n'avaient pas rencontré ce cas : leurs passes faisaient 100 à 160 Ko, pour un
+budget de rafale de 125 Ko.
 
 **Reste pour G3.** Les passes en REALTIME et sous RE9 (exécuteur élevé, un
 clic UAC de Bruno), qui diront aussi si la lenteur du contrôle de débit du

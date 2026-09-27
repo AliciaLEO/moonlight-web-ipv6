@@ -314,8 +314,8 @@ void runOn(const std::shared_ptr<d3d12::D3d12Device>& device, bool tenBit)
 /// could do (rc12=qp): the driver codes the QP asked; a bitrate change moves
 /// it without a new sequence; a still picture — encoded again without a new
 /// upload, as the still-screen passes do — is sharpened to QP 18 inside
-/// RefineConvergence's cap. Then reencode=: flat pictures, then movement, and
-/// the picture far over its budget is coded again.
+/// RefineConvergence's cap. Then flat pictures, then movement: the picture far
+/// over its budget is coded again — or sent as it is, at reencode=0.
 void ownRateOn(const std::shared_ptr<d3d12::D3d12Device>& device)
 {
     VideoEncode12 encoder;
@@ -389,34 +389,46 @@ void ownRateOn(const std::shared_ptr<d3d12::D3d12Device>& device)
                  device->name().c_str(), moving, lastQp, passes, passBytes / 1024, said, n);
     encoder.stop();
 
-    // reencode=: a flat run makes every new picture look cheap; the movement
-    // after it is far over its budget, and is coded again.
-    tuning.reencode12 = true;
-    if (!encoder.init(device, Codec::Hevc, 1920, 1080, 60, 20000, false, false, tuning, error)) {
-        std::fprintf(stderr, "  %s, reencode: %s\n", device->name().c_str(), error.c_str());
-        CHECK(false);
-        return;
+    // A flat run makes every new picture look cheap; the movement after it is
+    // far over its budget: coded again by default, sent as it is at the
+    // bench's reencode=0.
+    for (const EncoderTuning::Choice choice :
+         {EncoderTuning::Choice::Default, EncoderTuning::Choice::Off}) {
+        const bool again = choice != EncoderTuning::Choice::Off;
+        const char* what = again ? "coded again" : "reencode=0";
+        tuning.reencode12 = choice;
+        if (!encoder.init(device, Codec::Hevc, 1920, 1080, 60, 20000, false, false, tuning,
+                          error)) {
+            std::fprintf(stderr, "  %s, %s: %s\n", device->name().c_str(), what, error.c_str());
+            CHECK(false);
+            return;
+        }
+        n = 0;
+        failures = 0;
+        for (int i = 0; i < 10 && failures == 0; ++i)
+            encode(uploader.upload(input.Get(), i, false, error, /*flat=*/true), out);
+        size_t burst = 0;
+        for (int i = 0; i < 5 && failures == 0; ++i) {
+            encode(uploader.upload(input.Get(), i, false, error), out);
+            burst = (std::max)(burst, out.size);
+        }
+        CHECK_EQ(failures, 0);
+        CHECK_EQ(encoder.qpNotFollowed(), 0);
+        if (again) {
+            CHECK(encoder.reencoded() >= 1);
+        } else {
+            CHECK_EQ(encoder.reencoded(), 0);
+            CHECK(encoder.rateController().strongOvershoots() >= 1);
+        }
+        encoder.releaseOutput();
+        std::fprintf(stderr,
+                     "  %s, %s: %d picture(s) coded again, %d sent far over budget, largest "
+                     "%zu KB against %llu KB a frame\n",
+                     device->name().c_str(), what, encoder.reencoded(),
+                     encoder.rateController().strongOvershoots(), burst / 1024,
+                     static_cast<unsigned long long>(encoder.rateController().frameBits() / 8192));
+        encoder.stop();
     }
-    n = 0;
-    failures = 0;
-    for (int i = 0; i < 10 && failures == 0; ++i)
-        encode(uploader.upload(input.Get(), i, false, error, /*flat=*/true), out);
-    size_t burst = 0;
-    for (int i = 0; i < 5 && failures == 0; ++i) {
-        encode(uploader.upload(input.Get(), i, false, error), out);
-        burst = (std::max)(burst, out.size);
-    }
-    CHECK_EQ(failures, 0);
-    CHECK(encoder.reencoded() >= 1);
-    CHECK_EQ(encoder.qpNotFollowed(), 0);
-    encoder.releaseOutput();
-    std::fprintf(stderr,
-                 "  %s, reencode: %d picture(s) coded again, %d sent far over budget, largest "
-                 "%zu KB against %llu KB a frame\n",
-                 device->name().c_str(), encoder.reencoded(),
-                 encoder.rateController().strongOvershoots(), burst / 1024,
-                 static_cast<unsigned long long>(encoder.rateController().frameBits() / 8192));
-    encoder.stop();
 }
 
 /// 1440 lines end inside a coding tree block of 64 (the Arc's, the AMD

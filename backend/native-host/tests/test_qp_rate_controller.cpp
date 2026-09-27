@@ -75,6 +75,7 @@ struct Frame
 {
     QpRateController::Picture picture;
     uint64_t bits = 0;
+    bool again = false; ///< coded again, for a strong overshoot
 };
 
 /// One picture through the controller and the simulator.
@@ -87,16 +88,21 @@ Frame step(QpRateController& rc, Simulator& sim, bool intra, bool fresh)
     return f;
 }
 
-/// One new picture, coded again where it overshoots strongly (reencode=).
-Frame stepAgain(QpRateController& rc, Simulator& sim)
+/// One picture — new (@p fresh) or the same one again — coded again where it
+/// overshoots strongly, as VideoEncode12 does. The try was not sent: the
+/// picture the simulator holds is the one before it.
+Frame stepAgain(QpRateController& rc, Simulator& sim, bool fresh = true)
 {
     Frame f;
-    f.picture = rc.plan(false, true);
+    const int pictureQp = sim.pictureQp;
+    f.picture = rc.plan(false, fresh);
     f.bits = sim.encode(f.picture);
     if (rc.strongOvershoot(f.picture, f.bits)) {
         rc.overshot(f.picture, f.bits);
         f.picture = rc.reencode(f.picture, f.bits);
+        sim.pictureQp = pictureQp;
         f.bits = sim.encode(f.picture);
+        f.again = true;
     }
     rc.encoded(f.picture, f.bits);
     return f;
@@ -364,6 +370,47 @@ void run_qp_rate_controller_tests()
         const Frame floor = step(rc, sim, false, false);
         CHECK(floor.picture.qp <= lastQp);
         CHECK(static_cast<double>(floor.bits) <= 1.5 * frame);
+    }
+
+    SECTION("QpRateController — a pass far over its budget, coded again, still sharpens");
+    {
+        // After movement, what the whole picture costs is known only through
+        // the moving pictures: still at last, a page of dense text costs three
+        // times the burst's budget on its first pass. Coded again by the rule
+        // for new pictures, that pass went above the picture's QP, coded
+        // nothing, taught nothing, and the next one tried the same step: the
+        // page stayed at its moving QP, every pass coded twice (27/09/2026).
+        QpRateController rc;
+        rc.start(kRate, kFps, 0, kPixels);
+        Simulator sim;
+        sim.intra = 6.0e6;
+        const std::vector<Frame> frames = run(rc, sim, 30, true);
+        const int moving = frames.back().picture.qp;
+        rc.setBitrate(static_cast<uint32_t>(stillBitrateKbps(kRate / 1000)) * 1000u);
+        RefineConvergence conv;
+        RefineConvergence::Verdict verdict = RefineConvergence::Verdict::Continue;
+        int lastQp = moving, again = 0;
+        bool sharpened = true, fits = true;
+        while (verdict == RefineConvergence::Verdict::Continue) {
+            const Frame pass = stepAgain(rc, sim, false);
+            again += pass.again ? 1 : 0;
+            if (pass.picture.qp >= lastQp) sharpened = false;
+            if (rc.strongOvershoot(pass.picture, pass.bits)) fits = false;
+            lastQp = pass.picture.qp;
+            verdict = conv.notePass(static_cast<size_t>(pass.bits / 8), pass.picture.qp);
+        }
+        CHECK(again >= 1); // the case at hand
+        CHECK(sharpened);
+        CHECK(fits);
+        CHECK(rc.pictureQp() <= moving - 8);
+        // The idle floor carries on where a step fits a frame's worth, and is
+        // never coded twice for nothing.
+        rc.setBitrate(kRate);
+        int idleAgain = 0;
+        for (int i = 0; i < 10; ++i)
+            idleAgain += stepAgain(rc, sim, false).again ? 1 : 0;
+        CHECK_EQ(idleAgain, 0);
+        CHECK(rc.pictureQp() <= lastQp);
     }
 
     SECTION("QpRateController — movement after a sharpened desktop is budgeted as movement");
