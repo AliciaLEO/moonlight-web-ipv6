@@ -91,6 +91,14 @@ struct EncodedFrame
     int64_t gpuConvertUs = -1;
     int64_t gpuEncodeUs = -1;
 
+    /// The bitrate the encoder held for this frame, in kbps: the stream's
+    /// rate as last given to it, scaled to the cadence frames really arrive
+    /// at (encode::EffectiveCadence), the still-screen boost included. Over
+    /// the stream's frame rate it is the frame's budget, which the target
+    /// alone stops giving once the content slows. 0 where the platform does
+    /// not say (Windows only, for now).
+    int encoderKbps = 0;
+
     /// Convenience: the host-side processing latency this frame really cost,
     /// present → encoded. This is what the stats overlay shows, and unlike the
     /// GameStream path it is measured here rather than reported by a third

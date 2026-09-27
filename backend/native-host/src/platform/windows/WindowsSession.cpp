@@ -1002,7 +1002,9 @@ private:
         encoder.hdr = hdr;
         encoder.intraRefresh = m_Config.intraRefresh;
         encoder.tuning = m_Config.tuning;
-        return m_Pipeline->buildEncoder(*m_Capture, encoder, error);
+        if (!m_Pipeline->buildEncoder(*m_Capture, encoder, error)) return false;
+        m_EncoderKbps = encoder.bitrateKbps;
+        return true;
     }
 
     /// The duplication was lost — a resolution change, a mode set, a desktop
@@ -1566,7 +1568,9 @@ private:
         std::string bitrateRefused;
         auto applyBitrate = [&](int kbps) {
             if (kbps <= 0) return;
-            if (m_Pipeline->setBitrate(effective.scaledKbps(kbps), error)) {
+            const int held = effective.scaledKbps(kbps);
+            if (m_Pipeline->setBitrate(held, error)) {
+                m_EncoderKbps = held;
                 bitrateRefused.clear();
             } else if (error != bitrateRefused) {
                 bitrateRefused = error;
@@ -2123,6 +2127,7 @@ private:
             out.encodedUs = steadyNowUs();
             out.gpuConvertUs = encoded.gpuConvertUs;
             out.gpuEncodeUs = encoded.gpuEncodeUs;
+            out.encoderKbps = m_EncoderKbps;
 
             // Delivered on this thread, and the consumer sends it before
             // returning. The buffer is unlocked immediately after, which is
@@ -2905,6 +2910,10 @@ private:
     /// The rate the link is modelled at: the stream's bitrate, never the
     /// still-screen boost — that one is what is being paced, not the pipe.
     int m_LinkKbps = 0;
+    /// The rate the encoder holds: what it was built with, then every
+    /// setBitrate() it took — scaled to the cadence frames arrive at, boost
+    /// included. Stamped on each frame (EncodedFrame::encoderKbps).
+    int m_EncoderKbps = 0;
 };
 
 } // namespace

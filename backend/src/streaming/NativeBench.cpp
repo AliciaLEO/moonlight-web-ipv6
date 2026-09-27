@@ -83,6 +83,9 @@ struct BenchRow
     int64_t gpuEncodeUs = -1;
     /// The target the bench had set when the frame came out (ramp=).
     int targetKbps = 0;
+    /// The rate the encoder held for it (EncodedFrame::encoderKbps), 0 when
+    /// the platform does not say.
+    int encoderKbps = 0;
 };
 
 const char* const kUsage =
@@ -619,6 +622,7 @@ int runNativeBenchCommand(const QString& specText)
             row.gpuConvertUs = f.gpuConvertUs;
             row.gpuEncodeUs = f.gpuEncodeUs;
             row.targetKbps = targetKbps.load();
+            row.encoderKbps = f.encoderKbps;
             latestFrame.store(f.frameNumber);
             anyFrame.store(true);
             std::lock_guard<std::mutex> lock(rowsMutex);
@@ -735,7 +739,8 @@ int runNativeBenchCommand(const QString& specText)
         QTextStream csv(&file);
         csv << "frame,keyframe,captured,bytes,avg_qp,t0_present_us,t1_captured_us,"
                "t1b_submitted_us,t2_converted_us,t3_encoded_us,acquire_us,convert_us,"
-               "encode_us,host_total_us,gpu_convert_us,gpu_encode_us,target_kbps,pipeline\n";
+               "encode_us,host_total_us,gpu_convert_us,gpu_encode_us,target_kbps,encoder_kbps,"
+               "pipeline\n";
         const char* const pipelineName = mw::native::toString(pipeline);
         for (const BenchRow& r : rows) {
             csv << r.frameNumber << ',' << (r.keyframe ? 1 : 0) << ',' << (r.captured ? 1 : 0)
@@ -744,7 +749,7 @@ int runNativeBenchCommand(const QString& specText)
                 << r.encodedUs << ',' << (r.capturedUs - r.presentUs) << ','
                 << (r.convertedUs - r.submittedUs) << ',' << (r.encodedUs - r.convertedUs) << ','
                 << (r.encodedUs - r.presentUs) << ',' << r.gpuConvertUs << ',' << r.gpuEncodeUs
-                << ',' << r.targetKbps << ',' << pipelineName << '\n';
+                << ',' << r.targetKbps << ',' << r.encoderKbps << ',' << pipelineName << '\n';
         }
     }
     file.close();
