@@ -1764,6 +1764,103 @@ produit la prend (sans `strict12`), flux enregistré.
 pas candidats (G2). Le test manuel de Bruno (C5.7), sur cette même
 installation.
 
+### 8n.6 G3, première partie : le contrôle de débit maison sur l'Arc, au banc (27/09/2026)
+
+**Montage.**
+- `--native-bench` sur l'écran de l'Arc, 1920×1080 tiré d'un bureau
+  2560×1440, 20 Mb/s, classe GPU HIGH (jeton de l'agent). Passes de 12 à
+  24 s, sorties dans `bench-out\d3d12v2\g3`, lues par
+  `scripts/bench/rate-report.py`.
+- Contenus : `scroll.html` (texte qui défile), le clip Call of Duty,
+  `scroll.html?pause=2` (2 s de défilement, 2 s d'arrêt), `still.html`,
+  `ramp=5000@2` (marches 20 ↔ 5 Mb/s), `lose=45`.
+- `governor=0` (`9099d229`) : sans récepteur, le gouverneur du lien coupait
+  le débit à 80 % au bout de 4 s de chaque passe, et ne transmettait jamais
+  une marche de `ramp=` vers le haut. Toutes les passes d'avant ce commit
+  avaient cette coupure ; en G2, le bras D3D11 l'a subie, pas le bras D3D12
+  de l'Arc, qui refusait tout changement de débit.
+- Critères G3 (plan §5) : débit à ±10 % sur des fenêtres de 2 s ; p95 de la
+  taille d'image ≤ 2 × budget ; marche de débit suivie en 3 images ; écran
+  fixe convergé à QP 18 ; pas de pompage visible (test de Bruno) ; latence
+  pas pire qu'en G2.
+
+**Référence D3D11 (oneVPL) et D3D12 avec le débit du pilote, mêmes passes.**
+- D3D11 : défilement 60 i/s, 2 fenêtres sur 9 à ±10 % (0,69 à 0,98 de la
+  cible), p95 1,53 × le budget ; clip, 3 sur 9, p95 1,39 ; rampe, marches
+  suivies 8 fois sur 10 ; écran fixe, rafales au plafond de 8 passes.
+- D3D12 avec le débit du pilote : des images constantes de 33 Ko (0,80 du
+  budget), quelle que soit la cible : le pilote de l'Arc ne change pas de
+  débit en cours de séquence.
+- `host_total` : 10 à 15 ms en moyenne, p99 33 à 43 ms, pour les deux. Dans
+  chaque passe qui utilise le contrôle de débit du pilote (oneVPL ou D3D12
+  CBR), l'encodage de l'Arc passe de ~5 à ~18 ms entre 6 et 8,5 s. Jamais
+  en CQP. G2, en REALTIME, n'avait pas vu cela (6,3 ms au repos) : à vérifier
+  en REALTIME.
+
+**Ce que les premiers essais ont appris** (`89bcf517`, `6f9c6c13`, corrigés
+par `8d2e6bfc`).
+- Un plancher « un quart de l'intra » tenait le texte qui défile à QP 38 à 45,
+  pour un dixième du débit : une page qui défile ne coûte qu'un trentième de
+  son image intra (compensation de mouvement).
+- Sans plancher, le texte oscillait image par image entre 4 à 13 budgets et
+  presque rien. La taille ne suit pas « moitié tous les 6 QP » : 162 Ko à
+  QP 24, presque rien à QP 36. La pente se lit maintenant sur les images
+  elles-mêmes (sécantes, 2 à 2,5 QP par moitié pour le texte).
+- À 120 i/s, une capture sur deux regroupe deux présentations et coûte 2,5
+  fois la suivante. Remplacer le modèle à chaque écart de plus de 2×
+  doublait l'oscillation : il faut deux écarts de suite dans le même sens.
+- Un pic suivi d'une image quasi vide 17 QP plus haut n'est pas un « pic
+  ponctuel » : pris pour tel, il ramenait l'ancienne croyance image après
+  image, et le QP descendait à 18 (rejoué depuis le CSV réel).
+- Écran fixe : une passe coûte la part de l'image qu'elle affine,
+  (2^(ΔQP/6) − 1) de l'image entière. Prise pour une image entière, la page
+  de texte s'arrêtait au QP de sa première image, 42, « convergée ».
+
+**Le contrôle maison, version du `8d2e6bfc`.**
+
+| contenu | fenêtres à ±10 % | taille / budget : moy. / p95 | très au-dessus (> 2,5×) | QP moyen | `host_total` moy. / p99 (ms) |
+|---|---|---|---|---|---|
+| défilement 60 i/s | 7 / 9 (0,86 à 0,95) | 0,92 / 1,86 | 12 | 30 | 5,8 / 11,4 |
+| défilement 60 i/s, `reencode=1` | 5 / 9 (0,78 à 0,93) | 0,88 / 1,85 | 1 | 30 | 5,8 / 10,1 |
+| clip de jeu 60 i/s | 8 / 9 (0,72 à 1,03) | 1,04 / 1,72 | 5 | 23 | 5,6 / 7,7 |
+| clip de jeu, `reencode=1` | 4 / 9 (0,78 à 0,97) | 0,97 / 1,65 | 0 | 23 | 5,6 / 7,6 |
+| défilement 120 i/s | 7 / 9 (0,85 à 0,93) | 0,97 / 2,33 | 82 | 35 | 5,3 / 11,9 |
+| `lose=45` | 4 / 5 (0,84 à 0,96) | 0,92 / 1,86 | 7 | 30 | 5,5 / 7,7 |
+
+- Rampe 20 ↔ 5 Mb/s : marches suivies en 3 images 9 fois sur 10 (D3D11 :
+  8 sur 10) ; p95 2,61, les images de transition comprises.
+- Écran fixe : QP 42 → 18 en 8 passes (116 Ko puis 642 Ko), « converged ».
+- Pause puis défilement : la première image après l'arrêt fait jusqu'à 8
+  budgets sans ré-encodage, 2,7 au plus avec.
+- Le pilote code le QP demandé sur chaque image : jamais d'écart relevé, Main
+  10 compris (test matériel).
+- Les pertes sont réparées par invalidation, comme en G2.
+- Les fenêtres hors des ±10 % le sont toutes par défaut de débit (0,72 à
+  0,86), jamais par excès.
+
+**Critères G3, sur l'Arc au banc.**
+- Débit à ±10 % : atteint la plupart du temps, mieux que D3D11 dans les mêmes
+  passes ; les ratés sont sous la cible.
+- p95 ≤ 2 × budget : tenu à 60 i/s (1,65 à 1,86) ; pas à 120 i/s sur du texte
+  (2,33), ni sur la rampe (2,61).
+- Marches suivies en 3 images : tenu (9 sur 10).
+- Écran fixe à QP 18 : tenu.
+- Latence : 5,3 à 5,8 ms de moyenne, contre 6,25 pour D3D12 en G2 et 10 à
+  15 ms pour D3D11 dans ces passes.
+- Pompage : le test de Bruno le dira.
+
+**`reencode=1` (décision §9-5 du plan).** Il retire presque tous les
+dépassements forts (défilement : 12 → 1, clip : 5 → 0, première image après
+une pause : 8 → 2,7 budgets), pour un encodage de plus sur ces images
+(`host_total` moyen inchangé). Recommandation : l'activer par défaut.
+
+**Reste pour G3.** Les passes en REALTIME et sous RE9 (exécuteur élevé, un
+clic UAC de Bruno), qui diront aussi si la lenteur du contrôle de débit du
+pilote Intel tient en REALTIME ; le N95 ; la RTX en témoin ; le profil
+« Internet » sur un vrai stream (pertes, RTT, marches de bande passante,
+gouverneur actif) ; puis le test manuel de Bruno sur une édition dev
+installée.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
