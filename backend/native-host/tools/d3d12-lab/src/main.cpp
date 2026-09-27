@@ -49,6 +49,10 @@ void usage()
 int wmain(int argc, wchar_t** argv)
 {
     ::SetConsoleOutputCP(CP_UTF8);
+    // A driver that faults mid-probe takes the process down with what stdout
+    // still holds (the N95's caps, 27/09): written as it comes, the last line
+    // says where it stopped. The CRT has no line buffering, hence none at all.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     ::SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     if (argc < 2) {
         usage();
