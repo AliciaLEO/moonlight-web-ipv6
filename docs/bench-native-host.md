@@ -1501,6 +1501,81 @@ déjà 658 sur 1439 (RTX), 1136 sur 1424 (Arc), 1420 sur 1439 (iGPU AMD).
   RE9). À revoir si le N95 montre le contraire.
 - **Reste de C1.4** : le N95 (bench-intel), pas encore passé.
 
+### 8n.3 La chaîne D3D12 de bout en bout (phase 5, 27/09/2026 →)
+
+**Montage.**
+- DualRTX, trois M27Q, un par GPU. `--native-bench` en 2560×1440 à
+  120 i/s, 20 Mb/s, chaîne D3D12 forcée (`pipeline=d3d12,strict12=1`).
+- Contenu : `scroll.html` ou `still.html` en kiosque sur l'écran capturé.
+- Classe GPU HIGH : l'agent a un jeton limité.
+
+**La taille codée (C5.3, `6cf08d3a`).**
+- C5.2 laissait sur l'Arc et l'iGPU AMD « quelques images non décodables »
+  en 1440p120 : 2 à 6 lignes d'erreur ffmpeg par passe de 8 s. En réalité,
+  **toutes les images étaient fausses**.
+- Cause : les trois pilotes codent des CTB (blocs de codage) entiers, 32
+  pixels sur la RTX, 64 sur l'Arc et l'AMD, quelle que soit la taille
+  acceptée. Le produit alignait la taille sur 16 : 1440 lignes font 22,5
+  CTB de 64. Le décodeur déduit alors, au bord de l'image, des découpes que
+  les tranches du pilote n'ont pas. Tout est faux à partir de la dernière
+  rangée de CTB, et la prédiction étend l'erreur à l'écran entier en
+  quelques secondes (image 400 : traînées sur l'Arc, blocs verts sur l'AMD).
+- **Le compte d'erreurs de ffmpeg ne prouve rien.** Il ne signalait que 2 à
+  6 images sur 900. La preuve est au pixel : la sonde `encode` du labo écrit
+  ses images d'entrée (`--dump-input`), et `scripts/bench/hevc-psnr.py`
+  compare chaque image décodée à la sienne. `--align 16|asked` rejoue
+  l'ancienne règle.
+
+PSNR luma médian de la pire bande de 64 lignes, CBR 20 Mb/s :
+
+| cas | taille codée fausse | PSNR | taille codée en CTB entiers | PSNR |
+|---|---|---|---|---|
+| Arc 2560×1440@120 | 2560×1440 (règle de 16) | 12,2 dB, 448 images sur 448 sous 20 dB | 2560×1472 | 26,4 dB, aucune sous 20 |
+| iGPU AMD 2560×1440@120 | 2560×1440 (règle de 16) | 13,5 dB, 360 sur 360 | 2560×1472 | 27,1 dB, aucune |
+| RTX 2560×1440@120 | — | — | 2560×1440 | 27,1 dB, aucune |
+| Arc 3440×1440@60 | 3440×1440 (règle de 16) | 8,1 dB, image entière à 8,7 | 3456×1472 | 27,0 dB, aucune |
+| RTX 3440×1440@60 | 3440×1440 (règle de 16) | 8,1 dB, image entière à 8,7 | 3456×1440 | 27,1 dB, aucune |
+| Arc 1920×1080@60 | 1920×1080 (taille demandée) | 12,0 dB | 1920×1088 | 27,1 dB, aucune |
+| RTX 1920×1080@60 | 1920×1080 (taille demandée) | 11,9 dB | 1920×1088 | 27,1 dB, aucune |
+
+- Aucune dérive avec des CTB entiers : les 100 premières et les 100
+  dernières images ont le même PSNR.
+- Le constat du 26/09 (« une image sur 300 » avec un SPS à 1080) était déjà
+  ce défaut : toutes les images, à partir de la ligne 1024.
+- Correctif : la taille codée est un nombre entier de CTB. Le convertisseur
+  remplit la bande en noir, le SPS la recadre. Après correctif, le produit
+  sort des flux sans erreur ffmpeg sur les trois GPU, propres jusqu'à la
+  dernière ligne.
+- Sans lui, un écran ultralarge 3440×1440 aurait donné une image
+  entièrement détruite sur les trois GPU, RTX comprise.
+
+**Le QP rapporté (`7d8808a5`).**
+- L'Arc et l'iGPU AMD laissent le QP moyen à 0. Le raffinement d'écran fixe
+  croyait donc son QP stable et concluait à la 5e passe, quoi que fasse
+  l'image.
+- L'AMD écrit le QP choisi dans l'en-tête de tranche : il est lu, 18 à 35 au
+  test matériel.
+- L'Arc écrit `slice_qp_delta = 0` dans toutes ses tranches et porte son QP
+  dans les unités de codage, illisibles sans décoder le CABAC. Son QP est
+  donc inconnu (-1).
+
+**Le reste de C5.3** (2560×1440@120, 20 Mb/s). Tous les flux se décodent
+dans ffmpeg sans erreur.
+
+| essai | RTX | Arc | iGPU AMD |
+|---|---|---|---|
+| écran fixe (`still.html`) | rafales au plafond de 8 passes, QP 47 → 29 puis 31 → 21 | rafales au plafond, sans budget renforcé (débit non reconfigurable) ; première IDR floue, dernière image nette | 2e rafale convergée en 5 passes (QP 18 → 18) |
+| pointeur mobile (`still.html?cursor=1`) | — | 181 réveils « pointeur seul », pointeur dessiné | 183 réveils |
+| `lose=45` | 15 pertes sur 15 réparées par une P qui prédit 7 images plus tôt | 14 sur 14 (3 à 7 images) | 15 sur 15 (3 à 5 images) |
+| `intra=1` | refusé (aucune image de balayage) → keyframes | refusé (une image) → keyframes | balayage pris |
+| `ramp=5000@1` | suivi (7,5 Ko par image en moyenne) | refusé, en attendant la phase 6 | suivi |
+
+- Toutes les rafales de raffinement vont au plafond de 8 passes, sauf une
+  sur l'AMD : à comparer à D3D11 en G2.
+- Le refus de débit de l'Arc ne s'écrit plus qu'une fois par session : il
+  sortait deux fois par pause de la souris.
+- Reste : le changement de mode, qui demande un écran virtuel.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
