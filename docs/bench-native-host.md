@@ -1499,7 +1499,9 @@ déjà 658 sur 1439 (RTX), 1136 sur 1424 (Arc), 1420 sur 1439 (iGPU AMD).
 - **Scaler matériel d'Intel (SFC)** : pas justifié sur l'Arc. En REALTIME,
   la conversion ne fait plus la queue derrière le jeu (1,6 ms, p99 3,5 sous
   RE9). À revoir si le N95 montre le contraire.
-- **Reste de C1.4** : le N95 (bench-intel), pas encore passé.
+- **Reste de C1.4** : le N95 (bench-intel), pas encore passé. → Fait le
+  27/09 au §8n.8 : là, la conversion attend le jeu même en REALTIME, et le
+  SFC revient en question (décision §9-15 du plan).
 
 ### 8n.3 La chaîne D3D12 de bout en bout (phase 5, 27/09/2026 →)
 
@@ -1968,10 +1970,225 @@ du plan).
 - Pompage : c'est le test de Bruno qui le dira.
 
 **Reste pour G3.**
-- Le N95 (mw-intel).
+- Le N95 (mw-intel) : fait au §8n.8.
 - La RTX en témoin : son écran est l'écran principal de Bruno.
 - Le profil « Internet » sur un vrai stream, gouverneur actif.
 - Le test de Bruno sur l'édition dev.
+
+### 8n.8 Le N95 (mw-intel) : G2 et G3 sur un iGPU Intel (27/09/2026)
+
+**Montage.**
+- mw-intel : Intel N95 (Alder Lake-N), UHD Graphics `0x46D2`, pilote
+  32.0.101.7088, sans HAGS (le pilote ne le propose pas). Écran capturé : la
+  sortie de l'UHD, 1920×1080 à 60 Hz.
+- Binaires figés de G3 (`b3d9aefb`), copiés dans `C:\Users\max\mw-d3d12`.
+  L'exécuteur tourne élevé, par une tâche planifiée dans la session console
+  de max (SSH arrive en session 0, sans écran) : classe GPU REALTIME, comme
+  le worker installé. Même liste fermée de clés que sur DualRTX.
+- HEVC 1080p60, 20 Mb/s, `governor=0`. Contenus dans Chrome en kiosque sur
+  l'écran capturé. Charge synthétique : `mw-gpu-load` au niveau 1,05, en
+  plein écran ; cet iGPU n'a pas de capteur de température, donc 60 s au
+  plus par lancement. Pas de vrai jeu (décision §9-4 du plan en attente).
+- Sorties dans `bench-out\d3d12v2\n95` : `g3` pour les passes et les A/B,
+  `g1` pour les sondes du labo, `replay` pour le rejeu.
+
+**Ce que l'UHD offre** (sonde `caps`, tests natifs).
+- D3D12 Video Encode en HEVC Main, Main 10 et H.264 ; pas d'AV1 en
+  encodage.
+- Pas de reconfiguration du débit (drapeaux 0x774d, comme l'Arc) : la chaîne
+  D3D12 y prend notre contrôle de débit, en CQP.
+- CTB de 64 : 1080 est codé en 1088, 1440 en 1472.
+- La surface DDA s'ouvre dans D3D12. Poignée de main au repos : 99 µs en
+  moyenne, 885 µs au p99 (7 et 18 µs sur l'Arc).
+- `GLOBAL_REALTIME` est refusé en jeton limité et accordé en REALTIME.
+- Tests natifs des groupes D3D12 sur le N95 : 622 vérifications, 0 échec
+  (négociation, device, interop DDA, conversion, encodeur sur le vrai
+  pilote).
+- ⚠️ La sonde `caps` du labo plante dans le pilote (`igd12dxva64.dll`,
+  violation d'accès), après la ligne `cbr+vbv+maxframe` de HEVC Main.
+  Première suspecte : la requête `absolute-qp-map`, que le N95 annonce et que
+  l'Arc refuse. Le produit ne fait pas cette requête. Pour trouver la ligne
+  exacte, il faut un labo qui vide sa sortie à chaque ligne.
+- Flux : 10 s de défilement enregistrées, décodées par ffmpeg sans erreur ;
+  image nette jusqu'en bas (1088 recadré en 1080).
+
+**Au repos : A/B D3D11 (oneVPL) contre D3D12, défilement, 4 tours
+alternés.**
+
+| | D3D11 | D3D12 |
+|---|---|---|
+| `host_total` moy. / p99 | 13,2 / 40,6 ms | 9,5 / 38,6 ms |
+| encodage moy. / p99 | 11,2 / 28,4 ms | 7,5 / 14,2 ms |
+| images capturées par seconde | 56,3 | 56,3 |
+| Ko par image | 39,6 | 30,2 |
+
+- Les critères de G2 sont tenus, sauf la « cadence du jeu ». Avec Chrome
+  comme contenu, ce compteur n'est pas une cadence d'affichage :
+  - D3D11 y compte 62,8 à 63,8 présentations par seconde, sur un écran à
+    60 Hz.
+  - Sa boucle, plus lente, replie plus de présentations par capture (65 à
+    103, contre 29 à 43), et le compte des présentations repliées déborde.
+  - Les deux chaînes capturent le même nombre d'images.
+- L'A/B sur écran fixe ne mesure rien : une seule capture par passe.
+
+**Sous charge 3D synthétique : 4 tours alternés de 15 s.**
+
+| | D3D11 | D3D12 |
+|---|---|---|
+| `host_total` moy. / p99 | 32,8 / 64,4 ms | 31,3 / 62,7 ms |
+| encodage moy. | 30,3 ms | 29,4 ms |
+| images capturées par seconde | 28,4 | 28,6 |
+| i/s de la charge | 30,5 | 30,9 |
+
+L'iGPU est saturé. Le temps d'encodage, qui compte aussi l'attente de la
+conversion dans les deux chaînes, passe de 7 à 29-30 ms. D3D12 garde un
+léger avantage (−1,4 ms en moyenne), loin des −45 à −52 % de l'Arc sous RE9.
+Les sondes ci-dessous disent où part le temps : dans la conversion, sur le
+moteur 3D, pas dans l'encodeur.
+
+**Sondes du labo (C1.4), jeton limité puis élevé** (`bench-out\d3d12v2\n95\g1`).
+Conversion 2560×1440 → 1920×1080 Lanczos-2 avec pointeur, 120 soumissions
+par seconde ; charge `mw-gpu-load` au niveau 1,05. Temps en ms, moyenne /
+p99.
+
+| sonde | repos, HIGH | repos, REALTIME | charge, HIGH | charge, REALTIME |
+|---|---|---|---|---|
+| conversion D3D11 | 11,3 / 12,8 | 12,3 / 15,3 | 169 / 337 | 18,9 / 38,5 |
+| conversion D3D12, PS sur DIRECT | 12,8 / 13,9 | 13,3 / 14,7 | 158 / 317 | 19,1 / 37,4 |
+| attente de la file D3D12 | 0,2 | 0,2 | 49 | 5,2 (10,3 en HIGH) |
+| VE seul | 5,7 / 8,1 | 5,7 / 8,5 | 5,5 / 13,6 | 4,6 / 11,1 |
+| VE après la conversion | 15,5 | 15,5 | 197 | 30,5 |
+
+- Le N95 ne tient pas 120 conversions par seconde de ce format (13 ms de GPU
+  chacune) : la sonde sature l'iGPU à elle seule. La charge, 47 i/s seule,
+  tombe à ~40 i/s face à la sonde en HIGH, et à 11-19 i/s en REALTIME, où la
+  conversion passe devant. Seules les comparaisons entre lignes comptent.
+- Comme sur DualRTX (§8n.2), c'est la classe qui décide. Sous charge, la
+  conversion passe de 160-345 ms en HIGH à ~19 ms en REALTIME. La file
+  `GLOBAL_REALTIME` attend deux fois moins que la file HIGH (5,2 contre
+  10,3 ms).
+- En REALTIME, la conversion D3D12 égale celle de D3D11 sous charge (19,1
+  contre 18,9 ms). Au repos, elle coûte 1 ms de plus sur ce format lourd.
+  COMPUTE n'apporte rien, comme sur l'Arc.
+- L'encodeur VE tourne sur le moteur vidéo : la charge 3D ne le ralentit
+  pas (4,6 à 5,7 ms). Ce qui attend le jeu, c'est la conversion, sur le
+  moteur 3D. D'où les 29 ms de l'A/B sous charge, et le « ×4 sous charge »
+  vu sur ce banc le 22/09.
+- La poignée de main DDA est propre au repos (`ddasync=gpu`, 0 lecture
+  fausse, 58 i/s). Sous charge, la fenêtre de la charge couvre la page de
+  bandes : rien de mesuré.
+- Bruno avait posé une condition pour mesurer le scaler matériel d'Intel
+  (SFC, sur le moteur vidéo) : « à revoir si le N95 montre une conversion
+  qui attend le jeu ». Elle est remplie → décision §9-15 du plan.
+
+**G3 : passes seules, en REALTIME.**
+
+| contenu | fenêtres à ±10 % | taille / budget : moy. / p95 | très au-dessus (> 2,5×) | `host_total` moy. / p99 (ms) |
+|---|---|---|---|---|
+| défilement | 0 / 9 (0,60 à 0,75) | 0,74 / 2,01 | 2 | 10,1 / 42,0 |
+| défilement, `reencode=0` | 4 / 9 (0,76 à 0,91) | 0,91 / 2,53 | 57 | 8,6 / 25,1 |
+| clip de jeu | 2 / 9 (0,85 à 0,92) | 0,93 / 1,29 | 0 | 8,4 / 34,9 |
+| `lose=45` | 0 / 5 (0,59 à 0,71) | 0,70 / 2,08 | 1 | 9,8 / 29,8 |
+| pause puis défilement | 0 / 5 (0,49 à 0,66) | 0,75 / 2,05 | 1 | 10,1 / 27,3 |
+| D3D11, défilement | 6 / 9 (0,76 à 0,97) | 0,97 / 1,43 | 0 | 13,8 / 46,5 |
+| D3D11, clip de jeu | 9 / 9 (0,93 à 0,98) | 1,00 / 1,23 | 0 | 11,7 / 31,0 |
+| D3D12 au débit du pilote, défilement | 0 / 9 (0,73 à 0,78) | 0,80 / 0,80 | 0 | 10,5 / 29,1 |
+
+- Rampe 20 ↔ 5 Mb/s : marches suivies en 3 images 7 fois sur 10, 4 images
+  très au-dessus. D3D11 : 5 sur 10, et 50 images très au-dessus.
+- Écran fixe : QP 45 → 18, puis des renvois de 9,8 Ko à QP 18.
+- Pause puis défilement : la première image après l'arrêt fait de 0,6 à
+  1,7 budget.
+- Le pilote a codé le QP demandé sur toutes les images. Aucun repli : les
+  21 passes D3D12 sont restées en D3D12.
+- Le N95 ne capture que 55 à 57 images sur 60. Même avec chaque image à son
+  budget, le fil ne porterait que 0,92 à 0,95 de la cible.
+
+**Pourquoi le texte reste loin sous la cible.**
+- Sur le N95, Chrome fait défiler la page par à-coups : il partage l'iGPU
+  avec la capture et l'encodage. À QP presque égal, les images vont de 1 à
+  160 Ko.
+  - 32 % des images font 4 fois plus, ou 4 fois moins, que la précédente.
+  - Sur l'Arc, c'est 19 %.
+  - En D3D11, c'est 2 % : le contrôle de débit du pilote connaît l'image
+    avant de la coder.
+- Les rafales dépassent 2,5 budgets. Sans ré-encodage, c'est le cas de 97
+  images sur 1 144 ; avec, 153 images sur 1 104 sont codées deux fois.
+- Le ré-encodage monte le QP à la pente du manuel, 6 QP par moitié. Or le
+  texte suit 2 à 2,5 QP par moitié : l'image recodée tombe vers un cinquième
+  de son budget, et ces bits ne se rattrapent jamais.
+- La même cause joue sur l'Arc, en plus petit. C'est une part du « déficit
+  structurel » du §8n.7. Le recul était déjà visible au §8n.6 avec
+  `reencode=1` : défilement 0,92 → 0,88, clip 1,04 → 0,97.
+
+**Rejeu en boucle fermée** (`bench-out\d3d12v2\n95\replay`, hors dépôt).
+- Même méthode qu'au §8n.7. Le rejeu reproduit les passes, image par image :
+  0,745 contre 0,74 mesuré avec le ré-encodage, 0,906 contre 0,91 sans.
+- Variante chiffrée :
+  - premier ré-encodage à la pente apprise, jamais sous 3, en visant 2
+    budgets (sous le seuil de 2,5) ;
+  - second essai à la règle d'aujourd'hui, seulement si l'image dépasse
+    encore 2,5 budgets.
+
+| passe rejouée | aujourd'hui | variante |
+|---|---|---|
+| N95, défilement | 0,745 ; 0 / 9 | 0,893 ; 7 / 9 |
+| Arc, défilement 60 i/s | 0,902 ; 4 / 9 | 0,922 ; 7 / 9 |
+| Arc, défilement 120 i/s | 0,900 ; 6 / 9 | 0,923 ; 7 / 9 |
+| clip de jeu, Arc et N95 | 0,934 et 0,922 | 0,936 et 0,929 |
+
+(Taille moyenne sur budget, et fenêtres de 2 s, comptées par image.)
+- Aucune image de plus au-delà de 2,5 budgets ; le p95 ne bouge pas (1,3 à
+  1,9). Un peu moins d'images recodées (N95 : 153 → 135).
+- Le second essai sert aux vraies nouvelles images, comme une page qui
+  change : leur taille suit la pente du manuel. On a injecté dans le rejeu
+  une nouvelle page par seconde, 8 fois l'image médiane.
+  - Sans second essai, elles montent jusqu'à 8,9 budgets sur le N95 et 10,3
+    sur l'Arc.
+  - Avec lui, elles gardent les mêmes bornes qu'aujourd'hui : 1,0 et 1,4
+    budget.
+- Coût :
+  - une image recodée part à 2 budgets au lieu de 0,2 à 1, donc un peu plus
+    de temps d'envoi sur ces images ;
+  - un troisième encodage sur les rares images qui dépassent encore.
+- → Décision §9-14 du plan.
+
+**Le débit du pilote Intel, en D3D12, donne des images de taille fixe.**
+- En CBR avec un VBV d'une image, le pilote du N95 remplit chaque image
+  prédite jusqu'à la même taille, quel que soit le contenu :
+  - des tranches de 33 269 octets, bourrées de `cabac_zero_words`, sans NAL
+    de remplissage ;
+  - soit 0,80 du budget.
+- C'est le « 0,80 / 0,80 » de l'Arc aux §8n.6 et §8n.7 : même pilote. Le
+  flux est valide (ffmpeg, image nette), mais il paie le débit sans rien
+  coder de plus.
+- Sous ce CBR, le pilote rapporte un `AverageQP` de 184, hors de la plage
+  HEVC. La télémétrie doit l'ignorer au-delà de 51 et lire la tranche
+  (correctif à venir). Ce chemin n'est pas celui du produit sur Intel.
+
+**Critères G3 sur le N95.**
+- Débit à ±10 % : non tenu.
+  - Sur du texte : 0 fenêtre sur 9, toutes sous la cible.
+  - Sur le clip : 2 sur 9 (0,85 à 0,92).
+  - Deux causes : le ré-encodage (corrigeable, §9-14), et les 5 à 8 %
+    d'images que le N95 ne capture pas.
+- p95 ≤ 2 × budget : tenu sur le clip (1,29), limite sur le texte (2,01 à
+  2,08).
+- Marches suivies en 3 images : 7 fois sur 10 (D3D11 : 5 sur 10).
+- Écran fixe à QP 18 : tenu.
+- Latence :
+  - meilleure que D3D11 au repos : 9,5 contre 13,2 ms en moyenne, avec un
+    encodage de 7,5 ms contre 11,2 ;
+  - à peine meilleure sous une charge 3D qui sature l'iGPU : 31,3 contre
+    32,8 ms.
+- Aucun repli, flux valide.
+
+**Reste.**
+- Le correctif du ré-encodage (§9-14), puis ses passes sur le N95 et l'Arc.
+- Le SFC sur le N95, si Bruno le retient (§9-15).
+- Le témoin RTX.
+- Le profil « Internet ».
+- Le test de Bruno.
 
 ## 9. Pour l'A/B
 
