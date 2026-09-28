@@ -180,4 +180,52 @@ bool hasExtension(const std::vector<std::string>& extensions, const char* name)
     return std::binary_search(extensions.begin(), extensions.end(), std::string(name));
 }
 
+bool DeviceFunctions::load(const Vulkan& vk, VkDevice device, bool video, std::string& missing)
+{
+#define MW_VK_LOAD_DEVICE(name)                                                                    \
+    name = reinterpret_cast<PFN_##name>(vk.vkGetDeviceProcAddr(device, #name));                    \
+    if (!name && missing.empty()) missing = #name;
+    MW_VK_DEVICE_FUNCTIONS(MW_VK_LOAD_DEVICE)
+    if (video) {
+        MW_VK_VIDEO_ENCODE_FUNCTIONS(MW_VK_LOAD_DEVICE)
+    }
+#undef MW_VK_LOAD_DEVICE
+    return missing.empty();
+}
+
+EncodeProfileChain::EncodeProfileChain(VkVideoCodecOperationFlagBitsKHR op, int stdProfile,
+                                       VkVideoComponentBitDepthFlagsKHR depth)
+{
+    usage.sType = VK_STRUCTURE_TYPE_VIDEO_ENCODE_USAGE_INFO_KHR;
+    usage.videoUsageHints = VK_VIDEO_ENCODE_USAGE_STREAMING_BIT_KHR;
+    usage.videoContentHints =
+        VK_VIDEO_ENCODE_CONTENT_DESKTOP_BIT_KHR | VK_VIDEO_ENCODE_CONTENT_RENDERED_BIT_KHR;
+    usage.tuningMode = VK_VIDEO_ENCODE_TUNING_MODE_ULTRA_LOW_LATENCY_KHR;
+    info.sType = VK_STRUCTURE_TYPE_VIDEO_PROFILE_INFO_KHR;
+    info.videoCodecOperation = op;
+    info.chromaSubsampling = VK_VIDEO_CHROMA_SUBSAMPLING_420_BIT_KHR;
+    info.lumaBitDepth = depth;
+    info.chromaBitDepth = depth;
+    switch (op) {
+    case VK_VIDEO_CODEC_OPERATION_ENCODE_H264_BIT_KHR:
+        h264.sType = VK_STRUCTURE_TYPE_VIDEO_ENCODE_H264_PROFILE_INFO_KHR;
+        h264.pNext = &usage;
+        h264.stdProfileIdc = static_cast<StdVideoH264ProfileIdc>(stdProfile);
+        info.pNext = &h264;
+        break;
+    case VK_VIDEO_CODEC_OPERATION_ENCODE_H265_BIT_KHR:
+        h265.sType = VK_STRUCTURE_TYPE_VIDEO_ENCODE_H265_PROFILE_INFO_KHR;
+        h265.pNext = &usage;
+        h265.stdProfileIdc = static_cast<StdVideoH265ProfileIdc>(stdProfile);
+        info.pNext = &h265;
+        break;
+    default:
+        av1.sType = VK_STRUCTURE_TYPE_VIDEO_ENCODE_AV1_PROFILE_INFO_KHR;
+        av1.pNext = &usage;
+        av1.stdProfile = static_cast<StdVideoAV1Profile>(stdProfile);
+        info.pNext = &av1;
+        break;
+    }
+}
+
 } // namespace lab

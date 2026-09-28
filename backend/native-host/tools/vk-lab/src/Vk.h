@@ -53,6 +53,7 @@ std::string vkFormatName(VkFormat format);
     X(vkDestroyInstance)                                                                           \
     X(vkEnumeratePhysicalDevices)                                                                  \
     X(vkGetPhysicalDeviceProperties2)                                                              \
+    X(vkGetPhysicalDeviceMemoryProperties)                                                         \
     X(vkEnumerateDeviceExtensionProperties)                                                        \
     X(vkGetPhysicalDeviceQueueFamilyProperties2)                                                   \
     X(vkGetPhysicalDeviceFormatProperties2)                                                        \
@@ -109,5 +110,93 @@ private:
 /// The device extensions @p device offers.
 std::vector<std::string> deviceExtensions(const Vulkan& vk, VkPhysicalDevice device);
 bool hasExtension(const std::vector<std::string>& extensions, const char* name);
+
+// A device's, core 1.3: what a probe that records and submits work calls.
+#define MW_VK_DEVICE_FUNCTIONS(X)                                                                  \
+    X(vkGetDeviceQueue)                                                                            \
+    X(vkDeviceWaitIdle)                                                                            \
+    X(vkCreateCommandPool)                                                                         \
+    X(vkDestroyCommandPool)                                                                        \
+    X(vkAllocateCommandBuffers)                                                                    \
+    X(vkResetCommandBuffer)                                                                        \
+    X(vkBeginCommandBuffer)                                                                        \
+    X(vkEndCommandBuffer)                                                                          \
+    X(vkQueueSubmit2)                                                                              \
+    X(vkCreateSemaphore)                                                                           \
+    X(vkDestroySemaphore)                                                                          \
+    X(vkWaitSemaphores)                                                                            \
+    X(vkCreateBuffer)                                                                              \
+    X(vkDestroyBuffer)                                                                             \
+    X(vkGetBufferMemoryRequirements)                                                               \
+    X(vkBindBufferMemory)                                                                          \
+    X(vkCreateImage)                                                                               \
+    X(vkDestroyImage)                                                                              \
+    X(vkGetImageMemoryRequirements)                                                                \
+    X(vkBindImageMemory)                                                                           \
+    X(vkCreateImageView)                                                                           \
+    X(vkDestroyImageView)                                                                          \
+    X(vkAllocateMemory)                                                                            \
+    X(vkFreeMemory)                                                                                \
+    X(vkMapMemory)                                                                                 \
+    X(vkUnmapMemory)                                                                               \
+    X(vkCmdPipelineBarrier2)                                                                       \
+    X(vkCmdCopyBufferToImage)                                                                      \
+    X(vkCreateQueryPool)                                                                           \
+    X(vkDestroyQueryPool)                                                                          \
+    X(vkGetQueryPoolResults)                                                                       \
+    X(vkCmdResetQueryPool)                                                                         \
+    X(vkCmdBeginQuery)                                                                             \
+    X(vkCmdEndQuery)                                                                               \
+    X(vkCmdWriteTimestamp2)
+
+// VK_KHR_video_queue and VK_KHR_video_encode_queue.
+#define MW_VK_VIDEO_ENCODE_FUNCTIONS(X)                                                            \
+    X(vkCreateVideoSessionKHR)                                                                     \
+    X(vkDestroyVideoSessionKHR)                                                                    \
+    X(vkGetVideoSessionMemoryRequirementsKHR)                                                      \
+    X(vkBindVideoSessionMemoryKHR)                                                                 \
+    X(vkCreateVideoSessionParametersKHR)                                                           \
+    X(vkDestroyVideoSessionParametersKHR)                                                          \
+    X(vkGetEncodedVideoSessionParametersKHR)                                                       \
+    X(vkCmdBeginVideoCodingKHR)                                                                    \
+    X(vkCmdEndVideoCodingKHR)                                                                      \
+    X(vkCmdControlVideoCodingKHR)                                                                  \
+    X(vkCmdEncodeVideoKHR)
+
+/// A device's functions, through vkGetDeviceProcAddr.
+struct DeviceFunctions
+{
+    MW_VK_DEVICE_FUNCTIONS(MW_VK_DECLARE)
+    MW_VK_VIDEO_ENCODE_FUNCTIONS(MW_VK_DECLARE)
+
+    /// Loads them for @p device, the video encode ones when @p video. False
+    /// with the first one missing in @p missing.
+    bool load(const Vulkan& vk, VkDevice device, bool video, std::string& missing);
+};
+
+/// @p s put at the head of the pNext chain @p head points to.
+template <typename T> void pushNext(void*& head, T& s)
+{
+    s.pNext = head;
+    head = &s;
+}
+
+/// A video encode profile as the queries and the session take it: the generic
+/// part, the codec's profile, and the usage — streaming a desktop or a game at
+/// ultra-low latency, which is what the engine will declare. Built in place:
+/// the structures point at each other.
+struct EncodeProfileChain
+{
+    VkVideoEncodeUsageInfoKHR usage = {};
+    VkVideoEncodeH264ProfileInfoKHR h264 = {};
+    VkVideoEncodeH265ProfileInfoKHR h265 = {};
+    VkVideoEncodeAV1ProfileInfoKHR av1 = {};
+    VkVideoProfileInfoKHR info = {};
+
+    EncodeProfileChain(VkVideoCodecOperationFlagBitsKHR op, int stdProfile,
+                       VkVideoComponentBitDepthFlagsKHR depth);
+    EncodeProfileChain(const EncodeProfileChain&) = delete;
+    EncodeProfileChain& operator=(const EncodeProfileChain&) = delete;
+};
 
 } // namespace lab

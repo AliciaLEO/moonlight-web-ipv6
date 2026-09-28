@@ -443,62 +443,6 @@ const Profile kProfiles[] = {
      VK_VIDEO_COMPONENT_BIT_DEPTH_10_BIT_KHR},
 };
 
-/// A video profile as the queries take it: the generic part, the codec's
-/// profile, and the usage — streaming a desktop or a game at ultra-low
-/// latency, which is what the engine will declare. Built in place: the
-/// structures point at each other.
-struct ProfileChain
-{
-    VkVideoEncodeUsageInfoKHR usage = {};
-    VkVideoEncodeH264ProfileInfoKHR h264 = {};
-    VkVideoEncodeH265ProfileInfoKHR h265 = {};
-    VkVideoEncodeAV1ProfileInfoKHR av1 = {};
-    VkVideoProfileInfoKHR info = {};
-
-    explicit ProfileChain(const Profile& p)
-    {
-        usage.sType = VK_STRUCTURE_TYPE_VIDEO_ENCODE_USAGE_INFO_KHR;
-        usage.videoUsageHints = VK_VIDEO_ENCODE_USAGE_STREAMING_BIT_KHR;
-        usage.videoContentHints =
-            VK_VIDEO_ENCODE_CONTENT_DESKTOP_BIT_KHR | VK_VIDEO_ENCODE_CONTENT_RENDERED_BIT_KHR;
-        usage.tuningMode = VK_VIDEO_ENCODE_TUNING_MODE_ULTRA_LOW_LATENCY_KHR;
-        info.sType = VK_STRUCTURE_TYPE_VIDEO_PROFILE_INFO_KHR;
-        info.videoCodecOperation = p.op;
-        info.chromaSubsampling = VK_VIDEO_CHROMA_SUBSAMPLING_420_BIT_KHR;
-        info.lumaBitDepth = p.depth;
-        info.chromaBitDepth = p.depth;
-        switch (p.op) {
-        case VK_VIDEO_CODEC_OPERATION_ENCODE_H264_BIT_KHR:
-            h264.sType = VK_STRUCTURE_TYPE_VIDEO_ENCODE_H264_PROFILE_INFO_KHR;
-            h264.pNext = &usage;
-            h264.stdProfileIdc = static_cast<StdVideoH264ProfileIdc>(p.stdProfile);
-            info.pNext = &h264;
-            break;
-        case VK_VIDEO_CODEC_OPERATION_ENCODE_H265_BIT_KHR:
-            h265.sType = VK_STRUCTURE_TYPE_VIDEO_ENCODE_H265_PROFILE_INFO_KHR;
-            h265.pNext = &usage;
-            h265.stdProfileIdc = static_cast<StdVideoH265ProfileIdc>(p.stdProfile);
-            info.pNext = &h265;
-            break;
-        default:
-            av1.sType = VK_STRUCTURE_TYPE_VIDEO_ENCODE_AV1_PROFILE_INFO_KHR;
-            av1.pNext = &usage;
-            av1.stdProfile = static_cast<StdVideoAV1Profile>(p.stdProfile);
-            info.pNext = &av1;
-            break;
-        }
-    }
-    ProfileChain(const ProfileChain&) = delete;
-    ProfileChain& operator=(const ProfileChain&) = delete;
-};
-
-/// Links @p s at the head of the chain @p head points to.
-template <typename T> void link(void*& head, T& s)
-{
-    s.pNext = head;
-    head = &s;
-}
-
 // ── What one device holds while it is probed ────────────────────────────────
 
 struct Device
@@ -544,15 +488,15 @@ std::vector<Family> queueFamilies(const Device& d)
         if (d.video()) {
             video[i] = {};
             video[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_VIDEO_PROPERTIES_KHR;
-            link(head, video[i]);
+            pushNext(head, video[i]);
             status[i] = {};
             status[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_QUERY_RESULT_STATUS_PROPERTIES_KHR;
-            link(head, status[i]);
+            pushNext(head, status[i]);
         }
         if (d.globalPriorityQuery()) {
             priorities[i] = {};
             priorities[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_GLOBAL_PRIORITY_PROPERTIES;
-            link(head, priorities[i]);
+            pushNext(head, priorities[i]);
         }
         props[i] = {};
         props[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
@@ -614,7 +558,7 @@ VkResult tryPriority(const Device& d, uint32_t family, const Family& f,
 
 // ── Encoders ────────────────────────────────────────────────────────────────
 
-void formatsFor(const Device& d, const ProfileChain& chain, VkImageUsageFlags usage,
+void formatsFor(const Device& d, const EncodeProfileChain& chain, VkImageUsageFlags usage,
                 const char* label, Json& j)
 {
     VkVideoProfileListInfoKHR list = {};
@@ -665,7 +609,7 @@ void formatsFor(const Device& d, const ProfileChain& chain, VkImageUsageFlags us
 
 /// Whether an input picture of @p format can be made with @p usage (and
 /// @p flags) for this profile: what the conversion's way of writing needs.
-VkResult inputImage(const Device& d, const ProfileChain& chain, VkFormat format,
+VkResult inputImage(const Device& d, const EncodeProfileChain& chain, VkFormat format,
                     VkImageUsageFlags usage, VkImageCreateFlags flags)
 {
     VkVideoProfileListInfoKHR list = {};
@@ -698,7 +642,7 @@ void encodeProfile(const Device& d, const Profile& p, Json& j)
         j.endObject();
         return;
     }
-    const ProfileChain chain(p);
+    const EncodeProfileChain chain(p.op, p.stdProfile, p.depth);
     const bool h264 = p.op == VK_VIDEO_CODEC_OPERATION_ENCODE_H264_BIT_KHR;
     const bool h265 = p.op == VK_VIDEO_CODEC_OPERATION_ENCODE_H265_BIT_KHR;
     const bool av1 = p.op == VK_VIDEO_CODEC_OPERATION_ENCODE_AV1_BIT_KHR;
@@ -725,16 +669,16 @@ void encodeProfile(const Device& d, const Profile& p, Json& j)
     caps.sType = VK_STRUCTURE_TYPE_VIDEO_CAPABILITIES_KHR;
 
     void* head = nullptr;
-    if (h264) link(head, c264);
-    if (h265) link(head, c265);
-    if (av1) link(head, cav1);
+    if (h264) pushNext(head, c264);
+    if (h265) pushNext(head, c265);
+    if (av1) pushNext(head, cav1);
     if (qpMapExt) {
-        link(head, qmap);
-        if (h264) link(head, qmap264);
-        if (h265) link(head, qmap265);
+        pushNext(head, qmap);
+        if (h264) pushNext(head, qmap264);
+        if (h265) pushNext(head, qmap265);
     }
-    if (intraRefreshExt) link(head, refresh);
-    link(head, enc);
+    if (intraRefreshExt) pushNext(head, refresh);
+    pushNext(head, enc);
     caps.pNext = head;
 
     const VkResult result = d.vk.vkGetPhysicalDeviceVideoCapabilitiesKHR(d.pd, &chain.info, &caps);
@@ -1317,9 +1261,9 @@ void probeDevice(const Vulkan& vk, VkPhysicalDevice pd, uint32_t index, const Op
     VkPhysicalDeviceProperties2 props = {};
     props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
     void* head = nullptr;
-    link(head, driver);
+    pushNext(head, driver);
     const bool hasDrm = d.has(VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME);
-    if (hasDrm) link(head, drm);
+    if (hasDrm) pushNext(head, drm);
     props.pNext = head;
     vk.vkGetPhysicalDeviceProperties2(pd, &props);
     const VkPhysicalDeviceProperties& p = props.properties;

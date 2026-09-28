@@ -21,6 +21,7 @@
 // of it enters the engine. See tools/vk-lab/CMakeLists.txt for the why.
 
 #include "Caps.h"
+#include "Encode.h"
 
 #include <cstdio>
 #include <string>
@@ -32,6 +33,7 @@ void usage()
     std::puts("mw-vk-lab <command> [options]\n"
               "  caps    what every Vulkan device answers (Vulkan Video encode, queues and\n"
               "          their priorities, timestamps, DMA-BUF import, KMS planes, sync_file)\n"
+              "  encode  Vulkan Video HEVC as the Linux chain would drive it\n"
               "Run a command with --help for its options.\n");
 }
 
@@ -54,6 +56,13 @@ int main(int argc, char** argv)
             return 0;
         }
         return lab::runCaps(argc - 2, argv + 2);
+    }
+    if (command == "encode") {
+        if (help) {
+            lab::encodeUsage();
+            return 0;
+        }
+        return lab::runEncode(argc - 2, argv + 2);
     }
     usage();
     return command == "--help" ? 0 : 2;

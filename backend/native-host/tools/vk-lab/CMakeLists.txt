@@ -32,13 +32,17 @@ add_executable(mw-vk-lab
     src/Lab.cpp
     src/Vk.cpp
     src/Caps.cpp
+    src/Encode.cpp
 )
 
 set_target_properties(mw-vk-lab PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
 target_compile_features(mw-vk-lab PRIVATE cxx_std_17)
-# tools/common holds what the labs share (the JSON writer).
+# tools/common holds what the labs share (the JSON writer); the engine's
+# sources give `encode` its header-only readers (HevcSliceParser), so that the
+# lab reads the driver's bytes the way the engine will.
 target_include_directories(mw-vk-lab PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
-                                             ${CMAKE_CURRENT_SOURCE_DIR}/../common)
+                                             ${CMAKE_CURRENT_SOURCE_DIR}/../common
+                                             ${CMAKE_CURRENT_SOURCE_DIR}/../../src)
 target_include_directories(mw-vk-lab SYSTEM PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/vulkan-headers/include
     ${MW_VK_LAB_DRM_INCLUDE_DIRS})
