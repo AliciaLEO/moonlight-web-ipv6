@@ -2933,6 +2933,100 @@ fabricant, sans rien changer à son réglage.
 **Reste pour G3** : le profil « Internet » sur un vrai stream (pertes, RTT,
 marches de bande passante, gouverneur actif), puis le test de Bruno.
 
+### 8n.22 G3 : le profil « Internet », sur un vrai stream (28/09/2026)
+
+Jusqu'ici, G3 s'est jugé au banc, sans récepteur (`governor=0`). Ici, un vrai
+client reçoit le stream à travers un lien dégradé. Le gouverneur agit, le
+relais jette ce que le lien ne vide pas, et le client demande ses
+réparations.
+
+**Montage.**
+- Hôte : l'édition MoonlightWebDev installée sur DualRTX (`f1e8e8e3`, celle
+  que Bruno teste), écran de l'Arc avec du texte qui défile en kiosque, HEVC
+  1080p60. Le client fixe 20 Mb/s.
+- Client : Chrome 154 sur l'UM790Pro (Ubuntu 24.04, décodage HEVC matériel
+  par VA-API), piloté par DevTools. Transport `webrtc-dc-udp` : le canal de
+  données SCTP. ICE a choisi une paire IPv6.
+- Lien : `tc netem` sur l'UM790Pro, appliqué à l'UDP des ports média de
+  l'hôte (48550-48573), en IPv4 comme en IPv6. Le lien descendant passe par
+  `ifb0` (débit, pertes, délai), le lien montant garde le même délai.
+  Profil :
+
+| phase | durée | lien descendant | pertes | aller-retour ajouté |
+|---|---|---|---|---|
+| LAN | 20 s | — | — | — |
+| Internet | 30 s | 30 Mb/s | 0,3 % | 40 ms |
+| étroit | 30 s | 8 Mb/s | 0,3 % | 40 ms |
+| large | 30 s | 30 Mb/s | 0,3 % | 40 ms |
+| pertes | 30 s | 30 Mb/s | 2 % | 40 ms |
+| Internet | 30 s | 30 Mb/s | 0,3 % | 40 ms |
+| LAN | 15 s | — | — | — |
+
+- Deux passes, même profil : D3D12 (le réglage de l'édition), puis D3D11
+  (réglage passé à `d3d11` le temps de la passe, puis remis). L'overlay est
+  relu chaque seconde. Sorties et outils dans `bench-out\d3d12v2\inet` (hors
+  dépôt).
+
+**Résultats** (médianes par phase : images/s, débit reçu, latence de bout en
+bout médiane / p90, `host_total`, file du lien médiane / max).
+
+| phase | D3D12 | D3D11 |
+|---|---|---|
+| LAN | 60 i/s, 18,0 Mb/s, 8,8 / 10,6 ms, hôte 3,9 ms, file 2 / 4 ms | 47 i/s, 16,4 Mb/s, 28,8 / 31,4 ms, hôte 23,9 ms, file 2 / 5 ms |
+| Internet | 60 i/s, 13,3 Mb/s, 95 / 538 ms, hôte 4,1 ms, file 21 / 364 ms | 47 i/s, 12,1 Mb/s, 162 / 613 ms, hôte 22,7 ms, file 23 / 522 ms |
+| étroit | 60 i/s, 9,4 Mb/s, 99 / 223 ms, hôte 4,1 ms, file 3 / 321 ms | 48 i/s, 8,6 Mb/s, 149 / 454 ms, hôte 22,5 ms, file 20 / 525 ms |
+| large | 60 i/s, 7,7 Mb/s, 31 / 126 ms, hôte 4,1 ms, file 1 / 113 ms | 48 i/s, 7,2 Mb/s, 239 / 625 ms, hôte 22,7 ms, file 8 / 565 ms |
+| pertes | 53 i/s, 6,7 Mb/s, 689 / 856 ms, hôte 4,0 ms, file 466 / 588 ms | 40 i/s, 6,4 Mb/s, 784 / 913 ms, hôte 22,7 ms, file 577 / 772 ms |
+| Internet | 60 i/s, 6,0 Mb/s, 191 / 524 ms, hôte 4,1 ms, file 2 / 627 ms | 48 i/s, 5,8 Mb/s, 132 / 738 ms, hôte 22,8 ms, file 10 / 675 ms |
+| LAN | 60 i/s, 5,8 Mb/s, 8,4 / 57 ms, hôte 4,1 ms | 48 i/s, 5,6 Mb/s, 30 / 146 ms, hôte 22,2 ms |
+| gels du lien (nombre · plus long) | 4 · 2,4 s | 9 · 2,4 s |
+| images perdues (réseau) | 1,42 % | 1,69 % |
+
+**Ce que disent les journaux de l'hôte.**
+- À l'arrivée des pertes (0,3 %, 40 ms d'aller-retour), la file SCTP monte
+  à 250 ms, le relais jette des deltas (« link not draining »), un gel de
+  2,4 s suit, et le gouverneur descend de 20 à 4 Mb/s en 4 à 5 s. Même chose
+  sur les deux chaînes.
+- Avec 0,3 % de pertes au hasard, le débit reste à 4-6 Mb/s, même quand le
+  lien offre 30 Mb/s. C'est le plafond d'un transport qui lit chaque perte
+  comme une congestion : la formule de Mathis donne 5,3 Mb/s pour 0,3 % de
+  pertes à 40 ms d'aller-retour. Le gouverneur ne remonte qu'une fois les
+  pertes finies. Au dernier LAN, D3D12 revient à 16,4 Mb/s en 25 s, D3D11 est
+  à 8,7 Mb/s à la fin de la passe.
+- D3D12 : plus de 100 pertes réparées par un delta (invalidation) ; 3
+  réparées par une image clé, là où la perte était plus ancienne que l'image
+  gardée. Notre débit : 11 730 images, QP 35,8 en moyenne, 1 328 recodées
+  (11 %, dont 44 deux fois), 46 très au-dessus (0,4 %), aucun écart de QP du
+  pilote. À 4 Mb/s, le budget par image n'est que de 8 Ko, et le texte qui
+  défile le dépasse souvent.
+- D3D11 : l'Arc ne tient pas 60 i/s dès le départ (« frames arrive at 48
+  fps »), l'encodage oneVPL montant à ~19 ms (la lenteur du §8n.7). Pendant
+  les pertes, le relais jette 5 images clés, que le lien ne vide pas, et une
+  invalidation refusée devient une image clé.
+
+**Lecture.**
+- Notre contrôle de débit suit le gouverneur dans un vrai stream, dans les
+  deux sens, et l'hôte reste à 4 ms dans toutes les phases. D3D12 fait mieux
+  que D3D11 partout : images/s, latence de l'hôte, gels (4 contre 9), et
+  latence de bout en bout médiane dans 6 phases sur 7.
+- Ce qui se sent par Internet est le transport. Dès 0,3 % de pertes, le
+  canal de données plafonne vers 5 Mb/s, sa file monte à 0,5-0,8 s pendant
+  les pertes, et l'arrivée des pertes coûte un gel de 2,4 s. D3D11 a les
+  mêmes, et D3D12 n'y change rien : c'est le plafond du canal de données
+  sous pertes, désormais mesuré, que le chantier du transport devra lever.
+
+**Critères G3, sur le vrai stream.**
+- Débit : suit le gouverneur, à la baisse (4 s) comme à la hausse.
+- Latence pas pire qu'en D3D11 : tenu, et de loin côté hôte.
+- Pas de pompage visible : reste le test de Bruno.
+
+**Pièges du montage**, pour qui le refait.
+- Un profil Chrome neuf, sous une session ouverte automatiquement, attend le
+  trousseau GNOME (verrouillé) pour ses cookies, et aucune page ne se charge.
+  Il faut lancer Chrome avec `--password-store=basic`.
+- ICE prend l'IPv6 s'il en trouve : un filtre sur l'IPv4 de l'hôte ne bride
+  rien. Le script compte les paquets passés par `netem` avant de mesurer.
+
 ## 8o. Linux : la chaîne Vulkan (28/09/2026 →)
 
 Phase 13 du plan D3D12 : la même forme de chaîne sous Linux, en Vulkan Video

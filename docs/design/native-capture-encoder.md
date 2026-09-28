@@ -5615,3 +5615,30 @@ contrôle s'y branche tel quel.
 **Concrètement, pour l'utilisateur** : rien ne change sur un PC NVIDIA. Ce
 banc confirme que la régulation qui fait tenir son débit aux PC Intel n'est
 pas un réglage propre à une carte.
+
+### 32.16 G3 : le profil « Internet » sur un vrai stream (28/09/2026)
+
+Un Chrome sous Linux a reçu l'écran de l'Arc à travers un lien dégradé :
+40 ms d'aller-retour, 0,3 puis 2 % de pertes, une marche de 30 à 8 Mb/s et
+retour (§8n.22 du banc). Le gouverneur, le relais et les réparations
+jouaient tous.
+
+**La chaîne D3D12 tient.** Notre contrôle de débit suit le gouverneur, de
+20 à 4 Mb/s en 4 s, puis vers le haut quand les pertes cessent. L'hôte reste
+à 4 ms dans toutes les phases, et les pertes se réparent par un delta. Sur le
+même profil, la chaîne D3D11 d'avant ne tient pas 60 i/s sur l'Arc, avec
+23 ms d'hôte, et gèle deux fois plus.
+
+**Le transport, lui, plafonne.** Le canal de données lit chaque perte comme
+une congestion. À 0,3 % de pertes et 40 ms d'aller-retour, il ne porte
+qu'environ 5 Mb/s, quelle que soit la capacité du lien. Sa file monte à
+0,5-0,8 s pendant les pertes, et leur arrivée coûte un gel de 2,4 s. C'est
+vrai pour les deux chaînes : aucun réglage de l'encodeur n'y touche. C'est la
+mesure qui manquait au chantier du transport sous pertes (plafond du canal de
+données, correction d'erreurs), prévu après celui-ci.
+
+**Concrètement, pour l'utilisateur** : sur un PC Intel, par Internet, le
+stream D3D12 reste fluide et réactif là où l'ancien chemin perdait des images.
+Sur une connexion qui perd des paquets, l'image reste plus sobre (vers
+5 Mb/s) et peut geler un instant quand les pertes commencent. C'est le
+prochain chantier, côté transport.
