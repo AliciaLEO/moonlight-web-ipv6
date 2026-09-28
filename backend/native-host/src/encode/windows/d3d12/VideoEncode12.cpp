@@ -45,6 +45,42 @@ constexpr int kGuardedPictures = 6;
 /// driver rounding an average, three are a driver that stopped listening.
 constexpr int kQpMisses = 3;
 
+/// Room in front of an AV1 tile for the headers written after the picture:
+/// a temporal delimiter (2 bytes), a sequence header (~20), OBU_FRAME's
+/// header and size and a frame header — ~100 bytes with eight segments'
+/// features, loop filter deltas and eight CDEF strengths.
+constexpr UINT64 kAv1HeaderRoom = 512;
+
+/// The resolved metadata's room for tiles or slices: one is asked for.
+constexpr UINT64 kMaxSubregions = 64;
+
+/// D3D12's index for a reference slot that holds nothing.
+constexpr UINT kUnusedSlot = 0xFF;
+
+/// The picture flags the AV1 configuration's features want on every picture:
+/// D3D12's validation refuses a required feature left off a picture — the
+/// RTX requires auto segmentation (28/09/2026). The frame header says the
+/// same (finishAv1).
+D3D12_VIDEO_ENCODER_AV1_PICTURE_CONTROL_FLAGS av1PictureFlags(uint32_t features)
+{
+    UINT f = D3D12_VIDEO_ENCODER_AV1_PICTURE_CONTROL_FLAG_NONE;
+    if (features & av1feature::kAutoSegmentation)
+        f |= D3D12_VIDEO_ENCODER_AV1_PICTURE_CONTROL_FLAG_ENABLE_FRAME_SEGMENTATION_AUTO;
+    if (features & av1feature::kWarpedMotion)
+        f |= D3D12_VIDEO_ENCODER_AV1_PICTURE_CONTROL_FLAG_ENABLE_WARPED_MOTION;
+    if (features & av1feature::kReducedTxSet)
+        f |= D3D12_VIDEO_ENCODER_AV1_PICTURE_CONTROL_FLAG_REDUCED_TX_SET;
+    if (features & av1feature::kMotionModeSwitchable)
+        f |= D3D12_VIDEO_ENCODER_AV1_PICTURE_CONTROL_FLAG_MOTION_MODE_SWITCHABLE;
+    if (features & av1feature::kHighPrecisionMv)
+        f |= D3D12_VIDEO_ENCODER_AV1_PICTURE_CONTROL_FLAG_ALLOW_HIGH_PRECISION_MV;
+    if (features & av1feature::kSkipMode)
+        f |= D3D12_VIDEO_ENCODER_AV1_PICTURE_CONTROL_FLAG_ENABLE_SKIP_MODE;
+    if (features & av1feature::kRefFrameMvs)
+        f |= D3D12_VIDEO_ENCODER_AV1_PICTURE_CONTROL_FLAG_FRAME_REFERENCE_MOTION_VECTORS;
+    return static_cast<D3D12_VIDEO_ENCODER_AV1_PICTURE_CONTROL_FLAGS>(f);
+}
+
 D3D12_RESOURCE_BARRIER transition(ID3D12Resource* resource, D3D12_RESOURCE_STATES before,
                                   D3D12_RESOURCE_STATES after,
                                   UINT subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES)
@@ -201,13 +237,16 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
                          const EncoderTuning& tuning, std::string& error)
 {
     stop();
-    if (codec != Codec::Hevc && codec != Codec::H264) {
-        error = std::string("D3D12 Video Encode does ") + toString(codec) +
-                " later: HEVC and H.264 only";
+    if (codec != Codec::Hevc && codec != Codec::H264 && codec != Codec::Av1) {
+        error = std::string("D3D12 Video Encode does not do ") + toString(codec);
         return false;
     }
     if (codec == Codec::H264 && hdr) {
         error = "H.264 goes out in 8 bits: no HDR";
+        return false;
+    }
+    if (codec == Codec::Av1 && tuning.rc12 == EncoderTuning::RateControl12::Qp) {
+        error = "rc12=qp: our rate control speaks HEVC's and H.264's QP, not AV1's qindex";
         return false;
     }
     if (!device || !device->device()) {
@@ -256,6 +295,42 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
         m_H264Level = caps.suggestedLevel();
         m_H264Config = VideoEncodeCapsH264::codecConfiguration(m_H264.cabac, m_H264.transform8x8);
         m_H264Gop = VideoEncodeCapsH264::gop();
+    } else if (codec == Codec::Av1) {
+        VideoEncodeCapsAv1 caps(m_Video.Get());
+        Av1EncodeRequest request;
+        request.width = static_cast<uint32_t>((std::max)(width, 0));
+        request.height = static_cast<uint32_t>((std::max)(height, 0));
+        request.fps = rate;
+        request.hdr = hdr;
+        request.intraRefresh = intraRefresh;
+        m_Av1 = negotiateAv1(request, caps);
+        if (!m_Av1.ok) {
+            error = "D3D12 Video Encode takes no AV1 " + std::to_string(width) + "x" +
+                    std::to_string(height) + " on " + device->name() + ": " + m_Av1.reason;
+            stop();
+            return false;
+        }
+        if (!m_Av1.support.rateReconfigurable)
+            log::warning("[native] D3D12 Video Encode on " + device->name() +
+                         " moves its AV1 bitrate only with a new sequence: the bitrate stays "
+                         "where it starts");
+        m_Setup.ok = true;
+        m_Setup.reason = m_Av1.reason;
+        m_Setup.rate = m_Av1.rate;
+        m_Setup.support = m_Av1.support;
+        m_Setup.codedWidth = m_Av1.codedWidth;
+        m_Setup.codedHeight = m_Av1.codedHeight;
+        m_Setup.dpbCapacity = 1;
+        m_Setup.intraRefreshFrames = m_Av1.intraRefreshFrames;
+        m_Setup.queries = m_Av1.queries;
+        m_Av1Profile = VideoEncodeCapsAv1::profile();
+        m_Av1Level.Level = static_cast<D3D12_VIDEO_ENCODER_AV1_LEVELS>(m_Av1.sequence.levelIdx);
+        m_Av1Level.Tier = D3D12_VIDEO_ENCODER_AV1_TIER_MAIN;
+        m_Av1Config =
+            VideoEncodeCapsAv1::codecConfiguration(m_Av1.features, m_Av1.sequence.orderHintBits);
+        m_Av1Sequence = VideoEncodeCapsAv1::sequence();
+        m_RenderWidth = request.width != m_Av1.codedWidth ? request.width : 0;
+        m_RenderHeight = request.height != m_Av1.codedHeight ? request.height : 0;
     } else {
         VideoEncodeCaps12 caps(m_Video.Get());
         HevcEncodeRequest request;
@@ -289,7 +364,8 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
                                             L"MoonlightWeb video encode");
     m_Format = hdr ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12;
     const uint32_t bitsPerSecond = static_cast<uint32_t>((std::max)(bitrateKbps, 1)) * 1000u;
-    m_Rate = std::make_unique<VideoEncodeCaps12::RateControl>(m_Setup.rate, m_Fps, bitsPerSecond);
+    m_Rate = std::make_unique<VideoEncodeCaps12::RateControl>(m_Setup.rate, m_Fps, bitsPerSecond,
+                                                              codec == Codec::Av1);
     if (m_OwnRate) {
         const double floor = tuning.interFloor12 > 0 ? -static_cast<double>(tuning.interFloor12)
                                                      : QpRateController::kNoInterFloor;
@@ -314,6 +390,17 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
         m_Headers.insert(m_Headers.end(), pps.begin(), pps.end());
         unread = parseH264Sps(sps.data(), sps.size(), m_H264Sps);
         if (unread.empty()) unread = parseH264Pps(pps.data(), pps.size(), m_H264Pps);
+    } else if (codec == Codec::Av1) {
+        // The sequence header, in front of every key frame.
+        m_Headers = av1::sequenceHeader(m_Av1.sequence);
+        const std::vector<av1::Obu> units = av1::obus(m_Headers.data(), m_Headers.size());
+        av1::Sequence back;
+        unread = units.size() == 1 && units[0].type == av1::ObuType::SequenceHeader
+                     ? av1::parseSequenceHeader(units[0].payload, units[0].size, back)
+                     : "not one sequence header OBU";
+        if (unread.empty() &&
+            (back.width != m_Av1.sequence.width || back.height != m_Av1.sequence.height))
+            unread = "the size read back differs";
     } else {
         for (const auto& unit :
              {paramsets::hevcVps(m_Setup.sequence), paramsets::hevcSps(m_Setup.sequence),
@@ -354,6 +441,15 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
         shape = "level " + h264LevelText(m_H264.sequence.levelIdc) + ", " +
                 (m_H264.cabac ? "CABAC" : "CAVLC") +
                 (m_H264.transform8x8 ? ", 8x8 transform" : "") + ", 1 picture kept";
+    } else if (codec == Codec::Av1) {
+        const av1::Sequence& q = m_Av1.sequence;
+        shape = "level " + std::to_string(2 + q.levelIdx / 4) + "." +
+                std::to_string(q.levelIdx % 4) + ", one tile" + (q.cdef ? ", CDEF" : "") +
+                (q.restoration ? ", loop restoration" : "") +
+                (q.orderHintBits ? ", order hints" : "") + ", features " + hex(m_Av1.features) +
+                ", values after the picture " + hex(m_Av1.postEncode) +
+                (m_Av1.interpolationFilter == 4 ? ", switchable filters" : "") +
+                ", 1 picture kept, first " + m_Av1Layout;
     } else {
         const HevcBlocks& b = m_Setup.blocks;
         shape = "level " + levelText(m_Setup.sequence.levelIdc) + ", blocks " +
@@ -365,9 +461,10 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
                 std::to_string(m_Dpb.reachFrames()) + " frames)";
     }
     log::info("[native] D3D12 Video Encode ready on " + device->name() + ": " +
-              (codec == Codec::H264 ? "H.264 High "
-               : hdr                ? "HEVC Main 10 (BT.2020 PQ) "
-                                    : "HEVC Main ") +
+              (codec == Codec::H264  ? "H.264 High "
+               : codec == Codec::Av1 ? (hdr ? "AV1 Main 10-bit (BT.2020 PQ) " : "AV1 Main ")
+               : hdr                 ? "HEVC Main 10 (BT.2020 PQ) "
+                                     : "HEVC Main ") +
               std::to_string(width) + "x" + std::to_string(height) + " coded " +
               std::to_string(m_Setup.codedWidth) + "x" + std::to_string(m_Setup.codedHeight) + "@" +
               std::to_string(m_Fps) + ", " + m_Setup.rate.describe() +
@@ -388,7 +485,11 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
 
 D3D12_VIDEO_ENCODER_CODEC VideoEncode12::d3d12Codec() const
 {
-    return m_Codec == Codec::H264 ? D3D12_VIDEO_ENCODER_CODEC_H264 : D3D12_VIDEO_ENCODER_CODEC_HEVC;
+    switch (m_Codec) {
+    case Codec::H264: return D3D12_VIDEO_ENCODER_CODEC_H264;
+    case Codec::Av1: return D3D12_VIDEO_ENCODER_CODEC_AV1;
+    default: return D3D12_VIDEO_ENCODER_CODEC_HEVC;
+    }
 }
 
 D3D12_VIDEO_ENCODER_PROFILE_DESC VideoEncode12::profileDesc()
@@ -397,6 +498,9 @@ D3D12_VIDEO_ENCODER_PROFILE_DESC VideoEncode12::profileDesc()
     if (m_Codec == Codec::H264) {
         d.DataSize = sizeof(m_H264Profile);
         d.pH264Profile = &m_H264Profile;
+    } else if (m_Codec == Codec::Av1) {
+        d.DataSize = sizeof(m_Av1Profile);
+        d.pAV1Profile = &m_Av1Profile;
     } else {
         d.DataSize = sizeof(m_Profile);
         d.pHEVCProfile = &m_Profile;
@@ -410,6 +514,9 @@ D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION VideoEncode12::configurationDesc()
     if (m_Codec == Codec::H264) {
         d.DataSize = sizeof(m_H264Config);
         d.pH264Config = &m_H264Config;
+    } else if (m_Codec == Codec::Av1) {
+        d.DataSize = sizeof(m_Av1Config);
+        d.pAV1Config = &m_Av1Config;
     } else {
         d.DataSize = sizeof(m_Config);
         d.pHEVCConfig = &m_Config;
@@ -423,6 +530,9 @@ D3D12_VIDEO_ENCODER_LEVEL_SETTING VideoEncode12::levelDesc()
     if (m_Codec == Codec::H264) {
         d.DataSize = sizeof(m_H264Level);
         d.pH264LevelSetting = &m_H264Level;
+    } else if (m_Codec == Codec::Av1) {
+        d.DataSize = sizeof(m_Av1Level);
+        d.pAV1LevelSetting = &m_Av1Level;
     } else {
         d.DataSize = sizeof(m_Level);
         d.pHEVCLevelSetting = &m_Level;
@@ -436,6 +546,9 @@ D3D12_VIDEO_ENCODER_SEQUENCE_GOP_STRUCTURE VideoEncode12::gopDesc()
     if (m_Codec == Codec::H264) {
         d.DataSize = sizeof(m_H264Gop);
         d.pH264GroupOfPictures = &m_H264Gop;
+    } else if (m_Codec == Codec::Av1) {
+        d.DataSize = sizeof(m_Av1Sequence);
+        d.pAV1SequenceStructure = &m_Av1Sequence;
     } else {
         d.DataSize = sizeof(m_Gop);
         d.pHEVCGroupOfPictures = &m_Gop;
@@ -522,23 +635,37 @@ bool VideoEncode12::createResources(std::string& error)
     // driver accepts. The parameter sets are written now, once, right in
     // front of that offset.
     const UINT64 alignment = std::max<UINT64>(1, req.CompressedBitstreamBufferAccessAlignment);
-    m_SliceOffset = (m_Headers.size() + alignment - 1) / alignment * alignment;
+    // AV1's tile is written at the buffer's start: the Arc writes its AV1 there
+    // whatever the frame start offset says (28/09/2026, where it honours the
+    // offset in HEVC and H.264), and the headers, written after the picture,
+    // move the tile along (finishAv1) — room for them at the buffer's end.
+    const UINT64 headerRoom = m_Codec == Codec::Av1 ? 0 : m_Headers.size();
+    m_SliceOffset = (headerRoom + alignment - 1) / alignment * alignment;
     // A raw 4:2:0 picture: 1.5 bytes a pixel, twice that in P010.
     const UINT64 raw = static_cast<UINT64>(res.Width) * res.Height * 3 / 2;
-    const UINT64 worst = raw * (m_Format == DXGI_FORMAT_P010 ? 2 : 1) + 65536;
+    const UINT64 worst = raw * (m_Format == DXGI_FORMAT_P010 ? 2 : 1) + 65536 +
+                         (m_Codec == Codec::Av1 ? kAv1HeaderRoom : 0);
     m_BitstreamSize = (m_SliceOffset + worst + 65535) / 65536 * 65536;
     m_Bitstream = systemBuffer(d, m_BitstreamSize);
     const UINT64 metadataSize = std::max<UINT64>(4096, req.MaxEncoderOutputMetadataBufferSize);
     m_HwMetadata = videoBuffer(d, metadataSize);
-    m_Metadata = systemBuffer(d, 4096);
+    // Resolved: the output metadata, one entry per tile or slice, and for AV1
+    // the tile layout and the frame header's values after them.
+    const UINT64 resolved =
+        sizeof(D3D12_VIDEO_ENCODER_OUTPUT_METADATA) +
+        kMaxSubregions * sizeof(D3D12_VIDEO_ENCODER_FRAME_SUBREGION_METADATA) +
+        sizeof(D3D12_VIDEO_ENCODER_AV1_PICTURE_CONTROL_SUBREGIONS_LAYOUT_DATA_TILES) +
+        sizeof(D3D12_VIDEO_ENCODER_AV1_POST_ENCODE_VALUES);
+    m_Metadata = systemBuffer(d, (resolved + 4095) / 4096 * 4096);
     if (!m_Bitstream || !m_HwMetadata || !m_Metadata ||
         FAILED(m_Bitstream->Map(0, nullptr, reinterpret_cast<void**>(&m_BitstreamCpu))) ||
         FAILED(m_Metadata->Map(0, nullptr, reinterpret_cast<void**>(&m_MetadataCpu)))) {
         error = "no system-memory buffers for the bitstream";
         return false;
     }
-    std::memcpy(m_BitstreamCpu + m_SliceOffset - m_Headers.size(), m_Headers.data(),
-                m_Headers.size());
+    if (m_Codec != Codec::Av1)
+        std::memcpy(m_BitstreamCpu + m_SliceOffset - m_Headers.size(), m_Headers.data(),
+                    m_Headers.size());
     return true;
 }
 
@@ -638,6 +765,43 @@ bool VideoEncode12::submit(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
         pic264.pReferenceFramesReconPictureDescriptors = h264Descriptors.data();
     }
 
+    // AV1: every frame refreshes the eight slots, so every slot holds the
+    // previous picture and the seven references all name slot 0. A key frame
+    // names none.
+    D3D12_VIDEO_ENCODER_AV1_PICTURE_CONTROL_CODEC_DATA picAv1 = {};
+    if (m_Codec == Codec::Av1) {
+        const int bits = m_Av1.sequence.orderHintBits;
+        const UINT hintMask = bits > 0 ? (1u << bits) - 1u : 0u;
+        picAv1.Flags = av1PictureFlags(m_Av1.features);
+        picAv1.FrameType = plan.idr ? D3D12_VIDEO_ENCODER_AV1_FRAME_TYPE_KEY_FRAME
+                                    : D3D12_VIDEO_ENCODER_AV1_FRAME_TYPE_INTER_FRAME;
+        picAv1.CompoundPredictionType =
+            D3D12_VIDEO_ENCODER_AV1_COMP_PREDICTION_TYPE_SINGLE_REFERENCE;
+        picAv1.InterpolationFilter =
+            static_cast<D3D12_VIDEO_ENCODER_AV1_INTERPOLATION_FILTERS>(m_Av1.interpolationFilter);
+        picAv1.TxMode = (plan.idr ? m_Av1.txSelectKey : m_Av1.txSelectInter)
+                            ? D3D12_VIDEO_ENCODER_AV1_TX_MODE_SELECT
+                            : D3D12_VIDEO_ENCODER_AV1_TX_MODE_LARGEST;
+        picAv1.SuperResDenominator = 8; // SUPERRES_NUM: no scaling
+        picAv1.OrderHint = plan.poc & hintMask;
+        picAv1.PictureIndex = plan.poc;
+        for (auto& d : picAv1.ReferenceFramesReconPictureDescriptors) {
+            d.ReconstructedPictureResourceIndex = kUnusedSlot;
+            if (plan.idr || plan.references.empty()) continue;
+            const HevcDpb::Reference& r = plan.references[0];
+            d.ReconstructedPictureResourceIndex = 0;
+            d.FrameType = r.poc == 0 ? D3D12_VIDEO_ENCODER_AV1_FRAME_TYPE_KEY_FRAME
+                                     : D3D12_VIDEO_ENCODER_AV1_FRAME_TYPE_INTER_FRAME;
+            d.OrderHint = r.poc & hintMask;
+            d.PictureIndex = r.poc;
+        }
+        picAv1.PrimaryRefFrame = plan.idr ? av1::kPrimaryRefNone : 0;
+        picAv1.RefreshFrameFlags = 0xFF;
+        // What a driver that gives nothing back codes with: the rate
+        // control's starting quantizer, and no filter of its own choosing.
+        picAv1.Quantization.BaseQIndex = m_Rate->cbr.InitialQP ? m_Rate->cbr.InitialQP : 150;
+    }
+
     D3D12_VIDEO_ENCODER_ENCODEFRAME_INPUT_ARGUMENTS in = {};
     in.SequenceControlDesc.Flags =
         m_RateChanged ? D3D12_VIDEO_ENCODER_SEQUENCE_CONTROL_FLAG_RATE_CONTROL_CHANGE
@@ -658,6 +822,9 @@ bool VideoEncode12::submit(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
     if (m_Codec == Codec::H264) {
         in.PictureControlDesc.PictureControlCodecData.DataSize = sizeof(pic264);
         in.PictureControlDesc.PictureControlCodecData.pH264PicData = &pic264;
+    } else if (m_Codec == Codec::Av1) {
+        in.PictureControlDesc.PictureControlCodecData.DataSize = sizeof(picAv1);
+        in.PictureControlDesc.PictureControlCodecData.pAV1PicData = &picAv1;
     } else {
         in.PictureControlDesc.PictureControlCodecData.DataSize = sizeof(pic);
         in.PictureControlDesc.PictureControlCodecData.pHEVCPicData = &pic;
@@ -784,6 +951,23 @@ bool VideoEncode12::encode(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
             ++m_ReencodedTwice;
         }
     }
+    if (m_Codec == Codec::Av1) {
+        // The headers ours, the tile the driver's: written in front of it.
+        const uint8_t* data = nullptr;
+        size_t size = 0;
+        if (!finishAv1(plan, data, size, error)) return false;
+        if (m_GuardLeft > 0) --m_GuardLeft;
+        m_DriverQp = m_Av1Frame.q.baseQIdx;
+        m_Dpb.encoded(plan);
+        m_RateChanged = false;
+        ++m_IntraRefreshIndex;
+        out.data = data;
+        out.size = size;
+        out.keyframe = plan.idr;
+        out.avgQp = m_DriverQp; // the qindex, as NVENC's AV1 says it
+        m_OutputHeld = true;
+        return true;
+    }
     const auto* metadata =
         reinterpret_cast<const D3D12_VIDEO_ENCODER_OUTPUT_METADATA*>(m_MetadataCpu);
     const uint8_t* slices = m_BitstreamCpu + m_SliceOffset;
@@ -897,8 +1081,14 @@ bool VideoEncode12::warmUp(std::string& error)
     // Not recorded in the DPB: the first real picture is an IDR all the same.
     const HevcDpb::Plan plan = m_Dpb.plan(0, true);
     uint64_t bytes = 0;
-    return submit(blank.Get(), nullptr, 0, plan, error) && written(bytes, error) &&
-           guard(m_BitstreamCpu + m_SliceOffset, static_cast<size_t>(bytes), plan, error);
+    if (!submit(blank.Get(), nullptr, 0, plan, error) || !written(bytes, error)) return false;
+    if (m_Codec == Codec::Av1) {
+        // No slice header of the driver's to read: its values, checked.
+        const uint8_t* data = nullptr;
+        size_t size = 0;
+        return finishAv1(plan, data, size, error);
+    }
+    return guard(m_BitstreamCpu + m_SliceOffset, static_cast<size_t>(bytes), plan, error);
 }
 
 bool VideoEncode12::guard(const uint8_t* data, size_t size, const HevcDpb::Plan& plan,
@@ -992,6 +1182,165 @@ bool VideoEncode12::guardH264(const uint8_t* data, size_t size, const HevcDpb::P
     return true;
 }
 
+bool VideoEncode12::finishAv1(const HevcDpb::Plan& plan, const uint8_t*& data, size_t& size,
+                              std::string& error)
+{
+    // The resolved metadata: the output metadata, one entry per tile, the
+    // tile layout, then the frame header's values (D3D12's order).
+    const auto* md = reinterpret_cast<const D3D12_VIDEO_ENCODER_OUTPUT_METADATA*>(m_MetadataCpu);
+    if (md->WrittenSubregionsCount != 1) {
+        error = "the driver wrote " + std::to_string(md->WrittenSubregionsCount) +
+                " tiles where one was asked";
+        return false;
+    }
+    const auto* tile =
+        reinterpret_cast<const D3D12_VIDEO_ENCODER_FRAME_SUBREGION_METADATA*>(md + 1);
+    const auto* layout = reinterpret_cast<
+        const D3D12_VIDEO_ENCODER_AV1_PICTURE_CONTROL_SUBREGIONS_LAYOUT_DATA_TILES*>(tile + 1);
+    const auto* v = reinterpret_cast<const D3D12_VIDEO_ENCODER_AV1_POST_ENCODE_VALUES*>(layout + 1);
+    // A tile's size counts its start offset (the drivers' and Mesa's reading).
+    const uint64_t start = tile->bStartOffset;
+    if (tile->bSize <= start || tile->bSize + kAv1HeaderRoom > m_BitstreamSize) {
+        error = "the driver's tile runs from " + std::to_string(start) + " to " +
+                std::to_string(tile->bSize);
+        return false;
+    }
+    const uint64_t tileBytes = tile->bSize - start;
+    if (m_Av1Layout.empty()) {
+        m_Av1Layout = "tile from " + std::to_string(start) + " to " + std::to_string(tile->bSize) +
+                      " (header " + std::to_string(tile->bHeaderSize) + "), layout " +
+                      std::to_string(layout->RowCount) + "x" + std::to_string(layout->ColCount) +
+                      " context " + std::to_string(layout->ContextUpdateTileId) +
+                      ", the driver says " + std::to_string(md->EncodedBitstreamWrittenBytesCount) +
+                      " bytes written:";
+        const uint8_t* at = m_BitstreamCpu + m_SliceOffset;
+        for (int i = 0; i < 12; ++i) {
+            char b[4];
+            std::snprintf(b, sizeof(b), " %02x", at[i]);
+            m_Av1Layout += b;
+        }
+    }
+
+    // The frame header: our choices, and what the driver says it chose.
+    const auto inRange = [](int64_t value, int64_t low, int64_t high) {
+        return value >= low && value <= high;
+    };
+    const auto& q = v->Quantization;
+    const auto& lf = v->LoopFilter;
+    const auto& cd = v->CDEF;
+    const auto& seg = v->SegmentationConfig;
+    bool sane = q.BaseQIndex <= 255 && inRange(q.YDCDeltaQ, -64, 63) &&
+                inRange(q.UDCDeltaQ, -64, 63) && inRange(q.UACDeltaQ, -64, 63) &&
+                inRange(q.VDCDeltaQ, -64, 63) && inRange(q.VACDeltaQ, -64, 63) && q.QMY <= 15 &&
+                q.QMU <= 15 && q.QMV <= 15 && lf.LoopFilterLevel[0] <= 63 &&
+                lf.LoopFilterLevel[1] <= 63 && lf.LoopFilterLevelU <= 63 &&
+                lf.LoopFilterLevelV <= 63 && lf.LoopFilterSharpnessLevel <= 7 && cd.CdefBits <= 3 &&
+                cd.CdefDampingMinus3 <= 3 && v->QuantizationDelta.DeltaQRes <= 3 &&
+                v->LoopFilterDelta.DeltaLFRes <= 3 && v->PrimaryRefFrame <= 7 &&
+                seg.NumSegments <= av1::kMaxSegments;
+    for (int i = 0; i < 8 && sane; ++i)
+        sane = inRange(lf.RefDeltas[i], -64, 63) && cd.CdefYPriStrength[i] <= 15 &&
+               cd.CdefYSecStrength[i] <= 3 && cd.CdefUVPriStrength[i] <= 15 &&
+               cd.CdefUVSecStrength[i] <= 3;
+    sane = sane && inRange(lf.ModeDeltas[0], -64, 63) && inRange(lf.ModeDeltas[1], -64, 63);
+    if (!sane) {
+        error = "the driver's frame header values are out of AV1's ranges (base_q_idx " +
+                std::to_string(q.BaseQIndex) + ")";
+        return false;
+    }
+
+    const int bits = m_Av1.sequence.orderHintBits;
+    const uint32_t hintMask = bits > 0 ? (1u << bits) - 1u : 0u;
+    av1::Frame f;
+    f.key = plan.idr;
+    f.orderHint = plan.poc & hintMask;
+    f.refreshFrameFlags = 0xFF;
+    if (!plan.idr) {
+        const uint32_t previous = plan.references.empty() ? 0 : plan.references[0].poc & hintMask;
+        f.refOrderHint.fill(previous);
+        for (int i = 0; i < av1::kRefsPerFrame; ++i)
+            f.refFrameIdx[static_cast<size_t>(i)] = v->ReferenceIndices[i] < av1::kNumRefFrames
+                                                        ? static_cast<int>(v->ReferenceIndices[i])
+                                                        : 0;
+        f.primaryRefFrame = static_cast<int>(v->PrimaryRefFrame);
+    }
+    f.renderWidth = m_RenderWidth;
+    f.renderHeight = m_RenderHeight;
+    f.interpolationFilter = m_Av1.interpolationFilter;
+    f.q.baseQIdx = static_cast<int>(q.BaseQIndex);
+    f.q.deltaQYDc = static_cast<int>(q.YDCDeltaQ);
+    f.q.deltaQUDc = static_cast<int>(q.UDCDeltaQ);
+    f.q.deltaQUAc = static_cast<int>(q.UACDeltaQ);
+    f.q.deltaQVDc = static_cast<int>(q.VDCDeltaQ);
+    f.q.deltaQVAc = static_cast<int>(q.VACDeltaQ);
+    f.q.usingQmatrix = q.UsingQMatrix != 0;
+    f.q.qmY = static_cast<int>(q.QMY);
+    f.q.qmU = static_cast<int>(q.QMU);
+    f.q.qmV = static_cast<int>(q.QMV);
+    f.seg.enabled = seg.NumSegments > 0;
+    if (f.seg.enabled) {
+        f.seg.updateMap = seg.UpdateMap != 0;
+        f.seg.temporalUpdate = seg.TemporalUpdate != 0;
+        f.seg.updateData = seg.UpdateData != 0;
+        for (size_t i = 0; i < av1::kMaxSegments; ++i) {
+            f.seg.features[i] = static_cast<uint32_t>(seg.SegmentsData[i].EnabledFeatures);
+            for (size_t j = 0; j < av1::kSegLvlMax; ++j)
+                f.seg.values[i][j] = static_cast<int>(seg.SegmentsData[i].FeatureValue[j]);
+        }
+    }
+    f.deltaQPresent = v->QuantizationDelta.DeltaQPresent != 0;
+    f.deltaQRes = static_cast<int>(v->QuantizationDelta.DeltaQRes);
+    f.deltaLfPresent = v->LoopFilterDelta.DeltaLFPresent != 0;
+    f.deltaLfRes = static_cast<int>(v->LoopFilterDelta.DeltaLFRes);
+    f.deltaLfMulti = v->LoopFilterDelta.DeltaLFMulti != 0;
+    f.lf.level = {static_cast<int>(lf.LoopFilterLevel[0]), static_cast<int>(lf.LoopFilterLevel[1]),
+                  static_cast<int>(lf.LoopFilterLevelU), static_cast<int>(lf.LoopFilterLevelV)};
+    f.lf.sharpness = static_cast<int>(lf.LoopFilterSharpnessLevel);
+    f.lf.deltaEnabled = lf.LoopFilterDeltaEnabled != 0;
+    f.lf.updateRefDelta = lf.UpdateRefDelta != 0;
+    f.lf.updateModeDelta = lf.UpdateModeDelta != 0;
+    for (size_t i = 0; i < av1::kNumRefFrames; ++i)
+        f.lf.refDeltas[i] = static_cast<int>(lf.RefDeltas[i]);
+    f.lf.modeDeltas = {static_cast<int>(lf.ModeDeltas[0]), static_cast<int>(lf.ModeDeltas[1])};
+    f.cdef.dampingMinus3 = static_cast<int>(cd.CdefDampingMinus3);
+    f.cdef.bits = static_cast<int>(cd.CdefBits);
+    for (size_t i = 0; i < 8; ++i) {
+        f.cdef.yPri[i] = static_cast<int>(cd.CdefYPriStrength[i]);
+        f.cdef.ySec[i] = static_cast<int>(cd.CdefYSecStrength[i]);
+        f.cdef.uvPri[i] = static_cast<int>(cd.CdefUVPriStrength[i]);
+        f.cdef.uvSec[i] = static_cast<int>(cd.CdefUVSecStrength[i]);
+    }
+    f.txModeSelect = plan.idr ? m_Av1.txSelectKey : m_Av1.txSelectInter;
+    f.referenceSelect = !plan.idr && v->CompoundPredictionType != 0;
+    // The tools a required feature switched on for the picture (av1PictureFlags).
+    const uint32_t features = m_Av1.features;
+    f.allowWarpedMotion = !plan.idr && (features & av1feature::kWarpedMotion);
+    f.reducedTxSet = (features & av1feature::kReducedTxSet) != 0;
+    f.motionModeSwitchable = !plan.idr && (features & av1feature::kMotionModeSwitchable);
+    f.allowHighPrecisionMv = !plan.idr && (features & av1feature::kHighPrecisionMv);
+    f.skipModePresent = (features & av1feature::kSkipMode) != 0;
+    f.useRefFrameMvs = !plan.idr && (features & av1feature::kRefFrameMvs);
+
+    // In front of the tile: the temporal delimiter, the sequence header on a
+    // key frame, OBU_FRAME's header — one run with the tile, which moves up
+    // to make room (tens of kilobytes: microseconds).
+    std::vector<uint8_t> prefix = av1::temporalDelimiter();
+    if (plan.idr) prefix.insert(prefix.end(), m_Headers.begin(), m_Headers.end());
+    const std::vector<uint8_t> frame = av1::frameObuPrefix(m_Av1.sequence, f, tileBytes);
+    prefix.insert(prefix.end(), frame.begin(), frame.end());
+    if (prefix.size() > kAv1HeaderRoom) {
+        error = "the AV1 headers (" + std::to_string(prefix.size()) + " bytes) outgrow their room";
+        return false;
+    }
+    uint8_t* base = m_BitstreamCpu + m_SliceOffset;
+    std::memmove(base + prefix.size(), base + start, static_cast<size_t>(tileBytes));
+    std::memcpy(base, prefix.data(), prefix.size());
+    data = base;
+    size = prefix.size() + static_cast<size_t>(tileBytes);
+    m_Av1Frame = f;
+    return true;
+}
+
 bool VideoEncode12::invalidateReference(uint32_t frameNumber, std::string& error)
 {
     if (!m_Encoder) {
@@ -1069,6 +1418,11 @@ void VideoEncode12::stop()
     m_Headers.clear();
     m_Setup = HevcEncodeSetup();
     m_H264 = H264EncodeSetup();
+    m_Av1 = Av1EncodeSetup();
+    m_Av1Frame = av1::Frame();
+    m_Av1Layout.clear();
+    m_RenderWidth = 0;
+    m_RenderHeight = 0;
     m_Codec = Codec::Hevc;
     m_IdrPicId = 0;
     m_GuardLeft = 0;

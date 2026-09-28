@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include "encode/Av1EncodeNegotiation.h"
 #include "encode/H264EncodeNegotiation.h"
 #include "encode/HevcEncodeNegotiation.h"
 
@@ -51,6 +52,8 @@ public:
 
     /// The rate control of @p rate at @p fps, at a nominal bitrate (the answer
     /// does not depend on it): the structures D3D12 points to, kept together.
+    /// AV1's quantizer is a qindex, 0 to 255, where H.264's and HEVC's QP runs
+    /// to 51: @p av1 puts the same bounds on that scale.
     struct RateControl
     {
         D3D12_VIDEO_ENCODER_RATE_CONTROL desc = {};
@@ -59,7 +62,7 @@ public:
         D3D12_VIDEO_ENCODER_RATE_CONTROL_CQP cqp = {};
         D3D12_VIDEO_ENCODER_RATE_CONTROL_CQP1 cqp1 = {};
 
-        RateControl(const HevcRate& rate, int fps, uint32_t bitsPerSecond);
+        RateControl(const HevcRate& rate, int fps, uint32_t bitsPerSecond, bool av1 = false);
         RateControl(const RateControl&) = delete;
         RateControl& operator=(const RateControl&) = delete;
 
@@ -107,6 +110,31 @@ public:
 private:
     Microsoft::WRL::ComPtr<ID3D12VideoDevice3> m_Video;
     D3D12_VIDEO_ENCODER_LEVELS_H264 m_Level = D3D12_VIDEO_ENCODER_LEVELS_H264_51;
+};
+
+/// The questions Av1EncodeNegotiation asks, put to a D3D12 video device
+/// (plan C9.2). The support answer's suggested level is seq_level_idx, which
+/// D3D12's enumeration is.
+class VideoEncodeCapsAv1 : public Av1DriverQueries
+{
+public:
+    explicit VideoEncodeCapsAv1(ID3D12VideoDevice3* video);
+
+    Av1DriverLimits limits(bool tenBit) override;
+    Av1ConfigAnswer configuration() override;
+    HevcSupportAnswer support(const Av1SupportQuestion& question) override;
+
+    static D3D12_VIDEO_ENCODER_AV1_PROFILE profile()
+    {
+        return D3D12_VIDEO_ENCODER_AV1_PROFILE_MAIN;
+    }
+    static D3D12_VIDEO_ENCODER_AV1_CODEC_CONFIGURATION codecConfiguration(uint32_t features,
+                                                                          int orderHintBits);
+    /// Key frames on demand, no B frames.
+    static D3D12_VIDEO_ENCODER_AV1_SEQUENCE_STRUCTURE sequence() { return {0, 1}; }
+
+private:
+    Microsoft::WRL::ComPtr<ID3D12VideoDevice3> m_Video;
 };
 
 } // namespace mw::native::encode

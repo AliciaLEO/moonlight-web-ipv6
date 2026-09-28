@@ -76,16 +76,20 @@ int VideoEncodeCaps12::levelIdc(D3D12_VIDEO_ENCODER_LEVELS_HEVC level)
     return i >= 0 && i < 13 ? kIdc[i] : 0;
 }
 
-VideoEncodeCaps12::RateControl::RateControl(const HevcRate& rate, int fps, uint32_t bitsPerSecond)
+VideoEncodeCaps12::RateControl::RateControl(const HevcRate& rate, int fps, uint32_t bitsPerSecond,
+                                            bool av1)
 {
+    // The engine's QP floor: below 18 a still picture spends bits on noise
+    // the eye cannot see. In AV1's qindex, the same points: QP × 255 / 51.
+    const UINT initial = av1 ? 150 : 30;
+    const UINT floor = av1 ? 90 : 18;
+    const UINT ceiling = av1 ? 255 : 51;
     desc.TargetFrameRate = {static_cast<UINT>(fps > 0 ? fps : 60), 1};
     if (rate.mode == HevcRate::Mode::Cbr) {
         desc.Mode = D3D12_VIDEO_ENCODER_RATE_CONTROL_MODE_CBR;
-        // The engine's QP floor: below 18 a still picture spends bits on
-        // noise the eye cannot see.
-        cbr.InitialQP = 30;
-        cbr.MinQP = 18;
-        cbr.MaxQP = 51;
+        cbr.InitialQP = initial;
+        cbr.MinQP = floor;
+        cbr.MaxQP = ceiling;
         cbr1.InitialQP = cbr.InitialQP;
         cbr1.MinQP = cbr.MinQP;
         cbr1.MaxQP = cbr.MaxQP;
@@ -100,10 +104,10 @@ VideoEncodeCaps12::RateControl::RateControl(const HevcRate& rate, int fps, uint3
         }
     } else {
         desc.Mode = D3D12_VIDEO_ENCODER_RATE_CONTROL_MODE_CQP;
-        cqp = {30, 30, 30};
-        cqp1.ConstantQP_FullIntracodedFrame = 30;
-        cqp1.ConstantQP_InterPredictedFrame_PrevRefOnly = 30;
-        cqp1.ConstantQP_InterPredictedFrame_BiDirectionalRef = 30;
+        cqp = {initial, initial, initial};
+        cqp1.ConstantQP_FullIntracodedFrame = initial;
+        cqp1.ConstantQP_InterPredictedFrame_PrevRefOnly = initial;
+        cqp1.ConstantQP_InterPredictedFrame_BiDirectionalRef = initial;
         cqp1.QualityVsSpeed = 0;
         if (rate.qualityVsSpeed) {
             desc.ConfigParams.DataSize = sizeof(cqp1);
@@ -468,6 +472,166 @@ HevcSupportAnswer VideoEncodeCapsH264::support(const H264SupportQuestion& q)
     a.maxIntraRefreshFrames = limits.MaxIntraRefreshFrameDuration;
     a.maxQualityVsSpeed = s.MaxQualityVsSpeed;
     m_Level = suggestedLevel;
+    return a;
+}
+
+// ── AV1 ─────────────────────────────────────────────────────────────────────
+
+namespace {
+
+D3D12_VIDEO_ENCODER_PROFILE_DESC profileDesc(D3D12_VIDEO_ENCODER_AV1_PROFILE& profile)
+{
+    D3D12_VIDEO_ENCODER_PROFILE_DESC d = {};
+    d.DataSize = sizeof(profile);
+    d.pAV1Profile = &profile;
+    return d;
+}
+
+} // namespace
+
+VideoEncodeCapsAv1::VideoEncodeCapsAv1(ID3D12VideoDevice3* video)
+    : m_Video(video)
+{}
+
+D3D12_VIDEO_ENCODER_AV1_CODEC_CONFIGURATION
+VideoEncodeCapsAv1::codecConfiguration(uint32_t features, int orderHintBits)
+{
+    D3D12_VIDEO_ENCODER_AV1_CODEC_CONFIGURATION c = {};
+    c.FeatureFlags = static_cast<D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAGS>(features);
+    c.OrderHintBitsMinus1 = static_cast<UINT>(orderHintBits > 0 ? orderHintBits - 1 : 7);
+    return c;
+}
+
+Av1DriverLimits VideoEncodeCapsAv1::limits(bool tenBit)
+{
+    Av1DriverLimits l;
+    if (!m_Video) return l;
+    D3D12_FEATURE_DATA_VIDEO_ENCODER_OUTPUT_RESOLUTION_RATIOS_COUNT count = {};
+    count.Codec = D3D12_VIDEO_ENCODER_CODEC_AV1;
+    feature(m_Video.Get(), D3D12_FEATURE_VIDEO_ENCODER_OUTPUT_RESOLUTION_RATIOS_COUNT, count);
+    std::vector<D3D12_VIDEO_ENCODER_PICTURE_RESOLUTION_RATIO_DESC> ratios(
+        count.ResolutionRatiosCount ? count.ResolutionRatiosCount : 1);
+    D3D12_FEATURE_DATA_VIDEO_ENCODER_OUTPUT_RESOLUTION res = {};
+    res.Codec = D3D12_VIDEO_ENCODER_CODEC_AV1;
+    res.ResolutionRatiosCount = count.ResolutionRatiosCount;
+    res.pResolutionRatios = count.ResolutionRatiosCount ? ratios.data() : nullptr;
+    if (feature(m_Video.Get(), D3D12_FEATURE_VIDEO_ENCODER_OUTPUT_RESOLUTION, res) &&
+        res.IsSupported != 0) {
+        l.minWidth = res.MinResolutionSupported.Width;
+        l.minHeight = res.MinResolutionSupported.Height;
+        l.maxWidth = res.MaxResolutionSupported.Width;
+        l.maxHeight = res.MaxResolutionSupported.Height;
+        l.widthMultiple = res.ResolutionWidthMultipleRequirement;
+        l.heightMultiple = res.ResolutionHeightMultipleRequirement;
+    }
+    D3D12_VIDEO_ENCODER_AV1_PROFILE main = profile();
+    D3D12_FEATURE_DATA_VIDEO_ENCODER_INPUT_FORMAT input = {};
+    input.Codec = D3D12_VIDEO_ENCODER_CODEC_AV1;
+    input.Profile = profileDesc(main);
+    input.Format = DXGI_FORMAT_P010;
+    l.tenBit = feature(m_Video.Get(), D3D12_FEATURE_VIDEO_ENCODER_INPUT_FORMAT, input) &&
+               input.IsSupported != 0;
+    (void)tenBit;
+    return l;
+}
+
+Av1ConfigAnswer VideoEncodeCapsAv1::configuration()
+{
+    Av1ConfigAnswer a;
+    if (!m_Video) return a;
+    D3D12_VIDEO_ENCODER_AV1_PROFILE prof = profile();
+    D3D12_VIDEO_ENCODER_AV1_CODEC_CONFIGURATION_SUPPORT caps = {};
+    D3D12_FEATURE_DATA_VIDEO_ENCODER_CODEC_CONFIGURATION_SUPPORT support = {};
+    support.Codec = D3D12_VIDEO_ENCODER_CODEC_AV1;
+    support.Profile = profileDesc(prof);
+    support.CodecSupportLimits.DataSize = sizeof(caps);
+    support.CodecSupportLimits.pAV1Support = &caps;
+    if (!feature(m_Video.Get(), D3D12_FEATURE_VIDEO_ENCODER_CODEC_CONFIGURATION_SUPPORT, support) ||
+        support.IsSupported == 0)
+        return a;
+    a.taken = true;
+    a.supported = static_cast<uint32_t>(caps.SupportedFeatureFlags);
+    a.required = static_cast<uint32_t>(caps.RequiredFeatureFlags);
+    a.postEncode = static_cast<uint32_t>(caps.PostEncodeValuesFlags);
+    a.filters = static_cast<uint32_t>(caps.SupportedInterpolationFilters);
+    a.txKey =
+        static_cast<uint32_t>(caps.SupportedTxModes[D3D12_VIDEO_ENCODER_AV1_FRAME_TYPE_KEY_FRAME]);
+    a.txInter = static_cast<uint32_t>(
+        caps.SupportedTxModes[D3D12_VIDEO_ENCODER_AV1_FRAME_TYPE_INTER_FRAME]);
+
+    D3D12_VIDEO_ENCODER_CODEC_AV1_PICTURE_CONTROL_SUPPORT pc = {};
+    D3D12_FEATURE_DATA_VIDEO_ENCODER_CODEC_PICTURE_CONTROL_SUPPORT pcs = {};
+    pcs.Codec = D3D12_VIDEO_ENCODER_CODEC_AV1;
+    pcs.Profile = profileDesc(prof);
+    pcs.PictureSupport.DataSize = sizeof(pc);
+    pcs.PictureSupport.pAV1Support = &pc;
+    const UINT both = D3D12_VIDEO_ENCODER_AV1_FRAME_TYPE_FLAG_KEY_FRAME |
+                      D3D12_VIDEO_ENCODER_AV1_FRAME_TYPE_FLAG_INTER_FRAME;
+    a.keyAndInterFrames =
+        feature(m_Video.Get(), D3D12_FEATURE_VIDEO_ENCODER_CODEC_PICTURE_CONTROL_SUPPORT, pcs) &&
+        pcs.IsSupported != 0 && (static_cast<UINT>(pc.SupportedFrameTypes) & both) == both &&
+        pc.MaxUniqueReferencesPerFrame >= 1;
+    return a;
+}
+
+HevcSupportAnswer VideoEncodeCapsAv1::support(const Av1SupportQuestion& q)
+{
+    HevcSupportAnswer a;
+    if (!m_Video) return a;
+    D3D12_VIDEO_ENCODER_AV1_CODEC_CONFIGURATION config =
+        codecConfiguration(q.features, q.orderHintBits);
+    D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION codec = {};
+    codec.DataSize = sizeof(config);
+    codec.pAV1Config = &config;
+    D3D12_VIDEO_ENCODER_AV1_SEQUENCE_STRUCTURE seq = sequence();
+    D3D12_VIDEO_ENCODER_SEQUENCE_GOP_STRUCTURE gopDesc = {};
+    gopDesc.DataSize = sizeof(seq);
+    gopDesc.pAV1SequenceStructure = &seq;
+    const VideoEncodeCaps12::RateControl rate(q.rate, q.fps, 20000000, true);
+    D3D12_VIDEO_ENCODER_PICTURE_RESOLUTION_DESC res = {q.codedWidth, q.codedHeight};
+
+    D3D12_VIDEO_ENCODER_AV1_PROFILE suggestedProfile = {};
+    D3D12_VIDEO_ENCODER_AV1_LEVEL_TIER_CONSTRAINTS suggestedLevel = {};
+    D3D12_FEATURE_DATA_VIDEO_ENCODER_RESOLUTION_SUPPORT_LIMITS limits = {};
+    D3D12_FEATURE_DATA_VIDEO_ENCODER_SUPPORT1 s = {};
+    s.Codec = D3D12_VIDEO_ENCODER_CODEC_AV1;
+    s.InputFormat = q.tenBit ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12;
+    s.CodecConfiguration = codec;
+    s.CodecGopSequence = gopDesc;
+    s.RateControl = rate.desc;
+    s.IntraRefresh = q.intraRefresh ? D3D12_VIDEO_ENCODER_INTRA_REFRESH_MODE_ROW_BASED
+                                    : D3D12_VIDEO_ENCODER_INTRA_REFRESH_MODE_NONE;
+    s.SubregionFrameEncoding = D3D12_VIDEO_ENCODER_FRAME_SUBREGION_LAYOUT_MODE_FULL_FRAME;
+    s.ResolutionsListCount = 1;
+    s.pResolutionList = &res;
+    s.MaxReferenceFramesInDPB = 1;
+    s.SuggestedProfile.DataSize = sizeof(suggestedProfile);
+    s.SuggestedProfile.pAV1Profile = &suggestedProfile;
+    s.SuggestedLevel.DataSize = sizeof(suggestedLevel);
+    s.SuggestedLevel.pAV1LevelSetting = &suggestedLevel;
+    s.pResolutionDependentSupport = &limits;
+    HRESULT asked =
+        m_Video->CheckFeatureSupport(D3D12_FEATURE_VIDEO_ENCODER_SUPPORT1, &s, sizeof(s));
+    if (FAILED(asked) && !q.rate.qualityVsSpeed)
+        asked = m_Video->CheckFeatureSupport(D3D12_FEATURE_VIDEO_ENCODER_SUPPORT, &s,
+                                             sizeof(D3D12_FEATURE_DATA_VIDEO_ENCODER_SUPPORT));
+    if (FAILED(asked) ||
+        (s.SupportFlags & D3D12_VIDEO_ENCODER_SUPPORT_FLAG_GENERAL_SUPPORT_OK) == 0)
+        return a;
+    a.ok = true;
+    a.rateReconfigurable =
+        (s.SupportFlags &
+         D3D12_VIDEO_ENCODER_SUPPORT_FLAG_RATE_CONTROL_RECONFIGURATION_AVAILABLE) != 0;
+    a.reconTextureArray =
+        (s.SupportFlags &
+         D3D12_VIDEO_ENCODER_SUPPORT_FLAG_RECONSTRUCTED_FRAMES_REQUIRE_TEXTURE_ARRAYS) != 0;
+    a.reconReadable =
+        (s.SupportFlags &
+         D3D12_VIDEO_ENCODER_SUPPORT_FLAG_READABLE_RECONSTRUCTED_PICTURE_LAYOUT_AVAILABLE) != 0;
+    a.suggestedLevelIdc = static_cast<int>(suggestedLevel.Level);
+    a.qpMapRegion = limits.QPMapRegionPixelsSize;
+    a.maxIntraRefreshFrames = limits.MaxIntraRefreshFrameDuration;
+    a.maxQualityVsSpeed = s.MaxQualityVsSpeed;
     return a;
 }
 

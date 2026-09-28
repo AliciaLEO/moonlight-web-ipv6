@@ -6,6 +6,7 @@
 
 #if defined(_WIN32)
 #include "d3d12_test_pictures.h"
+#include "encode/Av1Obu.h"
 #include "encode/H264SliceParser.h"
 #include "encode/HevcDpb.h"
 #include "encode/HevcSliceParser.h"
@@ -476,6 +477,140 @@ void h264On(const std::shared_ptr<d3d12::D3d12Device>& device)
     encoder.stop();
 }
 
+/// AV1 (plan C9.2), on a GPU whose driver encodes it: every temporal unit a
+/// temporal delimiter, then the sequence header on a key frame, then one
+/// OBU_FRAME whose header we wrote from the driver's values and whose tile the
+/// driver coded; a loss healed by a key frame, a forced one, a bitrate change.
+/// The stream is dumped beside its input pictures for the pixel proof.
+void av1On(const std::shared_ptr<d3d12::D3d12Device>& device)
+{
+    ComPtr<ID3D12VideoDevice3> video;
+    D3D12_FEATURE_DATA_VIDEO_ENCODER_CODEC codecSupport = {};
+    codecSupport.Codec = D3D12_VIDEO_ENCODER_CODEC_AV1;
+    if (FAILED(device->device()->QueryInterface(IID_PPV_ARGS(&video))) ||
+        FAILED(video->CheckFeatureSupport(D3D12_FEATURE_VIDEO_ENCODER_CODEC, &codecSupport,
+                                          sizeof(codecSupport))) ||
+        !codecSupport.IsSupported) {
+        std::fprintf(stderr, "  %s: no AV1 encoder — skipped\n", device->name().c_str());
+        return;
+    }
+    VideoEncode12 encoder;
+    std::string error;
+    EncoderTuning tuning;
+    if (!encoder.init(device, Codec::Av1, 1920, 1080, 60, 20000, false, false, tuning, error)) {
+        std::fprintf(stderr, "  %s, AV1: %s\n", device->name().c_str(), error.c_str());
+        CHECK(false);
+        return;
+    }
+    CHECK(encoder.codec() == Codec::Av1);
+    CHECK_EQ(encoder.codedWidth(), 1920);
+    CHECK_EQ(encoder.codedHeight(), 1080);
+    CHECK(!encoder.supportsReferenceInvalidation());
+    const av1::Sequence& seq = encoder.av1Setup().sequence;
+
+    ComPtr<ID3D12Resource> input =
+        picture(device->device(), encoder.codedWidth(), encoder.codedHeight(), false);
+    Uploader uploader;
+    if (!input || !uploader.init(*device, input.Get(), error)) {
+        std::fprintf(stderr, "  %s: the test's upload: %s\n", device->name().c_str(),
+                     error.c_str());
+        CHECK(false);
+        return;
+    }
+    std::ofstream dump;
+    std::ofstream dumpInput;
+    if (const char* dir = std::getenv("MW_TEST_DUMP_HEVC")) {
+        const std::string base = std::string(dir) + "\\ve12-" + fileSafe(device->name()) + "-av1";
+        dump.open(base + ".obu", std::ios::binary);
+        dumpInput.open(base + ".nv12", std::ios::binary);
+    }
+
+    HevcDpb expected(1, 60);
+    const int frames = 40;
+    int keyframes = 0, errors = 0, wrongShape = 0, badQp = 0;
+    int lowQ = 256, highQ = -1;
+    for (int n = 0; n < frames; ++n) {
+        encoder.releaseOutput();
+        const bool force = n == 30;
+        if (n == 20) {
+            std::string why;
+            CHECK(!encoder.invalidateReference(18, why));
+            CHECK(!expected.invalidate(18));
+        }
+        const HevcDpb::Plan plan = expected.plan(static_cast<uint32_t>(n), force);
+        const uint64_t ready = uploader.upload(input.Get(), n, false, error);
+        EncoderOutput out;
+        if (!ready || !encoder.encode(input.Get(), uploader.fence.fence(), ready, force,
+                                      static_cast<uint32_t>(n), out, error)) {
+            std::fprintf(stderr, "  %s, AV1 frame %d: %s\n", device->name().c_str(), n,
+                         error.c_str());
+            ++errors;
+            break;
+        }
+        expected.encoded(plan);
+        if (dump.is_open())
+            dump.write(reinterpret_cast<const char*>(out.data),
+                       static_cast<std::streamsize>(out.size));
+        if (dumpInput.is_open()) {
+            const std::vector<uint8_t> nv12 = d3d12_test::nv12Frame(1920, 1080, n);
+            dumpInput.write(reinterpret_cast<const char*>(nv12.data()),
+                            static_cast<std::streamsize>(nv12.size()));
+        }
+        CHECK_EQ(out.keyframe, plan.idr);
+        if (out.keyframe) ++keyframes;
+        if (out.avgQp < 0 || out.avgQp > 255) {
+            ++badQp;
+        } else {
+            lowQ = (std::min)(lowQ, out.avgQp);
+            highQ = (std::max)(highQ, out.avgQp);
+        }
+        // TD, [sequence header], OBU_FRAME covering the rest exactly.
+        const std::vector<av1::Obu> units = av1::obus(out.data, out.size);
+        const size_t expectUnits = plan.idr ? 3 : 2;
+        bool shape = units.size() == expectUnits &&
+                     units[0].type == av1::ObuType::TemporalDelimiter && units[0].size == 0 &&
+                     units.back().type == av1::ObuType::Frame &&
+                     units.back().payload + units.back().size == out.data + out.size;
+        if (shape && plan.idr) {
+            av1::Sequence back;
+            shape = units[1].type == av1::ObuType::SequenceHeader &&
+                    av1::parseSequenceHeader(units[1].payload, units[1].size, back).empty() &&
+                    back.width == seq.width && back.height == seq.height;
+        }
+        if (shape) {
+            av1::FrameStart f;
+            shape = av1::parseFrameStart(units.back().payload, units.back().size, seq, f).empty() &&
+                    f.frameType == (plan.idr ? 0 : 1) && f.showFrame &&
+                    f.orderHint == (plan.poc & 0xFFu) && f.refreshFrameFlags == 0xFF;
+        }
+        if (!shape) ++wrongShape;
+    }
+    CHECK_EQ(errors, 0);
+    CHECK_EQ(wrongShape, 0);
+    CHECK_EQ(badQp, 0);
+    CHECK_EQ(keyframes, 3);
+    std::string refused;
+    const bool changed = encoder.setBitrate(10000, refused);
+    if (changed) {
+        const uint64_t ready = uploader.upload(input.Get(), frames, false, error);
+        EncoderOutput out;
+        encoder.releaseOutput();
+        CHECK(encoder.encode(input.Get(), uploader.fence.fence(), ready, false,
+                             static_cast<uint32_t>(frames), out, error));
+    }
+    encoder.releaseOutput();
+    const av1::Frame& last = encoder.av1Frame();
+    std::fprintf(stderr,
+                 "  %s, AV1: %d frames, %d keyframes, qindex %d..%d, last frame: loop filter "
+                 "%d/%d/%d/%d, CDEF bits %d, segmentation %d, delta q %d, compound %d; bitrate "
+                 "change %s\n",
+                 device->name().c_str(), frames, keyframes, lowQ, highQ, last.lf.level[0],
+                 last.lf.level[1], last.lf.level[2], last.lf.level[3], last.cdef.bits,
+                 last.seg.enabled ? 1 : 0, last.deltaQPresent ? 1 : 0, last.referenceSelect ? 1 : 0,
+                 changed ? "taken" : refused.c_str());
+    encoder.stop();
+}
+
 /// 1440 lines end inside a coding tree block of 64 (the Arc's, the AMD
 /// iGPU's): the driver takes the size in whole CTBs, and encodes at it.
 void wholeBlocksOn(const std::shared_ptr<d3d12::D3d12Device>& device)
@@ -564,6 +699,7 @@ void run_video_encode12_tests()
         wholeBlocksOn(device);
         ownRateOn(device);
         h264On(device);
+        av1On(device);
     }
     if (ran == 0) std::fprintf(stderr, "  no GPU with D3D12 Video Encode here — skipped\n");
 #endif

@@ -205,8 +205,8 @@ void run_video_pipeline_choice_tests()
         CHECK_EQ(c.route, std::string("DIRECT conversion → NVENC (D3D12) HEVC"));
         CHECK_EQ(c.encoder, std::string("NVENC (D3D12)"));
 
-        // The vendor's SDK codes what its D3D11 path codes; VE, HEVC and
-        // H.264.
+        // The vendor's SDK codes what its D3D11 path codes; VE, the three
+        // codecs where the GPU's driver does (its encoder asks).
         rtx.codec = Codec::H264;
         c = chooseVideoPipeline(rtx);
         CHECK(c.pipeline == VideoPipeline::D3d12);
@@ -225,7 +225,8 @@ void run_video_pipeline_choice_tests()
         CHECK_EQ(chooseVideoPipeline(rtx).route,
                  std::string("DIRECT conversion → D3D12 Video Encode H.264"));
         rtx.codec = Codec::Av1;
-        CHECK(chooseVideoPipeline(rtx).refused);
+        CHECK_EQ(chooseVideoPipeline(rtx).route,
+                 std::string("DIRECT conversion → D3D12 Video Encode AV1"));
 
         // No NVENC runtime able to take D3D12 pictures: D3D11, and why.
         VideoPipelineFacts old = forcedD3d12();
@@ -267,7 +268,6 @@ void run_video_pipeline_choice_tests()
             {"software", [](VideoPipelineFacts& f) { f.encoder = EncoderApi::Software; },
              "software has no D3D12 route"},
             {"4:4:4", [](VideoPipelineFacts& f) { f.yuv444 = true; }, "4:4:4"},
-            {"AV1", [](VideoPipelineFacts& f) { f.codec = Codec::Av1; }, "AV1 is not done"},
             {"no VE", [](VideoPipelineFacts& f) { f.videoEncode12 = false; },
              "D3D12 Video Encode does not take HEVC"},
             {"NVENC on Intel",

@@ -149,9 +149,8 @@ inline std::string refusal(const VideoPipelineFacts& f, EncoderTuning::Encoder12
     if (encoder == E::Nvenc && !f.nvenc12) return "NVENC takes no D3D12 picture on this machine";
     if (encoder == E::Amf && !f.amf12) return "AMF takes no D3D12 picture on this machine";
     // The vendors' SDKs code what their D3D11 path codes; D3D12 Video Encode
-    // codes HEVC and H.264 (Phase 9, C9.1), AV1 later.
-    if (encoder == E::VideoEncode && f.codec != Codec::Hevc && f.codec != Codec::H264)
-        return std::string(toString(f.codec)) + " is not done by D3D12 Video Encode yet";
+    // codes HEVC, H.264 and AV1 (Phase 9) — each where the GPU's driver does,
+    // which the encoder's negotiation asks.
     if (encoder == E::VideoEncode && !f.videoEncode12)
         return std::string("this GPU's D3D12 Video Encode does not take ") + toString(f.codec);
     return {};

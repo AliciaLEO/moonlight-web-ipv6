@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include "encode/Av1EncodeNegotiation.h"
+#include "encode/Av1Obu.h"
 #include "encode/H264EncodeNegotiation.h"
 #include "encode/H264SliceParser.h"
 #include "encode/HevcDpb.h"
@@ -77,9 +79,18 @@ namespace mw::native::encode {
 /// keyframe; the POC it counts is the picture's place since the IDR, which is
 /// frame_num (modulo 2^16) and half the H.264 POC.
 ///
-/// ── What it does not do yet ────────────────────────────────────────────────
+/// ── AV1 ─────────────────────────────────────────────────────────────────────
 ///
-/// AV1 (Phase 9, C9.2).
+/// The driver codes the tile and nothing else: once the picture is coded, the
+/// resolved metadata says where the tile lies and which frame header values
+/// the driver chose (quantizer, loop filter, CDEF, segmentation) — read
+/// whatever the driver's post-encode flags say: the Arc, which says none,
+/// fills them all (28/09/2026). The temporal delimiter, the sequence header on
+/// a key frame, and OBU_FRAME's header are written then (Av1Obu.h), and the
+/// tile moves up behind them: it starts at the buffer's start, the one place
+/// the Arc writes its AV1 whatever the frame start offset says. One tile,
+/// every slot refreshed by every frame — HevcDpb at a capacity of one again —
+/// and the driver's rate control only: our own speaks HEVC's and H.264's QP.
 class VideoEncode12 : public IVideoEncoder12
 {
 public:
@@ -110,6 +121,9 @@ public:
     /// coded size, the intra refresh; h264Setup() holds the rest.
     const HevcEncodeSetup& setup() const { return m_Setup; }
     const H264EncodeSetup& h264Setup() const { return m_H264; }
+    const Av1EncodeSetup& av1Setup() const { return m_Av1; }
+    /// The last AV1 frame's header, as the driver's values made it.
+    const av1::Frame& av1Frame() const { return m_Av1Frame; }
     Codec codec() const { return m_Codec; }
     const std::vector<uint8_t>& parameterSets() const { return m_Headers; }
     /// How many pictures' slice headers are still read back.
@@ -142,6 +156,10 @@ private:
     /// against @p plan; false, with the reason, when they do not agree.
     bool guard(const uint8_t* data, size_t size, const HevcDpb::Plan& plan, std::string& error);
     bool guardH264(const uint8_t* data, size_t size, const HevcDpb::Plan& plan, std::string& error);
+    /// The AV1 picture just coded, finished: the headers written in front of
+    /// its tile from what the driver said; its first byte and size out.
+    bool finishAv1(const HevcDpb::Plan& plan, const uint8_t*& data, size_t& size,
+                   std::string& error);
     /// The codec's half of the structures D3D12 points to.
     D3D12_VIDEO_ENCODER_CODEC d3d12Codec() const;
     D3D12_VIDEO_ENCODER_PROFILE_DESC profileDesc();
@@ -186,6 +204,19 @@ private:
     D3D12_VIDEO_ENCODER_SEQUENCE_GOP_STRUCTURE_H264 m_H264Gop = {};
     /// idr_pic_id: two IDRs in a row must differ.
     uint32_t m_IdrPicId = 0;
+    Av1EncodeSetup m_Av1;
+    D3D12_VIDEO_ENCODER_AV1_PROFILE m_Av1Profile = D3D12_VIDEO_ENCODER_AV1_PROFILE_MAIN;
+    D3D12_VIDEO_ENCODER_AV1_LEVEL_TIER_CONSTRAINTS m_Av1Level = {};
+    D3D12_VIDEO_ENCODER_AV1_CODEC_CONFIGURATION m_Av1Config = {};
+    D3D12_VIDEO_ENCODER_AV1_SEQUENCE_STRUCTURE m_Av1Sequence = {};
+    /// The frame header values the driver said, frame after frame: for the
+    /// tests and the log.
+    av1::Frame m_Av1Frame;
+    /// The picture's size when the coded frame is larger (AV1's render_size).
+    uint32_t m_RenderWidth = 0;
+    uint32_t m_RenderHeight = 0;
+    /// Where the first picture's tile lay, for the ready line.
+    std::string m_Av1Layout;
     std::unique_ptr<VideoEncodeCaps12::RateControl> m_Rate;
     bool m_RateChanged = false;
     int m_Fps = 60;

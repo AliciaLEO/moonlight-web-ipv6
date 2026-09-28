@@ -189,6 +189,80 @@ const std::initializer_list<FlagName> kH264ConfigFlags = {
      "num-ref-idx-override"},
 };
 
+const std::initializer_list<FlagName> kAv1FeatureFlags = {
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_128x128_SUPERBLOCK, "sb128"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_FILTER_INTRA, "filter-intra"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_INTRA_EDGE_FILTER, "intra-edge"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_INTERINTRA_COMPOUND, "interintra"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_MASKED_COMPOUND, "masked-compound"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_WARPED_MOTION, "warped"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_DUAL_FILTER, "dual-filter"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_JNT_COMP, "jnt-comp"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_FORCED_INTEGER_MOTION_VECTORS, "integer-mv"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_SUPER_RESOLUTION, "superres"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_LOOP_RESTORATION_FILTER, "restoration"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_PALETTE_ENCODING, "palette"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_CDEF_FILTERING, "cdef"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_INTRA_BLOCK_COPY, "intrabc"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_FRAME_REFERENCE_MOTION_VECTORS, "ref-mvs"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_ORDER_HINT_TOOLS, "order-hint"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_AUTO_SEGMENTATION, "auto-segmentation"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_CUSTOM_SEGMENTATION, "custom-segmentation"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_LOOP_FILTER_DELTAS, "lf-deltas"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_QUANTIZATION_DELTAS, "q-deltas"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_QUANTIZATION_MATRIX, "q-matrix"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_REDUCED_TX_SET, "reduced-tx-set"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_MOTION_MODE_SWITCHABLE, "motion-mode-switchable"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_ALLOW_HIGH_PRECISION_MV, "high-precision-mv"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_SKIP_MODE_PRESENT, "skip-mode"},
+    {D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_DELTA_LF_PARAMS, "delta-lf"},
+};
+
+const std::initializer_list<FlagName> kAv1PostEncodeFlags = {
+    {D3D12_VIDEO_ENCODER_AV1_POST_ENCODE_VALUES_FLAG_QUANTIZATION, "quantization"},
+    {D3D12_VIDEO_ENCODER_AV1_POST_ENCODE_VALUES_FLAG_QUANTIZATION_DELTA, "quantization-delta"},
+    {D3D12_VIDEO_ENCODER_AV1_POST_ENCODE_VALUES_FLAG_LOOP_FILTER, "loop-filter"},
+    {D3D12_VIDEO_ENCODER_AV1_POST_ENCODE_VALUES_FLAG_LOOP_FILTER_DELTA, "loop-filter-delta"},
+    {D3D12_VIDEO_ENCODER_AV1_POST_ENCODE_VALUES_FLAG_CDEF_DATA, "cdef"},
+    {D3D12_VIDEO_ENCODER_AV1_POST_ENCODE_VALUES_FLAG_CONTEXT_UPDATE_TILE_ID, "context-tile"},
+    {D3D12_VIDEO_ENCODER_AV1_POST_ENCODE_VALUES_FLAG_COMPOUND_PREDICTION_MODE, "compound-mode"},
+    {D3D12_VIDEO_ENCODER_AV1_POST_ENCODE_VALUES_FLAG_PRIMARY_REF_FRAME, "primary-ref"},
+    {D3D12_VIDEO_ENCODER_AV1_POST_ENCODE_VALUES_FLAG_REFERENCE_INDICES, "reference-indices"},
+};
+
+const std::initializer_list<FlagName> kAv1TxModeFlags = {
+    {D3D12_VIDEO_ENCODER_AV1_TX_MODE_FLAG_ONLY4x4, "only4x4"},
+    {D3D12_VIDEO_ENCODER_AV1_TX_MODE_FLAG_LARGEST, "largest"},
+    {D3D12_VIDEO_ENCODER_AV1_TX_MODE_FLAG_SELECT, "select"},
+};
+
+const std::initializer_list<FlagName> kAv1FilterFlags = {
+    {D3D12_VIDEO_ENCODER_AV1_INTERPOLATION_FILTERS_FLAG_EIGHTTAP, "eighttap"},
+    {D3D12_VIDEO_ENCODER_AV1_INTERPOLATION_FILTERS_FLAG_EIGHTTAP_SMOOTH, "smooth"},
+    {D3D12_VIDEO_ENCODER_AV1_INTERPOLATION_FILTERS_FLAG_EIGHTTAP_SHARP, "sharp"},
+    {D3D12_VIDEO_ENCODER_AV1_INTERPOLATION_FILTERS_FLAG_BILINEAR, "bilinear"},
+    {D3D12_VIDEO_ENCODER_AV1_INTERPOLATION_FILTERS_FLAG_SWITCHABLE, "switchable"},
+};
+
+const std::initializer_list<FlagName> kAv1FrameTypeFlags = {
+    {D3D12_VIDEO_ENCODER_AV1_FRAME_TYPE_FLAG_KEY_FRAME, "key"},
+    {D3D12_VIDEO_ENCODER_AV1_FRAME_TYPE_FLAG_INTER_FRAME, "inter"},
+    {D3D12_VIDEO_ENCODER_AV1_FRAME_TYPE_FLAG_INTRA_ONLY_FRAME, "intra-only"},
+    {D3D12_VIDEO_ENCODER_AV1_FRAME_TYPE_FLAG_SWITCH_FRAME, "switch"},
+};
+
+const std::initializer_list<FlagName> kAv1SegmentationFlags = {
+    {D3D12_VIDEO_ENCODER_AV1_SEGMENTATION_MODE_FLAG_DISABLED, "disabled"},
+    {D3D12_VIDEO_ENCODER_AV1_SEGMENTATION_MODE_FLAG_ALT_Q, "alt-q"},
+    {D3D12_VIDEO_ENCODER_AV1_SEGMENTATION_MODE_FLAG_ALT_LF_Y_V, "alt-lf-y-v"},
+    {D3D12_VIDEO_ENCODER_AV1_SEGMENTATION_MODE_FLAG_ALT_LF_Y_H, "alt-lf-y-h"},
+    {D3D12_VIDEO_ENCODER_AV1_SEGMENTATION_MODE_FLAG_ALT_LF_U, "alt-lf-u"},
+    {D3D12_VIDEO_ENCODER_AV1_SEGMENTATION_MODE_FLAG_ALT_LF_V, "alt-lf-v"},
+    {D3D12_VIDEO_ENCODER_AV1_SEGMENTATION_MODE_FLAG_REF_FRAME, "ref-frame"},
+    {D3D12_VIDEO_ENCODER_AV1_SEGMENTATION_MODE_FLAG_ALT_SKIP, "skip"},
+    {D3D12_VIDEO_ENCODER_AV1_SEGMENTATION_MODE_FLAG_ALT_GLOBALMV, "globalmv"},
+};
+
 const std::initializer_list<FlagName> kFormatSupport1 = {
     {D3D12_FORMAT_SUPPORT1_TEXTURE2D, "texture2d"},
     {D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE, "sample"},
@@ -1510,9 +1584,162 @@ void av1(ID3D12VideoDevice3* v, Json& j)
         say(" input %s %d", formatName(f), fi.IsSupported);
         j.field(std::string("input") + formatName(f), static_cast<unsigned>(fi.IsSupported));
     }
-    say(" (configuration and support: Phase 9)\n");
+    say("\n");
     outputResolution(v, D3D12_VIDEO_ENCODER_CODEC_AV1, j);
     rateModes(v, D3D12_VIDEO_ENCODER_CODEC_AV1, j);
+
+    // What the driver codes, what it cannot do without, and which of the
+    // frame header's values it only knows once the picture is coded (plan
+    // C9.2: those the application writes from the resolved metadata).
+    D3D12_VIDEO_ENCODER_AV1_CODEC_CONFIGURATION_SUPPORT caps = {};
+    D3D12_FEATURE_DATA_VIDEO_ENCODER_CODEC_CONFIGURATION_SUPPORT ccs = {};
+    ccs.Codec = D3D12_VIDEO_ENCODER_CODEC_AV1;
+    ccs.Profile = pd;
+    ccs.CodecSupportLimits.DataSize = sizeof(caps);
+    ccs.CodecSupportLimits.pAV1Support = &caps;
+    feature(v, D3D12_FEATURE_VIDEO_ENCODER_CODEC_CONFIGURATION_SUPPORT, ccs);
+    say("      configuration %d: supported %s\n", ccs.IsSupported,
+        decode(caps.SupportedFeatureFlags, kAv1FeatureFlags).c_str());
+    say("        required %s\n", decode(caps.RequiredFeatureFlags, kAv1FeatureFlags).c_str());
+    say("        post-encode values %s\n",
+        decode(caps.PostEncodeValuesFlags, kAv1PostEncodeFlags).c_str());
+    say("        filters %s; tx modes key %s, inter %s, intra-only %s, switch %s\n",
+        decode(caps.SupportedInterpolationFilters, kAv1FilterFlags).c_str(),
+        decode(caps.SupportedTxModes[0], kAv1TxModeFlags).c_str(),
+        decode(caps.SupportedTxModes[1], kAv1TxModeFlags).c_str(),
+        decode(caps.SupportedTxModes[2], kAv1TxModeFlags).c_str(),
+        decode(caps.SupportedTxModes[3], kAv1TxModeFlags).c_str());
+    say("        segmentation %s (block %d), restoration Y %s, layers %u temporal / %u spatial\n",
+        decode(caps.SupportedSegmentationModes, kAv1SegmentationFlags).c_str(),
+        static_cast<int>(caps.SegmentationBlockSize),
+        hex(caps.SupportedRestorationParams[0][0] | caps.SupportedRestorationParams[0][1] |
+            caps.SupportedRestorationParams[0][2])
+            .c_str(),
+        caps.MaxTemporalLayers, caps.MaxSpatialLayers);
+    j.key("configuration").beginObject();
+    j.field("supported", static_cast<unsigned>(ccs.IsSupported));
+    j.field("features", decode(caps.SupportedFeatureFlags, kAv1FeatureFlags));
+    j.field("required", decode(caps.RequiredFeatureFlags, kAv1FeatureFlags));
+    j.field("postEncode", decode(caps.PostEncodeValuesFlags, kAv1PostEncodeFlags));
+    j.field("filters", decode(caps.SupportedInterpolationFilters, kAv1FilterFlags));
+    j.field("txKey", decode(caps.SupportedTxModes[0], kAv1TxModeFlags));
+    j.field("txInter", decode(caps.SupportedTxModes[1], kAv1TxModeFlags));
+    j.field("segmentation", decode(caps.SupportedSegmentationModes, kAv1SegmentationFlags));
+    j.endObject();
+
+    D3D12_VIDEO_ENCODER_CODEC_AV1_PICTURE_CONTROL_SUPPORT pc = {};
+    D3D12_FEATURE_DATA_VIDEO_ENCODER_CODEC_PICTURE_CONTROL_SUPPORT pcs = {};
+    pcs.Codec = D3D12_VIDEO_ENCODER_CODEC_AV1;
+    pcs.Profile = pd;
+    pcs.PictureSupport.DataSize = sizeof(pc);
+    pcs.PictureSupport.pAV1Support = &pc;
+    feature(v, D3D12_FEATURE_VIDEO_ENCODER_CODEC_PICTURE_CONTROL_SUPPORT, pcs);
+    say("      picture control %d: %s prediction, %u references a frame, frame types %s, warped "
+        "%s\n",
+        pcs.IsSupported, pc.PredictionMode ? "compound" : "single", pc.MaxUniqueReferencesPerFrame,
+        decode(pc.SupportedFrameTypes, kAv1FrameTypeFlags).c_str(),
+        hex(pc.SupportedReferenceWarpedMotionFlags).c_str());
+    j.key("pictureControl").beginObject();
+    j.field("supported", static_cast<unsigned>(pcs.IsSupported));
+    j.field("compound", static_cast<unsigned>(pc.PredictionMode));
+    j.field("maxReferences", pc.MaxUniqueReferencesPerFrame);
+    j.field("frameTypes", decode(pc.SupportedFrameTypes, kAv1FrameTypeFlags));
+    j.endObject();
+
+    // One tile over the whole picture: the layout the encoder asks for.
+    D3D12_VIDEO_ENCODER_AV1_LEVEL_TIER_CONSTRAINTS level = {D3D12_VIDEO_ENCODER_AV1_LEVELS_5_1,
+                                                            D3D12_VIDEO_ENCODER_AV1_TIER_MAIN};
+    j.key("tiles").beginArray();
+    for (const D3D12_VIDEO_ENCODER_PICTURE_RESOLUTION_DESC res :
+         {D3D12_VIDEO_ENCODER_PICTURE_RESOLUTION_DESC{1920, 1080},
+          D3D12_VIDEO_ENCODER_PICTURE_RESOLUTION_DESC{2560, 1440},
+          D3D12_VIDEO_ENCODER_PICTURE_RESOLUTION_DESC{3840, 2160}}) {
+        for (const D3D12_VIDEO_ENCODER_FRAME_SUBREGION_LAYOUT_MODE mode :
+             {D3D12_VIDEO_ENCODER_FRAME_SUBREGION_LAYOUT_MODE_FULL_FRAME,
+              D3D12_VIDEO_ENCODER_FRAME_SUBREGION_LAYOUT_MODE_UNIFORM_GRID_PARTITION}) {
+            D3D12_VIDEO_ENCODER_AV1_FRAME_SUBREGION_LAYOUT_CONFIG_SUPPORT tiles = {};
+            tiles.TilesConfiguration.RowCount = 1;
+            tiles.TilesConfiguration.ColCount = 1;
+            D3D12_FEATURE_DATA_VIDEO_ENCODER_FRAME_SUBREGION_LAYOUT_CONFIG tc = {};
+            tc.Codec = D3D12_VIDEO_ENCODER_CODEC_AV1;
+            tc.Profile = pd;
+            tc.Level.DataSize = sizeof(level);
+            tc.Level.pAV1LevelSetting = &level;
+            tc.SubregionMode = mode;
+            tc.FrameResolution = res;
+            tc.CodecSupport.DataSize = sizeof(tiles);
+            tc.CodecSupport.pAV1Support = &tiles;
+            const HRESULT h = askGuarded(
+                v, D3D12_FEATURE_VIDEO_ENCODER_FRAME_SUBREGION_LAYOUT_CONFIG, &tc, sizeof(tc));
+            say("      tiles %ux%u %s: %s %d, validation %s, rows %u..%u cols %u..%u, tile size "
+                "bytes %u, sb128 %d\n",
+                res.Width, res.Height, subregionModeName(mode), SUCCEEDED(h) ? "ok" : hr(h).c_str(),
+                tc.IsSupported, hex(tiles.ValidationFlags).c_str(), tiles.MinTileRows,
+                tiles.MaxTileRows, tiles.MinTileCols, tiles.MaxTileCols,
+                tiles.TileSizeBytesMinus1 + 1, tiles.Use128SuperBlocks);
+            j.beginObject();
+            j.field("width", res.Width).field("height", res.Height);
+            j.field("mode", subregionModeName(mode)).field("hr", hr(h));
+            j.field("supported", static_cast<unsigned>(tc.IsSupported));
+            j.field("validation", hex(tiles.ValidationFlags));
+            j.endObject();
+        }
+    }
+    j.endArray();
+
+    // The whole encoder, as C9.2 would create it: what the driver requires,
+    // CDEF and order hints where it has them, one tile, endless P.
+    D3D12_VIDEO_ENCODER_AV1_CODEC_CONFIGURATION cfg = {};
+    cfg.FeatureFlags =
+        caps.RequiredFeatureFlags |
+        (caps.SupportedFeatureFlags & (D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_CDEF_FILTERING |
+                                       D3D12_VIDEO_ENCODER_AV1_FEATURE_FLAG_ORDER_HINT_TOOLS));
+    cfg.OrderHintBitsMinus1 = 7;
+    D3D12_VIDEO_ENCODER_AV1_SEQUENCE_STRUCTURE seq = {0, 1};
+    say("      support at 1920x1080 @ 60, features %s:\n",
+        decode(cfg.FeatureFlags, kAv1FeatureFlags).c_str());
+    j.key("support").beginArray();
+    const std::vector<D3D12_VIDEO_ENCODER_PICTURE_RESOLUTION_DESC> fullHd = {{1920, 1080}};
+    for (const RcCase& c : {kRcCases[1], kRcCases[2], kRcCases[3], kRcCases[5], kRcCases[6]}) {
+        for (const D3D12_VIDEO_ENCODER_FRAME_SUBREGION_LAYOUT_MODE mode :
+             {D3D12_VIDEO_ENCODER_FRAME_SUBREGION_LAYOUT_MODE_FULL_FRAME,
+              D3D12_VIDEO_ENCODER_FRAME_SUBREGION_LAYOUT_MODE_UNIFORM_GRID_PARTITION}) {
+            RcParams params;
+            D3D12_VIDEO_ENCODER_AV1_PROFILE suggestedProfile = {};
+            D3D12_VIDEO_ENCODER_AV1_LEVEL_TIER_CONSTRAINTS suggestedLevel = {};
+            const SupportAnswer a = askSupport(
+                v, fullHd,
+                [&](D3D12_FEATURE_DATA_VIDEO_ENCODER_SUPPORT1& s) {
+                    s.Codec = D3D12_VIDEO_ENCODER_CODEC_AV1;
+                    s.InputFormat = DXGI_FORMAT_NV12;
+                    s.CodecConfiguration.DataSize = sizeof(cfg);
+                    s.CodecConfiguration.pAV1Config = &cfg;
+                    s.CodecGopSequence.DataSize = sizeof(seq);
+                    s.CodecGopSequence.pAV1SequenceStructure = &seq;
+                    params.fill(c, s.RateControl);
+                    s.IntraRefresh = c.intraRefresh
+                                         ? D3D12_VIDEO_ENCODER_INTRA_REFRESH_MODE_ROW_BASED
+                                         : D3D12_VIDEO_ENCODER_INTRA_REFRESH_MODE_NONE;
+                    s.SubregionFrameEncoding = mode;
+                    s.MaxReferenceFramesInDPB = 1;
+                    s.SuggestedProfile.DataSize = sizeof(suggestedProfile);
+                    s.SuggestedProfile.pAV1Profile = &suggestedProfile;
+                    s.SuggestedLevel.DataSize = sizeof(suggestedLevel);
+                    s.SuggestedLevel.pAV1LevelSetting = &suggestedLevel;
+                },
+                [&] {
+                    const int l = static_cast<int>(suggestedLevel.Level);
+                    return std::to_string(2 + l / 4) + "." + std::to_string(l % 4) +
+                           (suggestedLevel.Tier ? " high" : "");
+                });
+            const std::string id =
+                std::string(c.id) +
+                (mode == D3D12_VIDEO_ENCODER_FRAME_SUBREGION_LAYOUT_MODE_FULL_FRAME ? " full"
+                                                                                    : " grid");
+            printAnswer(id.c_str(), a, j);
+        }
+    }
+    j.endArray();
     j.endObject();
 }
 
