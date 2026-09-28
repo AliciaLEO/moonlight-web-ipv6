@@ -425,7 +425,9 @@ fi
 # Third group, only recommended: the Vulkan loader and Mesa's Vulkan drivers
 # (the split route's conversion and the Vulkan Video chain, plan Phase 13).
 # The native host opens libvulkan.so.1 with dlopen, never links it: without
-# it, GL converts and VA-API encodes, as they always have.
+# it, GL converts and VA-API encodes, as they always have. apt, dnf and zypper
+# install recommended packages by default, so a machine without Vulkan gets it
+# with MoonlightWeb, silently; one set to skip them still streams.
 deb_depends=(
     --depends libgl1 --depends libopengl0 --depends libegl1
     --depends libfontconfig1 --depends libfreetype6
@@ -450,6 +452,11 @@ rpm_depends=(
     --depends "libva-drm.so.2()(64bit)" --depends "libGLESv2.so.2()(64bit)"
     --depends "libgbm.so.1()(64bit)" --depends "libpipewire-0.3.so.0()(64bit)"
     --rpm-tag "Recommends: libvulkan.so.1()(64bit)"
+    # Mesa's AMD and Intel Vulkan drivers, by the sonames both distros generate:
+    # Fedora's mesa-vulkan-drivers provides the two, openSUSE splits them into
+    # libvulkan_radeon and libvulkan_intel.
+    --rpm-tag "Recommends: libvulkan_radeon.so()(64bit)"
+    --rpm-tag "Recommends: libvulkan_intel.so()(64bit)"
 )
 
 common=(
