@@ -11,8 +11,8 @@
 #pragma once
 
 #include "AmfApi.h"
+#include "AmfConfig.h"
 #include "IVideoEncoder.h"
-#include "../ReferenceSlots.h"
 
 #include <wrl/client.h>
 
@@ -52,8 +52,10 @@ namespace mw::native::encode {
 ///
 /// **Property names are per codec.** AMF has no shared namespace: the same
 /// concept is `TargetBitrate`, `HevcTargetBitrate` or `Av1TargetBitrate`. They
-/// are gathered in one table (see the .cpp) so the configuration logic is
-/// written once rather than three times.
+/// are gathered in one table (AmfConfig.cpp) so the configuration logic is
+/// written once rather than three times — and once for the D3D11 and the D3D12
+/// encoders (AmfEncoder12), which differ only in their context and in how a
+/// picture is wrapped.
 class AmfEncoder final : public IVideoEncoder
 {
 public:
@@ -67,13 +69,13 @@ public:
     bool encode(ID3D11Texture2D* surface, bool forceKeyframe, uint32_t frameNumber,
                 EncoderOutput& out, std::string& error) override;
 
-    bool supportsReferenceInvalidation() const override { return m_Ltr.enabled(); }
+    bool supportsReferenceInvalidation() const override { return m_Frames.enabled(); }
     bool invalidateReference(uint32_t frameNumber, std::string& error) override;
 
     void releaseOutput() override;
     void stop() override;
     bool setBitrate(int bitrateKbps, std::string& error) override;
-    bool intraRefreshEnabled() const override { return m_IntraRefresh; }
+    bool intraRefreshEnabled() const override { return m_Setup.intraRefresh; }
 
     /// The configuration the encoder holds after Init (ConfigFingerprint).
     uint32_t configFingerprint() const { return m_Fingerprint; }
@@ -89,32 +91,11 @@ private:
     amf::AMFBufferPtr m_Output;
 
     Codec m_Codec = Codec::H264;
-    int m_Width = 0;
-    int m_Height = 0;
-    int m_Fps = 60;
-    /// What the encoder was actually configured with — reported, not wished for.
-    bool m_IntraRefresh = false;
-    /// The bench's VBV override, so setBitrate() sizes the buffer by the rule
-    /// init() used. 0 is the engine's own rule.
-    int m_VbvFrames = 0;
-
-    /// The long-term reference slots as the driver confirmed them (disabled
-    /// when it granted none). Touched only by the capture thread: encode() and
-    /// invalidateReference() are both called from the session loop.
-    ReferenceSlots m_Ltr;
-    /// A loss the receiver named, waiting for the next encode() to force the
-    /// reference: every frame from m_LostFrom on is unusable.
-    bool m_LostPending = false;
-    uint32_t m_LostFrom = 0;
-    int m_Invalidations = 0;
-    /// A refusal to mark is logged once: the table copes on its own, a loss
-    /// simply costs a keyframe until the driver obliges.
-    int m_MarkRefusals = 0;
-    /// A reference the driver refused UNSAFELY — it predicted from a picture at
-    /// or after the loss — costs the next frame as a keyframe. Not logged once
-    /// but every time: this is the cost the whole path exists to avoid.
-    bool m_ForceKeyframeNext = false;
-    int m_HealsLogged = 0;
+    /// What the configuration settled (AmfConfig): what the encoder reports,
+    /// and the VBV rule setBitrate() sizes the buffer by again.
+    AmfSetup m_Setup;
+    /// The per-picture half: the long-term slots and the repairs (AmfConfig).
+    AmfFrames m_Frames;
     uint32_t m_Fingerprint = 0;
 };
 

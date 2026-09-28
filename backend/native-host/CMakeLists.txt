@@ -63,6 +63,7 @@ if(WIN32)
         src/encode/windows/NvencEncoder.cpp
         src/encode/windows/AmfApi.cpp
         src/encode/windows/AmfCapabilities.cpp
+        src/encode/windows/AmfConfig.cpp
         src/encode/windows/AmfEncoder.cpp
         src/encode/windows/VplApi.cpp
         src/encode/windows/VplSession.cpp
