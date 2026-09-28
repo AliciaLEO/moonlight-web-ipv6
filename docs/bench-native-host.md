@@ -2018,6 +2018,17 @@ du plan).
   Virtual Display Driver, SudoMaker).
   - Les tests natifs « sur chaque GPU » y tournent donc quatre fois.
   - La sonde du produit liste quatre UHD.
+  - Ce sont les adaptateurs des pilotes d'écran virtuel eux-mêmes. Le
+    noyau les dit « affichage indirect » sans rendu, avec l'adresse PCI de
+    l'UHD comme adaptateur de rendu. DXGI leur donne le nom de l'UHD et
+    range leurs écrans sous l'UHD. DualRTX en a un aussi, Parsec, listé
+    comme une seconde Arc A380.
+  - Chaque sonde du produit (rafraîchissement de la liste des hôtes,
+    démarrage de session) ouvrait une session oneVPL sur chacun.
+  - ✅ Corrigé par `a83087db` : la sonde écarte un adaptateur d'écran
+    virtuel qui ne porte aucun écran, et le dit une fois par sonde. Sur le
+    N95, 1 GPU au lieu de 4, la sonde en 0,8 à 1,0 s au lieu de 2,8 s,
+    tests natifs 5500/5500.
 - Flux : 10 s de défilement enregistrées, décodées par ffmpeg sans erreur ;
   image nette jusqu'en bas (1088 recadré en 1080).
 
@@ -2257,8 +2268,11 @@ p99.
   puis 22 222 kb/s par seconde d'images, pour 20 000 sur le fil.
 - L'outil, lui, divise toujours la cible du banc par 60. Ces images, à 2,5
   à 3,5 fois ce budget nominal, restaient sous 2,5 fois le budget réel.
-- Le compte juste est donc celui de l'encodeur. Il faudra donner à l'outil
-  le budget de l'encodeur, image par image (une colonne du CSV).
+- Le compte juste est donc celui de l'encodeur. ✅ Depuis `5d842941`,
+  chaque image porte le débit que l'encodeur tenait (colonne
+  `encoder_kbps`), et `rate-report.py` en fait le budget. Il donne à côté
+  le compte contre la cible / 60 quand les deux diffèrent, et compte une
+  marche à partir de la première image codée au nouveau débit.
 - Ces ralentissements de Chrome touchent 4 passes `refit=1` et 1 passe
   `refit=0`. Les présentations par seconde diffèrent peu : 57,1 contre
   56,2 sur le défilement (`refit=0` puis `refit=1`), égales ou meilleures
@@ -2269,6 +2283,60 @@ p99.
 débit en plus sur le texte, plus aucune image très au-dessus, les marches
 mieux suivies, le clip et la latence inchangés. → Décision §9-14 du plan :
 l'activer par défaut après ses passes sur l'Arc.
+
+### 8n.10 `refit=1` sur l'Arc, puis par défaut (27-28/09/2026)
+
+**Montage.**
+- Binaires de `5d842941` : la clé `refit=`, la sonde sans les adaptateurs
+  d'écran virtuel (`a83087db`, trois GPU listés au lieu de quatre) et la
+  colonne `encoder_kbps`.
+- Même exécuteur élevé qu'au §8n.6 : classe REALTIME, HEVC 1080p60,
+  20 Mb/s, `governor=0`, sur l'écran de l'Arc (contenu rendu par l'Arc).
+- Mêmes passes qu'au §8n.9, alternées A-B puis B-A. Sorties dans
+  `bench-out\d3d12v2\refit-arc`.
+
+| contenu | mesure | `refit=0` | `refit=1` |
+|---|---|---|---|
+| défilement | débit / cible, fenêtres de 2 s | 0,88 ; 27 / 56 à ±10 % | 0,91 ; 43 / 56 |
+| | taille / budget : moy. / p95 | 0,89 / 1,87 | 0,91 / 1,86 |
+| | images recodées ; recodées deux fois | 3,1 % ; — | 3,8 % ; 42 (0,6 %) |
+| | très au-dessus (> 2,5 budgets) | 8 | 0 |
+| pause puis défilement | débit / cible | 0,67 | 0,78 |
+| | première image après l'arrêt : moy. / max | 0,72 / 1,60 budget | 1,00 / 1,70 |
+| | très au-dessus | 1 | 0 |
+| rampe | marches suivies en 3 images | 18 / 20 (montées : 8 / 10) | 20 / 20 |
+| | très au-dessus | 2 | 1 |
+| clip de jeu | débit / cible ; taille / budget | 0,928 ; 0,933 | 0,931 ; 0,935 |
+| toutes les passes | `host_total` moy. / p95 / p99 | 3,99 / 4,64 / 6,43 ms | 4,02 / 4,71 / 6,96 ms |
+
+(Latence sur 13 400 images par bras. Les images arrivent à 60 par seconde
+dans toutes les passes : le budget de l'encodeur n'est jamais mis à
+l'échelle.)
+
+- Même sens qu'au N95, en plus petit : l'Arc ne recodait que 3 % des images
+  de texte, contre 16 % sur le N95. Le débit du texte gagne 3 %, mais les
+  fenêtres dans ±10 % de la cible passent de 27 à 43 sur 56.
+- « Très au-dessus » : le compte de `rate-report.py` est désormais celui de
+  l'encodeur. Contre la cible / 60, il en trouverait 4 dans chaque bras de
+  la rampe ; les 2 ou 3 de plus sont les images de marche, codées sous
+  l'ancien débit, que `encoder_kbps` départage maintenant.
+- Le coût : le troisième encodage (environ 4 ms de plus) sur 0,6 % des
+  images de texte.
+  - Au-delà de 8 ms : 57 images de texte au lieu de 19.
+  - p99 de toutes les passes : 6,43 → 6,96 ms. Sur la pause seule : 6,47 →
+    8,10 ms (16 images au-delà de 8 ms au lieu de 12, sur 1 432).
+  - La moyenne ne bouge pas, le clip de jeu non plus.
+- Ce que ça achète : une image très au-dessus pèse au moins 104 Ko à
+  20 Mb/s. Sur un lien au débit de la cible, elle met au moins 42 ms à
+  passer au lieu de 17, et retarde les suivantes. Sur un LAN à 1 Gb/s, elle
+  passe en 1 ms : là, l'échange coûte +0,5 ms au p99 pour un texte un peu
+  plus net.
+- L'Arc recode un peu plus d'images avec `refit=1` (3,1 → 3,8 %), le N95
+  moins (15,7 → 9,5 %). Une image recodée à deux budgets laisse le tampon
+  plus plein, et les budgets suivants plus petits.
+
+**Décision (Bruno, 28/09) : `refit=1` par défaut.** `refit=0` reste la
+clé de banc de l'« avant ».
 
 ## 9. Pour l'A/B
 
