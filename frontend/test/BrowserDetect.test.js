@@ -4,6 +4,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
+    decoderRidesOutGaps,
     detectPlatform,
     isIphone,
     physicalScreenSize,
@@ -69,6 +70,45 @@ describe('BrowserDetect.detectPlatform', () => {
         expect(isIphone()).toBe(true);
         withNavigator({ userAgent: UA.desktop });
         expect(isIphone()).toBe(false);
+    });
+});
+
+// The ride-out bargain needs a decoder that patches over a missing reference.
+// VideoToolbox fails on it instead (seen 28/09/2026 from a Mac): every Apple
+// platform decodes there, whatever the browser, and nothing else says so.
+describe('BrowserDetect.decoderRidesOutGaps', () => {
+    const MAC_CHROME =
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+    const MAC_SAFARI =
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15';
+    const MAC_FIREFOX =
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 14.6; rv:131.0) Gecko/20100101 Firefox/131.0';
+    const IPHONE_CHROME =
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/129.0 Mobile/15E148 Safari/604.1';
+    const WIN_CHROME =
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+    const LINUX_CHROME =
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+    const CHROMEOS = 'Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 Chrome/126.0.0.0';
+
+    it('says no on every Apple platform, whatever the browser', () => {
+        for (const ua of [MAC_CHROME, MAC_SAFARI, MAC_FIREFOX, IPHONE_CHROME, UA.iphone, UA.ipad]) {
+            expect(decoderRidesOutGaps(ua)).toBe(false);
+        }
+    });
+
+    it('says yes everywhere else — "AppleWebKit" alone is not Apple', () => {
+        for (const ua of [WIN_CHROME, LINUX_CHROME, CHROMEOS, UA.androidPhone, UA.desktop]) {
+            expect(decoderRidesOutGaps(ua)).toBe(true);
+        }
+    });
+
+    it('reads the browser user agent when given none', () => {
+        vi.stubGlobal('navigator', { userAgent: MAC_CHROME });
+        expect(decoderRidesOutGaps()).toBe(false);
+        vi.stubGlobal('navigator', { userAgent: WIN_CHROME });
+        expect(decoderRidesOutGaps()).toBe(true);
+        vi.unstubAllGlobals();
     });
 });
 

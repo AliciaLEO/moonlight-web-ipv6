@@ -321,6 +321,22 @@ rafraîchissement resterait indéfiniment sur une image corrompue. Côté backen
 rattraper. Côté navigateur, la suppression est bornée par un chien de garde de
 2,5 s : passé ce délai sans trame contiguë, on redemande une keyframe.
 
+**Pas de demande depuis une plateforme Apple (28/09/2026).** Le pari suppose un
+décodeur qui décode un delta dont la référence n'est jamais arrivée, en
+rapiéçant le trou : c'est ce que font les décodeurs de Windows, sur lesquels il
+a été mesuré. VideoToolbox, qui décode tout flux H.264 et HEVC de WebCodecs sous
+macOS, iOS et iPadOS, le refuse (« Decoding error »). Vu au test C5.7 du plan
+D3D12 (Chrome sur un Mac, par Internet, hôte Arc en oneVPL avec intra-refresh) :
+trois calages du lien en trois minutes, chacun suivi d'une erreur du décodeur,
+d'un décodeur neuf et d'une keyframe — 60 à 110 ms d'image figée, et la keyframe
+que le pari devait éviter arrivait quand même, une erreur plus tard. Aucune API
+ne distingue les deux décodeurs : `decoderRidesOutGaps` (`BrowserDetect.js`) lit
+l'agent utilisateur, et le navigateur ne demande pas `ride_out_loss` sur une
+plateforme Apple. L'hôte encode alors sans vague et récupère à l'ancienne —
+deltas jetés pendant le calage, keyframe dès que le lien se vide —, le chemin
+qui tournait déjà sans erreur sur ce Mac en D3D12 au même test. Ailleurs, rien
+ne change.
+
 Le flag traverse le processus worker (`cfg["rideOutLoss"]`) : le moteur média
 vit dans l'enfant, le poser sur la session du parent ne l'atteindrait jamais.
 

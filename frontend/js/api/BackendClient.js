@@ -46,6 +46,12 @@
  * A Sunshine, Apollo or Wolf host is completely unaffected: nothing here can
  * change how a remote host's encoder recovers.
  *
+ * Never asked for on an Apple platform: VideoToolbox fails on the very delta
+ * the bargain sends it (see decoderRidesOutGaps). The host then encodes without
+ * a wave and recovers the classic way — deltas dropped while the link is stuck,
+ * a keyframe once it drains — which costs that platform one keyframe per stall
+ * instead of a decoder error, a new decoder and the same keyframe.
+ *
  * ── Why it is a switch and not just a default ───────────────────────────────
  *
  * Because which one looks better is a judgement, not a fact. Frozen-then-clean
@@ -68,7 +74,7 @@ const RIDE_OUT_LOSS = true;
  */
 
 import { loadOrCreateIdentity, rememberHostIdentity } from '../util/pairingCrypto.js';
-import { resolveTearing } from '../util/BrowserDetect.js';
+import { decoderRidesOutGaps, resolveTearing } from '../util/BrowserDetect.js';
 import { currentRefreshMilliHz } from '../util/RefreshRate.js';
 
 export class BackendClient {
@@ -358,7 +364,7 @@ export class BackendClient {
             {
                 appId,
                 client_uniqueid: this.clientUniqueId(),
-                ride_out_loss: RIDE_OUT_LOSS,
+                ride_out_loss: RIDE_OUT_LOSS && decoderRidesOutGaps(),
                 // This screen's measured refresh and whether frames wait for
                 // its vsync (tearing off). The native host runs a vsync client
                 // at a divisor of its refresh so frames land on its grid — see

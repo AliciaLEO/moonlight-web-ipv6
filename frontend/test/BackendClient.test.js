@@ -189,6 +189,23 @@ describe('BackendClient', () => {
         expect(body.client_uniqueid).toMatch(/^[0-9A-F]{16}$/);
     });
 
+    // The native host drops a delta without a keyframe only for a browser that
+    // asked for it — and a Mac's VideoToolbox fails on that delta (28/09/2026).
+    it('launchApp asks to ride out a gap, except from an Apple platform', async () => {
+        const fetchMock = mockFetch(jsonResponse({ started: true }));
+        await BackendClient.launchApp('host1', 42, {});
+        expect(JSON.parse(fetchMock.apiCalls()[0][1].body).ride_out_loss).toBe(true);
+
+        const ua = vi
+            .spyOn(navigator, 'userAgent', 'get')
+            .mockReturnValue(
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+            );
+        await BackendClient.launchApp('host1', 42, {});
+        expect(JSON.parse(fetchMock.apiCalls()[1][1].body).ride_out_loss).toBe(false);
+        ua.mockRestore();
+    });
+
     it('downloadCertificate returns raw text', async () => {
         vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse('CERT-TOKEN')));
         await expect(BackendClient.downloadCertificate()).resolves.toBe('CERT-TOKEN');

@@ -158,6 +158,34 @@ export const IS_ANDROID = /android/i.test(navigator.userAgent || '');
 export const IS_APPLE = /mac|iphone|ipad|ipod/i.test(navigator.userAgent || '') || IS_IOS;
 
 /**
+ * Whether this browser's video decoder decodes a delta whose reference never
+ * arrived — patching over the hole — instead of failing on it. The "ride out"
+ * bargain rests on that (RIDE_OUT_LOSS in BackendClient): the native host then
+ * drops a delta on a saturated link without asking for a keyframe, and its
+ * intra-refresh wave repairs what the decoder patched over.
+ *
+ * Not on an Apple platform. Every WebCodecs H.264 and HEVC stream there is
+ * decoded by VideoToolbox, which rejects that delta ("Decoding error"). Seen
+ * 28/09/2026 from a Mac (Chrome, over the Internet, an Arc host on oneVPL with
+ * intra-refresh): three stalls in three minutes, each one a decoder error, a
+ * new decoder and a keyframe, 60 to 110 ms frozen — the keyframe the bargain
+ * was meant to spare came anyway, one error later. Windows decoders patch over
+ * the hole and carry on, which is what the bargain was measured on.
+ *
+ * No API tells one decoder from the other, hence the user agent. iOS and
+ * iPadOS decode on the same VideoToolbox whatever the browser, and iPadOS's
+ * Mac user agent reads as Apple here too. "AppleWebKit", in nearly every user
+ * agent, does not.
+ * @param {string} [ua]
+ * @returns {boolean}
+ */
+export function decoderRidesOutGaps(
+    ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '',
+) {
+    return !/mac|iphone|ipad|ipod/i.test(ua);
+}
+
+/**
  * True on the WebKit engine: Safari on macOS, and every browser on iOS/iPadOS
  * (they all wrap WebKit, whatever their name). Chromium and Gecko on a Mac are
  * excluded by the Chrome/Firefox tokens.

@@ -67,6 +67,7 @@ import {
     IS_APPLE,
     IS_WEBKIT,
     SUPPORTS_CANVAS_TEARING,
+    decoderRidesOutGaps,
     isSnapdragonGpu,
     pickAutoEnhancer,
     supportsDisplayHdr,
@@ -803,6 +804,13 @@ export class StreamView {
         if (opts.intraRefresh === true && 'rideOutLoss' in this.webrtc) {
             this.webrtc.rideOutLoss = true;
             console.log('[StreamView] Loss recovery: riding out the refresh wave');
+        } else if (opts.nativeHost === true && !decoderRidesOutGaps()) {
+            // Never asked for here (BackendClient): this platform's decoder
+            // fails on a delta whose reference is missing, so a stall on the
+            // link costs a keyframe instead.
+            console.log(
+                "[StreamView] Loss recovery: keyframes (this platform's decoder cannot ride out a gap)",
+            );
         }
         // Debug builds only: force the virtual pad the host presents instead of
         // letting it follow the controller we detect. 'auto' everywhere else —
