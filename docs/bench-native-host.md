@@ -2338,6 +2338,87 @@ l'échelle.)
 **Décision (Bruno, 28/09) : `refit=1` par défaut** (`0d09df8d`). `refit=0`
 reste la clé de banc de l'« avant ».
 
+## 8o. Linux : la chaîne Vulkan (28/09/2026 →)
+
+Phase 13 du plan D3D12 : la même forme de chaîne sous Linux, en Vulkan Video
+là où le pilote l'offre, VA-API sinon. Avant d'en écrire une ligne dans le
+moteur, le labo `mw-vk-lab` (`tools/vk-lab`, jamais installé) demande au
+matériel ce qu'il sait faire.
+
+### 8o.0 Le 780M de l'UM790Pro sous Mesa 25.2.8 (28/09/2026)
+
+**Montage.**
+- UM790Pro, Ubuntu 22.04.5, noyau 6.8.0-138, Radeon 780M (Phoenix,
+  VCN 4.0.2). Micrologiciel VCN du paquet `linux-firmware` d'Ubuntu :
+  `0x0711300d`, soit ENC 1.19.
+- RADV de Mesa 25.2.8, ajouté au préfixe de labo (`~/mesa-25/prefix`,
+  `-Dvulkan-drivers=amd`). Le Mesa 23.2 du système n'a pas d'encodage
+  Vulkan. Chargeur 1.4.313 (SDK LunarG), en-têtes du module 1.4.364.
+- `VK_DRIVER_FILES=<préfixe>/share/vulkan/icd.d/radeon_icd.x86_64.json` et
+  `RADV_PERFTEST=video_encode` : Mesa n'expose l'encodeur de VCN 4 d'office
+  qu'à partir d'ENC 1.22.
+- Binaires de `c60f9816` (`caps`) et `5f1b1300` (`encode`). Sorties dans
+  `bench-out\vk-lab`.
+
+**`caps`.**
+- Encodeurs : H.264 (High, Constrained Baseline) et HEVC (Main, Main 10).
+  Pas d'AV1 : RADV le réserve à ENC ≥ 1.20.
+- HEVC :
+  - CTB de 64 seulement, transformées de 4 à 32 ;
+  - une seule référence active (L0 = 1 en P), 17 emplacements de DPB, tous
+    dans une même image (pas de `separate-reference-images`) ;
+  - débit : QP constant (`DISABLED`), CBR, VBR ; QP de 0 à 51 ; deux niveaux
+    de qualité ;
+  - granularité d'accès et d'entrée : 64 × 16 ;
+  - retour de l'encodeur : décalage et octets écrits, pas les retouches ;
+  - ni intra-refresh ni cartes de QP (les extensions manquent) ;
+  - niveau maximal annoncé : 1.0, un champ que RADV ne remplit pas.
+- L'entrée de l'encodeur (NV12, et P010 en Main 10) se crée en `STORAGE` ou
+  en `COLOR_ATTACHMENT` par plan : la conversion peut écrire directement
+  dedans, sans copie.
+- Priorités : les quatre familles de files annoncent LOW à REALTIME. En
+  utilisateur, HIGH et REALTIME sont refusées (`VK_ERROR_NOT_PERMITTED`)
+  partout, file d'encodage comprise ; en root (`CAP_SYS_NICE`), tout est
+  accordé.
+- Horodatages : 64 bits sur les files graphique et compute, **aucun sur la
+  file d'encodage**. Le temps d'encodage se mesure donc côté CPU, ou par les
+  horloges calibrées (device, monotonic, monotonic raw).
+- Import : les quatre formats de capture (XR24, XB24, XR30, XB30)
+  s'importent avec leurs six modificateurs, dont le DCC affichable en trois
+  plans. Le plan primaire affiché ce jour-là (1920 × 1080 XR24,
+  `GFX11, 64K_R_X, DCC, DCC_RETILE…`) s'importe tel quel ; le curseur
+  (256 × 256 AR24 linéaire) aussi.
+- Sémaphores : `sync_file` en import et en export.
+
+**`encode`, HEVC 1080p60 à QP 30.**
+- Latence : 2,3 ms en moyenne de la soumission au flux en main, 3,0 ms au
+  p99, envoi de l'image compris (0,24 ms sur la file compute). Chiffre à
+  reprendre avec un micrologiciel qui code juste (ci-dessous) ; le tout
+  intra, lui juste, donne 2,26 ms.
+- Relus dans chaque en-tête de tranche : le QP est celui demandé (180 sur
+  180), la RPS aussi (une référence, utilisée).
+- Nos en-têtes : RADV les retouche, et le dit (`hasOverrides`) : tranches
+  dépendantes activées, `cu_qp_delta` et tailles de blocs imposés. Il garde
+  l'AMP de notre SPS.
+- **Au pixel, le flux est faux dès la première image P** : 5 dB, erreurs
+  CABAC dans ffmpeg. Avec ou sans SAO, en CBR comme en QP constant, DPB de 2
+  ou 3 emplacements, envoi par la file compute ou graphique.
+- **En tout intra (`--idr-every 1`), il est juste** : 0 erreur, 27,2 dB
+  constants. La même machine en VA-API (`hevc_vaapi`) : 0 erreur.
+- Mesa l'explique : « VCN 4 FW 1.22 has all the necessary pieces to pass
+  CTS ». En dessous, RADV cache son encodeur et son décodeur derrière
+  `RADV_PERFTEST`.
+
+**Ce qu'on en retient.**
+- Le produit ne pose jamais `RADV_PERFTEST` : la chaîne Vulkan n'est offerte
+  que là où le pilote expose l'encodeur de lui-même. Sur ce banc tel quel,
+  c'est VA-API.
+- Mesurer RADV pour de vrai demande un micrologiciel VCN ≥ 1.22 sur
+  l'UM790Pro (un fichier plus récent de `linux-firmware`, puis un
+  redémarrage), ou une distribution plus récente.
+- La preuve au pixel attrape ce que les en-têtes relus ne voient pas : QP et
+  RPS justes, flux faux.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
