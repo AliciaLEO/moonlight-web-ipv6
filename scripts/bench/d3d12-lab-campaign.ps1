@@ -11,8 +11,15 @@
 # from an elevated one (REALTIME, GLOBAL_REALTIME queues). -Loads external
 # measures under whatever already runs (a game started by hand: RE9).
 #
+# -Set vp is the question of plan 9-15 instead: the driver's Video Process
+# (on Intel, the video engine's scaler, SFC) against the product's conversion
+# on the 3D engine, the same way - 1440p to 1080p, and 1080p as it is (the
+# N95's own screen) - then, at rest, both pictures of a real desktop (a text
+# page and a game frame, -Pictures) against the pixel shaders' Lanczos-2.
+#
 #   .\d3d12-lab-campaign.ps1 [-Gpus rtx,arc,amd|n95] [-Loads rest,load]
 #                            [-Seconds 12] [-Out <dir>] [-Build <dir>]
+#                            [-Set g1|vp] [-Pictures <dir>]
 #
 # n95 is the Intel UHD Graphics of the N95 bench (mw-intel): no temperature
 # sensor, and a load calibrated to 45 fps settles at a level that runs at 52,
@@ -30,7 +37,9 @@ param(
     [string[]] $Loads = @('rest', 'load'),
     [int] $Seconds = 12,
     [string] $Out = '',
-    [string] $Build = ''
+    [string] $Build = '',
+    [ValidateSet('g1', 'vp')] [string] $Set = 'g1',
+    [string] $Pictures = ''
 )
 $ErrorActionPreference = 'Continue'
 # powershell -File hands "rtx,arc" over as one string, not as an array.
@@ -38,7 +47,8 @@ $Gpus = @($Gpus | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $Loads = @($Loads | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $root = (Resolve-Path "$PSScriptRoot\..\..").Path
 if (-not $Build) { $Build = Join-Path $root 'build-d3d12' }
-if (-not $Out) { $Out = Join-Path $root 'bench-out\d3d12v2\g1' }
+if (-not $Out) { $Out = Join-Path $root "bench-out\d3d12v2\$(if ($Set -eq 'vp') { 'vpp' } else { 'g1' })" }
+if (-not $Pictures) { $Pictures = Join-Path $root 'bench-out\d3d12v2\vpp\pictures' }
 $lab = Join-Path $Build 'native-host\tools\d3d12-lab\mw-d3d12-lab.exe'
 $loadExe = Join-Path $Build 'native-host\tools\gpu-load\mw-gpu-load.exe'
 $kiosk = Join-Path $PSScriptRoot 'kiosk.ps1'
@@ -81,9 +91,52 @@ function Probe($gpu, $loadName, $dir, $name, [string[]] $probeArgs) {
     & $lab @all 2>&1 | Out-File -FilePath $txt -Encoding utf8
     Stop-Load $p
     $summary = [string](Get-Content $txt |
-        Where-Object { $_ -match 'refused|wall ms, P|NVENC-D3D12|AMF-DX12|^ddasync=gpu \+|^(d3d11|ps|cs) .*\|' } |
+        Where-Object { $_ -match 'refused|wall ms, P|NVENC-D3D12|AMF-DX12|^ddasync=gpu \+|^(d3d11|ps|cs|vp|vp-pointer) .*\|' } |
         Select-Object -First 1)
     Write-Host ("  {0,-16} {1}" -f $name, ($summary -replace '\s+', ' '))
+}
+
+if ($Set -eq 'vp') {
+    foreach ($gpu in $Gpus) {
+        $n = $names[$gpu]
+        foreach ($loadName in $Loads) {
+            $dir = Join-Path $Out "$gpu-$loadName-$token"
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            Write-Host "=== $gpu, $loadName, token $token -> $dir (Video Process)"
+            # One variant per call, as above. The product's queues: its own
+            # CreatorID, GLOBAL_REALTIME under REALTIME (refused with a limited
+            # token: the HIGH ones are that token's measure).
+            $s = "$Seconds"
+            $vpVariants = @(
+                @('v-ps-realtime', 'ps', 'realtime', '2560x1440:1920x1080'),
+                @('v-vp-realtime', 'vp', 'realtime', '2560x1440:1920x1080'),
+                @('v-vpp-realtime', 'vp-pointer', 'realtime', '2560x1440:1920x1080'),
+                @('v-ps-high', 'ps', 'high', '2560x1440:1920x1080'),
+                @('v-vp-high', 'vp', 'high', '2560x1440:1920x1080'),
+                @('v-ps-1080-realtime', 'ps', 'realtime', '1920x1080:1920x1080'),
+                @('v-vp-1080-realtime', 'vp', 'realtime', '1920x1080:1920x1080'),
+                @('v-ps-1080-high', 'ps', 'high', '1920x1080:1920x1080'),
+                @('v-vp-1080-high', 'vp', 'high', '1920x1080:1920x1080'))
+            foreach ($v in $vpVariants) {
+                Probe $gpu $loadName $dir $v[0] @('queues', '--adapter', $n, '--seconds', $s, '--warmup', '30',
+                    '--rate', '60', '--size', $v[3], '--variants', $v[1], '--priorities', $v[2], '--creators', 'own')
+            }
+            if ($loadName -ne 'rest') { continue }
+            # The pictures, at rest: what each scaler makes of a real desktop.
+            foreach ($q in @(@('text-2560x1440', '2560x1440:1920x1080'), @('game-2560x1440', '2560x1440:1920x1080'),
+                    @('text-1920x1080', '1920x1080:1280x720'), @('game-1920x1080', '1920x1080:1280x720'),
+                    @('text-1920x1080', '1920x1080:1920x1080'))) {
+                $picture = Join-Path $Pictures "$($q[0]).png"
+                if (-not (Test-Path $picture)) { Write-Host "  missing $picture"; continue }
+                $name = "v-quality-$($q[0])-to-$(($q[1] -split ':')[1])"
+                Probe $gpu $loadName $dir $name @('queues', '--adapter', $n, '--seconds', '2', '--warmup', '10',
+                    '--rate', '60', '--size', $q[1], '--picture', $picture, '--variants', 'ps,vp,vp-pointer',
+                    '--priorities', 'high', '--creators', 'own', '--dump', (Join-Path $dir $name))
+            }
+        }
+    }
+    Write-Host "=== done ($Out)"
+    return
 }
 
 foreach ($gpu in $Gpus) {

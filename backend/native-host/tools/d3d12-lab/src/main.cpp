@@ -35,13 +35,15 @@ namespace {
 
 void usage()
 {
-    std::puts("mw-d3d12-lab <command> [options]\n"
-              "  caps    what every GPU answers (driver, queues, fences, D3D12 Video Encode)\n"
-              "  queues  where the conversion waits: D3D11, D3D12 DIRECT and COMPUTE, by priority\n"
-              "  interop what the DDA handshake costs, and what reading without it does\n"
-              "  encode  D3D12 Video Encode HEVC with the product's rate control\n"
-              "  vendors NVENC and AMF fed D3D12 pictures\n"
-              "Run a command with --help for its options.\n");
+    std::puts(
+        "mw-d3d12-lab <command> [options]\n"
+        "  caps    what every GPU answers (driver, queues, fences, D3D12 Video Encode)\n"
+        "  queues  where the conversion waits: D3D11, D3D12 DIRECT and COMPUTE, by priority,\n"
+        "          and the driver's Video Process (Intel's SFC)\n"
+        "  interop what the DDA handshake costs, and what reading without it does\n"
+        "  encode  D3D12 Video Encode HEVC with the product's rate control\n"
+        "  vendors NVENC and AMF fed D3D12 pictures\n"
+        "Run a command with --help for its options.\n");
 }
 
 } // namespace

@@ -5443,3 +5443,28 @@ par l'ancien chemin, sans rien à relancer. Un PC verrouillé se déverrouille
 depuis le stream, comme avec Parsec, ce que la v0.3.1 promettait sans le
 tenir. Et là où le worker ne tourne pas en SYSTEM (banc, `--dev`), un écran
 verrouillé ne fait plus perdre le chemin rapide jusqu'à la fin du stream.
+
+### 32.11 Le scaler matériel d'Intel, mesuré et écarté (§9-15, 28/09/2026)
+
+Sur un iGPU Intel saturé par un jeu, la conversion attend le jeu, l'encodeur
+non : il tourne sur le moteur vidéo (§8n.8 du banc). D3D12 Video Process met
+le scaler de ce moteur (SFC) à portée, et la sonde `queues` du labo l'a mesuré
+sur le N95 (§8n.16 du banc).
+
+Il ne tient pas sa promesse. Sa file attend le jeu comme la nôtre, environ
+10 ms sous charge, même en `GLOBAL_REALTIME`, et sa latence n'est pas meilleure
+que celle de nos shaders en bilinéaire (11,2 contre 10,9 ms). Au repos, il est
+plus lent (4,0 contre 2,9 ms). Il rend quelques images au jeu, mais plus dès
+que le pointeur est composé : la composition à deux flux repasse par le moteur
+3D. Il ne sait pas le HDR, ni le pointeur en inversion. Sa réduction, en
+gamma, tient entre notre bilinéaire et notre Lanczos-2.
+
+Pas de route SFC, donc : la condition posée par Bruno (« seulement si la sonde
+ne voit plus le jeu ») n'est pas remplie. La sonde reste au labo (`vp`,
+`vp-pointer`, `--picture`, `-Set vp` dans la campagne) pour un autre GPU ou un
+autre pilote.
+
+**Concrètement, pour l'utilisateur** : rien ne change. Sur un PC portable à
+puce Intel où un jeu occupe toute la carte graphique, l'image du stream reste
+préparée par le même chemin, parce que le circuit spécialisé d'Intel, mesuré,
+fait la queue derrière le jeu tout autant et n'irait pas plus vite.

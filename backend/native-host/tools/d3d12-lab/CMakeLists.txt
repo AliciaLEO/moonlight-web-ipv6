@@ -6,8 +6,9 @@
 # D3D12 Video Encode driver takes, whether the shared fences of the Desktop
 # Duplication handshake open both ways and what a round costs, which queue
 # priorities are granted and to whom, and which queues can be timestamped.
-# Later subcommands time the real conversion on each queue type under a game,
-# look for torn frames in the DDA handshake, and encode.
+# Later subcommands time the real conversion on each queue type under a game
+# (and the driver's own Video Process, Intel's hardware scaler), look for torn
+# frames in the DDA handshake, and encode.
 #
 # Never installed nor shipped, outside the library's licence boundary: a lab
 # instrument, built on demand with -DMW_BUILD_TOOLS=ON. It links
@@ -43,7 +44,7 @@ target_include_directories(mw-d3d12-lab SYSTEM PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/nvenc-headers
     ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/amf-headers)
 target_link_libraries(mw-d3d12-lab PRIVATE mw-native-host d3d12 d3d11 dxgi d3dcompiler ole32
-                                           version advapi32)
+                                           version advapi32 windowscodecs)
 
 if(MSVC)
     target_compile_options(mw-d3d12-lab PRIVATE /W4 /utf-8)

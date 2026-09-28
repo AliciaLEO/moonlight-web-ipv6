@@ -2596,6 +2596,79 @@ lignes `[KBD]` de 327 journaux (dev et prod) sont effacées sur place, à longue
 clavier se taisent tant que l'entrée n'est pas sur le bureau de l'utilisateur,
 quoi que dise le réglage.
 
+### 8n.16 §9-15 : le scaler matériel d'Intel, par D3D12 Video Process (28/09/2026)
+
+**La question.** Sur le N95, sous une charge 3D qui sature l'iGPU, la
+conversion attend le jeu alors que l'encodeur VE, sur le moteur vidéo, ne
+l'attend pas (§8n.8). Le scaler du moteur vidéo (SFC), que D3D12 Video Process
+expose, sortirait-il la conversion de la file du jeu ? La condition de Bruno :
+une route SFC seulement si la sonde ne voit plus le jeu.
+
+**La sonde.** `mw-d3d12-lab queues` gagne deux variantes :
+- `vp` : le bureau BGRA réduit et converti en NV12 BT.709 limité par
+  `ProcessFrames`, sur une file VIDEO_PROCESS ;
+- `vp-pointer` : la même, avec le pointeur composé en second flux (alpha par
+  pixel).
+
+Les temps sont mesurés comme pour les autres variantes. La dernière image est
+comparée à celle des shaders : PSNR par plan et moyennes des plans. Avec
+`--picture`, la source est un vrai bureau : une page de texte rendue par
+Chrome, ou une image du clip de jeu du banc. La campagne passe par
+`d3d12-lab-campaign.ps1 -Set vp`, avec l'exécuteur élevé (REALTIME), la
+charge `mw-gpu-load` au niveau 1,05 et 60 soumissions par seconde. Les shaders
+en bilinéaire, le filtre que le garde-fou du produit choisit sur le N95, sont
+passés à part (`queues --filter bilinear`). Sorties dans
+`bench-out\d3d12v2\n95\vpp`.
+
+**Ce que l'UHD offre** (l'Arc répond pareil) :
+- BGRA → NV12 de 8×8 à 8192×8192, 16 flux d'entrée, fusion alpha ;
+- **pas de HDR** : FP16 → P010 PQ et FP16 → NV12 tone-mappé sont refusés ;
+- les horodatages de la file VIDEO_PROCESS n'encadrent pas le travail du
+  scaler (0,03 ms pour 4 ms de mur) : seul le temps mur compte ;
+- la couche de validation veut la destination d'un `ResolveQueryData` en
+  `COPY_DEST` sur cette file.
+
+**Temps mur (ms, moyenne / p99), classe REALTIME, files GLOBAL_REALTIME.**
+
+| 1440p → 1080p | repos | sous charge | jeu sous charge (i/s) |
+|---|---|---|---|
+| shaders, Lanczos-2 | 12,9 / 14,4 | 22,1 / 32,3 | 20,8 |
+| shaders, bilinéaire (le choix du produit ici) | 2,9 / 3,3 | 10,9 / 20,7 | 37,9 |
+| Video Process | 4,0 / 4,7 | 11,2 / 21,6 | 42,4 |
+| Video Process + pointeur | 6,9 / 7,2 | 11,6 / 23,5 | 37,8 |
+
+| 1080p → 1080p (l'écran du N95) | repos | sous charge | jeu sous charge (i/s) |
+|---|---|---|---|
+| shaders | 2,3 / 5,2 | 9,3 / 17,5 | 39,6 |
+| Video Process | 2,5 / 2,9 | 10,4 / 21,3 | 42,8 |
+
+- Sous charge, la file VIDEO_PROCESS attend le jeu autant que la file DIRECT :
+  environ 10 ms avant que le travail démarre, contre 8 à 9 ms pour les
+  shaders, et ce même en GLOBAL_REALTIME. Le scaler ne sort pas la conversion
+  de la file du jeu.
+- Il rend quelques images au jeu (42 i/s au lieu de 38 à 40) : ses
+  millisecondes ne sont plus prises au moteur 3D. Mais avec le pointeur en
+  second flux, la composition repasse par le moteur 3D (2,4 à 5,9 ms de GPU
+  horodatées, jeu à 37,8 i/s).
+- Au repos, il est plus lent que les shaders : 4,0 contre 2,9 ms en 1440p →
+  1080p. Sur l'Arc, 3,7 à 4,0 ms contre 2,2.
+
+**Qualité, sur les vraies images** (1440p → 1080p, contre notre Lanczos-2) :
+- texte : 29,9 dB, là où notre bilinéaire est à 28,7. Un peu plus sombre
+  (moyenne de Y 211 contre 213), parce qu'il réduit en gamma et non en lumière
+  linéaire ;
+- jeu : 56,6 dB, comme le bilinéaire (57,8) ;
+- sans mise à l'échelle, il donne la même image à un code près (83 dB sur
+  l'Arc) ;
+- le pointeur composé est juste, sauf sa partie en inversion (XOR), que le
+  scaler ne sait pas faire.
+
+**Verdict (§9-15 du plan) : pas de route SFC.** La condition n'est pas
+remplie : sous charge, le scaler attend le jeu comme les shaders, et sa
+latence n'est pas meilleure (11,2 contre 10,9 ms en moyenne). Son seul gain,
+quelques images par seconde rendues au jeu, disparaît dès que le pointeur est
+composé. Et il coûterait le HDR et le pointeur en inversion.
+
 ## 8o. Linux : la chaîne Vulkan (28/09/2026 →)
 
 Phase 13 du plan D3D12 : la même forme de chaîne sous Linux, en Vulkan Video
