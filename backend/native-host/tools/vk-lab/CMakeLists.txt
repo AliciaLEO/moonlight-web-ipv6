@@ -48,3 +48,35 @@ target_include_directories(mw-vk-lab SYSTEM PRIVATE
     ${MW_VK_LAB_DRM_INCLUDE_DIRS})
 target_link_libraries(mw-vk-lab PRIVATE ${MW_VK_LAB_DRM_LIBRARIES} ${CMAKE_DL_LIBS})
 target_compile_options(mw-vk-lab PRIVATE -Wall -Wextra)
+
+# The probes that run shaders take their SPIR-V from glslangValidator at build
+# time (the Vulkan SDK's, or the distribution's glslang-tools): a header of
+# 32-bit words, nothing compiled at run time. Without it, `queues` is left out.
+find_program(MW_GLSLANG_VALIDATOR glslangValidator)
+if(MW_GLSLANG_VALIDATOR)
+    set(_mw_vk_lab_spv ${CMAKE_CURRENT_BINARY_DIR}/spirv)
+    add_custom_command(
+        OUTPUT ${_mw_vk_lab_spv}/ConvertSpv.h
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${_mw_vk_lab_spv}
+        COMMAND ${MW_GLSLANG_VALIDATOR} -V --target-env vulkan1.1 --vn kConvertSpv
+                -o ${_mw_vk_lab_spv}/ConvertSpv.h ${CMAKE_CURRENT_SOURCE_DIR}/shaders/convert.comp
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/convert.comp
+        VERBATIM)
+    target_sources(mw-vk-lab PRIVATE src/Queues.cpp ${_mw_vk_lab_spv}/ConvertSpv.h)
+    target_include_directories(mw-vk-lab PRIVATE ${_mw_vk_lab_spv})
+    target_compile_definitions(mw-vk-lab PRIVATE MW_VK_LAB_SHADERS=1)
+else()
+    message(STATUS "mw-vk-lab: no glslangValidator, built without `queues`")
+endif()
+
+# `egl`, the witness of `queues`: the chain of today in GLES, as GlConvert sets
+# it up. Needs what the engine's Linux graphics backend links (EGL, GLESv2, GBM).
+pkg_check_modules(MW_VK_LAB_GL egl glesv2 gbm)
+if(MW_VK_LAB_GL_FOUND)
+    target_sources(mw-vk-lab PRIVATE src/Egl.cpp)
+    target_include_directories(mw-vk-lab SYSTEM PRIVATE ${MW_VK_LAB_GL_INCLUDE_DIRS})
+    target_link_libraries(mw-vk-lab PRIVATE ${MW_VK_LAB_GL_LIBRARIES})
+    target_compile_definitions(mw-vk-lab PRIVATE MW_VK_LAB_EGL=1)
+else()
+    message(STATUS "mw-vk-lab: no EGL/GLESv2/GBM, built without `egl`")
+endif()

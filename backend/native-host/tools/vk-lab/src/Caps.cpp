@@ -56,7 +56,6 @@
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
-#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1438,18 +1437,6 @@ bool parse(int argc, char** argv, Options& o)
     return true;
 }
 
-bool matches(const std::string& spec, uint32_t index, const char* name)
-{
-    if (spec.empty()) return true;
-    if (spec.find_first_not_of("0123456789") == std::string::npos) return std::stoul(spec) == index;
-    std::string lowerName = name, lowerSpec = spec;
-    for (char& c : lowerName)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    for (char& c : lowerSpec)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return lowerName.find(lowerSpec) != std::string::npos;
-}
-
 } // namespace
 
 void capsUsage()
@@ -1537,7 +1524,7 @@ int runCaps(int argc, char** argv)
                 props.properties.deviceName);
             continue;
         }
-        if (!matches(o.device, i, props.properties.deviceName)) continue;
+        if (!matchesDevice(o.device, i, props.properties.deviceName)) continue;
         probeDevice(vk, devices[i], i, o, j);
     }
     j.endArray();

@@ -46,11 +46,7 @@
 
 #include "encode/HevcSliceParser.h"
 
-#include <time.h>
-
 #include <algorithm>
-#include <cctype>
-#include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -97,37 +93,9 @@ struct Options
     std::string dump, dumpInput, csv, json;
 };
 
-struct Stats
-{
-    double mean = 0, p50 = 0, p99 = 0, max = 0;
-};
-
-Stats stats(std::vector<double> v)
-{
-    Stats s;
-    if (v.empty()) return s;
-    std::sort(v.begin(), v.end());
-    double sum = 0;
-    for (double x : v)
-        sum += x;
-    s.mean = sum / static_cast<double>(v.size());
-    s.p50 = v[v.size() / 2];
-    s.p99 = v[std::min(v.size() - 1, static_cast<size_t>(static_cast<double>(v.size()) * 0.99))];
-    s.max = v.back();
-    return s;
-}
-
 uint32_t alignUp(uint32_t v, uint32_t a)
 {
     return a ? (v + a - 1) / a * a : v;
-}
-
-void sleepUntilUs(int64_t deadlineUs)
-{
-    struct timespec ts = {};
-    ts.tv_sec = static_cast<time_t>(deadlineUs / 1000000);
-    ts.tv_nsec = static_cast<long>((deadlineUs % 1000000) * 1000);
-    while (::clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, nullptr) == EINTR) {}
 }
 
 /// The eight input pictures, NV12 at the coded size: a ramp that moves, fine
@@ -171,57 +139,6 @@ int walkQp(int base, int n, bool walk)
     return 22 + (phase < 20 ? phase : 40 - phase);
 }
 
-uint32_t memoryType(const VkPhysicalDeviceMemoryProperties& mem, uint32_t bits,
-                    VkMemoryPropertyFlags want)
-{
-    for (uint32_t i = 0; i < mem.memoryTypeCount; ++i)
-        if ((bits & (1u << i)) && (mem.memoryTypes[i].propertyFlags & want) == want) return i;
-    return UINT32_MAX;
-}
-
-/// Everything the probe makes, destroyed in reverse before the device.
-struct Owned
-{
-    const Vulkan* vk = nullptr;
-    DeviceFunctions fn;
-    VkDevice device = VK_NULL_HANDLE;
-    std::vector<VkDeviceMemory> memories;
-    std::vector<VkBuffer> buffers;
-    std::vector<VkImage> images;
-    std::vector<VkImageView> views;
-    std::vector<VkSemaphore> semaphores;
-    std::vector<VkCommandPool> pools;
-    std::vector<VkQueryPool> queryPools;
-    VkVideoSessionKHR session = VK_NULL_HANDLE;
-    VkVideoSessionParametersKHR parameters = VK_NULL_HANDLE;
-    void* mapped[2] = {nullptr, nullptr};
-
-    ~Owned()
-    {
-        if (!device) return;
-        if (fn.vkDeviceWaitIdle) fn.vkDeviceWaitIdle(device);
-        if (parameters && fn.vkDestroyVideoSessionParametersKHR)
-            fn.vkDestroyVideoSessionParametersKHR(device, parameters, nullptr);
-        if (session && fn.vkDestroyVideoSessionKHR)
-            fn.vkDestroyVideoSessionKHR(device, session, nullptr);
-        for (VkQueryPool q : queryPools)
-            fn.vkDestroyQueryPool(device, q, nullptr);
-        for (VkCommandPool p : pools)
-            fn.vkDestroyCommandPool(device, p, nullptr);
-        for (VkSemaphore s : semaphores)
-            fn.vkDestroySemaphore(device, s, nullptr);
-        for (VkImageView v : views)
-            fn.vkDestroyImageView(device, v, nullptr);
-        for (VkImage i : images)
-            fn.vkDestroyImage(device, i, nullptr);
-        for (VkBuffer b : buffers)
-            fn.vkDestroyBuffer(device, b, nullptr);
-        for (VkDeviceMemory m : memories)
-            fn.vkFreeMemory(device, m, nullptr);
-        vk->vkDestroyDevice(device, nullptr);
-    }
-};
-
 #define VKTRY(call, what)                                                                          \
     do {                                                                                           \
         const VkResult result_ = (call);                                                           \
@@ -230,23 +147,6 @@ struct Owned
             return 1;                                                                              \
         }                                                                                          \
     } while (0)
-
-/// Memory for @p req, of a type with @p want (then @p fallback) properties.
-VkResult allocate(Owned& o, const VkPhysicalDeviceMemoryProperties& mem,
-                  const VkMemoryRequirements& req, VkMemoryPropertyFlags want,
-                  VkMemoryPropertyFlags fallback, VkDeviceMemory& out)
-{
-    uint32_t type = memoryType(mem, req.memoryTypeBits, want);
-    if (type == UINT32_MAX) type = memoryType(mem, req.memoryTypeBits, fallback);
-    if (type == UINT32_MAX) return VK_ERROR_OUT_OF_DEVICE_MEMORY;
-    VkMemoryAllocateInfo info = {};
-    info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    info.allocationSize = req.size;
-    info.memoryTypeIndex = type;
-    const VkResult r = o.fn.vkAllocateMemory(o.device, &info, nullptr, &out);
-    if (r == VK_SUCCESS) o.memories.push_back(out);
-    return r;
-}
 
 bool parse(int argc, char** argv, Options& o)
 {
@@ -324,18 +224,6 @@ bool parse(int argc, char** argv, Options& o)
         o.dpbSlots < o.keep + 1 || o.width % 2 || o.height % 2)
         return false;
     return true;
-}
-
-bool matches(const std::string& spec, uint32_t index, const char* name)
-{
-    if (spec.empty()) return true;
-    if (spec.find_first_not_of("0123456789") == std::string::npos) return std::stoul(spec) == index;
-    std::string lowerName = name, lowerSpec = spec;
-    for (char& c : lowerName)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    for (char& c : lowerSpec)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return lowerName.find(lowerSpec) != std::string::npos;
 }
 
 /// One line per field that the driver's parameter sets say differently from
@@ -509,7 +397,7 @@ int runEncode(int argc, char** argv)
         p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
         vk.vkGetPhysicalDeviceProperties2(devices[i], &p2);
         if (p2.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU) continue;
-        if (!matches(o.device, i, p2.properties.deviceName)) continue;
+        if (!matchesDevice(o.device, i, p2.properties.deviceName)) continue;
         std::vector<std::string> ext = deviceExtensions(vk, devices[i]);
         if (!hasExtension(ext, VK_KHR_VIDEO_ENCODE_H265_EXTENSION_NAME)) {
             say("GPU %u (%s): no %s\n", i, p2.properties.deviceName,
@@ -620,8 +508,9 @@ int runEncode(int argc, char** argv)
     }
 
     // ── The device ──
-    Owned own;
+    DeviceObjects own;
     own.vk = &vk;
+    void* mapped[2] = {nullptr, nullptr}; // the staging buffer, the bitstream
     std::vector<const char*> enable = {VK_KHR_VIDEO_QUEUE_EXTENSION_NAME,
                                        VK_KHR_VIDEO_ENCODE_QUEUE_EXTENSION_NAME,
                                        VK_KHR_VIDEO_ENCODE_H265_EXTENSION_NAME};
@@ -708,7 +597,7 @@ int runEncode(int argc, char** argv)
         VkMemoryRequirements req = {};
         fn.vkGetImageMemoryRequirements(device, image, &req);
         VkDeviceMemory memory = VK_NULL_HANDLE;
-        VKTRY(allocate(own, mem, req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, memory),
+        VKTRY(own.allocate(mem, req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, memory),
               "picture memory");
         VKTRY(fn.vkBindImageMemory(device, image, memory, 0), "vkBindImageMemory");
     }
@@ -762,16 +651,16 @@ int runEncode(int argc, char** argv)
             fn.vkGetBufferMemoryRequirements(device, buffer, &req);
             VkDeviceMemory memory = VK_NULL_HANDLE;
             // The bitstream is read by the CPU: cached memory if there is some.
-            VKTRY(allocate(own, mem, req,
-                           index ? visible | VK_MEMORY_PROPERTY_HOST_CACHED_BIT : visible, visible,
-                           memory),
+            VKTRY(own.allocate(mem, req,
+                               index ? visible | VK_MEMORY_PROPERTY_HOST_CACHED_BIT : visible,
+                               visible, memory),
                   "buffer memory");
             VKTRY(fn.vkBindBufferMemory(device, buffer, memory, 0), "vkBindBufferMemory");
-            VKTRY(fn.vkMapMemory(device, memory, 0, VK_WHOLE_SIZE, 0, &own.mapped[index]),
+            VKTRY(fn.vkMapMemory(device, memory, 0, VK_WHOLE_SIZE, 0, &mapped[index]),
                   "vkMapMemory");
             ++index;
         }
-        std::memcpy(own.mapped[0], pictures.data(), pictures.size());
+        std::memcpy(mapped[0], pictures.data(), pictures.size());
     }
     if (!o.dumpInput.empty()) {
         std::ofstream out(o.dumpInput, std::ios::binary);
@@ -803,8 +692,8 @@ int runEncode(int argc, char** argv)
         std::vector<VkBindVideoSessionMemoryInfoKHR> binds(n);
         for (uint32_t i = 0; i < n; ++i) {
             VkDeviceMemory memory = VK_NULL_HANDLE;
-            VKTRY(allocate(own, mem, reqs[i].memoryRequirements,
-                           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0, memory),
+            VKTRY(own.allocate(mem, reqs[i].memoryRequirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                               0, memory),
                   "session memory");
             binds[i] = {};
             binds[i].sType = VK_STRUCTURE_TYPE_BIND_VIDEO_SESSION_MEMORY_INFO_KHR;
@@ -1354,7 +1243,7 @@ int runEncode(int argc, char** argv)
         slotPoc[setup] = poc;
 
         // Read the slice header back with the driver's own SPS and PPS.
-        const uint8_t* data = static_cast<const uint8_t*>(own.mapped[1]) + feedback.offset;
+        const uint8_t* data = static_cast<const uint8_t*>(mapped[1]) + feedback.offset;
         int codedQp = -1;
         size_t kept = 0, used = 0;
         for (const HevcNalUnit& u : mw::native::encode::hevcNalUnits(data, feedback.bytes)) {

@@ -22,6 +22,12 @@
 
 #include "Caps.h"
 #include "Encode.h"
+#ifdef MW_VK_LAB_SHADERS
+#include "Queues.h"
+#endif
+#ifdef MW_VK_LAB_EGL
+#include "Egl.h"
+#endif
 
 #include <cstdio>
 #include <string>
@@ -34,6 +40,12 @@ void usage()
               "  caps    what every Vulkan device answers (Vulkan Video encode, queues and\n"
               "          their priorities, timestamps, DMA-BUF import, KMS planes, sync_file)\n"
               "  encode  Vulkan Video HEVC as the Linux chain would drive it\n"
+#ifdef MW_VK_LAB_SHADERS
+              "  queues  where the conversion waits behind a load, priority by priority\n"
+#endif
+#ifdef MW_VK_LAB_EGL
+              "  egl     the witness: the same conversion in GLES, with a context priority\n"
+#endif
               "Run a command with --help for its options.\n");
 }
 
@@ -64,6 +76,24 @@ int main(int argc, char** argv)
         }
         return lab::runEncode(argc - 2, argv + 2);
     }
+#ifdef MW_VK_LAB_SHADERS
+    if (command == "queues") {
+        if (help) {
+            lab::queuesUsage();
+            return 0;
+        }
+        return lab::runQueues(argc - 2, argv + 2);
+    }
+#endif
+#ifdef MW_VK_LAB_EGL
+    if (command == "egl") {
+        if (help) {
+            lab::eglUsage();
+            return 0;
+        }
+        return lab::runEgl(argc - 2, argv + 2);
+    }
+#endif
     usage();
     return command == "--help" ? 0 : 2;
 }

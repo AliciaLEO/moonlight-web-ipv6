@@ -193,6 +193,69 @@ bool DeviceFunctions::load(const Vulkan& vk, VkDevice device, bool video, std::s
     return missing.empty();
 }
 
+uint32_t memoryType(const VkPhysicalDeviceMemoryProperties& mem, uint32_t bits,
+                    VkMemoryPropertyFlags want)
+{
+    for (uint32_t i = 0; i < mem.memoryTypeCount; ++i)
+        if ((bits & (1u << i)) && (mem.memoryTypes[i].propertyFlags & want) == want) return i;
+    return UINT32_MAX;
+}
+
+DeviceObjects::~DeviceObjects()
+{
+    if (!device) return;
+    if (fn.vkDeviceWaitIdle) fn.vkDeviceWaitIdle(device);
+    if (parameters && fn.vkDestroyVideoSessionParametersKHR)
+        fn.vkDestroyVideoSessionParametersKHR(device, parameters, nullptr);
+    if (session && fn.vkDestroyVideoSessionKHR)
+        fn.vkDestroyVideoSessionKHR(device, session, nullptr);
+    // The functions are null when loading stopped short: only what was made
+    // with them can be in the lists.
+    for (VkDescriptorPool p : descriptorPools)
+        fn.vkDestroyDescriptorPool(device, p, nullptr);
+    for (VkPipeline p : pipelines)
+        fn.vkDestroyPipeline(device, p, nullptr);
+    for (VkPipelineLayout l : pipelineLayouts)
+        fn.vkDestroyPipelineLayout(device, l, nullptr);
+    for (VkDescriptorSetLayout l : setLayouts)
+        fn.vkDestroyDescriptorSetLayout(device, l, nullptr);
+    for (VkShaderModule s : shaders)
+        fn.vkDestroyShaderModule(device, s, nullptr);
+    for (VkQueryPool q : queryPools)
+        fn.vkDestroyQueryPool(device, q, nullptr);
+    for (VkCommandPool p : pools)
+        fn.vkDestroyCommandPool(device, p, nullptr);
+    for (VkSemaphore s : semaphores)
+        fn.vkDestroySemaphore(device, s, nullptr);
+    for (VkSampler s : samplers)
+        fn.vkDestroySampler(device, s, nullptr);
+    for (VkImageView v : views)
+        fn.vkDestroyImageView(device, v, nullptr);
+    for (VkImage i : images)
+        fn.vkDestroyImage(device, i, nullptr);
+    for (VkBuffer b : buffers)
+        fn.vkDestroyBuffer(device, b, nullptr);
+    for (VkDeviceMemory m : memories)
+        fn.vkFreeMemory(device, m, nullptr);
+    vk->vkDestroyDevice(device, nullptr);
+}
+
+VkResult DeviceObjects::allocate(const VkPhysicalDeviceMemoryProperties& mem,
+                                 const VkMemoryRequirements& req, VkMemoryPropertyFlags want,
+                                 VkMemoryPropertyFlags fallback, VkDeviceMemory& out)
+{
+    uint32_t type = memoryType(mem, req.memoryTypeBits, want);
+    if (type == UINT32_MAX) type = memoryType(mem, req.memoryTypeBits, fallback);
+    if (type == UINT32_MAX) return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    VkMemoryAllocateInfo info = {};
+    info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    info.allocationSize = req.size;
+    info.memoryTypeIndex = type;
+    const VkResult r = fn.vkAllocateMemory(device, &info, nullptr, &out);
+    if (r == VK_SUCCESS) memories.push_back(out);
+    return r;
+}
+
 EncodeProfileChain::EncodeProfileChain(VkVideoCodecOperationFlagBitsKHR op, int stdProfile,
                                        VkVideoComponentBitDepthFlagsKHR depth)
 {

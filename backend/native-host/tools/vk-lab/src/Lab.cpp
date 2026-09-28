@@ -19,8 +19,12 @@
 
 #include <pwd.h>
 #include <sys/utsname.h>
+#include <time.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <cctype>
+#include <cerrno>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -139,6 +143,42 @@ int64_t nowUs()
     struct timespec ts = {};
     ::clock_gettime(CLOCK_MONOTONIC, &ts);
     return static_cast<int64_t>(ts.tv_sec) * 1000000 + ts.tv_nsec / 1000;
+}
+
+void sleepUntilUs(int64_t deadlineUs)
+{
+    struct timespec ts = {};
+    ts.tv_sec = static_cast<time_t>(deadlineUs / 1000000);
+    ts.tv_nsec = static_cast<long>((deadlineUs % 1000000) * 1000);
+    while (::clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, nullptr) == EINTR) {}
+}
+
+Stats stats(std::vector<double> values)
+{
+    Stats s;
+    if (values.empty()) return s;
+    std::sort(values.begin(), values.end());
+    double sum = 0;
+    for (double x : values)
+        sum += x;
+    const size_t n = values.size();
+    s.mean = sum / static_cast<double>(n);
+    s.p50 = values[n / 2];
+    s.p99 = values[std::min(n - 1, static_cast<size_t>(static_cast<double>(n) * 0.99))];
+    s.max = values.back();
+    return s;
+}
+
+bool matchesDevice(const std::string& spec, uint32_t index, const char* name)
+{
+    if (spec.empty()) return true;
+    if (spec.find_first_not_of("0123456789") == std::string::npos) return std::stoul(spec) == index;
+    std::string lowerName = name, lowerSpec = spec;
+    for (char& c : lowerName)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (char& c : lowerSpec)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return lowerName.find(lowerSpec) != std::string::npos;
 }
 
 bool capEffective(int cap)

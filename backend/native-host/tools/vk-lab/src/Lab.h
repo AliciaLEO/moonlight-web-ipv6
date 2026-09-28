@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <string>
+#include <vector>
 
 namespace lab {
 
@@ -58,6 +59,18 @@ std::string nowText();
 std::string nowStamp();
 /// Microseconds on CLOCK_MONOTONIC.
 int64_t nowUs();
+/// Sleeps until @p deadlineUs on the nowUs() clock: a steady submission rate.
+void sleepUntilUs(int64_t deadlineUs);
+
+struct Stats
+{
+    double mean = 0, p50 = 0, p99 = 0, max = 0;
+};
+Stats stats(std::vector<double> values);
+
+/// Whether the device @p spec names is this one: its index ("0"), or a piece
+/// of its name, case-insensitive ("radv", "780"); empty = every one.
+bool matchesDevice(const std::string& spec, uint32_t index, const char* name);
 
 /// Whether capability @p cap (CAP_SYS_NICE = 23, CAP_SYS_ADMIN = 21) is in
 /// the process's effective set, read from /proc/self/status.

@@ -147,7 +147,25 @@ bool hasExtension(const std::vector<std::string>& extensions, const char* name);
     X(vkCmdResetQueryPool)                                                                         \
     X(vkCmdBeginQuery)                                                                             \
     X(vkCmdEndQuery)                                                                               \
-    X(vkCmdWriteTimestamp2)
+    X(vkCmdWriteTimestamp2)                                                                        \
+    X(vkCreateShaderModule)                                                                        \
+    X(vkDestroyShaderModule)                                                                       \
+    X(vkCreateDescriptorSetLayout)                                                                 \
+    X(vkDestroyDescriptorSetLayout)                                                                \
+    X(vkCreatePipelineLayout)                                                                      \
+    X(vkDestroyPipelineLayout)                                                                     \
+    X(vkCreateComputePipelines)                                                                    \
+    X(vkDestroyPipeline)                                                                           \
+    X(vkCreateDescriptorPool)                                                                      \
+    X(vkDestroyDescriptorPool)                                                                     \
+    X(vkAllocateDescriptorSets)                                                                    \
+    X(vkUpdateDescriptorSets)                                                                      \
+    X(vkCreateSampler)                                                                             \
+    X(vkDestroySampler)                                                                            \
+    X(vkCmdBindPipeline)                                                                           \
+    X(vkCmdBindDescriptorSets)                                                                     \
+    X(vkCmdPushConstants)                                                                          \
+    X(vkCmdDispatch)
 
 // VK_KHR_video_queue and VK_KHR_video_encode_queue.
 #define MW_VK_VIDEO_ENCODE_FUNCTIONS(X)                                                            \
@@ -172,6 +190,46 @@ struct DeviceFunctions
     /// Loads them for @p device, the video encode ones when @p video. False
     /// with the first one missing in @p missing.
     bool load(const Vulkan& vk, VkDevice device, bool video, std::string& missing);
+};
+
+/// The index of a memory type of @p mem among @p bits with every property of
+/// @p want, or UINT32_MAX.
+uint32_t memoryType(const VkPhysicalDeviceMemoryProperties& mem, uint32_t bits,
+                    VkMemoryPropertyFlags want);
+
+/// A device and everything a probe makes on it, destroyed in reverse before
+/// the device itself — whichever way the probe leaves.
+struct DeviceObjects
+{
+    const Vulkan* vk = nullptr;
+    DeviceFunctions fn;
+    VkDevice device = VK_NULL_HANDLE;
+    std::vector<VkDeviceMemory> memories;
+    std::vector<VkBuffer> buffers;
+    std::vector<VkImage> images;
+    std::vector<VkImageView> views;
+    std::vector<VkSampler> samplers;
+    std::vector<VkSemaphore> semaphores;
+    std::vector<VkCommandPool> pools;
+    std::vector<VkQueryPool> queryPools;
+    std::vector<VkShaderModule> shaders;
+    std::vector<VkDescriptorSetLayout> setLayouts;
+    std::vector<VkPipelineLayout> pipelineLayouts;
+    std::vector<VkPipeline> pipelines;
+    std::vector<VkDescriptorPool> descriptorPools;
+    VkVideoSessionKHR session = VK_NULL_HANDLE;
+    VkVideoSessionParametersKHR parameters = VK_NULL_HANDLE;
+
+    DeviceObjects() = default;
+    DeviceObjects(const DeviceObjects&) = delete;
+    DeviceObjects& operator=(const DeviceObjects&) = delete;
+    ~DeviceObjects();
+
+    /// Memory for @p req, of a type with the @p want properties, else with
+    /// the @p fallback ones; kept for the destructor.
+    VkResult allocate(const VkPhysicalDeviceMemoryProperties& mem, const VkMemoryRequirements& req,
+                      VkMemoryPropertyFlags want, VkMemoryPropertyFlags fallback,
+                      VkDeviceMemory& out);
 };
 
 /// @p s put at the head of the pNext chain @p head points to.

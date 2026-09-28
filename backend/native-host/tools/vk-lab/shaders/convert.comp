@@ -1,0 +1,69 @@
+#version 450
+
+// The cost of a conversion, for `mw-vk-lab queues`: a Lanczos-2 resample of
+// the captured picture into the encoder's luma plane (pass 0) and chroma
+// plane at half size (pass 1), BT.709 limited range — what GlConvert and
+// ColorConvert12 do, in one compute shader. The pixels are not the point
+// (C13.4 checks those against GlConvert); the GPU time is.
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D source;
+layout(set = 0, binding = 1, r8) uniform writeonly image2D luma;
+layout(set = 0, binding = 2, rg8) uniform writeonly image2D chroma;
+
+layout(push_constant) uniform Push
+{
+    vec2 sourceSize;
+    vec2 targetSize;
+    uint pass;
+} pc;
+
+float lanczos2(float x)
+{
+    x = abs(x);
+    if (x < 1e-5) return 1.0;
+    if (x >= 2.0) return 0.0;
+    const float px = 3.14159265 * x;
+    return 2.0 * sin(px) * sin(px * 0.5) / (px * px);
+}
+
+// The 4 x 4 taps around the source point under target pixel p of a picture
+// of targetSize.
+vec3 resample(vec2 p, vec2 targetSize)
+{
+    const vec2 scale = pc.sourceSize / targetSize;
+    const vec2 at = (p + 0.5) * scale - 0.5;
+    const vec2 base = floor(at);
+    vec3 sum = vec3(0.0);
+    float weights = 0.0;
+    for (int j = -1; j <= 2; ++j) {
+        for (int i = -1; i <= 2; ++i) {
+            const vec2 tap = base + vec2(i, j);
+            const float w = lanczos2(at.x - tap.x) * lanczos2(at.y - tap.y);
+            sum += w * textureLod(source, (tap + 0.5) / pc.sourceSize, 0.0).rgb;
+            weights += w;
+        }
+    }
+    return sum / weights;
+}
+
+void main()
+{
+    const ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (pc.pass == 0u) {
+        if (p.x >= int(pc.targetSize.x) || p.y >= int(pc.targetSize.y)) return;
+        const vec3 rgb = resample(vec2(p), pc.targetSize);
+        const float y = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+        imageStore(luma, p, vec4((16.0 + 219.0 * y) / 255.0));
+    } else {
+        const vec2 half_ = pc.targetSize * 0.5;
+        if (p.x >= int(half_.x) || p.y >= int(half_.y)) return;
+        const vec3 rgb = resample(vec2(p), half_);
+        const float y = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+        const float u = (rgb.b - y) / 1.8556;
+        const float v = (rgb.r - y) / 1.5748;
+        imageStore(chroma, p, vec4((128.0 + 224.0 * u) / 255.0, (128.0 + 224.0 * v) / 255.0,
+                                   0.0, 0.0));
+    }
+}
