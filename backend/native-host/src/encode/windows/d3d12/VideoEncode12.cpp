@@ -129,6 +129,13 @@ std::string levelText(int idc)
     return std::to_string(idc / 30) + (idc % 30 ? "." + std::to_string(idc % 30 / 3) : "");
 }
 
+/// H.264's level_idc counts tenths; 9 is level 1b.
+std::string h264LevelText(int idc)
+{
+    if (idc == 9) return "1b";
+    return std::to_string(idc / 10) + (idc % 10 ? "." + std::to_string(idc % 10) : "");
+}
+
 /// The QP of the picture's first slice (SliceQpY), -1 if it does not read.
 /// Only its header is read, and the scan stops there.
 int firstSliceQp(const uint8_t* data, size_t size, const HevcSpsFields& sps,
@@ -144,6 +151,44 @@ int firstSliceQp(const uint8_t* data, size_t size, const HevcSpsFields& sps,
     return -1;
 }
 
+int firstH264SliceQp(const uint8_t* data, size_t size, const H264SpsFields& sps,
+                     const H264PpsFields& pps)
+{
+    for (size_t i = 0; i + 3 < size; ++i) {
+        if (data[i] != 0 || data[i + 1] != 0 || data[i + 2] != 1) continue;
+        const uint8_t* unit = data + i + 3;
+        const uint32_t type = unit[0] & 0x1Fu;
+        if (type != 1 && type != 5) continue; // an AUD or an SEI in front
+        H264SliceFields f;
+        return parseH264SliceHeader(unit, size - i - 3, sps, pps, f).empty() ? f.qp : -1;
+    }
+    return -1;
+}
+
+/// The negotiation, then — where the driver's CBR cannot move its target in
+/// flight — ours on a constant QP (plan §4.6); a driver that takes no constant
+/// QP either keeps its CBR, at the bitrate it starts with. Either codec.
+template <typename Setup, typename Request, typename Negotiate>
+Setup settle(const Request& request, const EncoderTuning& tuning, const Negotiate& negotiate,
+             const std::string& deviceName, std::string& rateWhy)
+{
+    Setup s = negotiate(request);
+    if (!s.ok || tuning.rc12 != EncoderTuning::RateControl12::Default ||
+        s.support.rateReconfigurable)
+        return s;
+    Request own = request;
+    own.ownRateControl = true;
+    Setup ownSetup = negotiate(own);
+    if (ownSetup.ok) {
+        rateWhy = "the driver moves its bitrate only with a new sequence";
+        return ownSetup;
+    }
+    log::warning("[native] D3D12 Video Encode on " + deviceName + " takes no constant QP (" +
+                 ownSetup.reason + "): the bitrate stays where it starts");
+    // The level the driver suggests is the last "yes" it gave.
+    return negotiate(request);
+}
+
 } // namespace
 
 VideoEncode12::~VideoEncode12()
@@ -156,8 +201,13 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
                          const EncoderTuning& tuning, std::string& error)
 {
     stop();
-    if (codec != Codec::Hevc) {
-        error = std::string("D3D12 Video Encode does ") + toString(codec) + " later: HEVC only";
+    if (codec != Codec::Hevc && codec != Codec::H264) {
+        error = std::string("D3D12 Video Encode does ") + toString(codec) +
+                " later: HEVC and H.264 only";
+        return false;
+    }
+    if (codec == Codec::H264 && hdr) {
+        error = "H.264 goes out in 8 bits: no HDR";
         return false;
     }
     if (!device || !device->device()) {
@@ -170,51 +220,70 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
         stop();
         return false;
     }
-
-    VideoEncodeCaps12 caps(m_Video.Get());
-    HevcEncodeRequest request;
-    request.width = static_cast<uint32_t>((std::max)(width, 0));
-    request.height = static_cast<uint32_t>((std::max)(height, 0));
-    request.fps = fps > 0 ? fps : 60;
-    request.hdr = hdr;
-    request.intraRefresh = intraRefresh;
-    request.dpbFrames = tuning.dpbFrames;
-    request.ownRateControl = tuning.rc12 == EncoderTuning::RateControl12::Qp;
-    m_Setup = negotiateHevc(request, caps);
-    if (!m_Setup.ok) {
-        error = "D3D12 Video Encode takes no HEVC " + std::to_string(width) + "x" +
-                std::to_string(height) + " on " + device->name() + ": " + m_Setup.reason;
-        stop();
-        return false;
-    }
+    m_Codec = codec;
+    const int rate = fps > 0 ? fps : 60;
+    const bool rc12Qp = tuning.rc12 == EncoderTuning::RateControl12::Qp;
     // The driver's CBR where it can move its target in flight; ours where it
-    // cannot, on a constant QP (plan §4.6). A driver that takes no constant
-    // QP either keeps its CBR, at the bitrate it starts with.
-    std::string rateWhy = request.ownRateControl ? "the bench's rc12=qp" : "";
-    if (tuning.rc12 == EncoderTuning::RateControl12::Default &&
-        !m_Setup.support.rateReconfigurable) {
-        HevcEncodeRequest own = request;
-        own.ownRateControl = true;
-        const HevcEncodeSetup ownSetup = negotiateHevc(own, caps);
-        if (ownSetup.ok) {
-            m_Setup = ownSetup;
-            rateWhy = "the driver moves its bitrate only with a new sequence";
-        } else {
-            log::warning("[native] D3D12 Video Encode on " + device->name() +
-                         " takes no constant QP (" + ownSetup.reason +
-                         "): the bitrate stays where it starts");
-            // The level the driver suggests is the last "yes" it gave.
-            m_Setup = negotiateHevc(request, caps);
+    // cannot, on a constant QP (plan §4.6).
+    std::string rateWhy = rc12Qp ? "the bench's rc12=qp" : "";
+    if (codec == Codec::H264) {
+        VideoEncodeCapsH264 caps(m_Video.Get());
+        H264EncodeRequest request;
+        request.width = static_cast<uint32_t>((std::max)(width, 0));
+        request.height = static_cast<uint32_t>((std::max)(height, 0));
+        request.fps = rate;
+        request.intraRefresh = intraRefresh;
+        request.ownRateControl = rc12Qp;
+        m_H264 = settle<H264EncodeSetup>(
+            request, tuning, [&](const H264EncodeRequest& r) { return negotiateH264(r, caps); },
+            device->name(), rateWhy);
+        if (!m_H264.ok) {
+            error = "D3D12 Video Encode takes no H.264 " + std::to_string(width) + "x" +
+                    std::to_string(height) + " on " + device->name() + ": " + m_H264.reason;
+            stop();
+            return false;
         }
+        // The part both codecs share, where the encoder reads it.
+        m_Setup.ok = true;
+        m_Setup.reason = m_H264.reason;
+        m_Setup.rate = m_H264.rate;
+        m_Setup.support = m_H264.support;
+        m_Setup.codedWidth = m_H264.codedWidth;
+        m_Setup.codedHeight = m_H264.codedHeight;
+        m_Setup.dpbCapacity = 1;
+        m_Setup.intraRefreshFrames = m_H264.intraRefreshFrames;
+        m_Setup.queries = m_H264.queries;
+        m_H264Level = caps.suggestedLevel();
+        m_H264Config = VideoEncodeCapsH264::codecConfiguration(m_H264.cabac, m_H264.transform8x8);
+        m_H264Gop = VideoEncodeCapsH264::gop();
+    } else {
+        VideoEncodeCaps12 caps(m_Video.Get());
+        HevcEncodeRequest request;
+        request.width = static_cast<uint32_t>((std::max)(width, 0));
+        request.height = static_cast<uint32_t>((std::max)(height, 0));
+        request.fps = rate;
+        request.hdr = hdr;
+        request.intraRefresh = intraRefresh;
+        request.dpbFrames = tuning.dpbFrames;
+        request.ownRateControl = rc12Qp;
+        m_Setup = settle<HevcEncodeSetup>(
+            request, tuning, [&](const HevcEncodeRequest& r) { return negotiateHevc(r, caps); },
+            device->name(), rateWhy);
+        if (!m_Setup.ok) {
+            error = "D3D12 Video Encode takes no HEVC " + std::to_string(width) + "x" +
+                    std::to_string(height) + " on " + device->name() + ": " + m_Setup.reason;
+            stop();
+            return false;
+        }
+        m_Level = caps.suggestedLevel();
+        m_Profile = VideoEncodeCaps12::profile(hdr);
+        m_Config = VideoEncodeCaps12::configuration(m_Setup.blocks, m_Setup.blocksAnswer);
+        // Endless, P only, the POC as wide as the SPS says.
+        m_Gop = {0, 1, static_cast<UCHAR>(m_Setup.sequence.log2MaxPocLsb - 4)};
     }
     m_OwnRate = m_Setup.rate.mode == HevcRate::Mode::Cqp;
     m_Reencode = m_OwnRate && tuning.reencode12 != EncoderTuning::Choice::Off;
-    m_Level = caps.suggestedLevel();
-    m_Profile = VideoEncodeCaps12::profile(hdr);
-    m_Config = VideoEncodeCaps12::configuration(m_Setup.blocks, m_Setup.blocksAnswer);
-    // Endless, P only, the POC as wide as the SPS says.
-    m_Gop = {0, 1, static_cast<UCHAR>(m_Setup.sequence.log2MaxPocLsb - 4)};
-    m_Fps = request.fps;
+    m_Fps = rate;
     m_VbvFrames = tuning.vbvFrames;
     m_QueueRequest = d3d12::queueRequestFor(D3D12_COMMAND_LIST_TYPE_VIDEO_ENCODE, tuning,
                                             L"MoonlightWeb video encode");
@@ -237,14 +306,24 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
     // The parameter sets, once for the session — and read back at once: a
     // writer that cannot read its own SPS has nothing to judge a slice with.
     m_Headers.clear();
-    for (const auto& unit :
-         {paramsets::hevcVps(m_Setup.sequence), paramsets::hevcSps(m_Setup.sequence),
-          paramsets::hevcPps(m_Setup.sequence)})
-        m_Headers.insert(m_Headers.end(), unit.begin(), unit.end());
-    const std::vector<uint8_t> sps = paramsets::hevcSps(m_Setup.sequence);
-    const std::vector<uint8_t> pps = paramsets::hevcPps(m_Setup.sequence);
-    std::string unread = parseHevcSps(sps.data(), sps.size(), m_SpsFields);
-    if (unread.empty()) unread = parseHevcPps(pps.data(), pps.size(), m_PpsFields);
+    std::string unread;
+    if (codec == Codec::H264) {
+        const std::vector<uint8_t> sps = paramsets::h264Sps(m_H264.sequence);
+        const std::vector<uint8_t> pps = paramsets::h264Pps(m_H264.sequence);
+        m_Headers = sps;
+        m_Headers.insert(m_Headers.end(), pps.begin(), pps.end());
+        unread = parseH264Sps(sps.data(), sps.size(), m_H264Sps);
+        if (unread.empty()) unread = parseH264Pps(pps.data(), pps.size(), m_H264Pps);
+    } else {
+        for (const auto& unit :
+             {paramsets::hevcVps(m_Setup.sequence), paramsets::hevcSps(m_Setup.sequence),
+              paramsets::hevcPps(m_Setup.sequence)})
+            m_Headers.insert(m_Headers.end(), unit.begin(), unit.end());
+        const std::vector<uint8_t> sps = paramsets::hevcSps(m_Setup.sequence);
+        const std::vector<uint8_t> pps = paramsets::hevcPps(m_Setup.sequence);
+        unread = parseHevcSps(sps.data(), sps.size(), m_SpsFields);
+        if (unread.empty()) unread = parseHevcPps(pps.data(), pps.size(), m_PpsFields);
+    }
     if (!unread.empty()) {
         error = "our own parameter sets do not read back: " + unread;
         stop();
@@ -270,12 +349,28 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
     m_LastReady = nullptr;
     m_LastReadyValue = 0;
 
-    const HevcBlocks& b = m_Setup.blocks;
-    log::info("[native] D3D12 Video Encode ready on " + device->name() + ": HEVC " +
-              (hdr ? "Main 10 (BT.2020 PQ) " : "Main ") + std::to_string(width) + "x" +
-              std::to_string(height) + " coded " + std::to_string(m_Setup.codedWidth) + "x" +
-              std::to_string(m_Setup.codedHeight) + "@" + std::to_string(m_Fps) + ", " +
-              m_Setup.rate.describe() +
+    std::string shape;
+    if (codec == Codec::H264) {
+        shape = "level " + h264LevelText(m_H264.sequence.levelIdc) + ", " +
+                (m_H264.cabac ? "CABAC" : "CAVLC") +
+                (m_H264.transform8x8 ? ", 8x8 transform" : "") + ", 1 picture kept";
+    } else {
+        const HevcBlocks& b = m_Setup.blocks;
+        shape = "level " + levelText(m_Setup.sequence.levelIdc) + ", blocks " +
+                std::to_string(1 << b.log2MinCodingBlock) + ".." +
+                std::to_string(1 << b.log2MaxCodingBlock) + " depth " + std::to_string(b.depth) +
+                (m_Setup.blocksAnswer.ampRequired ? ", AMP" : "") +
+                (m_Setup.blocksAnswer.pAsLowDelayB ? ", P as low-delay B" : "") + ", " +
+                std::to_string(m_Dpb.capacity()) + " pictures kept (reach " +
+                std::to_string(m_Dpb.reachFrames()) + " frames)";
+    }
+    log::info("[native] D3D12 Video Encode ready on " + device->name() + ": " +
+              (codec == Codec::H264 ? "H.264 High "
+               : hdr                ? "HEVC Main 10 (BT.2020 PQ) "
+                                    : "HEVC Main ") +
+              std::to_string(width) + "x" + std::to_string(height) + " coded " +
+              std::to_string(m_Setup.codedWidth) + "x" + std::to_string(m_Setup.codedHeight) + "@" +
+              std::to_string(m_Fps) + ", " + m_Setup.rate.describe() +
               (m_OwnRate ? " moved by our own rate control (" + rateWhy + ")" +
                                (m_Reencode ? m_Controller.reencodeFit()
                                                  ? ", overshoots coded again under the line"
@@ -283,13 +378,7 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
                                            : "") +
                                " at "
                          : std::string(" ")) +
-              std::to_string(bitrateKbps) + " kbps, level " + levelText(m_Setup.sequence.levelIdc) +
-              ", blocks " + std::to_string(1 << b.log2MinCodingBlock) + ".." +
-              std::to_string(1 << b.log2MaxCodingBlock) + " depth " + std::to_string(b.depth) +
-              (m_Setup.blocksAnswer.ampRequired ? ", AMP" : "") +
-              (m_Setup.blocksAnswer.pAsLowDelayB ? ", P as low-delay B" : "") + ", " +
-              std::to_string(m_Dpb.capacity()) + " pictures kept (reach " +
-              std::to_string(m_Dpb.reachFrames()) + " frames), " +
+              std::to_string(bitrateKbps) + " kbps, " + shape + ", " +
               (m_Setup.intraRefreshFrames > 0
                    ? "intra refresh over " + std::to_string(m_Setup.intraRefreshFrames) + " frames"
                    : std::string("keyframes on demand")) +
@@ -297,35 +386,84 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
     return true;
 }
 
+D3D12_VIDEO_ENCODER_CODEC VideoEncode12::d3d12Codec() const
+{
+    return m_Codec == Codec::H264 ? D3D12_VIDEO_ENCODER_CODEC_H264 : D3D12_VIDEO_ENCODER_CODEC_HEVC;
+}
+
+D3D12_VIDEO_ENCODER_PROFILE_DESC VideoEncode12::profileDesc()
+{
+    D3D12_VIDEO_ENCODER_PROFILE_DESC d = {};
+    if (m_Codec == Codec::H264) {
+        d.DataSize = sizeof(m_H264Profile);
+        d.pH264Profile = &m_H264Profile;
+    } else {
+        d.DataSize = sizeof(m_Profile);
+        d.pHEVCProfile = &m_Profile;
+    }
+    return d;
+}
+
+D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION VideoEncode12::configurationDesc()
+{
+    D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION d = {};
+    if (m_Codec == Codec::H264) {
+        d.DataSize = sizeof(m_H264Config);
+        d.pH264Config = &m_H264Config;
+    } else {
+        d.DataSize = sizeof(m_Config);
+        d.pHEVCConfig = &m_Config;
+    }
+    return d;
+}
+
+D3D12_VIDEO_ENCODER_LEVEL_SETTING VideoEncode12::levelDesc()
+{
+    D3D12_VIDEO_ENCODER_LEVEL_SETTING d = {};
+    if (m_Codec == Codec::H264) {
+        d.DataSize = sizeof(m_H264Level);
+        d.pH264LevelSetting = &m_H264Level;
+    } else {
+        d.DataSize = sizeof(m_Level);
+        d.pHEVCLevelSetting = &m_Level;
+    }
+    return d;
+}
+
+D3D12_VIDEO_ENCODER_SEQUENCE_GOP_STRUCTURE VideoEncode12::gopDesc()
+{
+    D3D12_VIDEO_ENCODER_SEQUENCE_GOP_STRUCTURE d = {};
+    if (m_Codec == Codec::H264) {
+        d.DataSize = sizeof(m_H264Gop);
+        d.pH264GroupOfPictures = &m_H264Gop;
+    } else {
+        d.DataSize = sizeof(m_Gop);
+        d.pHEVCGroupOfPictures = &m_Gop;
+    }
+    return d;
+}
+
 bool VideoEncode12::createResources(std::string& error)
 {
     ID3D12Device* d = m_Device->device();
-    D3D12_VIDEO_ENCODER_PROFILE_DESC profile = {};
-    profile.DataSize = sizeof(m_Profile);
-    profile.pHEVCProfile = &m_Profile;
-    D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION config = {};
-    config.DataSize = sizeof(m_Config);
-    config.pHEVCConfig = &m_Config;
+    const D3D12_VIDEO_ENCODER_PROFILE_DESC profile = profileDesc();
     D3D12_VIDEO_ENCODER_PICTURE_RESOLUTION_DESC res = {m_Setup.codedWidth, m_Setup.codedHeight};
 
     D3D12_VIDEO_ENCODER_DESC ed = {};
-    ed.EncodeCodec = D3D12_VIDEO_ENCODER_CODEC_HEVC;
+    ed.EncodeCodec = d3d12Codec();
     ed.EncodeProfile = profile;
     ed.InputFormat = m_Format;
-    ed.CodecConfiguration = config;
+    ed.CodecConfiguration = configurationDesc();
     ed.MaxMotionEstimationPrecision = D3D12_VIDEO_ENCODER_MOTION_ESTIMATION_PRECISION_MODE_MAXIMUM;
     HRESULT h = m_Video->CreateVideoEncoder(&ed, IID_PPV_ARGS(&m_Encoder));
     if (FAILED(h)) {
         error = "the driver refuses the encoder it said it takes (" + d3d12::hresultText(h) + ")";
         return false;
     }
-    D3D12_VIDEO_ENCODER_LEVEL_SETTING level = {};
-    level.DataSize = sizeof(m_Level);
-    level.pHEVCLevelSetting = &m_Level;
     D3D12_VIDEO_ENCODER_HEAP_DESC hd = {};
-    hd.EncodeCodec = D3D12_VIDEO_ENCODER_CODEC_HEVC;
+    hd.EncodeCodec = d3d12Codec();
     hd.EncodeProfile = profile;
-    hd.EncodeLevel = level;
+    hd.EncodeLevel = levelDesc();
     hd.ResolutionsListCount = 1;
     hd.pResolutionList = &res;
     h = m_Video->CreateVideoEncoderHeap(&hd, IID_PPV_ARGS(&m_Heap));
@@ -346,7 +484,7 @@ bool VideoEncode12::createResources(std::string& error)
     if (!m_Encoded.create(d, false, error)) return false;
 
     D3D12_FEATURE_DATA_VIDEO_ENCODER_RESOURCE_REQUIREMENTS req = {};
-    req.Codec = D3D12_VIDEO_ENCODER_CODEC_HEVC;
+    req.Codec = d3d12Codec();
     req.Profile = profile;
     req.InputFormat = m_Format;
     req.PictureTargetResolution = res;
@@ -447,9 +585,13 @@ bool VideoEncode12::submit(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
     for (UINT p = 0; p < planes; ++p)
         pre.push_back(reconBarrier(plan.texture, p, D3D12_RESOURCE_STATE_COMMON,
                                    D3D12_RESOURCE_STATE_VIDEO_ENCODE_WRITE));
+    // H.264 numbers a picture twice: frame_num, its place since the IDR
+    // modulo MaxFrameNum, and a POC of twice that place (type 2).
+    const uint32_t frameNumMask = (1u << m_H264.sequence.log2MaxFrameNum) - 1u;
     std::vector<ID3D12Resource*> references;
     std::vector<UINT> subresources;
     std::vector<D3D12_VIDEO_ENCODER_REFERENCE_PICTURE_DESCRIPTOR_HEVC> descriptors;
+    std::vector<D3D12_VIDEO_ENCODER_REFERENCE_PICTURE_DESCRIPTOR_H264> h264Descriptors;
     for (size_t k = 0; k < plan.references.size(); ++k) {
         const HevcDpb::Reference& r = plan.references[k];
         for (UINT p = 0; p < planes; ++p)
@@ -463,6 +605,12 @@ bool VideoEncode12::submit(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
         ref.IsLongTermReference = FALSE;
         ref.PictureOrderCountNumber = r.poc;
         descriptors.push_back(ref);
+        D3D12_VIDEO_ENCODER_REFERENCE_PICTURE_DESCRIPTOR_H264 ref264 = {};
+        ref264.ReconstructedPictureResourceIndex = static_cast<UINT>(k);
+        ref264.IsLongTermReference = FALSE;
+        ref264.PictureOrderCountNumber = 2 * r.poc;
+        ref264.FrameDecodingOrderNumber = r.poc & frameNumMask;
+        h264Descriptors.push_back(ref264);
     }
     m_List->ResourceBarrier(static_cast<UINT>(pre.size()), pre.data());
 
@@ -472,16 +620,24 @@ bool VideoEncode12::submit(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
     pic.FrameType = plan.idr ? D3D12_VIDEO_ENCODER_FRAME_TYPE_HEVC_IDR_FRAME
                              : D3D12_VIDEO_ENCODER_FRAME_TYPE_HEVC_P_FRAME;
     pic.PictureOrderCountNumber = plan.poc;
+    D3D12_VIDEO_ENCODER_PICTURE_CONTROL_CODEC_DATA_H264 pic264 = {};
+    pic264.FrameType = plan.idr ? D3D12_VIDEO_ENCODER_FRAME_TYPE_H264_IDR_FRAME
+                                : D3D12_VIDEO_ENCODER_FRAME_TYPE_H264_P_FRAME;
+    pic264.idr_pic_id = m_IdrPicId;
+    pic264.PictureOrderCountNumber = 2 * plan.poc;
+    pic264.FrameDecodingOrderNumber = plan.poc & frameNumMask;
     if (!plan.idr) {
         pic.List0ReferenceFramesCount = 1;
         pic.pList0ReferenceFrames = list0;
         pic.ReferenceFramesReconPictureDescriptorsCount = static_cast<UINT>(descriptors.size());
         pic.pReferenceFramesReconPictureDescriptors = descriptors.data();
+        pic264.List0ReferenceFramesCount = 1;
+        pic264.pList0ReferenceFrames = list0;
+        pic264.ReferenceFramesReconPictureDescriptorsCount =
+            static_cast<UINT>(h264Descriptors.size());
+        pic264.pReferenceFramesReconPictureDescriptors = h264Descriptors.data();
     }
 
-    D3D12_VIDEO_ENCODER_SEQUENCE_GOP_STRUCTURE gop = {};
-    gop.DataSize = sizeof(m_Gop);
-    gop.pHEVCGroupOfPictures = &m_Gop;
     D3D12_VIDEO_ENCODER_ENCODEFRAME_INPUT_ARGUMENTS in = {};
     in.SequenceControlDesc.Flags =
         m_RateChanged ? D3D12_VIDEO_ENCODER_SEQUENCE_CONTROL_FLAG_RATE_CONTROL_CHANGE
@@ -495,12 +651,17 @@ bool VideoEncode12::submit(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
     in.SequenceControlDesc.PictureTargetResolution = {m_Setup.codedWidth, m_Setup.codedHeight};
     in.SequenceControlDesc.SelectedLayoutMode =
         D3D12_VIDEO_ENCODER_FRAME_SUBREGION_LAYOUT_MODE_FULL_FRAME;
-    in.SequenceControlDesc.CodecGopSequence = gop;
+    in.SequenceControlDesc.CodecGopSequence = gopDesc();
     in.PictureControlDesc.IntraRefreshFrameIndex = refresh > 0 ? m_IntraRefreshIndex % refresh : 0;
     in.PictureControlDesc.Flags =
         D3D12_VIDEO_ENCODER_PICTURE_CONTROL_FLAG_USED_AS_REFERENCE_PICTURE;
-    in.PictureControlDesc.PictureControlCodecData.DataSize = sizeof(pic);
-    in.PictureControlDesc.PictureControlCodecData.pHEVCPicData = &pic;
+    if (m_Codec == Codec::H264) {
+        in.PictureControlDesc.PictureControlCodecData.DataSize = sizeof(pic264);
+        in.PictureControlDesc.PictureControlCodecData.pH264PicData = &pic264;
+    } else {
+        in.PictureControlDesc.PictureControlCodecData.DataSize = sizeof(pic);
+        in.PictureControlDesc.PictureControlCodecData.pHEVCPicData = &pic;
+    }
     if (!plan.idr) {
         in.PictureControlDesc.ReferenceFrames.NumTexture2Ds = static_cast<UINT>(references.size());
         in.PictureControlDesc.ReferenceFrames.ppTexture2Ds = references.data();
@@ -522,12 +683,9 @@ bool VideoEncode12::submit(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
                    D3D12_RESOURCE_STATE_VIDEO_ENCODE_WRITE),
     };
     m_List->ResourceBarrier(2, mid);
-    D3D12_VIDEO_ENCODER_PROFILE_DESC profile = {};
-    profile.DataSize = sizeof(m_Profile);
-    profile.pHEVCProfile = &m_Profile;
     D3D12_VIDEO_ENCODER_RESOLVE_METADATA_INPUT_ARGUMENTS rin = {};
-    rin.EncoderCodec = D3D12_VIDEO_ENCODER_CODEC_HEVC;
-    rin.EncoderProfile = profile;
+    rin.EncoderCodec = d3d12Codec();
+    rin.EncoderProfile = profileDesc();
     rin.EncoderInputFormat = m_Format;
     rin.EncodedPictureEffectiveResolution = {m_Setup.codedWidth, m_Setup.codedHeight};
     rin.HWLayoutMetadata = {m_HwMetadata.Get(), 0};
@@ -588,7 +746,11 @@ bool VideoEncode12::encode(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
         return false;
     }
     const HevcDpb::Plan plan = m_Dpb.plan(frameNumber, forceKeyframe);
-    if (plan.idr) m_IntraRefreshIndex = 0;
+    if (plan.idr) {
+        m_IntraRefreshIndex = 0;
+        // Coded again after an overshoot, the IDR keeps its number.
+        m_IdrPicId = (m_IdrPicId + 1) & 0xFFFFu;
+    }
     // The conversion signals a new value for every picture it writes: the
     // value of the last one encoded again is the same picture again.
     const bool newPicture =
@@ -661,8 +823,10 @@ int VideoEncode12::reportedQp(const uint8_t* slices, size_t size)
     // slice's QP counts once it has left the PPS's; until then the QP is
     // unknown (-1), which the overlay and the still-screen refinement
     // (RefineConvergence) take as an encoder that does not say.
-    const int qp = firstSliceQp(slices, size, m_SpsFields, m_PpsFields);
-    if (qp >= 0 && qp != m_PpsFields.initQp) m_SliceQpMoves = true;
+    const bool h264 = m_Codec == Codec::H264;
+    const int qp = h264 ? firstH264SliceQp(slices, size, m_H264Sps, m_H264Pps)
+                        : firstSliceQp(slices, size, m_SpsFields, m_PpsFields);
+    if (qp >= 0 && qp != (h264 ? m_H264Pps.initQp : m_PpsFields.initQp)) m_SliceQpMoves = true;
     return m_SliceQpMoves ? qp : -1;
 }
 
@@ -740,6 +904,7 @@ bool VideoEncode12::warmUp(std::string& error)
 bool VideoEncode12::guard(const uint8_t* data, size_t size, const HevcDpb::Plan& plan,
                           std::string& error)
 {
+    if (m_Codec == Codec::H264) return guardH264(data, size, plan, error);
     int slices = 0;
     for (const HevcNalUnit& unit : hevcNalUnits(data, size)) {
         if (unit.type() > 31) continue; // not a slice: an AUD or an SEI the driver adds
@@ -770,6 +935,53 @@ bool VideoEncode12::guard(const uint8_t* data, size_t size, const HevcDpb::Plan&
                         std::to_string(wanted) + ")";
                 return false;
             }
+        }
+        ++slices;
+    }
+    if (slices == 0) {
+        error = "no slice in the driver's output";
+        return false;
+    }
+    return true;
+}
+
+bool VideoEncode12::guardH264(const uint8_t* data, size_t size, const HevcDpb::Plan& plan,
+                              std::string& error)
+{
+    const uint32_t frameNumMask = (1u << m_H264Sps.log2MaxFrameNum) - 1u;
+    int slices = 0;
+    for (const HevcNalUnit& unit : hevcNalUnits(data, size)) {
+        const uint32_t type = h264NalType(unit);
+        if (type != 1 && type != 5) continue; // not a slice: an AUD or an SEI the driver adds
+        H264SliceFields f;
+        const std::string wrong =
+            parseH264SliceHeader(unit.data, unit.size, m_H264Sps, m_H264Pps, f);
+        if (!wrong.empty()) {
+            error = "the driver's slices do not read with our parameter sets: " + wrong;
+            return false;
+        }
+        // What we asked for, said back: the kind of picture, its number, and
+        // a reference kept the way the SPS says — every picture is the next
+        // one's, by the sliding window, and a P predicts from that one alone.
+        if ((type == 5) != plan.idr) {
+            error = plan.idr ? "the driver coded the IDR asked as an ordinary picture"
+                             : "the driver coded an IDR where a P picture was asked";
+            return false;
+        }
+        if (f.frameNum != (plan.poc & frameNumMask)) {
+            error = "the driver numbered picture " + std::to_string(plan.poc) + " as frame_num " +
+                    std::to_string(f.frameNum);
+            return false;
+        }
+        if (f.nalRefIdc == 0 || f.adaptiveMarking) {
+            error = "the driver does not keep the picture as the next one's reference (" +
+                    std::string(f.nalRefIdc == 0 ? "nal_ref_idc 0" : "memory management") + ")";
+            return false;
+        }
+        if (!plan.idr && f.numRefIdxL0Active != 1) {
+            error = "the driver's slice predicts from " + std::to_string(f.numRefIdxL0Active) +
+                    " pictures where one is kept";
+            return false;
         }
         ++slices;
     }
@@ -856,6 +1068,9 @@ void VideoEncode12::stop()
     m_Dpb.reset();
     m_Headers.clear();
     m_Setup = HevcEncodeSetup();
+    m_H264 = H264EncodeSetup();
+    m_Codec = Codec::Hevc;
+    m_IdrPicId = 0;
     m_GuardLeft = 0;
     m_SliceQpMoves = false;
     m_RateChanged = false;

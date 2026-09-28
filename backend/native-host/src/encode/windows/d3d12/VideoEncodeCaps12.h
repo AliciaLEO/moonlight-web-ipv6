@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include "encode/H264EncodeNegotiation.h"
 #include "encode/HevcEncodeNegotiation.h"
 
 #include <d3d12video.h>
@@ -74,6 +75,38 @@ public:
 private:
     Microsoft::WRL::ComPtr<ID3D12VideoDevice3> m_Video;
     D3D12_VIDEO_ENCODER_LEVEL_TIER_CONSTRAINTS_HEVC m_Level = {};
+};
+
+/// The questions H264EncodeNegotiation asks, put to a D3D12 video device
+/// (plan C9.1): VideoEncodeCaps12's, in H.264. The support answer's level is
+/// level_idc here (tenths of a level), not HEVC's thirtieths.
+class VideoEncodeCapsH264 : public H264DriverQueries
+{
+public:
+    explicit VideoEncodeCapsH264(ID3D12VideoDevice3* video);
+
+    H264DriverLimits limits() override;
+    H264ConfigAnswer configuration() override;
+    HevcSupportAnswer support(const H264SupportQuestion& question) override;
+
+    /// The level the driver suggested in its last "yes" to support().
+    D3D12_VIDEO_ENCODER_LEVELS_H264 suggestedLevel() const { return m_Level; }
+
+    static D3D12_VIDEO_ENCODER_PROFILE_H264 profile()
+    {
+        return D3D12_VIDEO_ENCODER_PROFILE_H264_HIGH;
+    }
+    static D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_H264 codecConfiguration(bool cabac,
+                                                                           bool transform8x8);
+    /// The encoder's GOP: endless, P only, POC type 2, frame_num 16 bits wide
+    /// — the SPS's (ParameterSets.h).
+    static D3D12_VIDEO_ENCODER_SEQUENCE_GOP_STRUCTURE_H264 gop();
+    /// level_idc: D3D12's enumeration in the SPS's terms (9 for 1b).
+    static int levelIdc(D3D12_VIDEO_ENCODER_LEVELS_H264 level);
+
+private:
+    Microsoft::WRL::ComPtr<ID3D12VideoDevice3> m_Video;
+    D3D12_VIDEO_ENCODER_LEVELS_H264 m_Level = D3D12_VIDEO_ENCODER_LEVELS_H264_51;
 };
 
 } // namespace mw::native::encode

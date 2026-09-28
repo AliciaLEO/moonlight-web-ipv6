@@ -107,6 +107,15 @@ inline VideoPipeline autoVideoPipeline(EncoderApi api)
     }
 }
 
+/// Whether a vendor line's D3D12 holds for @p codec. The lines were measured
+/// in HEVC; D3D12 Video Encode's H.264 (Phase 9, C9.1) has been through no
+/// gate, so Auto keeps D3D11 for it — the bench key and the setting still
+/// reach it — until one has and Bruno has decided.
+inline bool autoD3d12Codec(Codec codec)
+{
+    return codec == Codec::Hevc;
+}
+
 /// One vendor's user-mode drivers the D3D12 route stays off: from @p from to
 /// @p to, both included, packed as GpuInfo::driverVersion.
 struct D3d12DriverExclusion

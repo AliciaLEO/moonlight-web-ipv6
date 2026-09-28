@@ -286,4 +286,189 @@ HevcSupportAnswer VideoEncodeCaps12::support(const HevcSupportQuestion& q)
     return a;
 }
 
+// ── H.264 ───────────────────────────────────────────────────────────────────
+
+namespace {
+
+D3D12_VIDEO_ENCODER_PROFILE_DESC profileDesc(D3D12_VIDEO_ENCODER_PROFILE_H264& profile)
+{
+    D3D12_VIDEO_ENCODER_PROFILE_DESC d = {};
+    d.DataSize = sizeof(profile);
+    d.pH264Profile = &profile;
+    return d;
+}
+
+} // namespace
+
+VideoEncodeCapsH264::VideoEncodeCapsH264(ID3D12VideoDevice3* video)
+    : m_Video(video)
+{}
+
+D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_H264
+VideoEncodeCapsH264::codecConfiguration(bool cabac, bool transform8x8)
+{
+    D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_H264 c = {};
+    if (cabac)
+        c.ConfigurationFlags |=
+            D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_H264_FLAG_ENABLE_CABAC_ENCODING;
+    if (transform8x8)
+        c.ConfigurationFlags |=
+            D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_H264_FLAG_USE_ADAPTIVE_8x8_TRANSFORM;
+    // No B pictures, so no direct prediction; every edge filtered, as the
+    // slices' disable_deblocking_filter_idc 0 says.
+    c.DirectModeConfig = D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_H264_DIRECT_MODES_DISABLED;
+    c.DisableDeblockingFilterConfig =
+        D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_H264_SLICES_DEBLOCKING_MODE_0_ALL_LUMA_CHROMA_SLICE_BLOCK_EDGES_ALWAYS_FILTERED;
+    return c;
+}
+
+D3D12_VIDEO_ENCODER_SEQUENCE_GOP_STRUCTURE_H264 VideoEncodeCapsH264::gop()
+{
+    D3D12_VIDEO_ENCODER_SEQUENCE_GOP_STRUCTURE_H264 g = {};
+    g.GOPLength = 0;      // endless: IDRs on demand
+    g.PPicturePeriod = 1; // no B pictures
+    g.pic_order_cnt_type = 2;
+    g.log2_max_frame_num_minus4 = 12;
+    g.log2_max_pic_order_cnt_lsb_minus4 = 0; // unused with POC type 2
+    return g;
+}
+
+int VideoEncodeCapsH264::levelIdc(D3D12_VIDEO_ENCODER_LEVELS_H264 level)
+{
+    static const int kIdc[] = {10, 9,  11, 12, 13, 20, 21, 22, 30, 31,
+                               32, 40, 41, 42, 50, 51, 52, 60, 61, 62};
+    const int i = static_cast<int>(level);
+    return i >= 0 && i < 20 ? kIdc[i] : 0;
+}
+
+H264DriverLimits VideoEncodeCapsH264::limits()
+{
+    H264DriverLimits l;
+    if (!m_Video) return l;
+    D3D12_VIDEO_ENCODER_PROFILE_H264 prof = profile();
+
+    D3D12_FEATURE_DATA_VIDEO_ENCODER_OUTPUT_RESOLUTION_RATIOS_COUNT count = {};
+    count.Codec = D3D12_VIDEO_ENCODER_CODEC_H264;
+    feature(m_Video.Get(), D3D12_FEATURE_VIDEO_ENCODER_OUTPUT_RESOLUTION_RATIOS_COUNT, count);
+    std::vector<D3D12_VIDEO_ENCODER_PICTURE_RESOLUTION_RATIO_DESC> ratios(
+        count.ResolutionRatiosCount ? count.ResolutionRatiosCount : 1);
+    D3D12_FEATURE_DATA_VIDEO_ENCODER_OUTPUT_RESOLUTION res = {};
+    res.Codec = D3D12_VIDEO_ENCODER_CODEC_H264;
+    res.ResolutionRatiosCount = count.ResolutionRatiosCount;
+    res.pResolutionRatios = count.ResolutionRatiosCount ? ratios.data() : nullptr;
+    if (feature(m_Video.Get(), D3D12_FEATURE_VIDEO_ENCODER_OUTPUT_RESOLUTION, res) &&
+        res.IsSupported != 0) {
+        l.minWidth = res.MinResolutionSupported.Width;
+        l.minHeight = res.MinResolutionSupported.Height;
+        l.maxWidth = res.MaxResolutionSupported.Width;
+        l.maxHeight = res.MaxResolutionSupported.Height;
+    }
+
+    D3D12_VIDEO_ENCODER_CODEC_PICTURE_CONTROL_SUPPORT_H264 pc = {};
+    D3D12_FEATURE_DATA_VIDEO_ENCODER_CODEC_PICTURE_CONTROL_SUPPORT pcs = {};
+    pcs.Codec = D3D12_VIDEO_ENCODER_CODEC_H264;
+    pcs.Profile = profileDesc(prof);
+    pcs.PictureSupport.DataSize = sizeof(pc);
+    pcs.PictureSupport.pH264Support = &pc;
+    if (feature(m_Video.Get(), D3D12_FEATURE_VIDEO_ENCODER_CODEC_PICTURE_CONTROL_SUPPORT, pcs) &&
+        pcs.IsSupported != 0) {
+        l.maxL0ForP = pc.MaxL0ReferencesForP;
+        l.maxDpb = pc.MaxDPBCapacity;
+    }
+    return l;
+}
+
+H264ConfigAnswer VideoEncodeCapsH264::configuration()
+{
+    H264ConfigAnswer a;
+    if (!m_Video) return a;
+    D3D12_VIDEO_ENCODER_PROFILE_H264 prof = profile();
+    // The driver fills the structure in: what it codes, and which deblocking
+    // modes.
+    D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_SUPPORT_H264 caps = {};
+    D3D12_FEATURE_DATA_VIDEO_ENCODER_CODEC_CONFIGURATION_SUPPORT support = {};
+    support.Codec = D3D12_VIDEO_ENCODER_CODEC_H264;
+    support.Profile = profileDesc(prof);
+    support.CodecSupportLimits.DataSize = sizeof(caps);
+    support.CodecSupportLimits.pH264Support = &caps;
+    if (!feature(m_Video.Get(), D3D12_FEATURE_VIDEO_ENCODER_CODEC_CONFIGURATION_SUPPORT, support) ||
+        support.IsSupported == 0)
+        return a;
+    a.taken = true;
+    a.cabac =
+        (caps.SupportFlags &
+         D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_SUPPORT_H264_FLAG_CABAC_ENCODING_SUPPORT) != 0;
+    a.transform8x8 =
+        (caps.SupportFlags &
+         D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_SUPPORT_H264_FLAG_ADAPTIVE_8x8_TRANSFORM_ENCODING_SUPPORT) !=
+        0;
+    a.deblockingAllEdges =
+        (caps.DisableDeblockingFilterSupportedModes &
+         D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_H264_SLICES_DEBLOCKING_MODE_FLAG_0_ALL_LUMA_CHROMA_SLICE_BLOCK_EDGES_ALWAYS_FILTERED) !=
+        0;
+    return a;
+}
+
+HevcSupportAnswer VideoEncodeCapsH264::support(const H264SupportQuestion& q)
+{
+    HevcSupportAnswer a;
+    if (!m_Video) return a;
+    D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_H264 config =
+        codecConfiguration(q.cabac, q.transform8x8);
+    D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION codec = {};
+    codec.DataSize = sizeof(config);
+    codec.pH264Config = &config;
+    D3D12_VIDEO_ENCODER_SEQUENCE_GOP_STRUCTURE_H264 g = gop();
+    D3D12_VIDEO_ENCODER_SEQUENCE_GOP_STRUCTURE gopDesc = {};
+    gopDesc.DataSize = sizeof(g);
+    gopDesc.pH264GroupOfPictures = &g;
+    const VideoEncodeCaps12::RateControl rate(q.rate, q.fps, 20000000);
+    D3D12_VIDEO_ENCODER_PICTURE_RESOLUTION_DESC res = {q.codedWidth, q.codedHeight};
+
+    D3D12_VIDEO_ENCODER_PROFILE_H264 suggestedProfile = {};
+    D3D12_VIDEO_ENCODER_LEVELS_H264 suggestedLevel = {};
+    D3D12_FEATURE_DATA_VIDEO_ENCODER_RESOLUTION_SUPPORT_LIMITS limits = {};
+    D3D12_FEATURE_DATA_VIDEO_ENCODER_SUPPORT1 s = {};
+    s.Codec = D3D12_VIDEO_ENCODER_CODEC_H264;
+    s.InputFormat = DXGI_FORMAT_NV12;
+    s.CodecConfiguration = codec;
+    s.CodecGopSequence = gopDesc;
+    s.RateControl = rate.desc;
+    s.IntraRefresh = q.intraRefresh ? D3D12_VIDEO_ENCODER_INTRA_REFRESH_MODE_ROW_BASED
+                                    : D3D12_VIDEO_ENCODER_INTRA_REFRESH_MODE_NONE;
+    s.SubregionFrameEncoding = D3D12_VIDEO_ENCODER_FRAME_SUBREGION_LAYOUT_MODE_FULL_FRAME;
+    s.ResolutionsListCount = 1;
+    s.pResolutionList = &res;
+    s.MaxReferenceFramesInDPB = 1;
+    s.SuggestedProfile.DataSize = sizeof(suggestedProfile);
+    s.SuggestedProfile.pH264Profile = &suggestedProfile;
+    s.SuggestedLevel.DataSize = sizeof(suggestedLevel);
+    s.SuggestedLevel.pH264LevelSetting = &suggestedLevel;
+    s.pResolutionDependentSupport = &limits;
+    HRESULT asked =
+        m_Video->CheckFeatureSupport(D3D12_FEATURE_VIDEO_ENCODER_SUPPORT1, &s, sizeof(s));
+    if (FAILED(asked) && !q.rate.qualityVsSpeed)
+        asked = m_Video->CheckFeatureSupport(D3D12_FEATURE_VIDEO_ENCODER_SUPPORT, &s,
+                                             sizeof(D3D12_FEATURE_DATA_VIDEO_ENCODER_SUPPORT));
+    if (FAILED(asked) ||
+        (s.SupportFlags & D3D12_VIDEO_ENCODER_SUPPORT_FLAG_GENERAL_SUPPORT_OK) == 0)
+        return a;
+    a.ok = true;
+    a.rateReconfigurable =
+        (s.SupportFlags &
+         D3D12_VIDEO_ENCODER_SUPPORT_FLAG_RATE_CONTROL_RECONFIGURATION_AVAILABLE) != 0;
+    a.reconTextureArray =
+        (s.SupportFlags &
+         D3D12_VIDEO_ENCODER_SUPPORT_FLAG_RECONSTRUCTED_FRAMES_REQUIRE_TEXTURE_ARRAYS) != 0;
+    a.reconReadable =
+        (s.SupportFlags &
+         D3D12_VIDEO_ENCODER_SUPPORT_FLAG_READABLE_RECONSTRUCTED_PICTURE_LAYOUT_AVAILABLE) != 0;
+    a.suggestedLevelIdc = levelIdc(suggestedLevel);
+    a.qpMapRegion = limits.QPMapRegionPixelsSize;
+    a.maxIntraRefreshFrames = limits.MaxIntraRefreshFrameDuration;
+    a.maxQualityVsSpeed = s.MaxQualityVsSpeed;
+    m_Level = suggestedLevel;
+    return a;
+}
+
 } // namespace mw::native::encode

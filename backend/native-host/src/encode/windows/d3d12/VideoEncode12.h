@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include "encode/H264EncodeNegotiation.h"
+#include "encode/H264SliceParser.h"
 #include "encode/HevcDpb.h"
 #include "encode/HevcEncodeNegotiation.h"
 #include "encode/HevcSliceParser.h"
@@ -34,8 +36,8 @@
 
 namespace mw::native::encode {
 
-/// HEVC through D3D12 Video Encode: the driver writes the slices, we write the
-/// rest.
+/// HEVC and H.264 through D3D12 Video Encode: the driver writes the slices, we
+/// write the rest.
 ///
 /// ── One picture ─────────────────────────────────────────────────────────────
 ///
@@ -67,9 +69,17 @@ namespace mw::native::encode {
 /// the last one — is the same picture: a still-screen pass or the idle floor,
 /// which the controller sizes apart from new pictures.
 ///
+/// ── H.264 ───────────────────────────────────────────────────────────────────
+///
+/// The sequence VA-API streams (H264EncodeNegotiation.h): High profile, one
+/// picture kept, the sliding window, POC type 2. HevcDpb plans it at a
+/// capacity of one — the previous picture, always used — so a loss costs a
+/// keyframe; the POC it counts is the picture's place since the IDR, which is
+/// frame_num (modulo 2^16) and half the H.264 POC.
+///
 /// ── What it does not do yet ────────────────────────────────────────────────
 ///
-/// HEVC only (H.264 and AV1 are Phase 9).
+/// AV1 (Phase 9, C9.2).
 class VideoEncode12 : public IVideoEncoder12
 {
 public:
@@ -95,8 +105,12 @@ public:
     bool intraRefreshEnabled() const override { return m_Setup.intraRefreshFrames > 0; }
     std::string describe() const override { return "D3D12 VE"; }
 
-    /// What the negotiation settled, for the log and the tests.
+    /// What the negotiation settled, for the log and the tests. In H.264, the
+    /// part both codecs share — the rate control, the driver's answer, the
+    /// coded size, the intra refresh; h264Setup() holds the rest.
     const HevcEncodeSetup& setup() const { return m_Setup; }
+    const H264EncodeSetup& h264Setup() const { return m_H264; }
+    Codec codec() const { return m_Codec; }
     const std::vector<uint8_t>& parameterSets() const { return m_Headers; }
     /// How many pictures' slice headers are still read back.
     int guardLeft() const { return m_GuardLeft; }
@@ -127,6 +141,13 @@ private:
     /// The slice headers of @p data read with our SPS and PPS, and checked
     /// against @p plan; false, with the reason, when they do not agree.
     bool guard(const uint8_t* data, size_t size, const HevcDpb::Plan& plan, std::string& error);
+    bool guardH264(const uint8_t* data, size_t size, const HevcDpb::Plan& plan, std::string& error);
+    /// The codec's half of the structures D3D12 points to.
+    D3D12_VIDEO_ENCODER_CODEC d3d12Codec() const;
+    D3D12_VIDEO_ENCODER_PROFILE_DESC profileDesc();
+    D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION configurationDesc();
+    D3D12_VIDEO_ENCODER_LEVEL_SETTING levelDesc();
+    D3D12_VIDEO_ENCODER_SEQUENCE_GOP_STRUCTURE gopDesc();
     /// The QP the driver says it coded the picture at: its average, or its
     /// first slice's once slices have been seen to move; -1 when neither says.
     int reportedQp(const uint8_t* slices, size_t size);
@@ -152,11 +173,19 @@ private:
     Microsoft::WRL::ComPtr<ID3D12VideoEncodeCommandList2> m_List;
     d3d12::GpuFence m_Encoded;
 
+    Codec m_Codec = Codec::Hevc;
     HevcEncodeSetup m_Setup;
     D3D12_VIDEO_ENCODER_LEVEL_TIER_CONSTRAINTS_HEVC m_Level = {};
     D3D12_VIDEO_ENCODER_PROFILE_HEVC m_Profile = D3D12_VIDEO_ENCODER_PROFILE_HEVC_MAIN;
     D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_HEVC m_Config = {};
     D3D12_VIDEO_ENCODER_SEQUENCE_GOP_STRUCTURE_HEVC m_Gop = {};
+    H264EncodeSetup m_H264;
+    D3D12_VIDEO_ENCODER_LEVELS_H264 m_H264Level = D3D12_VIDEO_ENCODER_LEVELS_H264_51;
+    D3D12_VIDEO_ENCODER_PROFILE_H264 m_H264Profile = D3D12_VIDEO_ENCODER_PROFILE_H264_HIGH;
+    D3D12_VIDEO_ENCODER_CODEC_CONFIGURATION_H264 m_H264Config = {};
+    D3D12_VIDEO_ENCODER_SEQUENCE_GOP_STRUCTURE_H264 m_H264Gop = {};
+    /// idr_pic_id: two IDRs in a row must differ.
+    uint32_t m_IdrPicId = 0;
     std::unique_ptr<VideoEncodeCaps12::RateControl> m_Rate;
     bool m_RateChanged = false;
     int m_Fps = 60;
@@ -191,9 +220,11 @@ private:
     uint8_t* m_MetadataCpu = nullptr;
 
     HevcDpb m_Dpb;
-    std::vector<uint8_t> m_Headers; ///< VPS, SPS, PPS, Annex-B
+    std::vector<uint8_t> m_Headers; ///< VPS (HEVC), SPS, PPS, Annex-B
     HevcSpsFields m_SpsFields;
     HevcPpsFields m_PpsFields;
+    H264SpsFields m_H264Sps;
+    H264PpsFields m_H264Pps;
     int m_GuardLeft = 0;
     /// A slice QP has left the PPS's: the driver says its QP there (encode()).
     bool m_SliceQpMoves = false;

@@ -149,8 +149,8 @@ inline std::string refusal(const VideoPipelineFacts& f, EncoderTuning::Encoder12
     if (encoder == E::Nvenc && !f.nvenc12) return "NVENC takes no D3D12 picture on this machine";
     if (encoder == E::Amf && !f.amf12) return "AMF takes no D3D12 picture on this machine";
     // The vendors' SDKs code what their D3D11 path codes; D3D12 Video Encode
-    // is HEVC until Phase 9.
-    if (encoder == E::VideoEncode && f.codec != Codec::Hevc)
+    // codes HEVC and H.264 (Phase 9, C9.1), AV1 later.
+    if (encoder == E::VideoEncode && f.codec != Codec::Hevc && f.codec != Codec::H264)
         return std::string(toString(f.codec)) + " is not done by D3D12 Video Encode yet";
     if (encoder == E::VideoEncode && !f.videoEncode12)
         return std::string("this GPU's D3D12 Video Encode does not take ") + toString(f.codec);
@@ -178,6 +178,11 @@ inline VideoPipelineChoice chooseVideoPipeline(const VideoPipelineFacts& f)
         why = std::string("auto: the vendor table has ") +
               (wanted == VideoPipeline::D3d12 ? "D3D12" : "D3D11") + " for " + toString(f.encoder);
         asker = std::string("auto: the vendor table for ") + toString(f.encoder);
+        if (wanted == VideoPipeline::D3d12 && !autoD3d12Codec(f.codec)) {
+            wanted = VideoPipeline::D3d11;
+            why +=
+                std::string(" in HEVC, D3D11 in ") + toString(f.codec) + " (not measured on D3D12)";
+        }
     }
 
     VideoPipelineChoice c;

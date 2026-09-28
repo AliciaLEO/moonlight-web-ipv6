@@ -6,6 +6,7 @@
 
 #if defined(_WIN32)
 #include "d3d12_test_pictures.h"
+#include "encode/H264SliceParser.h"
 #include "encode/HevcDpb.h"
 #include "encode/HevcSliceParser.h"
 #include "encode/windows/d3d12/VideoEncode12.h"
@@ -317,6 +318,164 @@ void ownRateOn(const std::shared_ptr<d3d12::D3d12Device>& device)
     tuning.reencodeFit12 = EncoderTuning::Choice::Default;
 }
 
+std::string fileSafe(std::string name)
+{
+    for (char& c : name)
+        if (!std::isalnum(static_cast<unsigned char>(c))) c = '-';
+    return name;
+}
+
+/// H.264 (plan C9.1): the IDR with its SPS and PPS in front, P pictures
+/// numbered in order, every one kept as the next one's reference; a loss has
+/// no older picture to reach back to — the next picture is an IDR — and a
+/// forced keyframe; the header guard passed, a bitrate change taken. The
+/// stream is dumped beside its input pictures for the pixel proof.
+void h264On(const std::shared_ptr<d3d12::D3d12Device>& device)
+{
+    VideoEncode12 encoder;
+    std::string error;
+    EncoderTuning tuning;
+    if (!encoder.init(device, Codec::H264, 1920, 1080, 60, 20000, false, false, tuning, error)) {
+        std::fprintf(stderr, "  %s, H.264: %s\n", device->name().c_str(), error.c_str());
+        CHECK(false);
+        return;
+    }
+    CHECK(encoder.codec() == Codec::H264);
+    CHECK_EQ(encoder.codedWidth(), 1920);
+    CHECK_EQ(encoder.codedHeight(), 1088);
+    CHECK(!encoder.supportsReferenceInvalidation());
+    // The parameter sets read back as they were written: 1088 coded lines,
+    // 1080 shown, one picture kept.
+    const std::vector<uint8_t>& headers = encoder.parameterSets();
+    H264SpsFields sps;
+    H264PpsFields pps;
+    int units = 0;
+    for (const HevcNalUnit& u : hevcNalUnits(headers.data(), headers.size())) {
+        ++units;
+        if (h264NalType(u) == 7) CHECK(parseH264Sps(u.data, u.size, sps).empty());
+        if (h264NalType(u) == 8) CHECK(parseH264Pps(u.data, u.size, pps).empty());
+    }
+    CHECK_EQ(units, 2);
+    CHECK_EQ(sps.profileIdc, 100u);
+    CHECK_EQ(sps.pocType, 2u);
+    CHECK_EQ(sps.log2MaxFrameNum, 16u);
+    CHECK_EQ(sps.maxRefFrames, 1u);
+    CHECK_EQ(sps.heightMbs, 68u);
+    CHECK_EQ(pps.cabac, encoder.h264Setup().cabac);
+    CHECK_EQ(pps.transform8x8, encoder.h264Setup().transform8x8);
+
+    ComPtr<ID3D12Resource> input =
+        picture(device->device(), encoder.codedWidth(), encoder.codedHeight(), false);
+    Uploader uploader;
+    if (!input || !uploader.init(*device, input.Get(), error)) {
+        std::fprintf(stderr, "  %s: the test's upload: %s\n", device->name().c_str(),
+                     error.c_str());
+        CHECK(false);
+        return;
+    }
+    std::ofstream dump;
+    std::ofstream dumpInput;
+    if (const char* dir = std::getenv("MW_TEST_DUMP_HEVC")) {
+        const std::string base = std::string(dir) + "\\ve12-" + fileSafe(device->name()) + "-h264";
+        dump.open(base + ".h264", std::ios::binary);
+        dumpInput.open(base + ".nv12", std::ios::binary);
+    }
+
+    HevcDpb expected(1, 60);
+    const int frames = 40;
+    int keyframes = 0, errors = 0, wrongFrameNum = 0, notKept = 0, badQp = 0, unknownQp = 0;
+    int lowQp = 99, highQp = -1;
+    bool lossHealed = false;
+    for (int n = 0; n < frames; ++n) {
+        encoder.releaseOutput();
+        const bool force = n == 30;
+        if (n == 20) {
+            // Frame 18 never arrived: with one picture kept, nothing older is
+            // left, and the next picture is an IDR — asked or not.
+            std::string why;
+            CHECK(!encoder.invalidateReference(18, why));
+            CHECK(!expected.invalidate(18));
+        }
+        const HevcDpb::Plan plan = expected.plan(static_cast<uint32_t>(n), force);
+        if (n == 20) lossHealed = plan.idr;
+        const uint64_t ready = uploader.upload(input.Get(), n, false, error);
+        EncoderOutput out;
+        if (!ready || !encoder.encode(input.Get(), uploader.fence.fence(), ready, force,
+                                      static_cast<uint32_t>(n), out, error)) {
+            std::fprintf(stderr, "  %s, H.264 frame %d: %s\n", device->name().c_str(), n,
+                         error.c_str());
+            ++errors;
+            break;
+        }
+        expected.encoded(plan);
+        if (dump.is_open())
+            dump.write(reinterpret_cast<const char*>(out.data),
+                       static_cast<std::streamsize>(out.size));
+        if (dumpInput.is_open()) {
+            const std::vector<uint8_t> nv12 = d3d12_test::nv12Frame(1920, 1080, n);
+            dumpInput.write(reinterpret_cast<const char*>(nv12.data()),
+                            static_cast<std::streamsize>(nv12.size()));
+        }
+        CHECK_EQ(out.keyframe, plan.idr);
+        if (out.avgQp == -1) {
+            ++unknownQp;
+        } else if (out.avgQp < 1 || out.avgQp > 51) {
+            ++badQp;
+        } else {
+            lowQp = (std::min)(lowQp, out.avgQp);
+            highQp = (std::max)(highQp, out.avgQp);
+        }
+        if (out.keyframe) {
+            ++keyframes;
+            CHECK(out.size > headers.size());
+            CHECK(std::memcmp(out.data, headers.data(), headers.size()) == 0);
+        }
+        for (const HevcNalUnit& u : hevcNalUnits(out.data, out.size)) {
+            const uint32_t type = h264NalType(u);
+            if (type != 1 && type != 5) continue;
+            H264SliceFields f;
+            const std::string wrong = parseH264SliceHeader(u.data, u.size, sps, pps, f);
+            if (!wrong.empty()) {
+                std::fprintf(stderr, "  %s, H.264 frame %d: %s\n", device->name().c_str(), n,
+                             wrong.c_str());
+                ++errors;
+                break;
+            }
+            if (f.frameNum != (plan.poc & 0xFFFFu)) ++wrongFrameNum;
+            if (f.nalRefIdc == 0 || f.adaptiveMarking) ++notKept;
+        }
+    }
+    CHECK_EQ(errors, 0);
+    CHECK_EQ(wrongFrameNum, 0);
+    CHECK_EQ(notKept, 0);
+    CHECK_EQ(badQp, 0);
+    CHECK(lossHealed);
+    CHECK_EQ(keyframes, 3); // the first, after the loss, the forced one
+    CHECK_EQ(encoder.guardLeft(), 0);
+    CHECK_EQ(encoder.ownRateControl(), !encoder.setup().support.rateReconfigurable);
+    CHECK_EQ(encoder.qpNotFollowed(), 0);
+    std::string refused;
+    const bool changed = encoder.setBitrate(10000, refused);
+    CHECK(changed);
+    if (changed) {
+        const uint64_t ready = uploader.upload(input.Get(), frames, false, error);
+        EncoderOutput out;
+        encoder.releaseOutput();
+        CHECK(encoder.encode(input.Get(), uploader.fence.fence(), ready, false,
+                             static_cast<uint32_t>(frames), out, error));
+    }
+    encoder.releaseOutput();
+    std::fprintf(stderr,
+                 "  %s, H.264: %d frames, %d keyframes, QP %d..%d (%d unknown), %s, %s%s, "
+                 "bitrate change %s\n",
+                 device->name().c_str(), frames, keyframes, lowQp, highQp, unknownQp,
+                 encoder.ownRateControl() ? "our rate control" : "the driver's rate control",
+                 encoder.h264Setup().cabac ? "CABAC" : "CAVLC",
+                 encoder.h264Setup().transform8x8 ? ", 8x8 transform" : "",
+                 changed ? "taken" : refused.c_str());
+    encoder.stop();
+}
+
 /// 1440 lines end inside a coding tree block of 64 (the Arc's, the AMD
 /// iGPU's): the driver takes the size in whole CTBs, and encodes at it.
 void wholeBlocksOn(const std::shared_ptr<d3d12::D3d12Device>& device)
@@ -370,11 +529,12 @@ void wholeBlocksOn(const std::shared_ptr<d3d12::D3d12Device>& device)
 // the header guard passed, a forced keyframe, a bitrate change (the driver's
 // rate control or ours); a short Main 10 run; 2560x1440 in whole coding tree
 // blocks; our rate control forced on, a still picture sharpened, an overshoot
-// coded again. MW_TEST_DUMP_HEVC=<dir> writes the streams out for ffmpeg.
+// coded again; H.264, a loss healed by an IDR (C9.1). MW_TEST_DUMP_HEVC=<dir>
+// writes the streams out for ffmpeg, H.264's beside its input pictures.
 void run_video_encode12_tests()
 {
 #if defined(_WIN32)
-    SECTION("VideoEncode12 — HEVC through D3D12 Video Encode, on each GPU");
+    SECTION("VideoEncode12 — HEVC and H.264 through D3D12 Video Encode, on each GPU");
 
     ComPtr<IDXGIFactory4> factory;
     if (FAILED(::CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
@@ -403,6 +563,7 @@ void run_video_encode12_tests()
         runOn(device, true);
         wholeBlocksOn(device);
         ownRateOn(device);
+        h264On(device);
     }
     if (ran == 0) std::fprintf(stderr, "  no GPU with D3D12 Video Encode here — skipped\n");
 #endif

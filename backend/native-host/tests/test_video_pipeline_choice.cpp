@@ -103,26 +103,41 @@ void run_video_pipeline_choice_tests()
         CHECK(contains(c.reason, "the setting (d3d11)"));
     }
 
-    SECTION("VideoPipeline — the table's D3D12 refused for a build: D3D11 runs, and says the table "
-            "asked");
+    SECTION("VideoPipeline — the table's D3D12 is HEVC's: H.264 keeps D3D11 on Auto, the setting "
+            "reaches D3D12 Video Encode's");
     {
         VideoPipelineFacts f = arc();
         f.codec = Codec::H264; // a browser that decodes no HEVC
         VideoPipelineChoice c = chooseVideoPipeline(f);
         CHECK(c.pipeline == VideoPipeline::D3d11);
+        CHECK(!c.refused); // the table has D3D11 for it: nothing was refused
+        CHECK(c.encoder.empty());
+        CHECK(contains(c.reason, "auto: the vendor table has D3D12 for oneVPL in HEVC, D3D11 in "
+                                 "H.264 (not measured on D3D12)"));
+        CHECK(autoD3d12Codec(Codec::Hevc));
+        CHECK(!autoD3d12Codec(Codec::H264));
+        CHECK(!autoD3d12Codec(Codec::Av1));
+
+        f.setting = VideoPipeline::D3d12;
+        c = chooseVideoPipeline(f);
+        CHECK(c.pipeline == VideoPipeline::D3d12);
+        CHECK_EQ(c.route, std::string("DIRECT conversion → D3D12 Video Encode H.264"));
+        CHECK_EQ(c.encoder, std::string("D3D12 VE"));
+    }
+
+    SECTION("VideoPipeline — the table's D3D12 refused for a build: D3D11 runs, and says the table "
+            "asked");
+    {
+        // A GPU a first build found without D3D12 Video Encode (Windows 10):
+        // the builds after it choose D3D11 from the start.
+        VideoPipelineFacts f = arc();
+        f.videoEncode12 = false;
+        VideoPipelineChoice c = chooseVideoPipeline(f);
+        CHECK(c.pipeline == VideoPipeline::D3d11);
         CHECK(c.refused); // the overlay reads "oneVPL (D3D11)"
         CHECK(c.encoder.empty());
         CHECK(contains(c.reason, "auto: the vendor table for oneVPL asks for D3D12, D3D11 runs: "
-                                 "H.264 is not done by D3D12 Video Encode yet"));
-
-        // A GPU a first build found without D3D12 Video Encode (Windows 10):
-        // the builds after it choose D3D11 from the start.
-        f = arc();
-        f.videoEncode12 = false;
-        c = chooseVideoPipeline(f);
-        CHECK(c.pipeline == VideoPipeline::D3d11);
-        CHECK(c.refused);
-        CHECK(contains(c.reason, "D3D12 Video Encode does not take HEVC"));
+                                 "this GPU's D3D12 Video Encode does not take HEVC"));
     }
 
     SECTION("VideoPipeline — the bench key over the setting over the table");
@@ -190,7 +205,8 @@ void run_video_pipeline_choice_tests()
         CHECK_EQ(c.route, std::string("DIRECT conversion → NVENC (D3D12) HEVC"));
         CHECK_EQ(c.encoder, std::string("NVENC (D3D12)"));
 
-        // The vendor's SDK codes what its D3D11 path codes; VE is HEVC only.
+        // The vendor's SDK codes what its D3D11 path codes; VE, HEVC and
+        // H.264.
         rtx.codec = Codec::H264;
         c = chooseVideoPipeline(rtx);
         CHECK(c.pipeline == VideoPipeline::D3d12);
@@ -206,6 +222,9 @@ void run_video_pipeline_choice_tests()
         CHECK(c.encoder12 == EncoderTuning::Encoder12::VideoEncode);
         CHECK_EQ(c.encoder, std::string("D3D12 VE"));
         rtx.codec = Codec::H264;
+        CHECK_EQ(chooseVideoPipeline(rtx).route,
+                 std::string("DIRECT conversion → D3D12 Video Encode H.264"));
+        rtx.codec = Codec::Av1;
         CHECK(chooseVideoPipeline(rtx).refused);
 
         // No NVENC runtime able to take D3D12 pictures: D3D11, and why.
@@ -248,7 +267,6 @@ void run_video_pipeline_choice_tests()
             {"software", [](VideoPipelineFacts& f) { f.encoder = EncoderApi::Software; },
              "software has no D3D12 route"},
             {"4:4:4", [](VideoPipelineFacts& f) { f.yuv444 = true; }, "4:4:4"},
-            {"H.264", [](VideoPipelineFacts& f) { f.codec = Codec::H264; }, "H.264 is not done"},
             {"AV1", [](VideoPipelineFacts& f) { f.codec = Codec::Av1; }, "AV1 is not done"},
             {"no VE", [](VideoPipelineFacts& f) { f.videoEncode12 = false; },
              "D3D12 Video Encode does not take HEVC"},

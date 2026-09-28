@@ -49,6 +49,8 @@ void run_parameter_sets_tests();
 void run_hevc_slice_parser_tests();
 void run_hevc_dpb_tests();
 void run_hevc_negotiation_tests();
+void run_h264_slice_parser_tests();
+void run_h264_negotiation_tests();
 void run_video_pipeline_choice_tests();
 void run_d3d12_fault_tests();
 void run_linux_route_choice_tests();
@@ -125,6 +127,8 @@ int main(int argc, char** argv)
     RUN(hevc_slice_parser);
     RUN(hevc_dpb);
     RUN(hevc_negotiation);
+    RUN(h264_slice_parser);
+    RUN(h264_negotiation);
     RUN(video_pipeline_choice);
     RUN(d3d12_fault);
     RUN(linux_route_choice);

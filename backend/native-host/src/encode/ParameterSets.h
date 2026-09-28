@@ -117,6 +117,11 @@ struct H264Sequence
     /// log2_max_frame_num: frame_num is this many bits wide.
     int log2MaxFrameNum = 16;
     int fps = 60;
+    /// CABAC and the 8×8 transform, above Baseline: what VA-API has always
+    /// streamed. A D3D12 driver without one says so (H264EncodeNegotiation),
+    /// and its PPS must then say it too.
+    bool cabac = true;
+    bool transform8x8 = true;
 };
 
 inline std::vector<uint8_t> h264Sps(const H264Sequence& s)
@@ -181,11 +186,11 @@ inline std::vector<uint8_t> h264Sps(const H264Sequence& s)
 inline std::vector<uint8_t> h264Pps(const H264Sequence& s)
 {
     detail::BitWriter w;
-    w.ue(0);                            // pic_parameter_set_id
-    w.ue(0);                            // seq_parameter_set_id
-    w.u(1, s.profileIdc == 66 ? 0 : 1); // entropy_coding_mode_flag: CABAC above Baseline
-    w.u(1, 0);                          // bottom_field_pic_order_in_frame_present_flag
-    w.ue(0);                            // num_slice_groups_minus1
+    w.ue(0);                                       // pic_parameter_set_id
+    w.ue(0);                                       // seq_parameter_set_id
+    w.u(1, s.profileIdc != 66 && s.cabac ? 1 : 0); // entropy_coding_mode_flag: CABAC above Baseline
+    w.u(1, 0);                                     // bottom_field_pic_order_in_frame_present_flag
+    w.ue(0);                                       // num_slice_groups_minus1
     w.ue(0);          // num_ref_idx_l0_default_active_minus1: one reference per picture
     w.ue(0);          // num_ref_idx_l1_default_active_minus1
     w.u(1, 0);        // weighted_pred_flag
@@ -197,9 +202,9 @@ inline std::vector<uint8_t> h264Pps(const H264Sequence& s)
     w.u(1, 0);        // constrained_intra_pred_flag
     w.u(1, 0);        // redundant_pic_cnt_present_flag
     if (s.profileIdc == 100) {
-        w.u(1, 1);        // transform_8x8_mode_flag
-        w.u(1, 0);        // pic_scaling_matrix_present_flag
-        detail::se(w, 0); // second_chroma_qp_index_offset
+        w.u(1, s.transform8x8 ? 1 : 0); // transform_8x8_mode_flag
+        w.u(1, 0);                      // pic_scaling_matrix_present_flag
+        detail::se(w, 0);               // second_chroma_qp_index_offset
     }
     return detail::nal({0x68}, w);
 }
@@ -247,11 +252,11 @@ inline std::vector<uint8_t> h264SliceHeader(const H264Sequence& s, const H264Sli
     } else {
         w.u(1, 0); // adaptive_ref_pic_marking_mode_flag: the sliding window
     }
-    if (!slice.idr && s.profileIdc != 66) w.ue(0); // cabac_init_idc
-    detail::se(w, 0);                              // slice_qp_delta
-    w.ue(0);                                       // disable_deblocking_filter_idc
-    detail::se(w, 0);                              // slice_alpha_c0_offset_div2
-    detail::se(w, 0);                              // slice_beta_offset_div2
+    if (!slice.idr && s.profileIdc != 66 && s.cabac) w.ue(0); // cabac_init_idc
+    detail::se(w, 0);                                         // slice_qp_delta
+    w.ue(0);                                                  // disable_deblocking_filter_idc
+    detail::se(w, 0);                                         // slice_alpha_c0_offset_div2
+    detail::se(w, 0);                                         // slice_beta_offset_div2
     return detail::nal({static_cast<uint8_t>(slice.idr ? 0x65 : 0x41)}, w);
 }
 
