@@ -30,6 +30,32 @@ const SHELL_CACHE = 'mw-shell';
 /** How long a request may wait for the page to answer before it is given up. */
 const CLIENT_TIMEOUT_MS = 30000;
 
+/**
+ * A shell from before v0.3.1 never asks its host whether it is still current.
+ *
+ * It only learns of an update when the machine's link — /<id> — is opened,
+ * because that is the one address that runs the bootstrap. Opened from a home
+ * screen icon or from the bare root, it serves itself forever. The v0.3.1
+ * application checks on every start; its VersionGuard carries this key, the
+ * older one does not, and that is how the two are told apart.
+ */
+const SHELL_GUARD_FILE = '/js/util/VersionGuard.js';
+const SHELL_GUARD_MARK = 'mw-shell-recheck';
+
+/**
+ * When this worker last sent a stale shell back through the link.
+ *
+ * Kept in a cache of its own, because a worker has no memory between wake-ups
+ * and the bootstrap empties 'mw-shell' whenever it refills it. The note is what
+ * stops a loop: a host still on the old version hands back the same old shell,
+ * and the bootstrap then lands on the root again — which must now open it.
+ */
+const NOTES_CACHE = 'mw-sw-notes';
+const STALE_NOTE = '/stale-shell-redirect';
+
+/** One trip back through the link per stale shell per this long. */
+const STALE_RETRY_MS = 60 * 60 * 1000;
+
 self.addEventListener('install', () => {
     // Take over straight away. The bootstrap registers this worker and then
     // navigates, and waiting a lifecycle would mean that navigation is the one
@@ -121,6 +147,49 @@ async function bootstrapPage() {
     }
 }
 
+/** Whether the cached application checks its own version when it starts. */
+async function shellChecksItself(cache) {
+    const guard = await cache.match(SHELL_GUARD_FILE);
+    if (!guard) return false;
+    return (await guard.text()).includes(SHELL_GUARD_MARK);
+}
+
+/**
+ * Whether a stale shell should be sent back through the link now.
+ *
+ * Writes the note as it answers yes, so the navigation the bootstrap ends with
+ * finds it and opens the shell instead of turning round again.
+ */
+async function timeForStaleRedirect() {
+    const notes = await caches.open(NOTES_CACHE);
+    const note = await notes.match(STALE_NOTE);
+    const last = note ? Number(await note.text()) : 0;
+    if (last && Date.now() - last < STALE_RETRY_MS) return false;
+    await notes.put(STALE_NOTE, new Response(String(Date.now())));
+    return true;
+}
+
+/**
+ * A page that goes to the machine's link, which the bootstrap answers.
+ *
+ * Only the page can read which machine that is: the old bootstrap left the
+ * identifier in localStorage, which a worker cannot see. With none there, the
+ * reload finds the note written and opens the shell as before.
+ */
+function backThroughTheLink() {
+    const html =
+        '<!doctype html><meta charset="utf-8"><script>' +
+        'var id=null;' +
+        "try{id=(JSON.parse(localStorage.getItem('mw-shell-stamp')||'null')||{}).hostId}catch(e){}" +
+        "if(typeof id==='string'&&/^[0-9a-z]{26}$/.test(id))location.replace('/'+id);" +
+        'else location.reload();' +
+        '</script>';
+    return new Response(html, {
+        status: 200,
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
+    });
+}
+
 self.addEventListener('fetch', (event) => {
     const request = event.request;
     const url = new URL(request.url);
@@ -159,7 +228,11 @@ self.addEventListener('fetch', (event) => {
 
             if (request.mode === 'navigate') {
                 const shell = await cache.match('/index.html');
-                return shell || (await bootstrapPage());
+                if (!shell) return await bootstrapPage();
+                if (!(await shellChecksItself(cache)) && (await timeForStaleRedirect())) {
+                    return backThroughTheLink();
+                }
+                return shell;
             }
 
             // /version.json is how the application notices the host was updated,
