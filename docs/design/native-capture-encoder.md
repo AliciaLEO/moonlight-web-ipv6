@@ -4997,8 +4997,8 @@ arrêté, rien ne casse : on retrouve exactement le comportement précédent.
 ## 32. Pipeline vidéo D3D12, deuxième essai (ouvert le 26/09/2026)
 
 > Ébauche, complétée à chaque porte du chantier (branche `feat/d3d12-pipeline`).
-> D3D11 reste le défaut partout tant que le banc et Bruno n'en décident pas
-> autrement.
+> D3D11 reste le défaut partout où le banc et Bruno n'en ont pas décidé
+> autrement : Intel passe en D3D12 le 28/09 (§32.9).
 
 ### 32.1 Ce que la première tentative a appris (21/09)
 
@@ -5074,8 +5074,9 @@ D3D11.
 ### 32.4 Ce qui protège D3D11
 
 - Un réglage `native_video_pipeline` (`auto`, `d3d11`, `d3d12`) et un choix
-  « Avancé » dans l'admin ; `auto` reste sur D3D11 pour tous les GPU tant que
-  Bruno n'a pas décidé d'une ligne par vendeur.
+  « Avancé » dans l'admin ; `auto` suit une ligne par vendeur, qui ne bouge que
+  sur décision de Bruno : D3D11 partout au départ, Intel en D3D12 depuis le
+  28/09 (§32.9).
 - Un refus à la construction (Windows.Graphics.Capture, pont inter-GPU, 4:4:4,
   étage logiciel, codec pas encore fait…) repasse en D3D11 pour cette
   construction, avec la raison au journal. Un échec en cours de stream repasse en
@@ -5266,3 +5267,42 @@ régler. Sous un jeu qui occupe tout le GPU, le stream capte toutes les images
 du jeu au lieu d'une sur trois, avec 8 ms de retard au lieu de 38. Si la carte
 ou son pilote ne s'y prêtent pas, le stream reprend l'ancien chemin sans
 coupure, et « VA-API » dans l'admin y revient à la main.
+
+### 32.9 Windows : Intel en D3D12 par défaut (décision de Bruno, 28/09/2026)
+
+Plan §9-23, sur la foi de G3 (§8n.6 à §8n.10 du banc) et du test de Bruno
+(C5.7). Sur l'Arc, par Internet depuis un Mac, le bureau passe de 12,0 à 6,0 ms
+sur l'hôte, et de 63,6 à 47,7 ms du clic au photon (médianes). Sous RE9, le jeu
+tient 30 à 35 i/s dans le stream en D3D12, contre 25 à 30 en D3D11, qui saute en
+plus des images. Sur le N95, D3D12 est plus rapide au repos (9,5 ms contre
+13,2) et égal sous une charge qui sature l'iGPU.
+
+**Ce qui change.** La ligne Intel (oneVPL) de la table des vendeurs
+(`autoVideoPipeline`) passe à D3D12 : conversion sur la file DIRECT, D3D12
+Video Encode HEVC, contrôle de débit maison. L'overlay lit « D3D12 VE
+(Intel) ».
+
+**Ce qui ne change pas.**
+- NVIDIA et AMD gardent D3D11. Sur la RTX, VE met 21 ms là où NVENC en met
+  environ 2 ; l'iGPU AMD perd 6,7 à 8,1 ms au repos (G2). Leur voie D3D12
+  passe par leurs SDK en entrée D3D12 (phase 7, G4).
+- `d3d11` choisi dans l'admin, ou `pipeline=d3d11` au banc, reprend la chaîne
+  d'avant. C'est le retour arrière, sans clé de banc.
+- Ce que la route D3D12 ne porte pas encore reste en D3D11, pour la
+  construction concernée : H.264 (un navigateur sans HEVC), AV1, 4:4:4,
+  Windows.Graphics.Capture, pont inter-GPU. Le journal dit pourquoi, et
+  l'overlay lit « oneVPL (D3D11) » : `refused` vaut aussi quand c'est la table
+  qui a demandé D3D12.
+
+**Windows 10.** Sans `ID3D12VideoDevice3`, il n'y a pas de D3D12 Video Encode.
+La première construction le découvre avant de faire la conversion, et le
+processus s'en souvient, un worker étant une session. Les constructions
+suivantes choisissent D3D11 d'emblée, au lieu de faire puis défaire une chaîne
+D3D12 à chaque reconstruction.
+
+**Concrètement, pour l'utilisateur** : sur un PC à carte ou à puce graphique
+Intel, rien à régler. L'image part plus vite de l'hôte (deux fois plus vite
+sur une Arc), et un jeu garde sa cadence dans le stream ; par Internet, le clic
+arrive à l'écran environ 16 ms plus tôt. Si le PC ne s'y prête pas (Windows 10, un navigateur
+sans HEVC), le stream prend l'ancien chemin sans coupure, et « D3D11 » dans
+l'admin y revient à la main.

@@ -319,8 +319,8 @@ struct SessionInfo
     std::string videoPipelineReason;
     /// The D3D12 route's encoder as the overlay names it ("D3D12 VE", "NVENC
     /// (D3D12)"), empty while D3D11 runs; and whether D3D12 was asked for — by
-    /// the setting or a bench key — while D3D11 runs, so the overlay can say
-    /// so in a word. The reason is the log's.
+    /// the setting, a bench key or the vendor table — while D3D11 runs, so the
+    /// overlay can say so in a word. The reason is the log's.
     std::string videoEncoder;
     bool videoPipelineRefused = false;
 

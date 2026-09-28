@@ -58,8 +58,16 @@ public:
 
     const char* kind() const override { return "d3d12"; }
 
+    /// Why the GPU on @p encodeAdapterLuid has no D3D12 Video Encode, once a
+    /// chain opened there has found out — Windows 10, a driver without one —
+    /// and "" until then. Kept for the process, a worker being one session:
+    /// the builds after the first take D3D11 from the start, rather than make
+    /// a D3D12 chain to tear down each time Auto asks for one (Intel's line).
+    static std::string videoEncodeMissing(uint64_t encodeAdapterLuid);
+
     /// @p crossGpuCopy is refused (the bridge is D3D11's); the device is the
-    /// one on @p encodeAdapterLuid, which is then the display's.
+    /// one on @p encodeAdapterLuid, which is then the display's. A device with
+    /// no D3D12 Video Encode is refused here, before anything is made on it.
     bool open(bool crossGpuCopy, uint64_t encodeAdapterLuid, const std::string& encodeGpuName,
               std::string& error) override;
     void teardown(bool keepHeld) override;

@@ -89,14 +89,17 @@ inline bool parseVideoPipeline(const std::string& text, VideoPipeline& out)
 }
 
 /// What Auto means on a GPU reached through @p api: one line per vendor.
-/// D3D11 everywhere until a gate of the D3D12 plan has measured a vendor and
-/// Bruno has moved its line — a default never changes on a measurement alone.
+/// A line moves once a gate of the D3D12 plan has measured its vendor and
+/// Bruno has decided — a default never changes on a measurement alone.
+/// Intel's moved on 28/09/2026 (plan §9-23): D3D12 halved the Arc's time on
+/// the host and kept a game's pace where D3D11 skipped pictures; the N95 was
+/// faster at rest and no slower under load (G3, then Bruno's own test, C5.7).
 inline VideoPipeline autoVideoPipeline(EncoderApi api)
 {
     switch (api) {
     case EncoderApi::Nvenc: return VideoPipeline::D3d11; // G2, then G4 (NVENC on D3D12)
     case EncoderApi::Amf: return VideoPipeline::D3d11;   // G2, then G4 (AMF on D3D12)
-    case EncoderApi::Vpl: return VideoPipeline::D3d11;   // G2, then G3 (in-house rate control)
+    case EncoderApi::Vpl: return VideoPipeline::D3d12;   // G3 and C5.7: Bruno, 28/09 (§9-23)
     case EncoderApi::VaApi: return VideoPipeline::Vaapi; // Linux: until G5 (Phase 13)
     default: return VideoPipeline::D3d11;                // no D3D12 route at all
     }

@@ -834,10 +834,12 @@ private:
         f.capture = m_CaptureApi;
         f.crossGpuCopy = m_Target.crossGpuCopy;
         f.yuv444 = m_Target.yuv444;
-        // Taken for granted here, found out by the build: a GPU without it
-        // (Windows 10, a driver that takes no HEVC) refuses the D3D12 build,
-        // which says why, and D3D11 carries on.
-        f.videoEncode12 = true;
+        // Taken for granted until a build finds out: a GPU without it (Windows
+        // 10, a driver that takes no HEVC) refuses the D3D12 build, which says
+        // why, and D3D11 carries on. One with no D3D12 Video Encode at all is
+        // then known, and the builds after it choose D3D11 from the start.
+        f.videoEncode12 =
+            D3d12VideoPipeline::videoEncodeMissing(m_Target.encodeAdapterHandle).empty();
         return f;
     }
 

@@ -70,18 +70,58 @@ void run_video_pipeline_choice_tests()
         CHECK(p == VideoPipeline::D3d12); // untouched by a refusal
     }
 
-    SECTION("VideoPipeline — the vendor table is D3D11 everywhere until Bruno moves a line");
+    SECTION("VideoPipeline — the vendor table: D3D12 on Intel (§9-23), D3D11 for the rest");
     {
+        CHECK(autoVideoPipeline(EncoderApi::Vpl) == VideoPipeline::D3d12);
         for (EncoderApi api : {EncoderApi::None, EncoderApi::Nvenc, EncoderApi::Amf,
-                               EncoderApi::Vpl, EncoderApi::MediaFoundation, EncoderApi::Software})
+                               EncoderApi::MediaFoundation, EncoderApi::Software})
             CHECK(autoVideoPipeline(api) == VideoPipeline::D3d11);
-        const VideoPipelineChoice c = chooseVideoPipeline(arc());
+
+        VideoPipelineChoice c = chooseVideoPipeline(arc());
+        CHECK(c.pipeline == VideoPipeline::D3d12);
+        CHECK_EQ(c.route, std::string("DIRECT conversion → D3D12 Video Encode HEVC"));
+        CHECK_EQ(c.encoder, std::string("D3D12 VE"));
+        CHECK(!c.refused);
+        CHECK(contains(c.reason, "auto: the vendor table has D3D12 for oneVPL"));
+
+        VideoPipelineFacts rtx = arc();
+        rtx.encoder = EncoderApi::Nvenc;
+        c = chooseVideoPipeline(rtx);
         CHECK(c.pipeline == VideoPipeline::D3d11);
         CHECK_EQ(c.route, std::string("D3D11"));
         CHECK(c.encoder.empty()); // the Selector's encoder names itself
         CHECK(!c.refused);
-        CHECK(contains(c.reason, "vendor table"));
-        CHECK(contains(c.reason, "oneVPL"));
+        CHECK(contains(c.reason, "auto: the vendor table has D3D11 for NVENC"));
+
+        // The way back from the table's D3D12, from the admin page.
+        VideoPipelineFacts back = arc();
+        back.setting = VideoPipeline::D3d11;
+        c = chooseVideoPipeline(back);
+        CHECK(c.pipeline == VideoPipeline::D3d11);
+        CHECK(!c.refused);
+        CHECK(contains(c.reason, "the setting (d3d11)"));
+    }
+
+    SECTION("VideoPipeline — the table's D3D12 refused for a build: D3D11 runs, and says the table "
+            "asked");
+    {
+        VideoPipelineFacts f = arc();
+        f.codec = Codec::H264; // a browser that decodes no HEVC
+        VideoPipelineChoice c = chooseVideoPipeline(f);
+        CHECK(c.pipeline == VideoPipeline::D3d11);
+        CHECK(c.refused); // the overlay reads "oneVPL (D3D11)"
+        CHECK(c.encoder.empty());
+        CHECK(contains(c.reason, "auto: the vendor table for oneVPL asks for D3D12, D3D11 runs: "
+                                 "H.264 is not done by the D3D12 route yet"));
+
+        // A GPU a first build found without D3D12 Video Encode (Windows 10):
+        // the builds after it choose D3D11 from the start.
+        f = arc();
+        f.videoEncode12 = false;
+        c = chooseVideoPipeline(f);
+        CHECK(c.pipeline == VideoPipeline::D3d11);
+        CHECK(c.refused);
+        CHECK(contains(c.reason, "D3D12 Video Encode does not take HEVC"));
     }
 
     SECTION("VideoPipeline — the bench key over the setting over the table");
@@ -187,11 +227,13 @@ void run_video_pipeline_choice_tests()
     SECTION("VideoPipeline — a refusal only matters when D3D12 was asked for");
     {
         VideoPipelineFacts f = arc();
+        f.encoder = EncoderApi::Nvenc; // whose line is D3D11
         f.capture = CaptureApi::WindowsGraphicsCapture;
         f.yuv444 = true;
         const VideoPipelineChoice c = chooseVideoPipeline(f);
         CHECK(c.pipeline == VideoPipeline::D3d11);
         CHECK(!c.refused);
+        f.encoder = EncoderApi::Vpl; // whose line is D3D12, asked for D3D11 by name
         f.setting = VideoPipeline::D3d11;
         CHECK(!chooseVideoPipeline(f).refused);
     }
@@ -206,11 +248,16 @@ void run_video_pipeline_choice_tests()
         }
         CHECK(autoVideoPipeline(EncoderApi::VaApi) == VideoPipeline::Vaapi);
         // A bench key or a setting naming a Linux chain leaves Windows on its
-        // table, as Auto does: nothing asked of D3D12, nothing refused.
+        // table, as Auto does: D3D12 for Intel, D3D11 for NVIDIA.
         VideoPipelineFacts f = arc();
         f.setting = VideoPipeline::Vulkan;
         f.benchKey = VideoPipeline::Vaapi;
-        const VideoPipelineChoice c = chooseVideoPipeline(f);
+        VideoPipelineChoice c = chooseVideoPipeline(f);
+        CHECK(c.pipeline == VideoPipeline::D3d12);
+        CHECK(!c.refused);
+        CHECK(contains(c.reason, "vendor table"));
+        f.encoder = EncoderApi::Nvenc;
+        c = chooseVideoPipeline(f);
         CHECK(c.pipeline == VideoPipeline::D3d11);
         CHECK(!c.refused);
         CHECK(contains(c.reason, "vendor table"));

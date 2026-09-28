@@ -114,9 +114,10 @@ QString withVendor(const QString& name, const mw::native::SessionInfo& info)
 /// "NVENC (D3D12)") while that chain runs, "Vulkan Video" while Linux's does,
 /// the Selector's ("NVENC", "AMF", "oneVPL", "VA-API") otherwise — followed
 /// by "(D3D11)" when D3D12 was asked for and D3D11 runs, so whoever picked
-/// D3D12 in the admin sees at a glance that it did not take. The two names
-/// that fit any vendor carry the GPU's maker: "D3D12 VE (Intel)". On Linux
-/// the encoder's name already says which chain runs. Why is the log's to say.
+/// D3D12 in the admin, or streams an Intel GPU (Auto's D3D12), sees at a
+/// glance that it did not take. The two names that fit any vendor carry the
+/// GPU's maker: "D3D12 VE (Intel)". On Linux the encoder's name already says
+/// which chain runs. Why is the log's to say.
 QString encoderLabel(const mw::native::SessionInfo& info)
 {
     if (info.videoPipeline == mw::native::VideoPipeline::D3d12 && !info.videoEncoder.empty()) {

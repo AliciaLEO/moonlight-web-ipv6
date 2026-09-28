@@ -22,10 +22,16 @@
 #include "../../../encode/windows/d3d12/VideoEncode12.h"
 
 #include <cstdio>
+#include <map>
+#include <mutex>
 
 namespace mw::native {
 
 namespace {
+
+/// The adapters found without D3D12 Video Encode, and why (videoEncodeMissing).
+std::mutex g_NoVideoEncodeLock;
+std::map<uint64_t, std::string> g_NoVideoEncode;
 
 /// The size the converter starts at: whole blocks of 16. The encoder settles
 /// on whole coding tree blocks (32 or 64, HevcEncodeNegotiation.h), and the
@@ -68,6 +74,13 @@ D3d12VideoPipeline::~D3d12VideoPipeline()
     close();
 }
 
+std::string D3d12VideoPipeline::videoEncodeMissing(uint64_t encodeAdapterLuid)
+{
+    std::lock_guard<std::mutex> lock(g_NoVideoEncodeLock);
+    const auto found = g_NoVideoEncode.find(encodeAdapterLuid);
+    return found == g_NoVideoEncode.end() ? std::string() : found->second;
+}
+
 bool D3d12VideoPipeline::open(bool crossGpuCopy, uint64_t encodeAdapterLuid,
                               const std::string& encodeGpuName, std::string& error)
 {
@@ -76,9 +89,24 @@ bool D3d12VideoPipeline::open(bool crossGpuCopy, uint64_t encodeAdapterLuid,
         error = "the frames cross to another GPU, over a D3D11 bridge";
         return false;
     }
+    error = videoEncodeMissing(encodeAdapterLuid);
+    if (!error.empty()) return false;
     m_Device = d3d12::D3d12Device::forAdapter(encodeAdapterLuid, error);
     if (!m_Device) return false;
     ID3D12Device* device = m_Device->device();
+    // The chain ends in D3D12 Video Encode: a device without it is refused
+    // before its conversion is made, and remembered.
+    Microsoft::WRL::ComPtr<ID3D12VideoDevice3> video;
+    if (FAILED(device->QueryInterface(IID_PPV_ARGS(&video)))) {
+        error = "no D3D12 Video Encode on " + encodeGpuName +
+                " (no ID3D12VideoDevice3: Windows 10, or a driver without it)";
+        {
+            std::lock_guard<std::mutex> lock(g_NoVideoEncodeLock);
+            g_NoVideoEncode[encodeAdapterLuid] = error;
+        }
+        close();
+        return false;
+    }
     if (!m_Device->createQueue(d3d12::queueRequestFor(D3D12_COMMAND_LIST_TYPE_DIRECT, m_Tuning,
                                                       L"MoonlightWeb conversion"),
                                m_Queue, error)) {

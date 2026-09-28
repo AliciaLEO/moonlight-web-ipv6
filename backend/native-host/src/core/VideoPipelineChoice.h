@@ -80,7 +80,8 @@ struct VideoPipelineChoice
     /// Why, for the log: which of the bench key, the setting and the table
     /// decided — and, when D3D12 was asked for and D3D11 runs, what refused.
     std::string reason;
-    /// D3D12 was asked for and D3D11 runs.
+    /// D3D12 was asked for — by the bench key, the setting or the table's
+    /// line — and D3D11 runs.
     bool refused = false;
 };
 
@@ -138,17 +139,21 @@ inline VideoPipelineChoice chooseVideoPipeline(const VideoPipelineFacts& f)
 {
     VideoPipeline wanted = VideoPipeline::D3d11;
     std::string why;
+    std::string asker; // who asked for D3D12, in a refusal's words
     // Linux's chains (vaapi, vulkan) are no opinion here, as Auto is.
     if (f.benchKey != VideoPipeline::Auto && isWindowsPipeline(f.benchKey)) {
         wanted = f.benchKey;
         why = std::string("the bench key pipeline=") + toString(f.benchKey);
+        asker = why;
     } else if (f.setting != VideoPipeline::Auto && isWindowsPipeline(f.setting)) {
         wanted = f.setting;
         why = std::string("the setting (") + toString(f.setting) + ")";
+        asker = why;
     } else {
         wanted = autoVideoPipeline(f.encoder);
         why = std::string("auto: the vendor table has ") +
               (wanted == VideoPipeline::D3d12 ? "D3D12" : "D3D11") + " for " + toString(f.encoder);
+        asker = std::string("auto: the vendor table for ") + toString(f.encoder);
     }
 
     VideoPipelineChoice c;
@@ -162,7 +167,7 @@ inline VideoPipelineChoice chooseVideoPipeline(const VideoPipelineFacts& f)
     const std::string refused = videopipeline_detail::refusal(f, encoder);
     if (!refused.empty()) {
         c.refused = true;
-        c.reason = why + " asks for D3D12, D3D11 runs: " + refused;
+        c.reason = asker + " asks for D3D12, D3D11 runs: " + refused;
         return c;
     }
     c.pipeline = VideoPipeline::D3d12;
