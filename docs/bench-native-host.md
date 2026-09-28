@@ -2335,8 +2335,8 @@ l'échelle.)
   moins (15,7 → 9,5 %). Une image recodée à deux budgets laisse le tampon
   plus plein, et les budgets suivants plus petits.
 
-**Décision (Bruno, 28/09) : `refit=1` par défaut.** `refit=0` reste la
-clé de banc de l'« avant ».
+**Décision (Bruno, 28/09) : `refit=1` par défaut** (`0d09df8d`). `refit=0`
+reste la clé de banc de l'« avant ».
 
 ## 9. Pour l'A/B
 
