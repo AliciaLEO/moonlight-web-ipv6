@@ -438,6 +438,12 @@ Unavailability enumerate(Capabilities& caps)
         gpu.name = narrow(adapterDesc.Description);
         gpu.vendorId = adapterDesc.VendorId;
         gpu.deviceId = adapterDesc.DeviceId;
+        // The driver's version, as Device Manager shows it. Since WDDM 2.3 the
+        // D3D9, D3D11 and D3D12 parts of a driver package share one, and
+        // asking about IDXGIDevice is the documented way to read it.
+        LARGE_INTEGER umd = {};
+        if (SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &umd)))
+            gpu.driverVersion = static_cast<uint64_t>(umd.QuadPart);
         // The LUID is how the encoder re-opens this exact adapter later. Packed
         // whole so no part of the identity is lost.
         gpu.nativeHandle =

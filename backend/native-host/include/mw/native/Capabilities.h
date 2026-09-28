@@ -70,6 +70,24 @@ enum class CaptureApi
 
 const char* toString(CaptureApi a);
 
+/// A packed driver version (GpuInfo::driverVersion) as Windows writes it:
+/// "32.0.101.7088". Empty for 0, a version nobody gave.
+inline std::string driverVersionText(uint64_t driverVersion)
+{
+    if (driverVersion == 0) return {};
+    return std::to_string((driverVersion >> 48) & 0xffff) + "." +
+           std::to_string((driverVersion >> 32) & 0xffff) + "." +
+           std::to_string((driverVersion >> 16) & 0xffff) + "." +
+           std::to_string(driverVersion & 0xffff);
+}
+
+/// The same four parts packed, for the list of excluded drivers and its tests.
+constexpr uint64_t driverVersionOf(uint16_t a, uint16_t b, uint16_t c, uint16_t d)
+{
+    return (static_cast<uint64_t>(a) << 48) | (static_cast<uint64_t>(b) << 32) |
+           (static_cast<uint64_t>(c) << 16) | static_cast<uint64_t>(d);
+}
+
 /// A GPU, as the OS enumerates it.
 struct GpuInfo
 {
@@ -78,6 +96,13 @@ struct GpuInfo
     std::string name;      ///< e.g. "NVIDIA GeForce RTX 4070"
     uint32_t vendorId = 0; ///< PCI vendor id (0x10DE NVIDIA, 0x1002 AMD, 0x8086 Intel)
     uint32_t deviceId = 0;
+
+    /// The user-mode driver's version, packed as Windows gives it — four
+    /// 16-bit parts, the first in the top bits — so that versions compare as
+    /// numbers: what the D3D12 route's list of excluded drivers reads
+    /// (VideoPipelineChoice.h). 0 where the platform does not say;
+    /// driverVersionText() writes it as Windows does.
+    uint64_t driverVersion = 0;
 
     /// Opaque, platform-specific handle to the adapter this describes: a
     /// DXGI LUID on Windows, a DRM render-node path hash on Linux, a Metal

@@ -949,6 +949,8 @@ private:
         // then known, and the builds after it choose D3D11 from the start.
         f.videoEncode12 =
             D3d12VideoPipeline::videoEncodeMissing(m_Target.encodeAdapterHandle).empty();
+        f.driverExcluded =
+            d3d12DriverExcluded(m_Target.encodeVendorId, m_Target.encodeDriverVersion);
         return f;
     }
 

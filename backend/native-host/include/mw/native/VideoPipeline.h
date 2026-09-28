@@ -20,7 +20,9 @@
 #include "Capabilities.h"
 
 #include <cctype>
+#include <cstdint>
 #include <string>
+#include <vector>
 
 namespace mw::native {
 
@@ -103,6 +105,39 @@ inline VideoPipeline autoVideoPipeline(EncoderApi api)
     case EncoderApi::VaApi: return VideoPipeline::Vaapi; // Linux: until G5 (Phase 13)
     default: return VideoPipeline::D3d11;                // no D3D12 route at all
     }
+}
+
+/// One vendor's user-mode drivers the D3D12 route stays off: from @p from to
+/// @p to, both included, packed as GpuInfo::driverVersion.
+struct D3d12DriverExclusion
+{
+    uint32_t vendorId = 0;
+    uint64_t from = 0;
+    uint64_t to = 0;
+    /// The fault, where it was seen, and the version that mended it.
+    const char* why = "";
+};
+
+/// The drivers the D3D12 route stays off, whoever asks for it (plan C8.3).
+/// None yet. A line comes with a fault seen on the bench or reported that the
+/// route's own guards — the header guard, the fence deadline, the way back to
+/// D3D11 on one keyframe — did not already catch, and with its proof.
+inline const std::vector<D3d12DriverExclusion>& d3d12DriverExclusions()
+{
+    static const std::vector<D3d12DriverExclusion> none;
+    return none;
+}
+
+/// Why the D3D12 route stays off this driver of vendor @p vendorId, "" when
+/// it may run there. @p list is the tests' way in.
+inline std::string
+d3d12DriverExcluded(uint32_t vendorId, uint64_t driverVersion,
+                    const std::vector<D3d12DriverExclusion>& list = d3d12DriverExclusions())
+{
+    for (const D3d12DriverExclusion& e : list)
+        if (e.vendorId == vendorId && driverVersion >= e.from && driverVersion <= e.to)
+            return "driver " + driverVersionText(driverVersion) + ": " + e.why;
+    return {};
 }
 
 } // namespace mw::native

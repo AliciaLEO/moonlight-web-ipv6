@@ -5357,6 +5357,23 @@ perdue à 3 s, WGC prend le relais en D3D11 (0,7 s sans image), puis D3D12
 revient 0,4 s après la fin du refus (0,5 s sans image). Chaque bascule se fait
 sur une keyframe, sans erreur de décodage (§8n.12 du banc).
 
+**Le pilote, et les pilotes exclus (C8.3).** La sonde lit la version du
+pilote de chaque GPU. Elle utilise `IDXGIAdapter::CheckInterfaceSupport` sur
+`IDXGIDevice` : depuis WDDM 2.3, les parts D3D9, D3D11 et D3D12 d'un paquet
+de pilote partagent un même numéro. La version s'affiche à trois endroits :
+- la ligne de session du journal (« on Intel(R) Arc(TM) A380 Graphics
+  (driver 32.0.101.7088) ») ;
+- `/api/native/status` (`gpu_driver`) ;
+- le JSON de la sonde en session console.
+
+Une liste par vendeur et par plage de versions (`d3d12DriverExclusions`, dans
+`VideoPipeline.h`) tient la route D3D12 à l'écart d'un pilote fautif. Le choix
+de chaîne le refuse alors comme les autres cas, raison à l'appui, et
+`video_pipeline_auto` lit `d3d11` avec `video_pipeline_excluded`. La liste est
+vide : une ligne n'y entre qu'avec une panne que les gardes de la route
+n'attrapent pas déjà (garde d'en-têtes, délai des fences, retour en D3D11), et
+avec sa preuve.
+
 **Concrètement, pour l'utilisateur** : si la carte graphique décroche en
 plein stream (pilote qui plante ou se met à jour, GPU bloqué), l'image se fige
 une demi-seconde, trois secondes et demie au pire, puis repart d'elle-même

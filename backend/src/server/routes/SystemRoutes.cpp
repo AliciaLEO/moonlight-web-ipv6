@@ -760,6 +760,10 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
                         break;
                     }
             if (gpu) o["gpu"] = QString::fromStdString(gpu->name);
+            // The driver, which a regression report needs before anything else.
+            if (gpu && gpu->driverVersion)
+                o["gpu_driver"] =
+                    QString::fromStdString(mw::native::driverVersionText(gpu->driverVersion));
             // What would actually encode this display. A GPU with an encoder
             // answers for itself; when no GPU in the machine has one, the
             // machine-level fallback tier does — and it must be NAMED, because
@@ -784,9 +788,20 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
                 o["encoder_is_fallback"] = true;
             }
 #if defined(Q_OS_WIN) || defined(Q_OS_LINUX)
-            if (gpuEncodes)
-                o["video_pipeline_auto"] = QString::fromUtf8(
-                    mw::native::toString(mw::native::autoVideoPipeline(gpu->encoders.front())));
+            if (gpuEncodes) {
+                mw::native::VideoPipeline autoPipeline =
+                    mw::native::autoVideoPipeline(gpu->encoders.front());
+                // A driver the D3D12 route stays off keeps D3D11, and says why.
+                const std::string excluded =
+                    autoPipeline == mw::native::VideoPipeline::D3d12
+                        ? mw::native::d3d12DriverExcluded(gpu->vendorId, gpu->driverVersion)
+                        : std::string();
+                if (!excluded.empty()) {
+                    autoPipeline = mw::native::VideoPipeline::D3d11;
+                    o["video_pipeline_excluded"] = QString::fromStdString(excluded);
+                }
+                o["video_pipeline_auto"] = QString::fromUtf8(mw::native::toString(autoPipeline));
+            }
 #endif
             QString codecs;
             for (mw::native::Codec c : codecList)

@@ -64,6 +64,9 @@ struct VideoPipelineFacts
     /// The vendors' SDKs fed D3D12 pictures, once they are built.
     bool nvenc12 = false;
     bool amf12 = false;
+    /// Why this GPU's driver is kept off the D3D12 route, "" when it is not
+    /// (d3d12DriverExcluded).
+    std::string driverExcluded;
 };
 
 struct VideoPipelineChoice
@@ -119,6 +122,7 @@ inline std::string refusal(const VideoPipelineFacts& f, EncoderTuning::Encoder12
     if (f.encoder != EncoderApi::Nvenc && f.encoder != EncoderApi::Amf &&
         f.encoder != EncoderApi::Vpl)
         return std::string(toString(f.encoder)) + " has no D3D12 route";
+    if (!f.driverExcluded.empty()) return "the D3D12 route stays off " + f.driverExcluded;
     if (f.yuv444) return "4:4:4, which no D3D12 encoder takes";
     if (f.codec != Codec::Hevc)
         return std::string(toString(f.codec)) + " is not done by the D3D12 route yet";

@@ -23,6 +23,7 @@
 
 #include <cstdio>
 #include <string>
+#include <vector>
 
 using namespace mw::native;
 
@@ -208,6 +209,9 @@ void run_video_pipeline_choice_tests()
                  f.enc12 = EncoderTuning::Encoder12::Amf;
              },
              "AMF fed D3D12 pictures is not built yet"},
+            {"excluded driver",
+             [](VideoPipelineFacts& f) { f.driverExcluded = "driver 1.2.3.4: a fault"; },
+             "the D3D12 route stays off driver 1.2.3.4: a fault"},
         };
         for (const Case& k : cases) {
             VideoPipelineFacts f = forcedD3d12();
@@ -222,6 +226,48 @@ void run_video_pipeline_choice_tests()
                 std::fprintf(stderr, "  %s: \"%s\"\n", k.what, c.reason.c_str());
             CHECK(contains(c.reason, k.named));
         }
+    }
+
+    SECTION("VideoPipeline — drivers the D3D12 route stays off: none yet, each range read whole");
+    {
+        CHECK_EQ(driverVersionText(driverVersionOf(32, 0, 101, 7088)),
+                 std::string("32.0.101.7088"));
+        CHECK_EQ(driverVersionText(driverVersionOf(65535, 1, 0, 65535)),
+                 std::string("65535.1.0.65535"));
+        CHECK_EQ(driverVersionText(0), std::string());
+        // Packed, the versions compare as Windows orders them.
+        CHECK(driverVersionOf(32, 0, 101, 7088) > driverVersionOf(32, 0, 101, 6987));
+        CHECK(driverVersionOf(32, 0, 102, 0) > driverVersionOf(32, 0, 101, 65535));
+        CHECK(driverVersionOf(33, 0, 0, 0) > driverVersionOf(32, 65535, 65535, 65535));
+
+        // The product's list: empty, so nothing is kept off.
+        CHECK(d3d12DriverExclusions().empty());
+        CHECK(d3d12DriverExcluded(0x8086, driverVersionOf(32, 0, 101, 7088)).empty());
+
+        const std::vector<D3d12DriverExclusion> list = {
+            {0x8086, driverVersionOf(32, 0, 101, 6000), driverVersionOf(32, 0, 101, 6999),
+             "a fault seen on the bench"},
+        };
+        CHECK_EQ(d3d12DriverExcluded(0x8086, driverVersionOf(32, 0, 101, 6500), list),
+                 std::string("driver 32.0.101.6500: a fault seen on the bench"));
+        // Both ends are in the range, the next version out of it.
+        CHECK(!d3d12DriverExcluded(0x8086, driverVersionOf(32, 0, 101, 6000), list).empty());
+        CHECK(!d3d12DriverExcluded(0x8086, driverVersionOf(32, 0, 101, 6999), list).empty());
+        CHECK(d3d12DriverExcluded(0x8086, driverVersionOf(32, 0, 101, 7000), list).empty());
+        CHECK(d3d12DriverExcluded(0x8086, driverVersionOf(32, 0, 101, 5999), list).empty());
+        // Another vendor's driver of the same number, and a version nobody gave.
+        CHECK(d3d12DriverExcluded(0x1002, driverVersionOf(32, 0, 101, 6500), list).empty());
+        CHECK(d3d12DriverExcluded(0x8086, 0, list).empty());
+
+        // Refused like any other reason, and the table's D3D12 with it.
+        VideoPipelineFacts f = arc();
+        f.driverExcluded = d3d12DriverExcluded(0x8086, driverVersionOf(32, 0, 101, 6500), list);
+        const VideoPipelineChoice c = chooseVideoPipeline(f);
+        CHECK(c.pipeline == VideoPipeline::D3d11);
+        CHECK(c.refused);
+        CHECK_EQ(c.reason, std::string("auto: the vendor table for oneVPL asks for D3D12, D3D11 "
+                                       "runs: the D3D12 route stays off driver 32.0.101.6500: a "
+                                       "fault seen on the bench"));
     }
 
     SECTION("VideoPipeline — a refusal only matters when D3D12 was asked for");
