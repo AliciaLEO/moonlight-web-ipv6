@@ -18,12 +18,31 @@
 #include "NvencEncoder.h"
 
 #include "../../core/Log.h"
+#include "../ConfigFingerprint.h"
 #include "../RateControl.h"
 
 #include <cstring>
 
 namespace mw::native::encode {
 namespace {
+
+/// What the driver is handed, fingerprinted (ConfigFingerprint): the config's
+/// bytes and the init's, without the one pointer in them and without
+/// bufferFormat, which only the D3D12 interface reads — so a D3D12 session
+/// configured alike prints the same value.
+uint32_t fingerprintOf(NV_ENC_INITIALIZE_PARAMS& init, const NV_ENC_CONFIG& config)
+{
+    NV_ENC_CONFIG* const pointer = init.encodeConfig;
+    const NV_ENC_BUFFER_FORMAT format = init.bufferFormat;
+    init.encodeConfig = nullptr;
+    init.bufferFormat = NV_ENC_BUFFER_FORMAT_UNDEFINED;
+    ConfigFingerprint fingerprint;
+    fingerprint.addValue(init);
+    fingerprint.addValue(config);
+    init.encodeConfig = pointer;
+    init.bufferFormat = format;
+    return fingerprint.value();
+}
 
 const GUID& codecGuid(Codec codec)
 {
@@ -393,6 +412,7 @@ bool NvencEncoder::init(ID3D11Device* device, Codec codec, int width, int height
     // an IDR, which NV_ENC_PIC_FLAG_FORCEIDR does per frame.
     m_InitParams.enablePTD = 1;
     m_InitParams.encodeConfig = &m_Config;
+    m_Fingerprint = fingerprintOf(m_InitParams, m_Config);
 
     status = m_Api->fn().nvEncInitializeEncoder(m_Encoder, &m_InitParams);
     if (status != NV_ENC_SUCCESS) {
@@ -431,6 +451,7 @@ bool NvencEncoder::init(ID3D11Device* device, Codec codec, int width, int height
               " taq=" + std::to_string(m_Config.rcParams.enableTemporalAQ) + ", DPB " +
               std::to_string(kDpbFrames) +
               (m_RefInvalidation ? " with reference invalidation" : ", no reference invalidation") +
+              ", config " + ConfigFingerprint::text(m_Fingerprint) +
               (overrides.empty() ? "" : " [bench: " + overrides + "]"));
     return true;
 }

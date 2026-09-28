@@ -11,6 +11,7 @@
 #include "AmfEncoder.h"
 
 #include "../../core/Log.h"
+#include "../ConfigFingerprint.h"
 #include "../RateControl.h"
 
 #include <components/VideoEncoderAV1.h>
@@ -19,6 +20,7 @@
 
 #include <algorithm>
 #include <thread>
+#include <vector>
 
 namespace mw::native::encode {
 namespace {
@@ -267,6 +269,64 @@ std::string qualityName(const CodecProperties& props, amf_int64 value)
     if (value == props.qualityBalanced) return "balanced";
     if (value == props.qualityQuality) return "quality";
     return "value " + std::to_string(value);
+}
+
+/// Every property init() sets, as the encoder holds it once initialized,
+/// fingerprinted (ConfigFingerprint): read back rather than recorded as asked,
+/// so the value speaks for what the driver kept — the D3D11 and D3D12 contexts
+/// alike.
+uint32_t fingerprintOf(amf::AMFComponent* encoder, const CodecProperties& props, Codec codec)
+{
+    std::vector<const wchar_t*> names = {
+        props.usage,         props.rateControl,        props.targetBitrate, props.peakBitrate,
+        props.vbvBufferSize, props.frameSize,          props.frameRate,     props.gopSize,
+        props.queryTimeout,  props.statisticsFeedback, props.qualityPreset, props.preAnalysis,
+        props.adaptiveQuant, props.maxLtrFrames,       props.ltrMode,
+    };
+    if (props.headerInsertionMode) names.push_back(props.headerInsertionMode);
+    if (props.lowLatencyMode) names.push_back(props.lowLatencyMode);
+    switch (codec) {
+    case Codec::H264:
+        names.insert(names.end(), {AMF_VIDEO_ENCODER_MIN_QP, AMF_VIDEO_ENCODER_B_PIC_PATTERN,
+                                   AMF_VIDEO_ENCODER_INTRA_REFRESH_NUM_MBS_PER_SLOT});
+        break;
+    case Codec::Hevc:
+        names.insert(names.end(), {AMF_VIDEO_ENCODER_HEVC_MIN_QP_I, AMF_VIDEO_ENCODER_HEVC_MIN_QP_P,
+                                   AMF_VIDEO_ENCODER_HEVC_INTRA_REFRESH_NUM_CTBS_PER_SLOT});
+        break;
+    case Codec::Av1:
+        names.insert(names.end(), {AMF_VIDEO_ENCODER_AV1_INTRA_REFRESH_MODE,
+                                   AMF_VIDEO_ENCODER_AV1_INTRAREFRESH_STRIPES,
+                                   AMF_VIDEO_ENCODER_AV1_ENCODING_LATENCY_MODE});
+        break;
+    }
+    ConfigFingerprint fingerprint;
+    for (const wchar_t* name : names) {
+        amf::AMFVariant value;
+        const AMF_RESULT result = encoder->GetProperty(name, &value);
+        fingerprint.addValue(result);
+        fingerprint.addValue(value.type);
+        switch (value.type) {
+        case amf::AMF_VARIANT_BOOL: fingerprint.addValue(value.ToBool()); break;
+        case amf::AMF_VARIANT_INT64: fingerprint.addValue(value.ToInt64()); break;
+        case amf::AMF_VARIANT_DOUBLE: fingerprint.addValue(value.ToDouble()); break;
+        case amf::AMF_VARIANT_FLOAT: fingerprint.addValue(value.ToFloat()); break;
+        case amf::AMF_VARIANT_SIZE: {
+            const AMFSize size = value.ToSize();
+            fingerprint.addValue(size.width);
+            fingerprint.addValue(size.height);
+            break;
+        }
+        case amf::AMF_VARIANT_RATE: {
+            const AMFRate rate = value.ToRate();
+            fingerprint.addValue(rate.num);
+            fingerprint.addValue(rate.den);
+            break;
+        }
+        default: break;
+        }
+    }
+    return fingerprint.value();
 }
 
 } // namespace
@@ -533,6 +593,8 @@ bool AmfEncoder::init(ID3D11Device* device, Codec codec, int width, int height, 
         m_Ltr = ReferenceSlots(slots, ReferenceSlots::strideFor(m_Fps, slots));
     }
 
+    m_Fingerprint = fingerprintOf(m_Encoder, props, codec);
+
     // The knobs as the encoder holds them now — usage, then overrides, then
     // Init(), which may have corrected any of them.
     amf_int64 quality = -1, preAnalysis = -1, aq = -1, lowLatency = -1;
@@ -558,6 +620,7 @@ bool AmfEncoder::init(ID3D11Device* device, Codec codec, int width, int height, 
                                      " frames with reference invalidation (reach " +
                                      std::to_string(m_Ltr.reachFrames()) + " frames)"
                                : ", no reference invalidation") +
+              ", config " + ConfigFingerprint::text(m_Fingerprint) +
               (overrides.empty() ? "" : " [bench: " + overrides + "]"));
     return true;
 }

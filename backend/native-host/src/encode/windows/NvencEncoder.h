@@ -92,6 +92,9 @@ public:
         return m_IntraRefresh ? m_IntraRefreshHorizon : 0;
     }
 
+    /// The configuration handed to the driver at init (ConfigFingerprint).
+    uint32_t configFingerprint() const { return m_Fingerprint; }
+
 private:
     bool registerInput(ID3D11Texture2D* texture, std::string& error);
 
@@ -125,6 +128,7 @@ private:
     /// Whether the driver claims reference invalidation for this codec.
     bool m_RefInvalidation = false;
     int m_Invalidations = 0;
+    uint32_t m_Fingerprint = 0;
 };
 
 } // namespace mw::native::encode

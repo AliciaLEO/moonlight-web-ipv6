@@ -75,6 +75,9 @@ public:
     bool setBitrate(int bitrateKbps, std::string& error) override;
     bool intraRefreshEnabled() const override { return m_IntraRefresh; }
 
+    /// The configuration the encoder holds after Init (ConfigFingerprint).
+    uint32_t configFingerprint() const { return m_Fingerprint; }
+
 private:
     const AmfApi* m_Api = nullptr;
     amf::AMFContextPtr m_Context;
@@ -112,6 +115,7 @@ private:
     /// but every time: this is the cost the whole path exists to avoid.
     bool m_ForceKeyframeNext = false;
     int m_HealsLogged = 0;
+    uint32_t m_Fingerprint = 0;
 };
 
 } // namespace mw::native::encode
