@@ -22,6 +22,7 @@
 
 #include "Caps.h"
 #include "Encode.h"
+#include "Import.h"
 #ifdef MW_VK_LAB_SHADERS
 #include "Queues.h"
 #endif
@@ -40,6 +41,7 @@ void usage()
               "  caps    what every Vulkan device answers (Vulkan Video encode, queues and\n"
               "          their priorities, timestamps, DMA-BUF import, KMS planes, sync_file)\n"
               "  encode  Vulkan Video HEVC as the Linux chain would drive it\n"
+              "  import  the KMS plane's buffer into Vulkan, checked against EGL's reading\n"
 #ifdef MW_VK_LAB_SHADERS
               "  queues  where the conversion waits behind a load, priority by priority\n"
 #endif
@@ -75,6 +77,13 @@ int main(int argc, char** argv)
             return 0;
         }
         return lab::runEncode(argc - 2, argv + 2);
+    }
+    if (command == "import") {
+        if (help) {
+            lab::importUsage();
+            return 0;
+        }
+        return lab::runImport(argc - 2, argv + 2);
     }
 #ifdef MW_VK_LAB_SHADERS
     if (command == "queues") {

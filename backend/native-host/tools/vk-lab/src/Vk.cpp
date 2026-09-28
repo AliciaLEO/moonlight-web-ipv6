@@ -190,6 +190,10 @@ bool DeviceFunctions::load(const Vulkan& vk, VkDevice device, bool video, std::s
         MW_VK_VIDEO_ENCODE_FUNCTIONS(MW_VK_LOAD_DEVICE)
     }
 #undef MW_VK_LOAD_DEVICE
+#define MW_VK_LOAD_OPTIONAL(name)                                                                  \
+    name = reinterpret_cast<PFN_##name>(vk.vkGetDeviceProcAddr(device, #name));
+    MW_VK_OPTIONAL_DEVICE_FUNCTIONS(MW_VK_LOAD_OPTIONAL)
+#undef MW_VK_LOAD_OPTIONAL
     return missing.empty();
 }
 

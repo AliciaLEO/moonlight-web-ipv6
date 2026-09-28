@@ -165,7 +165,14 @@ bool hasExtension(const std::vector<std::string>& extensions, const char* name);
     X(vkCmdBindPipeline)                                                                           \
     X(vkCmdBindDescriptorSets)                                                                     \
     X(vkCmdPushConstants)                                                                          \
-    X(vkCmdDispatch)
+    X(vkCmdDispatch)                                                                               \
+    X(vkCmdCopyImageToBuffer)
+
+// An extension's, looked up on every device and null where it is missing:
+// the probes that need one check it first.
+#define MW_VK_OPTIONAL_DEVICE_FUNCTIONS(X)                                                         \
+    X(vkGetMemoryFdPropertiesKHR)                                                                  \
+    X(vkImportSemaphoreFdKHR)
 
 // VK_KHR_video_queue and VK_KHR_video_encode_queue.
 #define MW_VK_VIDEO_ENCODE_FUNCTIONS(X)                                                            \
@@ -186,6 +193,7 @@ struct DeviceFunctions
 {
     MW_VK_DEVICE_FUNCTIONS(MW_VK_DECLARE)
     MW_VK_VIDEO_ENCODE_FUNCTIONS(MW_VK_DECLARE)
+    MW_VK_OPTIONAL_DEVICE_FUNCTIONS(MW_VK_DECLARE)
 
     /// Loads them for @p device, the video encode ones when @p video. False
     /// with the first one missing in @p missing.

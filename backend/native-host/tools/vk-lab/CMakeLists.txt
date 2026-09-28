@@ -33,6 +33,7 @@ add_executable(mw-vk-lab
     src/Vk.cpp
     src/Caps.cpp
     src/Encode.cpp
+    src/Import.cpp
 )
 
 set_target_properties(mw-vk-lab PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
