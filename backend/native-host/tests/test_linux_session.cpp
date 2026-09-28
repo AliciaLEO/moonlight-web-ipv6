@@ -516,6 +516,97 @@ void run_linux_session_tests()
         }
         ::unsetenv("MW_SCALER");
     }
+
+    // ── The split route, and its way back to GL ──────────────────────────────
+    //
+    // Plan §9-17: Vulkan on a compute queue in front of VA-API (convert=vulkan,
+    // the bench's key until the vendor table takes it). And Bruno's rule of
+    // 28/09/2026 on the same road: a Vulkan that cannot carry the stream is
+    // never forced — the session converts through GL instead, and says so. Run
+    // three times: the route itself; the Vulkan conversion failing at its first
+    // picture, as a lost device would (MW_VK_CONVERT_FAIL_AT=1), which must
+    // leave a stream that goes on through GL; and a Vulkan conversion that does
+    // not start, as on a machine without Vulkan (=0), which must leave a
+    // stream that starts on GL. Not by hiding the drivers with VK_DRIVER_FILES:
+    // the loader reads it with secure_getenv, which a binary carrying file
+    // capabilities — this one, for the scanout — never sees.
+#if defined(MW_NATIVE_LINUX_VULKAN)
+    if (!h264Only) {
+        SECTION("Linux — the split route: Vulkan compute into VA-API, GL when Vulkan gives up");
+        struct Run
+        {
+            const char* what;
+            const char* failAt; // MW_VK_CONVERT_FAIL_AT, or null
+        };
+        const Run runs[] = {
+            {"split route", nullptr},
+            {"Vulkan lost at its first picture", "1"},
+            {"no Vulkan conversion at all", "0"},
+        };
+        for (const Run& run : runs) {
+            if (run.failAt) ::setenv("MW_VK_CONVERT_FAIL_AT", run.failAt, 1);
+            SessionConfig split = config;
+            split.clientCodecs = {Codec::H264};
+            split.tuning.convertLinux = EncoderTuning::ConvertLinux::Vulkan;
+            std::atomic<int> splitFrames{0};
+            std::atomic<int> splitKeyframes{0};
+            std::atomic<int64_t> convertSumUs{0};
+            std::string splitEnded;
+            std::string splitError;
+            const std::string failAt = run.failAt ? run.failAt : "";
+            std::ofstream splitOut(std::string("/tmp/mw-linux-split-") +
+                                       (failAt.empty() ? "vulkan" : "fail" + failAt) + ".h264",
+                                   std::ios::binary | std::ios::trunc);
+            std::unique_ptr<Session> splitSession = NativeHost::createSession(
+                split,
+                [&](const EncodedFrame& f) {
+                    splitFrames.fetch_add(1);
+                    if (f.keyframe) splitKeyframes.fetch_add(1);
+                    convertSumUs.fetch_add(f.convertedUs - f.submittedUs);
+                    splitOut.write(reinterpret_cast<const char*>(f.data),
+                                   static_cast<std::streamsize>(f.size));
+                },
+                nullptr, nullptr, nullptr, [&](const std::string& reason) { splitEnded = reason; },
+                splitError);
+            if (!splitSession) {
+                std::fprintf(stderr, "  createSession failed: %s\n", splitError.c_str());
+                CHECK(false);
+                continue;
+            }
+            CHECK(splitSession->start(splitError));
+            std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+            splitSession->requestKeyframe();
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            splitSession->stop();
+            splitOut.close();
+            ::unsetenv("MW_VK_CONVERT_FAIL_AT");
+            const SessionInfo& splitInfo = splitSession->info();
+            const int n = splitFrames.load();
+            std::fprintf(stderr,
+                         "  %s: route \"%s\"%s, %d frame(s), %d keyframe(s), convert mean %.2f "
+                         "ms%s\n    reason: %s\n",
+                         run.what, splitInfo.videoRoute.c_str(),
+                         splitInfo.videoPipelineRefused ? " (refused)" : "", n,
+                         splitKeyframes.load(), n ? convertSumUs.load() / 1000.0 / n : 0.0,
+                         splitEnded.empty() ? "" : (", ended: " + splitEnded).c_str(),
+                         splitInfo.videoPipelineReason.c_str());
+            // Whatever Vulkan did, the stream went on: that is the rule.
+            CHECK(splitEnded.empty());
+            CHECK(n >= 2);
+            CHECK(splitKeyframes.load() >= 1);
+            if (failAt.empty()) {
+                CHECK_EQ(splitInfo.videoRoute, std::string("Vulkan compute → VA-API"));
+                CHECK(!splitInfo.videoPipelineRefused);
+            } else {
+                CHECK_EQ(splitInfo.videoRoute, std::string("EGL → VA-API"));
+                CHECK(splitInfo.videoPipelineRefused);
+                CHECK(splitInfo.videoPipelineReason.find(
+                          failAt == "0" ? "could not start" : "gave up while streaming") !=
+                      std::string::npos);
+            }
+        }
+    }
+#endif
 #endif
 }
 

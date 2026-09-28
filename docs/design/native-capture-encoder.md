@@ -5100,3 +5100,54 @@ image clé, ce qui se sent surtout par Internet. Sur NVIDIA, l'objectif est de n
 rien perdre face à un chemin déjà très bon ; sur AMD, la mesure dira. Si quelque
 chose échoue, le stream repasse seul en D3D11 sans se couper, et l'overlay comme
 le journal disent quel chemin tourne et pourquoi.
+
+### 32.6 Linux : la route scindée, et la règle qui encadre Vulkan (28/09/2026)
+
+Phase 13 du plan : la même forme de chaîne sous Linux, en Vulkan. Les sondes
+(banc §8o) ont réordonné le travail. Sous un jeu qui sature le 780M, la
+conversion GL d'aujourd'hui attend deux images du jeu (46 ms) ; une file compute
+Vulkan tourne à côté du jeu (10,6 ms sans privilège, 8,0 en HIGH). Le gain tient
+à la file, pas à l'encodeur. D'où la **route scindée**, décidée le 28/09 (plan
+§9-17) : la conversion passe en Vulkan compute, l'encodeur reste le VA-API
+d'aujourd'hui.
+
+**Les deux bouts, prouvés avant d'écrire le moteur.**
+- L'entrée : le tampon KMS (DCC d'AMD en trois plans) s'importe dans Vulkan avec
+  son modificateur, sa barrière implicite attendue en `sync_file`, et se lit au
+  pixel près comme EGL le lit (§8o.2).
+- La sortie : la surface d'entrée de VA-API est linéaire sur AMD ; Vulkan écrit
+  ses deux plans en images de stockage R8 et RG8, et VA-API relit exactement ce
+  qui a été écrit (§8o.4). Ni copie, ni changement de propriétaire de la surface.
+
+**Le code.**
+- `platform/linux/vulkan/VulkanDevice` : le chargeur ouvert par `dlopen`, le
+  périphérique du GPU trouvé par son nœud de rendu (`VK_EXT_physical_device_drm`),
+  une file compute, en HIGH seulement si le processus tient `CAP_SYS_NICE` et
+  qu'une soumission le prouve — une file d'encodage en HIGH se crée sur le 780M
+  et le noyau refuse sa première soumission (§8o.3).
+- `convert/linux/VulkanConvert` : le jumeau de `GlConvert`, même interface,
+  shaders transcrits ligne à ligne (`shaders/vk_scale.comp`, `vk_nv12.comp`,
+  compilés en SPIR-V par `glslangValidator` au build). Sur le 780M, les deux
+  écrivent la même image à une valeur près au plus, en 1:1, en Lanczos-2 et en
+  bilinéaire (`test_vulkan_convert`).
+- `core/LinuxRouteChoice.h` : le choix de la chaîne, pur et testé, à chaque
+  construction. La clé de banc, puis le réglage, puis une table par vendeur ; la
+  table dit GL partout tant qu'un banc et Bruno n'ont pas bougé une ligne. La clé
+  `convert=vulkan` prend la route scindée.
+
+**La règle (Bruno, 28/09) : jamais Vulkan forcé.** Ce qui ne peut pas tourner
+est refusé, nommé, et la chaîne descend d'un cran — Vulkan Video → VA-API → CPU,
+Vulkan compute → GL. Une conversion Vulkan qui ne démarre pas (pas de chargeur,
+pas de Vulkan 1.3, un modificateur qu'elle n'importe pas) laisse GL convertir dès
+le départ ; une qui lâche en plein stream (périphérique perdu, tampon refusé) est
+remplacée par GL sur l'image même, avec une image clé, pour le reste de la
+session. La route, sa raison et le refus éventuel vont au journal et dans
+`SessionInfo` (overlay, banc). Pour l'encodeur Vulkan à venir, le banc a montré
+que ni le numéro du micrologiciel ni la version de Mesa ne disent « fiable »
+(§8o.3) : il ouvrira sur une preuve au pixel et, s'il l'échoue, laissera VA-API.
+
+**Concrètement, pour l'utilisateur** : rien ne change par défaut sous Linux tant
+que le banc n'a pas mesuré la route et que Bruno n'a pas basculé AMD. Ensuite, sur
+un PC Linux AMD, l'image n'attendra plus derrière le jeu pour être convertie. Et
+si la carte ou son pilote ne s'y prêtent pas, le stream reste sur le chemin
+d'aujourd'hui, sans coupure.

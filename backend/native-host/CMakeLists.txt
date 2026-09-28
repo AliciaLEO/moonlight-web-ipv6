@@ -214,6 +214,53 @@ else()
             # PUBLIC so the tests can tell whether the backend exists.
             target_compile_definitions(mw-native-host PUBLIC MW_NATIVE_LINUX_GFX=1)
 
+            # The split route's conversion (plan pipeline-video-d3d12-v2, §9-17):
+            # Vulkan on a compute queue in front of VA-API, beside a game rather
+            # than behind it. Nothing links libvulkan — the loader is opened with
+            # dlopen, and a host without Vulkan converts through GL as before; the
+            # headers are the module's own (third_party/vulkan-headers, Apache-2.0
+            # OR MIT, in LICENSE.md). The shaders are GLSL built to SPIR-V by
+            # glslangValidator (glslang-tools): a build tool, nothing of it ships.
+            # Without it the route is left out, loudly, and GL converts.
+            find_program(MW_GLSLANG_VALIDATOR glslangValidator)
+            if(MW_GLSLANG_VALIDATOR)
+                set(_mw_spirv ${CMAKE_CURRENT_BINARY_DIR}/spirv)
+                set(_mw_shaders ${CMAKE_CURRENT_SOURCE_DIR}/src/convert/linux/shaders)
+                set(_mw_spirv_headers "")
+                foreach(_mw_shader "VkScaleHSpv;vk_scale.comp;-DMW_HORIZONTAL=1"
+                                   "VkScaleVSpv;vk_scale.comp;-DMW_HORIZONTAL=0"
+                                   "VkNv12Spv;vk_nv12.comp;")
+                    list(GET _mw_shader 0 _mw_name)
+                    list(GET _mw_shader 1 _mw_source)
+                    list(LENGTH _mw_shader _mw_parts)
+                    set(_mw_define "")
+                    if(_mw_parts GREATER 2)
+                        list(GET _mw_shader 2 _mw_define)
+                    endif()
+                    add_custom_command(
+                        OUTPUT ${_mw_spirv}/${_mw_name}.h
+                        COMMAND ${CMAKE_COMMAND} -E make_directory ${_mw_spirv}
+                        COMMAND ${MW_GLSLANG_VALIDATOR} -V --target-env vulkan1.1 ${_mw_define}
+                                --vn k${_mw_name} -o ${_mw_spirv}/${_mw_name}.h
+                                ${_mw_shaders}/${_mw_source}
+                        DEPENDS ${_mw_shaders}/${_mw_source}
+                        VERBATIM)
+                    list(APPEND _mw_spirv_headers ${_mw_spirv}/${_mw_name}.h)
+                endforeach()
+                target_sources(mw-native-host PRIVATE
+                    src/platform/linux/vulkan/VulkanDevice.cpp
+                    src/convert/linux/VulkanConvert.cpp
+                    ${_mw_spirv_headers})
+                target_include_directories(mw-native-host PRIVATE ${_mw_spirv})
+                target_include_directories(mw-native-host SYSTEM PRIVATE
+                    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vulkan-headers/include)
+                # PUBLIC so the session and the tests know whether the route exists.
+                target_compile_definitions(mw-native-host PUBLIC MW_NATIVE_LINUX_VULKAN=1)
+                message(STATUS "mw-native-host: Vulkan conversion ON (SPIR-V by ${MW_GLSLANG_VALIDATOR})")
+            else()
+                message(WARNING "mw-native-host: Vulkan conversion OFF — install glslang-tools to build it (the split route, GL converts meanwhile)")
+            endif()
+
             # The sound: a PipeWire capture stream on the default output's
             # monitor (libpipewire-0.3, MIT — libpulse is LGPL and off the
             # allow-list in LICENSE.md). Optional on the same terms as the
@@ -399,6 +446,7 @@ if(MW_BUILD_TESTS)
         tests/test_absolute_map.cpp
         tests/test_wayland_layout.cpp
         tests/test_linux_pipeline.cpp
+        tests/test_vulkan_convert.cpp
         tests/test_linux_session.cpp
         tests/test_mac_keymap.cpp
         tests/test_mac_session.cpp
@@ -421,6 +469,7 @@ if(MW_BUILD_TESTS)
         tests/test_hevc_dpb.cpp
         tests/test_hevc_negotiation.cpp
         tests/test_video_pipeline_choice.cpp
+        tests/test_linux_route_choice.cpp
         tests/test_reference_slots.cpp
         tests/test_audio_pacer.cpp
         tests/test_audio_interleave.cpp

@@ -502,6 +502,11 @@ jobs:
           # Build step below refuses to package that stub again.
           sudo apt-get install -y libdrm-dev libva-dev libegl1-mesa-dev \
             libgles2-mesa-dev libgbm-dev libpipewire-0.3-dev
+          # The split route's Vulkan conversion (plan Phase 13): its compute
+          # shaders are built to SPIR-V by glslangValidator. A build tool only —
+          # nothing of glslang ships, and the loader is opened at run time.
+          # Without it CMake leaves the route out, loudly, and GL converts.
+          sudo apt-get install -y glslang-tools
           # The click-to-photon flag's X11 overlay (LatencyFlag.h). Optional in
           # the same way: without these CMake builds the stub, and the shipped
           # binary would simply report that it has no backend — which on a

@@ -128,6 +128,9 @@ public:
     /// The same, said for the log: "high (CAP_SYS_NICE)", or normal and why.
     const std::string& priority() const { return m_Priority; }
 
+    /// For the session's line: which API converts (VulkanConvert has its own).
+    static const char* apiName() { return "EGL"; }
+
     void stop();
 
 private:

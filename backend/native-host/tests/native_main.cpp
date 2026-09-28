@@ -36,6 +36,7 @@ void run_xkb_text_map_tests();
 void run_absolute_map_tests();
 void run_wayland_layout_tests();
 void run_linux_pipeline_tests();
+void run_vulkan_convert_tests();
 void run_cpu_cursor_tests();
 void run_portal_tests();
 void run_encode_load_cap_tests();
@@ -45,6 +46,7 @@ void run_hevc_slice_parser_tests();
 void run_hevc_dpb_tests();
 void run_hevc_negotiation_tests();
 void run_video_pipeline_choice_tests();
+void run_linux_route_choice_tests();
 void run_linux_session_tests();
 void run_linux_virtual_display_tests();
 void run_mac_keymap_tests();
@@ -119,6 +121,7 @@ int main(int argc, char** argv)
     RUN(hevc_dpb);
     RUN(hevc_negotiation);
     RUN(video_pipeline_choice);
+    RUN(linux_route_choice);
     RUN(vpl_params);
 #ifdef MW_NATIVE_OPENH264
     RUN(openh264);
@@ -158,6 +161,7 @@ int main(int argc, char** argv)
     RUN(wayland_layout);
     RUN(mac_keymap);
     RUN(linux_pipeline);
+    RUN(vulkan_convert);
     RUN(cpu_cursor);
     RUN(portal);
     RUN(linux_session);
