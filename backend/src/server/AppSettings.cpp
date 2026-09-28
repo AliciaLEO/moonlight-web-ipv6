@@ -967,8 +967,12 @@ namespace {
 /// "auto", "d3d11" or "d3d12", lower-cased; empty for anything else.
 QString videoPipelineName(const QString& value)
 {
+    // Windows' chains and Linux's (plan Phase 13); each OS ignores the
+    // other's, which is also what happens to a settings file carried across.
     const QString v = value.trimmed().toLower();
-    return v == QLatin1String("auto") || v == QLatin1String("d3d11") || v == QLatin1String("d3d12")
+    return v == QLatin1String("auto") || v == QLatin1String("d3d11") ||
+                   v == QLatin1String("d3d12") || v == QLatin1String("vaapi") ||
+                   v == QLatin1String("vulkan")
                ? v
                : QString();
 }

@@ -84,12 +84,16 @@ void run_app_settings_tests()
     s.setTransportMode("webrtc-dc-udp");
     CHECK_EQ(s.transportMode(), QString("webrtc-dc-udp"));
 
-    // The picture chain of a native Windows session (admin → Advanced): auto
-    // until the admin picks one, the three names in any case, nothing else. A
-    // refused value leaves the stored one in place, and a file edited by hand
-    // to something else reads as the default, not as a chain that does not
-    // exist.
+    // The picture chain of a native session (admin → Advanced): auto until
+    // the admin picks one — Windows' names and Linux's, in any case, nothing
+    // else. A refused value leaves the stored one in place, and a file edited
+    // by hand to something else reads as the default, not as a chain that
+    // does not exist.
     CHECK_EQ(s.nativeVideoPipeline(), QString("auto"));
+    CHECK(s.setNativeVideoPipeline("Vulkan"));
+    CHECK_EQ(s.nativeVideoPipeline(), QString("vulkan"));
+    CHECK(s.setNativeVideoPipeline("vaapi"));
+    CHECK_EQ(s.nativeVideoPipeline(), QString("vaapi"));
     CHECK(s.setNativeVideoPipeline("d3d12"));
     CHECK_EQ(s.nativeVideoPipeline(), QString("d3d12"));
     CHECK(s.setNativeVideoPipeline(" D3D11 "));
@@ -117,7 +121,9 @@ void run_app_settings_tests()
             mw::native::VideoPipeline engine;
         } names[] = {{"auto", mw::native::VideoPipeline::Auto},
                      {"d3d11", mw::native::VideoPipeline::D3d11},
-                     {"d3d12", mw::native::VideoPipeline::D3d12}};
+                     {"d3d12", mw::native::VideoPipeline::D3d12},
+                     {"vaapi", mw::native::VideoPipeline::Vaapi},
+                     {"vulkan", mw::native::VideoPipeline::Vulkan}};
         for (const auto& n : names) {
             CHECK(s.setNativeVideoPipeline(n.stored));
             mw::native::VideoPipeline parsed = mw::native::VideoPipeline::Auto;

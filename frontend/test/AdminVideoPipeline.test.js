@@ -4,10 +4,11 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-// The admin's "Advanced" section: the picture chain of a native Windows
-// session (Auto / D3D11 / D3D12). Shown only where the server says the choice
-// means something, saved the moment it changes, and never left showing a value
-// the server refused to store.
+// The admin's "Advanced" section: the picture chain of a native session —
+// Auto / D3D11 / D3D12 on Windows, Auto / VA-API / Vulkan on Linux, as the
+// server lists them. Shown only where the server says the choice means
+// something, saved the moment it changes, and never left showing a value the
+// server refused to store.
 vi.mock('../js/api/BackendClient.js', () => ({
     BackendClient: { getStreamingSettings: vi.fn(), saveStreamingSettings: vi.fn() },
 }));
@@ -74,6 +75,31 @@ describe('AdminView — video pipeline (Advanced)', () => {
         const values = Array.from(select().options).map((o) => o.value);
         expect(values).toEqual(['auto', 'd3d11', 'd3d12']);
         expect(select().value).toBe('d3d11');
+    });
+
+    it("offers a Linux host's chains when the server lists them, with Linux's hint", async () => {
+        BackendClient.getStreamingSettings.mockResolvedValue({
+            native_video_pipeline: 'vulkan',
+            native_video_pipeline_supported: true,
+            native_video_pipeline_options: ['auto', 'vaapi', 'vulkan'],
+        });
+        await view._loadStreamingState();
+        mount();
+        const values = Array.from(select().options).map((o) => o.value);
+        expect(values).toEqual(['auto', 'vaapi', 'vulkan']);
+        expect(select().value).toBe('vulkan');
+        expect(document.body.innerHTML).toContain('admin.videoPipelineHintLinux');
+    });
+
+    it('shows Auto for a stored value this OS does not list (it runs as Auto)', async () => {
+        BackendClient.getStreamingSettings.mockResolvedValue({
+            native_video_pipeline: 'd3d12',
+            native_video_pipeline_supported: true,
+            native_video_pipeline_options: ['auto', 'vaapi', 'vulkan'],
+        });
+        await view._loadStreamingState();
+        mount();
+        expect(select().value).toBe('auto');
     });
 
     it('saves a change at once and says so', async () => {

@@ -421,6 +421,11 @@ fi
 # the client library: a machine still on PulseAudio has it too, and the host
 # then streams silent with an explicit log rather than not starting.
 # libcap2-bin provides setcap for the postinst above.
+#
+# Third group, only recommended: the Vulkan loader and Mesa's Vulkan drivers
+# (the split route's conversion and the Vulkan Video chain, plan Phase 13).
+# The native host opens libvulkan.so.1 with dlopen, never links it: without
+# it, GL converts and VA-API encodes, as they always have.
 deb_depends=(
     --depends libgl1 --depends libopengl0 --depends libegl1
     --depends libfontconfig1 --depends libfreetype6
@@ -428,6 +433,7 @@ deb_depends=(
     --depends libdrm2 --depends libva2 --depends libva-drm2
     --depends libgles2 --depends libgbm1 --depends libpipewire-0.3-0
     --depends libcap2-bin
+    --deb-recommends libvulkan1 --deb-recommends mesa-vulkan-drivers
 )
 # RPM resolves soname provides, which every RPM distro generates the same way —
 # unlike package names, which differ between Fedora (libglvnd-glx) and openSUSE
@@ -443,6 +449,7 @@ rpm_depends=(
     --depends "libdrm.so.2()(64bit)" --depends "libva.so.2()(64bit)"
     --depends "libva-drm.so.2()(64bit)" --depends "libGLESv2.so.2()(64bit)"
     --depends "libgbm.so.1()(64bit)" --depends "libpipewire-0.3.so.0()(64bit)"
+    --rpm-tag "Recommends: libvulkan.so.1()(64bit)"
 )
 
 common=(

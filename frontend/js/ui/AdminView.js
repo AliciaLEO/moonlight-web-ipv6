@@ -139,11 +139,13 @@ export class AdminView {
         this._instanceName = '';
         this._defaultInstanceName = '';
         this._instanceNameMax = 32;
-        // The picture chain of a native Windows session (Advanced): what is
-        // stored, and whether this machine has a choice to make at all — a GPU
-        // whose encoder has a D3D12 route. The section is hidden otherwise.
+        // The picture chain of a native session (Advanced): what is stored,
+        // whether this machine has a choice to make at all — a Windows GPU
+        // whose encoder has a D3D12 route, a Linux GPU (VA-API or Vulkan) —
+        // and this OS's values. The section is hidden where there is none.
         this._videoPipeline = 'auto';
         this._videoPipelineSupported = false;
+        this._videoPipelineValues = ['auto', 'd3d11', 'd3d12'];
 
         // Dirty tracking: snapshot of values at load time
         this._cleanState = {};
@@ -237,6 +239,10 @@ export class AdminView {
             const settings = await BackendClient.getStreamingSettings();
             this._videoPipeline = settings.native_video_pipeline || 'auto';
             this._videoPipelineSupported = settings.native_video_pipeline_supported === true;
+            // An older server names no values: Windows', the only ones it had.
+            if (Array.isArray(settings.native_video_pipeline_options)) {
+                this._videoPipelineValues = settings.native_video_pipeline_options;
+            }
         } catch (err) {
             console.warn('[Admin] Failed to load streaming settings:', err);
         }
@@ -2121,18 +2127,24 @@ export class AdminView {
         }
     }
 
-    // --- Advanced: the picture chain of a native Windows session ---
+    // --- Advanced: the picture chain of a native session ---
 
     _videoPipelineOptions() {
-        return [
-            ['auto', t('admin.videoPipelineAuto')],
-            ['d3d11', t('admin.videoPipelineD3d11')],
-            ['d3d12', t('admin.videoPipelineD3d12')],
-        ];
+        const labels = {
+            auto: t('admin.videoPipelineAuto'),
+            d3d11: t('admin.videoPipelineD3d11'),
+            d3d12: t('admin.videoPipelineD3d12'),
+            vaapi: t('admin.videoPipelineVaapi'),
+            vulkan: t('admin.videoPipelineVulkan'),
+        };
+        // A stored value this OS does not list (a settings file carried across)
+        // is no opinion here: nothing matches it, and the select shows Auto,
+        // which is what runs.
+        return this._videoPipelineValues.map((value) => [value, labels[value] || value]);
     }
 
     // Only where the choice means something: the server says whether this
-    // machine has a GPU with a D3D12 route, and a section with nothing to
+    // machine has a GPU with a chain to choose, and a section with nothing to
     // change is not shown.
     _renderAdvanced() {
         if (!this._videoPipelineSupported) return '';
@@ -2153,7 +2165,11 @@ export class AdminView {
                                 .join('')}
                         </select>
                         <p class="settings-hint">
-                            ${t('admin.videoPipelineHint')}
+                            ${t(
+                                this._videoPipelineValues.includes('vulkan')
+                                    ? 'admin.videoPipelineHintLinux'
+                                    : 'admin.videoPipelineHint',
+                            )}
                         </p>
                     </div>
                 </div>

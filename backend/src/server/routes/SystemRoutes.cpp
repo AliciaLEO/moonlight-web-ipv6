@@ -78,8 +78,24 @@ static bool nativeVideoPipelineSupported()
             if (api == mw::native::EncoderApi::Nvenc || api == mw::native::EncoderApi::Amf ||
                 api == mw::native::EncoderApi::Vpl)
                 return true;
+#elif defined(MW_NATIVE_LINUX_VULKAN)
+    // Linux: VA-API or the Vulkan chain (plan Phase 13), wherever the engine
+    // streams off a GPU. Vulkan is taken only on its pixel proof, and refused
+    // by name otherwise — the choice never breaks a stream.
+    if (!NativeHostBackend::isEnabled()) return false;
+    return !NativeProbeService::instance().snapshot().gpus.empty();
 #endif
     return false;
+}
+
+/// The values the admin offers, this OS's chains only.
+static QJsonArray nativeVideoPipelineOptions()
+{
+#if defined(Q_OS_WIN)
+    return {QStringLiteral("auto"), QStringLiteral("d3d11"), QStringLiteral("d3d12")};
+#else
+    return {QStringLiteral("auto"), QStringLiteral("vaapi"), QStringLiteral("vulkan")};
+#endif
 }
 
 void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthManager& authManager,
@@ -715,10 +731,11 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
         if (!local) return HttpResponse::json(obj); // availability only, for a remote caller
 
         obj["capture"] = QString::fromUtf8(mw::native::toString(caps.capture));
-#if defined(Q_OS_WIN)
+#if defined(Q_OS_WIN) || defined(Q_OS_LINUX)
         // The picture chain: the admin's setting here, and for each display
         // below what Auto means for the GPU that would encode it — what a
-        // session started now would ask for, before anything its build refuses.
+        // session started now would ask for, before anything its build refuses
+        // (on Linux, Vulkan also waits for its pixel proof).
         obj["video_pipeline"] = appSettings.nativeVideoPipeline();
 #else
         (void)appSettings;
@@ -766,7 +783,7 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
                 o["encoder_hardware"] = fallback->hardware;
                 o["encoder_is_fallback"] = true;
             }
-#if defined(Q_OS_WIN)
+#if defined(Q_OS_WIN) || defined(Q_OS_LINUX)
             if (gpuEncodes)
                 o["video_pipeline_auto"] = QString::fromUtf8(
                     mw::native::toString(mw::native::autoVideoPipeline(gpu->encoders.front())));
@@ -1178,10 +1195,11 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
         obj["transport_mode"] = transportMode;
         obj["media_track_only_h264"] =
             (transportMode == "webrtc-media-udp" || transportMode == "webrtc-media-tcp");
-        // The picture chain of a native Windows session (admin → Advanced),
-        // and whether this machine has a choice to make at all.
+        // The picture chain of a native session (admin → Advanced), whether
+        // this machine has a choice to make at all, and which.
         obj["native_video_pipeline"] = appSettings.nativeVideoPipeline();
         obj["native_video_pipeline_supported"] = nativeVideoPipelineSupported();
+        obj["native_video_pipeline_options"] = nativeVideoPipelineOptions();
         obj["auto_ip_detection"] = appSettings.autoIpDetection();
         obj["stream_bitrate"] = appSettings.streamBitrate();
         obj["stream_height"] = appSettings.streamHeight();
@@ -1244,8 +1262,8 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
         // would read back as "auto" and hide behind the default.
         if (body.contains("native_video_pipeline")) {
             if (!appSettings.setNativeVideoPipeline(body["native_video_pipeline"].toString()))
-                return HttpResponse::error(400,
-                                           "native_video_pipeline must be auto, d3d11 or d3d12");
+                return HttpResponse::error(
+                    400, "native_video_pipeline must be auto, d3d11, d3d12, vaapi or vulkan");
             obj["native_video_pipeline"] = appSettings.nativeVideoPipeline();
             obj["status"] = "saved";
             hadChange = true;

@@ -88,16 +88,20 @@ int formatFromSession(const mw::native::SessionInfo& info)
 }
 
 /// The encoder as the overlay names it: the D3D12 route's own ("D3D12 VE",
-/// "NVENC (D3D12)") while that chain runs, the Selector's ("NVENC", "AMF",
-/// "oneVPL") otherwise — followed by "(D3D11)" when D3D12 was asked for and
-/// D3D11 runs, so whoever picked D3D12 in the admin sees at a glance that it
-/// did not take. Why is the log's to say.
+/// "NVENC (D3D12)") while that chain runs, "Vulkan Video" while Linux's does,
+/// the Selector's ("NVENC", "AMF", "oneVPL", "VA-API") otherwise — followed
+/// by "(D3D11)" when D3D12 was asked for and D3D11 runs, so whoever picked
+/// D3D12 in the admin sees at a glance that it did not take. On Linux the
+/// encoder's name already says which chain runs. Why is the log's to say.
 QString encoderLabel(const mw::native::SessionInfo& info)
 {
     if (info.videoPipeline == mw::native::VideoPipeline::D3d12 && !info.videoEncoder.empty())
         return QString::fromStdString(info.videoEncoder);
+    if (info.videoPipeline == mw::native::VideoPipeline::Vulkan)
+        return QStringLiteral("Vulkan Video");
     QString name = QString::fromUtf8(mw::native::toString(info.encoder));
-    if (info.videoPipelineRefused) name += QStringLiteral(" (D3D11)");
+    if (info.videoPipelineRefused && info.videoPipeline == mw::native::VideoPipeline::D3d11)
+        name += QStringLiteral(" (D3D11)");
     return name;
 }
 
