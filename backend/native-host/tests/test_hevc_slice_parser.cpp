@@ -137,7 +137,26 @@ void run_hevc_slice_parser_tests()
         CHECK(!s.sampleAdaptiveOffset);
         CHECK(!s.longTermReferences);
         CHECK(!s.temporalMvp);
+        // What a decoder's session parameters take (the Vulkan encoder's
+        // pixel proof, C13.5), down to the transform tree.
+        CHECK_EQ(s.profileIdc, 1u); // Main
+        CHECK(!s.highTier);
+        CHECK_EQ(s.levelIdc, 123u);
+        CHECK(s.temporalIdNesting);
+        CHECK_EQ(s.log2MinTransformBlock, shape.log2MinTransformBlock);
+        CHECK_EQ(s.log2MaxTransformBlock, shape.log2MaxTransformBlock);
+        CHECK_EQ(s.maxTransformHierarchyDepthInter,
+                 static_cast<uint32_t>(shape.transformDepthInter));
+        CHECK_EQ(s.maxTransformHierarchyDepthIntra,
+                 static_cast<uint32_t>(shape.transformDepthIntra));
+        CHECK(!s.scalingList);
+        CHECK(!s.pcm);
+        CHECK(!s.strongIntraSmoothing);
+        CHECK(s.vui);
         const HevcPpsFields p = pps(hevcPps(shape));
+        CHECK(!p.signDataHiding);
+        CHECK(!p.transquantBypass);
+        CHECK_EQ(p.log2ParallelMergeLevel, 2);
         CHECK(p.cabacInitPresent);
         CHECK(p.sliceChromaQpOffsets);
         CHECK(p.cuQpDelta);
@@ -189,6 +208,7 @@ void run_hevc_slice_parser_tests()
                     CHECK_EQ(f.sliceType, 2u);
                     CHECK(f.shortTerm.empty());
                     CHECK_EQ(f.headerBits, size_t(16));
+                    CHECK_EQ(f.shortTermSetBits, 0u);
                     continue;
                 }
                 // One picture predicted from, the one before; from the third
@@ -200,6 +220,10 @@ void run_hevc_slice_parser_tests()
                     CHECK_EQ(f.shortTerm[1].deltaPoc, -2);
                     CHECK(!f.shortTerm[1].used);
                 }
+                // The set's length, what a decoder is told: num_negative_pics
+                // ue(1) or ue(2) (3 bits), num_positive_pics ue(0) (1), then
+                // per picture delta_poc_s0_minus1 ue(0) (1) and its used flag (1).
+                CHECK_EQ(f.shortTermSetBits, i == 1 ? 6u : 8u);
                 CHECK_EQ(f.referencesUsed(), 1u);
                 CHECK_EQ(f.activeL0, 1u);
                 CHECK_EQ(f.maxMergeCandidates, 5u);

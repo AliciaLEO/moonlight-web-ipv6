@@ -61,10 +61,23 @@ struct HevcNalUnit
     uint8_t type() const { return size ? static_cast<uint8_t>((data[0] >> 1) & 0x3F) : 0xFF; }
 };
 
-/// What the slice header's syntax depends on in an SPS.
+/// What the slice header's syntax depends on in an SPS — and, from the
+/// profile to the transform tree, what a decoder's session parameters take:
+/// the Vulkan encoder's pixel proof decodes its own stream (C13.5).
 struct HevcSpsFields
 {
     uint32_t spsId = 0;
+    uint32_t vpsId = 0;
+    uint32_t maxSubLayersMinus1 = 0;
+    bool temporalIdNesting = false;
+    /// profile_tier_level()'s general part.
+    uint32_t profileIdc = 0;
+    bool highTier = false;
+    uint32_t levelIdc = 0; ///< 30 × the level: 123 for 4.1
+    bool progressiveSource = false;
+    bool interlacedSource = false;
+    bool nonPackedConstraint = false;
+    bool frameOnlyConstraint = false;
     uint32_t chromaFormatIdc = 1;
     /// pic_width/height_in_luma_samples: the size as coded.
     uint32_t width = 0;
@@ -79,14 +92,32 @@ struct HevcSpsFields
     int log2MaxPocLsb = 4;
     uint32_t maxDecPicBufferingMinus1 = 0; ///< of the highest sub-layer
     uint32_t maxNumReorderPics = 0;
+    uint32_t maxLatencyIncreasePlus1 = 0;
     int log2MinCodingBlock = 3;
     int log2CodingTreeBlock = 3;
+    int log2MinTransformBlock = 2;
+    int log2MaxTransformBlock = 2;
+    /// What AMD's firmware codes whatever the SPS says — and what a decoder
+    /// must be told for its split flags to line up (bench §8o.3).
+    uint32_t maxTransformHierarchyDepthInter = 0;
+    uint32_t maxTransformHierarchyDepthIntra = 0;
+    /// scaling_list_enabled_flag, with the default lists: data in the SPS is
+    /// refused.
+    bool scalingList = false;
     bool asymmetricMotionPartitions = false;
     bool sampleAdaptiveOffset = false;
+    bool pcm = false;
+    uint32_t pcmBitDepthLuma = 0;
+    uint32_t pcmBitDepthChroma = 0;
+    int log2MinPcmCodingBlock = 0;
+    int log2MaxPcmCodingBlock = 0;
+    bool pcmLoopFilterDisabled = false;
     bool longTermReferences = false;
     std::vector<uint32_t> longTermPocLsb; ///< lt_ref_pic_poc_lsb_sps
     std::vector<bool> longTermUsed;       ///< used_by_curr_pic_lt_sps_flag
     bool temporalMvp = false;
+    bool strongIntraSmoothing = false;
+    bool vui = false; ///< vui_parameters_present_flag; the VUI itself is not read
 
     uint32_t pictureSizeInCtbs() const
     {
@@ -103,24 +134,31 @@ struct HevcPpsFields
     bool dependentSliceSegments = false;
     bool outputFlagPresent = false;
     uint32_t extraSliceHeaderBits = 0;
+    bool signDataHiding = false;
     bool cabacInitPresent = false;
     uint32_t defaultActiveL0 = 1; ///< num_ref_idx_l0_default_active_minus1 + 1
     uint32_t defaultActiveL1 = 1;
     int32_t initQp = 26;
+    bool constrainedIntraPred = false;
+    bool transformSkip = false;
     bool cuQpDelta = false;
+    uint32_t diffCuQpDeltaDepth = 0;
     int32_t cbQpOffset = 0;
     int32_t crQpOffset = 0;
     bool sliceChromaQpOffsets = false;
     bool weightedPred = false;
     bool weightedBipred = false;
+    bool transquantBypass = false;
     bool tiles = false;
     bool entropyCodingSync = false;
     bool loopFilterAcrossSlices = false;
+    bool deblockingControlPresent = false;
     bool deblockingOverride = false; ///< deblocking_filter_override_enabled_flag
     bool deblockingDisabled = false;
     int32_t betaOffsetDiv2 = 0;
     int32_t tcOffsetDiv2 = 0;
     bool listsModification = false;
+    int log2ParallelMergeLevel = 2;
     bool sliceHeaderExtension = false;
 };
 
@@ -149,6 +187,9 @@ struct HevcSliceFields
     /// The short-term reference picture set: the ones before this picture
     /// first, nearest first, then the ones after it.
     std::vector<Reference> shortTerm;
+    /// st_ref_pic_set()'s length in the header, in bits — what a Vulkan
+    /// decoder is handed as NumBitsForSTRPSInSlice. 0 on an IDR.
+    uint32_t shortTermSetBits = 0;
     std::vector<LongTerm> longTerm;
     bool temporalMvp = false;
     bool saoLuma = false;
@@ -239,11 +280,21 @@ inline std::vector<uint8_t> payload(const uint8_t* data, size_t size, size_t lim
 }
 
 /// profile_tier_level(1, maxSubLayersMinus1): read past, nothing kept.
-inline void skipProfileTierLevel(BitReader& r, uint32_t maxSubLayersMinus1)
+/// profile_tier_level(1, maxSubLayersMinus1): the general part into @p s, the
+/// sub-layers' skipped.
+inline void readProfileTierLevel(BitReader& r, uint32_t maxSubLayersMinus1, HevcSpsFields& s)
 {
-    r.u(32); // general profile space, tier, idc, then the compatibility flags…
-    r.u(32);
-    r.u(32); // …up to and including general_level_idc: 96 bits
+    r.u(2); // general_profile_space
+    s.highTier = r.u(1) != 0;
+    s.profileIdc = r.u(5);
+    r.u(32); // general_profile_compatibility_flag[32]
+    s.progressiveSource = r.u(1) != 0;
+    s.interlacedSource = r.u(1) != 0;
+    s.nonPackedConstraint = r.u(1) != 0;
+    s.frameOnlyConstraint = r.u(1) != 0;
+    r.u(32); // the 43 bits of constraint flags and reserved ones…
+    r.u(12); // …and general_inbld_flag or its reserved bit
+    s.levelIdc = r.u(8);
     bool profile[8] = {};
     bool level[8] = {};
     for (uint32_t i = 0; i < maxSubLayersMinus1; ++i) {
@@ -316,12 +367,13 @@ inline std::string parseHevcSps(const uint8_t* data, size_t size, HevcSpsFields&
     const std::vector<uint8_t> rbsp = payload(data, size, kHeaderLimit);
     BitReader r{rbsp};
     HevcSpsFields s;
-    r.u(4); // sps_video_parameter_set_id
+    s.vpsId = r.u(4);
     const uint32_t maxSubLayersMinus1 = r.u(3);
     if (maxSubLayersMinus1 > 6)
         return "sps_max_sub_layers_minus1 " + std::to_string(maxSubLayersMinus1);
-    r.u(1); // sps_temporal_id_nesting_flag
-    skipProfileTierLevel(r, maxSubLayersMinus1);
+    s.maxSubLayersMinus1 = maxSubLayersMinus1;
+    s.temporalIdNesting = r.u(1) != 0;
+    readProfileTierLevel(r, maxSubLayersMinus1, s);
     s.spsId = r.ue();
     if (s.spsId > 15) return "sps_seq_parameter_set_id " + std::to_string(s.spsId);
     s.chromaFormatIdc = r.ue();
@@ -345,7 +397,7 @@ inline std::string parseHevcSps(const uint8_t* data, size_t size, HevcSpsFields&
     for (uint32_t i = everySubLayer ? 0 : maxSubLayersMinus1; i <= maxSubLayersMinus1; ++i) {
         s.maxDecPicBufferingMinus1 = r.ue();
         s.maxNumReorderPics = r.ue();
-        r.ue(); // sps_max_latency_increase_plus1
+        s.maxLatencyIncreasePlus1 = r.ue();
     }
     if (s.maxDecPicBufferingMinus1 > 15) return "a DPB of more than 16 pictures";
     const uint32_t minCbMinus3 = r.ue();
@@ -353,19 +405,29 @@ inline std::string parseHevcSps(const uint8_t* data, size_t size, HevcSpsFields&
     if (minCbMinus3 > 3 || minCbMinus3 + ctbDiff > 3) return "coding blocks beyond 64";
     s.log2MinCodingBlock = static_cast<int>(minCbMinus3) + 3;
     s.log2CodingTreeBlock = s.log2MinCodingBlock + static_cast<int>(ctbDiff);
-    r.ue(); // log2_min_luma_transform_block_size_minus2
-    r.ue(); // log2_diff_max_min_luma_transform_block_size
-    r.ue(); // max_transform_hierarchy_depth_inter
-    r.ue(); // max_transform_hierarchy_depth_intra
-    if (r.u(1) && r.u(1)) return "scaling list data in the SPS: not followed";
+    const uint32_t minTbMinus2 = r.ue();
+    const uint32_t tbDiff = r.ue();
+    if (minTbMinus2 > 3 || minTbMinus2 + tbDiff > 3) return "transform blocks beyond 32";
+    s.log2MinTransformBlock = static_cast<int>(minTbMinus2) + 2;
+    s.log2MaxTransformBlock = s.log2MinTransformBlock + static_cast<int>(tbDiff);
+    s.maxTransformHierarchyDepthInter = r.ue();
+    s.maxTransformHierarchyDepthIntra = r.ue();
+    const uint32_t depthLimit =
+        static_cast<uint32_t>(s.log2CodingTreeBlock - s.log2MinTransformBlock);
+    if (s.maxTransformHierarchyDepthInter > depthLimit ||
+        s.maxTransformHierarchyDepthIntra > depthLimit)
+        return "a transform hierarchy deeper than the CTB allows";
+    s.scalingList = r.u(1) != 0;
+    if (s.scalingList && r.u(1)) return "scaling list data in the SPS: not followed";
     s.asymmetricMotionPartitions = r.u(1) != 0;
     s.sampleAdaptiveOffset = r.u(1) != 0;
-    if (r.u(1)) { // pcm_enabled_flag
-        r.u(4);
-        r.u(4);
-        r.ue();
-        r.ue();
-        r.u(1);
+    s.pcm = r.u(1) != 0;
+    if (s.pcm) {
+        s.pcmBitDepthLuma = r.u(4) + 1;
+        s.pcmBitDepthChroma = r.u(4) + 1;
+        s.log2MinPcmCodingBlock = static_cast<int>(r.ue()) + 3;
+        s.log2MaxPcmCodingBlock = s.log2MinPcmCodingBlock + static_cast<int>(r.ue());
+        s.pcmLoopFilterDisabled = r.u(1) != 0;
     }
     const uint32_t sets = r.ue();
     if (sets != 0) return std::to_string(sets) + " short-term sets in the SPS: not followed";
@@ -379,8 +441,9 @@ inline std::string parseHevcSps(const uint8_t* data, size_t size, HevcSpsFields&
         }
     }
     s.temporalMvp = r.u(1) != 0;
-    r.u(1); // strong_intra_smoothing_enabled_flag
-    r.u(1); // vui_parameters_present_flag — the VUI says nothing a slice depends on
+    s.strongIntraSmoothing = r.u(1) != 0;
+    // The VUI says nothing a slice depends on, nor a decoder's parameters.
+    s.vui = r.u(1) != 0;
     if (r.overrun) return "the SPS runs past its end";
     out = s;
     return {};
@@ -405,16 +468,17 @@ inline std::string parseHevcPps(const uint8_t* data, size_t size, HevcPpsFields&
     p.dependentSliceSegments = r.u(1) != 0;
     p.outputFlagPresent = r.u(1) != 0;
     p.extraSliceHeaderBits = r.u(3);
-    r.u(1); // sign_data_hiding_enabled_flag
+    p.signDataHiding = r.u(1) != 0;
     p.cabacInitPresent = r.u(1) != 0;
     p.defaultActiveL0 = r.ue() + 1;
     p.defaultActiveL1 = r.ue() + 1;
     if (p.defaultActiveL0 > 15 || p.defaultActiveL1 > 15) return "more than 15 default references";
     p.initQp = 26 + r.se();
-    r.u(1); // constrained_intra_pred_flag
-    r.u(1); // transform_skip_enabled_flag
+    p.constrainedIntraPred = r.u(1) != 0;
+    p.transformSkip = r.u(1) != 0;
     p.cuQpDelta = r.u(1) != 0;
-    if (p.cuQpDelta) r.ue(); // diff_cu_qp_delta_depth
+    if (p.cuQpDelta) p.diffCuQpDeltaDepth = r.ue();
+    if (p.diffCuQpDeltaDepth > 3) return "diff_cu_qp_delta_depth beyond the CTB";
     p.cbQpOffset = r.se();
     p.crQpOffset = r.se();
     if (p.cbQpOffset < -12 || p.cbQpOffset > 12 || p.crQpOffset < -12 || p.crQpOffset > 12)
@@ -422,7 +486,7 @@ inline std::string parseHevcPps(const uint8_t* data, size_t size, HevcPpsFields&
     p.sliceChromaQpOffsets = r.u(1) != 0;
     p.weightedPred = r.u(1) != 0;
     p.weightedBipred = r.u(1) != 0;
-    r.u(1); // transquant_bypass_enabled_flag
+    p.transquantBypass = r.u(1) != 0;
     p.tiles = r.u(1) != 0;
     p.entropyCodingSync = r.u(1) != 0;
     if (p.tiles) {
@@ -438,7 +502,8 @@ inline std::string parseHevcPps(const uint8_t* data, size_t size, HevcPpsFields&
         r.u(1); // loop_filter_across_tiles_enabled_flag
     }
     p.loopFilterAcrossSlices = r.u(1) != 0;
-    if (r.u(1)) { // deblocking_filter_control_present_flag
+    p.deblockingControlPresent = r.u(1) != 0;
+    if (p.deblockingControlPresent) {
         p.deblockingOverride = r.u(1) != 0;
         p.deblockingDisabled = r.u(1) != 0;
         if (!p.deblockingDisabled) {
@@ -448,7 +513,8 @@ inline std::string parseHevcPps(const uint8_t* data, size_t size, HevcPpsFields&
     }
     if (r.u(1)) return "scaling list data in the PPS: not followed";
     p.listsModification = r.u(1) != 0;
-    r.ue(); // log2_parallel_merge_level_minus2
+    p.log2ParallelMergeLevel = static_cast<int>(r.ue()) + 2;
+    if (p.log2ParallelMergeLevel > 6) return "log2_parallel_merge_level beyond the CTB";
     p.sliceHeaderExtension = r.u(1) != 0;
     if (r.u(1)) return "PPS extensions: not followed";
     if (!trailing(r)) return "the PPS does not end on its trailing bits";
@@ -499,7 +565,8 @@ inline std::string parseHevcSliceHeader(const uint8_t* data, size_t size, const 
         f.pocLsb = r.u(sps.log2MaxPocLsb);
         if (r.u(1)) return "short_term_ref_pic_set_sps_flag set, and the SPS has no set";
         // st_ref_pic_set(num_short_term_ref_pic_sets), with none in the SPS:
-        // no prediction from another set.
+        // no prediction from another set. Its length is what a decoder is told.
+        const size_t setStart = r.pos;
         const uint32_t before = r.ue();
         const uint32_t after = r.ue();
         if (before > sps.maxDecPicBufferingMinus1 || after > sps.maxDecPicBufferingMinus1 - before)
@@ -515,6 +582,7 @@ inline std::string parseHevcSliceHeader(const uint8_t* data, size_t size, const 
             poc += static_cast<int32_t>(r.ue()) + 1;
             f.shortTerm.push_back({poc, r.u(1) != 0});
         }
+        f.shortTermSetBits = static_cast<uint32_t>(r.pos - setStart);
         if (sps.longTermReferences) {
             const uint32_t spsCount = static_cast<uint32_t>(sps.longTermPocLsb.size());
             const uint32_t fromSps = spsCount > 0 ? r.ue() : 0;
