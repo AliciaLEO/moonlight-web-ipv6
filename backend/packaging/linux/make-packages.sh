@@ -66,13 +66,14 @@ EOF
 # as (`moonlightweb --status`, `--new-pin`, `--enable-internet`).
 #
 # It points at the LAUNCHER, not the binary — as do the .desktop entry and the
-# systemd unit. The KMS screen capture needs CAP_SYS_ADMIN, and the file
-# capability cannot sit on MoonlightWeb itself: glibc runs a binary that gains a
-# capability in secure mode, where the $ORIGIN rpath linuxdeploy wrote is
-# refused and the bundled Qt is never found (measured: "error while loading
-# shared libraries" on Ubuntu 22.04). moonlightweb-launch links libc only,
-# carries the capability, and execs MoonlightWeb next to it with the capability
-# in the ambient set — see moonlightweb-launch.c. postinst sets it below.
+# systemd unit. The KMS screen capture needs CAP_SYS_ADMIN (and a GPU context
+# above normal priority CAP_SYS_NICE), and a file capability cannot sit on
+# MoonlightWeb itself: glibc runs a binary that gains a capability in secure
+# mode, where the $ORIGIN rpath linuxdeploy wrote is refused and the bundled Qt
+# is never found (measured: "error while loading shared libraries" on Ubuntu
+# 22.04). moonlightweb-launch links libc only, carries the capabilities, and
+# execs MoonlightWeb next to it with them in the ambient set — see
+# moonlightweb-launch.c. postinst sets them below.
 ln -sfn "$PREFIX/bin/moonlightweb-launch" "$PKG/usr/bin/$NAME"
 
 # systemd unit for headless installs. Vendor directory, not /etc/systemd/system:
@@ -143,20 +144,21 @@ cat > "$ROOT/postinst.sh" <<'EOF'
 update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
 gtk-update-icon-cache -q /usr/share/icons/hicolor >/dev/null 2>&1 || true
 
-# The capability the screen capture needs, on the launcher (never on the
-# binary — see make-packages.sh). Neither dpkg nor rpm restores file
-# capabilities from the payload, so it is set here, first, on every install and
-# upgrade. Permitted only (+p), Sunshine's posture: the app raises it into the
-# effective set of one thread around the one ioctl that checks it. setcap lives
-# in /usr/sbin (or /sbin on an unmerged system), which a package manager's PATH
-# does not always include. Loud on failure: the symptom otherwise is a host card
-# that never appears, with the reason buried in a log.
+# The capabilities the native engine needs, on the launcher (never on the
+# binary — see make-packages.sh): CAP_SYS_ADMIN for the screen capture,
+# CAP_SYS_NICE for a GPU context above normal priority. Neither dpkg nor rpm
+# restores file capabilities from the payload, so they are set here, first, on
+# every install and upgrade. Permitted only (+p), Sunshine's posture: the app
+# raises one into the effective set of one thread around the one call that
+# checks it. setcap lives in /usr/sbin (or /sbin on an unmerged system), which a
+# package manager's PATH does not always include. Loud on failure: the symptom
+# otherwise is a host card that never appears, with the reason buried in a log.
 PATH="$PATH:/usr/sbin:/sbin"
-if ! setcap cap_sys_admin+p /opt/moonlightweb/bin/moonlightweb-launch 2>/dev/null; then
-    echo "warning: could not set cap_sys_admin on /opt/moonlightweb/bin/moonlightweb-launch" >&2
+if ! setcap cap_sys_admin,cap_sys_nice+p /opt/moonlightweb/bin/moonlightweb-launch 2>/dev/null; then
+    echo "warning: could not set cap_sys_admin,cap_sys_nice on /opt/moonlightweb/bin/moonlightweb-launch" >&2
     echo "         (is setcap installed? libcap2-bin on Debian/Ubuntu, libcap on Fedora," >&2
     echo "         libcap-progs on openSUSE). Until it is set, this machine cannot host" >&2
-    echo "         its own screen:  sudo setcap cap_sys_admin+p /opt/moonlightweb/bin/moonlightweb-launch" >&2
+    echo "         its own screen:  sudo setcap cap_sys_admin,cap_sys_nice+p /opt/moonlightweb/bin/moonlightweb-launch" >&2
 fi
 
 # Apply the uinput rule now rather than at the next boot, and load the module so

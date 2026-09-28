@@ -16,7 +16,8 @@
  */
 
 /*
- * moonlightweb-launch — hands CAP_SYS_ADMIN to MoonlightWeb, then becomes it.
+ * moonlightweb-launch — hands CAP_SYS_ADMIN and CAP_SYS_NICE to MoonlightWeb,
+ * then becomes it.
  *
  * Why a launcher exists at all. Capturing the screen through KMS needs
  * CAP_SYS_ADMIN (the kernel hands framebuffer handles to nobody else — see
@@ -48,9 +49,18 @@
  * unavailable and why. Nothing is printed here: an unprivileged start is a
  * supported state, not an error.
  *
- * The package sets `cap_sys_admin+p` (permitted only, like Sunshine): the
- * ambient raise needs the capability permitted and inheritable, not effective,
- * and a launcher that never holds it effective has nothing to misuse.
+ * The second capability, CAP_SYS_NICE, rides the same road for the stream's
+ * GPU work: amdgpu, i915 and xe create a context above normal priority only for
+ * a process that holds it, and under a game that saturates the GPU that halves
+ * the colour conversion's wait (docs/bench-native-host.md §8o.1). The app keeps
+ * it as it keeps the other — permitted only, raised on one thread for the one
+ * call that creates the context. A package set up before it was added hands
+ * over CAP_SYS_ADMIN alone, and the conversion simply runs at normal priority.
+ *
+ * The package sets `cap_sys_admin,cap_sys_nice+p` (permitted only, like
+ * Sunshine): the ambient raise needs a capability permitted and inheritable,
+ * not effective, and a launcher that never holds them effective has nothing to
+ * misuse.
  */
 
 #define _GNU_SOURCE
@@ -121,7 +131,9 @@ int main(int argc, char** argv)
     }
     memcpy(slash + 1, kTarget, sizeof kTarget);
 
+    /* Each on its own: holding one and not the other is a supported state. */
     (void)hand_over(CAP_SYS_ADMIN);
+    (void)hand_over(CAP_SYS_NICE);
 
     argv[0] = path;
     execv(path, argv);

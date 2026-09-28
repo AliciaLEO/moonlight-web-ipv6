@@ -1344,9 +1344,10 @@ static int concurrentSessionCap(const QString& backendType)
 int main(int argc, char* argv[])
 {
     // First, while this is still the only thread: if the Linux launcher handed
-    // us CAP_SYS_ADMIN (KMS capture), keep it permitted, run without it
-    // effective, and hand it to nothing we spawn except the native worker. See
-    // common/LinuxCapabilities.h. Logged below, once the log exists.
+    // us CAP_SYS_ADMIN (KMS capture) and CAP_SYS_NICE (GPU priority), keep them
+    // permitted, run without them effective, and hand them to nothing we spawn
+    // except the native worker. See common/LinuxCapabilities.h. Logged below,
+    // once the log exists.
     const QString capabilityNote = mw::confineCapabilities();
 
     // Before QApplication: on a headless Linux host this swaps the xcb platform

@@ -18,6 +18,7 @@
 #include "KmsCapture.h"
 
 #include "../../core/Log.h"
+#include "../../platform/linux/ScopedCapability.h"
 
 #include <cerrno>
 #include <chrono>
@@ -27,7 +28,6 @@
 #include <linux/dma-buf.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
-#include <sys/syscall.h>
 #include <thread>
 #include <unistd.h>
 #include <xf86drm.h>
@@ -46,9 +46,7 @@ namespace {
 /// process holds it permitted. The app deliberately runs with the capability
 /// permitted but not effective (the HTTP server and everything else in the
 /// process never carry it), so the ioctl that checks it — GETFB2 — is wrapped
-/// in one of these. Raw capget/capset on the calling thread, no libcap: the
-/// module links nothing it does not have to, and libcap's setter would sync
-/// every thread of the process, which is the opposite of the intent.
+/// in one of these (platform/linux/ScopedCapability.h).
 ///
 /// A process without the capability at all is left alone: GETFB2 then hands
 /// back zero handles and the callers say why.
@@ -56,32 +54,11 @@ class ScopedSysAdmin
 {
 public:
     ScopedSysAdmin()
-    {
-        __user_cap_header_struct header{};
-        __user_cap_data_struct data[_LINUX_CAPABILITY_U32S_3]{};
-        header.version = _LINUX_CAPABILITY_VERSION_3;
-        if (syscall(SYS_capget, &header, data) != 0) return;
-        if (!(data[kIndex].permitted & kBit) || (data[kIndex].effective & kBit)) return;
-        data[kIndex].effective |= kBit;
-        m_Raised = syscall(SYS_capset, &header, data) == 0;
-    }
-    ~ScopedSysAdmin()
-    {
-        if (!m_Raised) return;
-        __user_cap_header_struct header{};
-        __user_cap_data_struct data[_LINUX_CAPABILITY_U32S_3]{};
-        header.version = _LINUX_CAPABILITY_VERSION_3;
-        if (syscall(SYS_capget, &header, data) != 0) return;
-        data[kIndex].effective &= ~kBit;
-        syscall(SYS_capset, &header, data);
-    }
-    ScopedSysAdmin(const ScopedSysAdmin&) = delete;
-    ScopedSysAdmin& operator=(const ScopedSysAdmin&) = delete;
+        : m_Capability(CAP_SYS_ADMIN)
+    {}
 
 private:
-    static constexpr unsigned kIndex = CAP_SYS_ADMIN >> 5;
-    static constexpr unsigned kBit = 1u << (CAP_SYS_ADMIN & 31);
-    bool m_Raised = false;
+    platform::ScopedCapability m_Capability;
 };
 
 const char* const kNeedsCapability =

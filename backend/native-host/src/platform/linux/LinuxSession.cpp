@@ -232,7 +232,9 @@ public:
     int copiesPerFrame() const override { return 1; }
     std::string describe(const char* source) const override
     {
-        return std::string("via VA-API — ") + source + " → EGL → VA-API, 1 copy (the bitstream)";
+        return std::string("via VA-API — ") + source + " → EGL" +
+               (m_Converter->highPriority() ? " (high priority)" : "") +
+               " → VA-API, 1 copy (the bitstream)";
     }
     void detachThread() override
     {

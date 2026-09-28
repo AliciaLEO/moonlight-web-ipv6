@@ -2584,6 +2584,25 @@ levé la capacité par thread dans le serveur, sans qu'elle soit effective aille
 banc est Qt 6.11 à la place de 6.6.3 ; et le **premier flux navigateur** depuis cet
 hôte (§19.6), qui est la prochaine étape.
 
+**Une seconde capacité, `CAP_SYS_NICE` (28/09/2026, plan D3D12 §9-9 et §9-18).**
+Sous un jeu qui sature le GPU, la conversion attend deux images du jeu : 46 ms sur
+le 780M (banc §8o.1). Un contexte GPU au-dessus de la priorité normale passe devant
+l'image suivante (23 ms en GLES), et amdgpu, i915 et xe ne le créent que pour un
+processus qui tient `CAP_SYS_NICE` — Sunshine la porte déjà (`cap_sys_admin,
+cap_sys_nice=p`). Elle suit exactement la route de l'autre : `setcap
+cap_sys_admin,cap_sys_nice+p` sur le lanceur, levée ambiante des deux, confinement
+des deux au démarrage (permitted et inheritable gardés, effective retiré, ambiant
+abaissé), rendue au seul worker natif. Le moteur la lève sur son thread le temps
+de créer le contexte (`platform/linux/ScopedCapability.h`, partagé désormais avec
+`KmsCapture`) ; la priorité est fixée à la création, rien ne la garde ensuite.
+`GlConvert` ne demande HIGH (`EGL_IMG_context_priority`) que s'il la tient :
+Mesa 23.2 relit « HIGH » pour un contexte que le noyau a refusé, la réponse du
+pilote ne prouve rien. `mw-native-tests linux_pipeline` sur le banc : « priority
+normal (no CAP_SYS_NICE…) » avec `cap_sys_admin+p`, « priority high
+(CAP_SYS_NICE) » avec les deux, 61/61 dans les deux cas. Un paquet installé avant
+ne pose que `CAP_SYS_ADMIN` : la conversion y tourne à la priorité normale, et le
+log dit pourquoi.
+
 ---
 
 ### 19.16 Ce qui manque encore à la plateforme Linux (08/09/2026)

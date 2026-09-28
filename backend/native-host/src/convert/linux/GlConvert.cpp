@@ -18,6 +18,7 @@
 #include "GlConvert.h"
 
 #include "../../core/Log.h"
+#include "../../platform/linux/ScopedCapability.h"
 #include "../../platform/macos/FrameFit.h"
 
 #include <EGL/egl.h>
@@ -25,7 +26,17 @@
 #include <drm_fourcc.h>
 #include <fcntl.h>
 #include <gbm.h>
+#include <linux/capability.h>
 #include <unistd.h>
+
+// EGL_IMG_context_priority. eglext.h has carried the names since 2016; these
+// are for a header older than that — the values are the extension's.
+#ifndef EGL_CONTEXT_PRIORITY_LEVEL_IMG
+#define EGL_CONTEXT_PRIORITY_LEVEL_IMG 0x3100
+#define EGL_CONTEXT_PRIORITY_HIGH_IMG 0x3101
+#define EGL_CONTEXT_PRIORITY_MEDIUM_IMG 0x3102
+#define EGL_CONTEXT_PRIORITY_LOW_IMG 0x3103
+#endif
 
 // gl2ext.h defines nothing of its own: it needs GL_APIENTRY and the GL types
 // from a core header first, and an alphabetical sort puts it before gl3.h. Kept
@@ -411,8 +422,39 @@ bool GlConvert::createContext(const std::string& renderNode, std::string& error)
         error = "no ES3 EGL config";
         return false;
     }
-    const EGLint contextAttribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
-    d->context = eglCreateContext(d->display, config, EGL_NO_CONTEXT, contextAttribs);
+    // The conversion's place on the GPU (plan §9-18, bench §8o.1). A context
+    // at the game's priority waits for the game's frame in flight AND for the
+    // next one: 46 ms under a load that saturates a Radeon 780M. At HIGH it
+    // goes ahead of the next one: 23 ms. amdgpu, like i915 and xe, grants a
+    // context above normal only to CAP_SYS_NICE, which the package's launcher
+    // hands over and the app keeps permitted only — raised on this thread for
+    // the one call, since the priority is fixed when the context is made.
+    //
+    // Asked for only when held. The driver's answer proves nothing: Mesa 23.2
+    // reads back HIGH for a context the kernel refused (-13), measured
+    // 28/09/2026. Holding the capability is the proof.
+    const bool priorityExtension = std::strstr(extensions, "EGL_IMG_context_priority") != nullptr;
+    const bool mayRaise = platform::ScopedCapability::permitted(CAP_SYS_NICE);
+    const EGLint plainAttribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
+    const EGLint highAttribs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_CONTEXT_PRIORITY_LEVEL_IMG,
+                                  EGL_CONTEXT_PRIORITY_HIGH_IMG, EGL_NONE};
+    m_HighPriority = false;
+    if (priorityExtension && mayRaise) {
+        platform::ScopedCapability nice(CAP_SYS_NICE);
+        d->context = eglCreateContext(d->display, config, EGL_NO_CONTEXT, highAttribs);
+        m_HighPriority = d->context != EGL_NO_CONTEXT && nice.effective();
+        m_Priority = m_HighPriority                 ? "high (CAP_SYS_NICE)"
+                     : d->context == EGL_NO_CONTEXT ? "normal (the driver refused a high one)"
+                                                    : "normal (CAP_SYS_NICE could not be raised)";
+    } else {
+        m_Priority = !priorityExtension
+                         ? "normal (the driver has no EGL_IMG_context_priority)"
+                         : "normal (no CAP_SYS_NICE: the package's launcher hands it over)";
+    }
+    // A driver that refuses the attribute rather than lowering it: the
+    // conversion at normal priority beats no conversion at all.
+    if (d->context == EGL_NO_CONTEXT)
+        d->context = eglCreateContext(d->display, config, EGL_NO_CONTEXT, plainAttribs);
     if (d->context == EGL_NO_CONTEXT ||
         !eglMakeCurrent(d->display, EGL_NO_SURFACE, EGL_NO_SURFACE, d->context)) {
         error = "could not create or bind an ES3 context";
@@ -420,7 +462,7 @@ bool GlConvert::createContext(const std::string& renderNode, std::string& error)
     }
     log::info(std::string("[native] GL conversion on ") +
               reinterpret_cast<const char*>(glGetString(GL_RENDERER)) + " (" +
-              reinterpret_cast<const char*>(glGetString(GL_VERSION)) + ")");
+              reinterpret_cast<const char*>(glGetString(GL_VERSION)) + "), priority " + m_Priority);
     return true;
 }
 
@@ -912,6 +954,8 @@ void GlConvert::stop()
     if (d->gbm) gbm_device_destroy(d->gbm);
     if (d->renderFd >= 0) ::close(d->renderFd);
     d = std::make_unique<Impl>();
+    m_HighPriority = false;
+    m_Priority.clear();
 }
 
 } // namespace mw::native::convert

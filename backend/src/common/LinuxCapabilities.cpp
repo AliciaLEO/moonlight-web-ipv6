@@ -49,10 +49,24 @@ struct Caps
         return syscall(SYS_capget, &header, data) == 0;
     }
     bool set() { return syscall(SYS_capset, &header, data) == 0; }
+
+    bool permitted(int cap) const { return data[index(cap)].permitted & bit(cap); }
+
+    static unsigned index(int cap) { return static_cast<unsigned>(cap) >> 5; }
+    static unsigned bit(int cap) { return 1u << (static_cast<unsigned>(cap) & 31); }
 };
 
-constexpr unsigned kIndex = CAP_SYS_ADMIN >> 5;
-constexpr unsigned kBit = 1u << (CAP_SYS_ADMIN & 31);
+/// The capabilities the launcher hands over, and what each one is for.
+struct Handed
+{
+    int cap;
+    const char* note;
+};
+constexpr Handed kHanded[] = {
+    {CAP_SYS_ADMIN, "CAP_SYS_ADMIN held (permitted): the screen can be captured through KMS"},
+    {CAP_SYS_NICE, "CAP_SYS_NICE held (permitted): the stream's GPU work can run above normal "
+                   "priority"},
+};
 
 } // namespace
 
@@ -61,18 +75,32 @@ namespace mw {
 QString confineCapabilities()
 {
     Caps caps;
-    if (!caps.get() || !(caps.data[kIndex].permitted & kBit)) return {};
+    if (!caps.get()) return {};
 
-    const bool wasEffective = caps.data[kIndex].effective & kBit;
-    caps.data[kIndex].effective &= ~kBit;
-    caps.data[kIndex].inheritable |= kBit;
+    QString note;
+    bool wasEffective = false;
+    bool any = false;
+    for (const Handed& handed : kHanded) {
+        if (!caps.permitted(handed.cap)) continue;
+        const unsigned i = Caps::index(handed.cap), b = Caps::bit(handed.cap);
+        any = true;
+        wasEffective = wasEffective || (caps.data[i].effective & b);
+        caps.data[i].effective &= ~b;
+        caps.data[i].inheritable |= b;
+        if (!note.isEmpty()) note += QStringLiteral("; ");
+        note += QString::fromLatin1(handed.note);
+    }
+    if (!any) return {};
+
     const bool set = caps.set();
     // Lower only ours: a systemd unit may have granted CAP_NET_BIND_SERVICE the
     // same way, and that one is meant to stay.
-    const bool lowered = prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_LOWER, CAP_SYS_ADMIN, 0, 0) == 0;
+    bool lowered = true;
+    for (const Handed& handed : kHanded) {
+        if (caps.permitted(handed.cap))
+            lowered = prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_LOWER, handed.cap, 0, 0) == 0 && lowered;
+    }
 
-    QString note =
-        QStringLiteral("CAP_SYS_ADMIN held (permitted): the screen can be captured through KMS");
     if (set && wasEffective) note += QStringLiteral("; dropped from the effective set");
     if (lowered) note += QStringLiteral("; withheld from child processes except the native worker");
     if (!set) note += QStringLiteral("; capset failed, the effective set is unchanged");
@@ -82,16 +110,24 @@ QString confineCapabilities()
 bool hasCaptureCapability()
 {
     Caps caps;
-    return caps.get() && (caps.data[kIndex].permitted & kBit);
+    return caps.get() && caps.permitted(CAP_SYS_ADMIN);
 }
 
-void raiseCaptureCapabilityForChild()
+void raiseStreamCapabilitiesForChild()
 {
     Caps caps;
-    if (!caps.get() || !(caps.data[kIndex].permitted & kBit)) return;
-    caps.data[kIndex].inheritable |= kBit;
-    if (!caps.set()) return;
-    prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_SYS_ADMIN, 0, 0);
+    if (!caps.get()) return;
+    bool any = false;
+    for (const Handed& handed : kHanded) {
+        if (!caps.permitted(handed.cap)) continue;
+        caps.data[Caps::index(handed.cap)].inheritable |= Caps::bit(handed.cap);
+        any = true;
+    }
+    if (!any || !caps.set()) return;
+    for (const Handed& handed : kHanded) {
+        if (caps.permitted(handed.cap))
+            prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, handed.cap, 0, 0);
+    }
 }
 
 } // namespace mw
@@ -110,7 +146,7 @@ bool hasCaptureCapability()
     return false;
 }
 
-void raiseCaptureCapabilityForChild() {}
+void raiseStreamCapabilitiesForChild() {}
 
 } // namespace mw
 
