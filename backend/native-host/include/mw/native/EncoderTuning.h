@@ -242,12 +242,13 @@ struct EncoderTuning
     /// 27/09/2026 (plan §9-5): scrolling text went from 12 such pictures sent
     /// to 1, for the same mean host time. Off is the bench's "before".
     Choice reencode12 = Choice::Default;
-    /// How that picture is coded again. The engine's own (off): once, at its
-    /// budget, by the textbook's slope. On: at two budgets — under the
-    /// overshoot line — by the slope learned, then by the textbook if it
-    /// still lands far over. Replayed on the N95's scrolling text, where 14 %
-    /// of the pictures were coded again, on keeps 0.89 of the budget instead
-    /// of 0.75 (bench §8n.8, plan §9-14).
+    /// How that picture is coded again. On, the engine's own since
+    /// 28/09/2026: at two budgets — under the overshoot line — by the slope
+    /// learned, then by the textbook if it still lands far over. Off, the
+    /// bench's "before": once, at its budget, by the textbook's slope. On
+    /// scrolling text, on went from 0.68 to 0.83 of the target on the N95 and
+    /// sent no picture far over on either the N95 or the Arc, for a third
+    /// encode on 0.5 % of the pictures (bench §8n.9-§8n.10, plan §9-14).
     Choice reencodeFit12 = Choice::Default;
     /// The in-house rate control only: a new picture is never believed to
     /// cost under 1/2^k of an intra one. 0 is the engine's own — no floor,

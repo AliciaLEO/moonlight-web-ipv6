@@ -106,7 +106,7 @@ public:
     /// Pictures coded again for a strong overshoot (all but reencode=0).
     int reencoded() const { return m_Reencoded; }
     /// Of those, the ones the fitting rule's first try left far over, coded a
-    /// last time by the textbook (refit=1 only).
+    /// last time by the textbook (never at refit=0).
     int reencodedTwice() const { return m_ReencodedTwice; }
     /// Pictures whose QP, as the driver said it, did not follow the one asked.
     int qpNotFollowed() const { return m_QpNotFollowed; }

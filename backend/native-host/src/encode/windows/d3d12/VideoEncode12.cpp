@@ -227,7 +227,7 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
         m_Controller.start(bitsPerSecond, m_Fps, m_VbvFrames,
                            static_cast<uint64_t>(m_Setup.codedWidth) * m_Setup.codedHeight, floor);
         m_Controller.setReencodeFit(m_Reencode &&
-                                    tuning.reencodeFit12 == EncoderTuning::Choice::On);
+                                    tuning.reencodeFit12 != EncoderTuning::Choice::Off);
         m_SubmittedQp = static_cast<int>(m_Rate->cqp.ConstantQP_FullIntracodedFrame);
     } else {
         m_Rate->setBitrate(bitsPerSecond, m_Fps, m_VbvFrames);

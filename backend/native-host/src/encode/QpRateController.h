@@ -365,9 +365,10 @@ public:
     }
 
     /// How a picture far over its budget is coded again (the bench's refit=,
-    /// plan §9-14). Off, the engine's own: once, at its budget, by the
-    /// textbook's slope. On: at kReencodeAim budgets by the slope learned,
-    /// then by the textbook when that still lands far over. Kept by start().
+    /// plan §9-14). Off: once, at its budget, by the textbook's slope. On: at
+    /// kReencodeAim budgets by the slope learned, then by the textbook when
+    /// that still lands far over — what VideoEncode12 asks since 28/09/2026,
+    /// the controller alone starting off. Kept by start().
     void setReencodeFit(bool on) { m_ReencodeFit = on; }
     bool reencodeFit() const { return m_ReencodeFit; }
 

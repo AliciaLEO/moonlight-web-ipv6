@@ -391,8 +391,8 @@ void ownRateOn(const std::shared_ptr<d3d12::D3d12Device>& device)
     encoder.stop();
 
     // A flat run makes every new picture look cheap; the movement after it is
-    // far over its budget: coded again by default, under the overshoot line
-    // at the bench's refit=1, sent as it is at reencode=0.
+    // far over its budget: coded again under the overshoot line by default,
+    // once at its budget at the bench's refit=0, sent as it is at reencode=0.
     struct Case
     {
         EncoderTuning::Choice reencode;
@@ -401,9 +401,10 @@ void ownRateOn(const std::shared_ptr<d3d12::D3d12Device>& device)
     };
     for (const Case& c :
          {Case{EncoderTuning::Choice::Default, EncoderTuning::Choice::Default, "coded again"},
-          Case{EncoderTuning::Choice::Default, EncoderTuning::Choice::On, "refit=1"},
+          Case{EncoderTuning::Choice::Default, EncoderTuning::Choice::Off, "refit=0"},
           Case{EncoderTuning::Choice::Off, EncoderTuning::Choice::Default, "reencode=0"}}) {
         const bool again = c.reencode != EncoderTuning::Choice::Off;
+        const bool fit = again && c.fit != EncoderTuning::Choice::Off;
         const char* what = c.what;
         tuning.reencode12 = c.reencode;
         tuning.reencodeFit12 = c.fit;
@@ -424,14 +425,14 @@ void ownRateOn(const std::shared_ptr<d3d12::D3d12Device>& device)
         }
         CHECK_EQ(failures, 0);
         CHECK_EQ(encoder.qpNotFollowed(), 0);
-        CHECK_EQ(encoder.rateController().reencodeFit(), c.fit == EncoderTuning::Choice::On);
+        CHECK_EQ(encoder.rateController().reencodeFit(), fit);
         if (again) {
             CHECK(encoder.reencoded() >= 1);
         } else {
             CHECK_EQ(encoder.reencoded(), 0);
             CHECK(encoder.rateController().strongOvershoots() >= 1);
         }
-        if (c.fit != EncoderTuning::Choice::On) CHECK_EQ(encoder.reencodedTwice(), 0);
+        if (!fit) CHECK_EQ(encoder.reencodedTwice(), 0);
         encoder.releaseOutput();
         std::fprintf(stderr,
                      "  %s, %s: %d picture(s) coded again (%d twice), %d sent far over budget, "
