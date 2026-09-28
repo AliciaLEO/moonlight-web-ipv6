@@ -616,6 +616,15 @@ public:
     /// Turn remote administration on or off.
     void setRemoteAdminEnabled(bool enabled);
 
+    /// Whether the password is also accepted from outside the LAN, through the
+    /// rendezvous tunnel only. Default: false — an operator who set a password
+    /// for the machines in the house never finds it facing the internet unless
+    /// they asked for exactly that.
+    bool remoteAdminInternet() const;
+
+    /// Open or close the internet side of the remote admin door.
+    void setRemoteAdminInternet(bool enabled);
+
     // ── Rendezvous identity (0.3.0+) ────────────────────────────────────────
     //
     // How the instance is reached from the internet:

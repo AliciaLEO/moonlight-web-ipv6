@@ -1105,6 +1105,19 @@ void AppSettings::setRemoteAdminEnabled(bool enabled)
     writeAll(obj);
 }
 
+bool AppSettings::remoteAdminInternet() const
+{
+    QJsonObject obj = readAll();
+    return obj.value("remote_admin_internet").toBool(false);
+}
+
+void AppSettings::setRemoteAdminInternet(bool enabled)
+{
+    QJsonObject obj = readAll();
+    obj["remote_admin_internet"] = enabled;
+    writeAll(obj);
+}
+
 void AppSettings::setCertAuthEnabled(bool enabled)
 {
     QJsonObject obj = readAll();

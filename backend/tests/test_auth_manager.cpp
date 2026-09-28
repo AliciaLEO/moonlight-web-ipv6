@@ -262,6 +262,42 @@ void run_auth_manager_tests()
     CHECK(auth.adminPasswordSet());
     CHECK(auth.validateAdminPassword("192.168.5.32", "another-password").result ==
           AuthManager::Valid);
+
+    // The internet side of the door is shut out of the box, and opening it is
+    // persisted like the rest.
+    CHECK(!auth.remoteAdminInternet());
+    CHECK(!settings.remoteAdminInternet());
+    auth.setRemoteAdminInternet(true);
+    CHECK(auth.remoteAdminInternet());
+    CHECK(settings.remoteAdminInternet());
+
+    // From the internet every address shares one more counter: three wrong
+    // guesses from three addresses lock the fourth out as well. The LAN never
+    // feeds that counter and keeps its own.
+    CHECK(auth.validateAdminPassword("203.0.113.1", "wrong").result == AuthManager::InvalidPin);
+    CHECK(auth.validateAdminPassword("203.0.113.2", "wrong").result == AuthManager::InvalidPin);
+    {
+        const AuthManager::ValidateResult third =
+            auth.validateAdminPassword("203.0.113.3", "wrong");
+        CHECK(third.result == AuthManager::InvalidPin);
+        CHECK(third.lockoutSeconds > 0);
+        CHECK_EQ(third.remainingAttempts, 2); // the shared counter's tier: 5 - 3
+    }
+    CHECK(auth.validateAdminPassword("203.0.113.4", "another-password").result ==
+          AuthManager::RateLimited);
+    CHECK(auth.validateAdminPassword("192.168.5.33", "another-password").result ==
+          AuthManager::Valid);
+
+    // Closing the internet side takes back every unlock: which ones it bought
+    // is not recorded, and a LAN unlock is honoured from anywhere afterwards.
+    {
+        const QString office = auth.createSession("203.0.113.9", "Office laptop");
+        CHECK(auth.promoteSessionToAdmin(office));
+        auth.setRemoteAdminInternet(false);
+        CHECK(!auth.isAdminSession(office));
+        CHECK(auth.validateSession(office)); // still signed in, just not admin
+        CHECK(!settings.remoteAdminInternet());
+    }
     auth.destroyAllSessions();
 
     // ── LAN address classification (gates the unlock) ──────────────────────
@@ -303,6 +339,20 @@ void run_auth_manager_tests()
     // parses as nothing and is refused on both paths.
     CHECK(!AuthManager::canUnlockAdmin("peer-4f2a", false, true));
     CHECK(!AuthManager::canUnlockAdmin("", true, true));
+
+    // Once the owner opens the internet side: a public peer is admitted on
+    // the rendezvous tunnel, where it holds a session earned with the PIN
+    // over that link — never on a socket, where a proxy on this machine is
+    // exactly what forwards the whole internet here.
+    CHECK(AuthManager::canUnlockAdmin("8.8.8.8", false, /*viaTunnel*/ true, /*internet*/ true));
+    CHECK(AuthManager::canUnlockAdmin("2001:db8::1", false, true, true));
+    CHECK(!AuthManager::canUnlockAdmin("8.8.8.8", true, /*viaTunnel*/ false, true));
+    CHECK(!AuthManager::canUnlockAdmin("8.8.8.8", false, true, /*internet*/ false));
+    // A label is still nothing, and the LAN's own rules do not loosen.
+    CHECK(!AuthManager::canUnlockAdmin("peer-4f2a", false, true, true));
+    CHECK(!AuthManager::canUnlockAdmin("", false, true, true));
+    CHECK(!AuthManager::canUnlockAdmin("192.168.1.5", false, false, true));
+    CHECK(AuthManager::canUnlockAdmin("192.168.1.5", false, true, true));
 
     // ── Address helpers (static) ───────────────────────────────────────────
     CHECK_EQ(AuthManager::cleanClientAddress("::ffff:192.168.1.5"), QString("192.168.1.5"));

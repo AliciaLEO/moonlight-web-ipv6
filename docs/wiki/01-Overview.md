@@ -58,7 +58,7 @@ Per-browser preferences (stored in `localStorage`, with server defaults) are edi
 
 ## 1.2 The Administrator's journey
 
-The **Admin page** (`https://localhost/admin`, also reachable from the tray icon → *Server Settings*) configures the server itself. It is **only functional from the host machine**: all `/api/admin/*` routes return 403 for non-localhost requests (a *host-key* mechanism extends this to the host's own browser when it arrives through the remote entry link, and a LAN machine can unlock it with the admin password — see [Security](06-Security.md)).
+The **Admin page** (`https://localhost/admin`, also reachable from the tray icon → *Server Settings*) configures the server itself. It is **only functional from the host machine**: all `/api/admin/*` routes return 403 for non-localhost requests (a *host-key* mechanism extends this to the host's own browser when it arrives through the remote entry link, and a LAN machine — or a device on the internet, when the owner allows it — can unlock it with the admin password; see [Security](06-Security.md)).
 
 ![Open the Admin page from the tray icon → Server Settings](../screenshots/localhost.png)
 

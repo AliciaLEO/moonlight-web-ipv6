@@ -354,6 +354,8 @@ void registerAuthRoutes(HttpServer& server, AuthManager& authManager, GeoIpServi
     // does. These two routes add a second door for a LAN machine that is not
     // the host — the operator sets a password from the host, and any other
     // machine on the same network can spend it to get the same admin page.
+    // The owner may also open it to the internet, through the rendezvous only
+    // (remote_admin_internet, off by default).
     //
     // POST /api/auth/admin-unlock — spend the password to promote this session.
     server.router()->post("/api/auth/admin-unlock", [&authManager](const HttpRequest& req) {
@@ -368,13 +370,15 @@ void registerAuthRoutes(HttpServer& server, AuthManager& authManager, GeoIpServi
             return HttpResponse::json(obj);
         }
 
-        // LAN only, by explicit design: the password is a convenience for the
-        // machines in the same house, not a second front door on the internet.
+        // The LAN's door by default: the password is a convenience for the
+        // machines in the same house, and a front door on the internet only
+        // when the owner opened that side, through the rendezvous tunnel alone.
         // What "on this LAN" is worth proving with differs by arrival — see
         // AuthManager::canUnlockAdmin. Every device now reaches an instance
         // through the rendezvous, LAN ones included, so the tunnel case is not
         // an exception carved out of this door: it is the door.
-        if (!AuthManager::canUnlockAdmin(req.clientAddress, req.hostTrusted, req.viaTunnel)) {
+        if (!AuthManager::canUnlockAdmin(req.clientAddress, req.hostTrusted, req.viaTunnel,
+                                         authManager.remoteAdminInternet())) {
             QJsonObject obj;
             obj["status"] = "error";
             obj["error"] = "lan_only";
@@ -428,22 +432,27 @@ void registerAuthRoutes(HttpServer& server, AuthManager& authManager, GeoIpServi
     });
 
     // POST /api/admin/password — change the remote admin password and/or turn
-    // remote administration on and off (admin only). Body may carry either or
-    // both of {password, enabled}; the toggle is applied first so a single call
-    // can re-enable the door and set a password behind it.
+    // remote administration on and off, from the LAN or also from the internet
+    // (admin only). Body may carry any of {password, enabled, internet}; the
+    // toggles are applied first so a single call can re-enable the door and set
+    // a password behind it.
     server.router()->post("/api/admin/password", [&authManager](const HttpRequest& req) {
         if (!req.isLocal) return HttpResponse::error(403, "Only available from localhost");
 
         const QJsonObject body = QJsonDocument::fromJson(req.body).object();
         const QString password = body["password"].toString();
 
-        // Changing either setting revokes every unlock the old password bought,
+        // Changing any setting revokes every unlock the old password bought,
         // which would include the caller's own if they are a remote admin doing
-        // the reset. They just proved they are an admin, so hand it back.
+        // the reset. They just proved they are an admin, so hand it back — as
+        // long as the door still lets them in from where they are: closing the
+        // internet side from the internet closes it on the caller too.
         const QString token = HttpServer::sessionTokenFromRequest(req);
         const bool callerWasRemoteAdmin = authManager.isAdminSession(token);
 
         if (body.contains("enabled")) authManager.setRemoteAdminEnabled(body["enabled"].toBool());
+        if (body.contains("internet"))
+            authManager.setRemoteAdminInternet(body["internet"].toBool());
 
         if (!password.isEmpty() && !authManager.setAdminPassword(password)) {
             QJsonObject obj;
@@ -452,12 +461,15 @@ void registerAuthRoutes(HttpServer& server, AuthManager& authManager, GeoIpServi
             obj["min_length"] = AuthManager::MIN_ADMIN_PASSWORD_LEN;
             return HttpResponse::json(obj, 400);
         }
-        if (callerWasRemoteAdmin && authManager.remoteAdminEnabled())
+        if (callerWasRemoteAdmin && authManager.remoteAdminEnabled() &&
+            AuthManager::canUnlockAdmin(req.clientAddress, req.hostTrusted, req.viaTunnel,
+                                        authManager.remoteAdminInternet()))
             authManager.promoteSessionToAdmin(token);
 
         QJsonObject obj;
         obj["status"] = "ok";
         obj["remote_admin_enabled"] = authManager.remoteAdminEnabled();
+        obj["remote_admin_internet"] = authManager.remoteAdminInternet();
         obj["admin_password_set"] = authManager.adminPasswordSet();
         return HttpResponse::json(obj);
     });
@@ -478,6 +490,7 @@ void registerAuthRoutes(HttpServer& server, AuthManager& authManager, GeoIpServi
             obj["pin"] = authManager.currentPin();
             obj["pin_consumed"] = authManager.isPinConsumed();
             obj["remote_admin_enabled"] = authManager.remoteAdminEnabled();
+            obj["remote_admin_internet"] = authManager.remoteAdminInternet();
             // Drives the admin page's banner: remote administration is on but no
             // password has been set, so the LAN door is advertised and shut. The
             // owner is the only one who can open it, and only from here.
@@ -531,7 +544,8 @@ void registerAuthRoutes(HttpServer& server, AuthManager& authManager, GeoIpServi
         obj["admin_unlock_available"] =
             !isLocal && obj["authenticated"].toBool() && authManager.remoteAdminEnabled() &&
             authManager.adminPasswordSet() &&
-            AuthManager::canUnlockAdmin(req.clientAddress, req.hostTrusted, req.viaTunnel);
+            AuthManager::canUnlockAdmin(req.clientAddress, req.hostTrusted, req.viaTunnel,
+                                        authManager.remoteAdminInternet());
 
         // Whether this browser holds a session cookie at all — true even on
         // localhost, where authenticated is hardcoded. It is what tells the UI

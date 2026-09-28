@@ -69,6 +69,10 @@ export class AdminView {
         // so until one is set the door is advertised but opens for nobody.
         this._remoteAdminEnabled = true;
         this._adminPasswordSet = false;
+        // Whether the password is also accepted from the internet, through the
+        // rendezvous. Off by default: the LAN's door does not turn into the
+        // internet's unless the owner asks for exactly that.
+        this._remoteAdminInternet = false;
 
         // Server settings state
         this._httpsPort = 443;
@@ -319,6 +323,7 @@ export class AdminView {
             if (status.remote_admin_enabled !== undefined) {
                 this._remoteAdminEnabled = !!status.remote_admin_enabled;
                 this._adminPasswordSet = !!status.admin_password_set;
+                this._remoteAdminInternet = !!status.remote_admin_internet;
             }
             if (status.pin) {
                 this._pin = status.pin;
@@ -395,15 +400,29 @@ export class AdminView {
         );
     }
 
+    // Open or close the internet side of the same door. Closing it revokes
+    // every unlock too: the host does not record which ones the internet bought.
+    async _toggleRemoteAdminInternet(internet) {
+        await this._postRemoteAdmin(
+            { internet },
+            internet ? t('admin.remoteAdminInternetOn') : t('admin.remoteAdminInternetOff'),
+        );
+    }
+
     async _postRemoteAdmin(body, successMessage) {
         try {
             const result = await BackendClient.saveRemoteAdmin(body);
             this._remoteAdminEnabled = !!result.remote_admin_enabled;
             this._adminPasswordSet = !!result.admin_password_set;
+            this._remoteAdminInternet = !!result.remote_admin_internet;
             Toast.success(successMessage);
-            // A remote admin who just closed the LAN door closed it on itself.
+            // A remote admin who just closed a door may have closed it on
+            // itself: the LAN's, or the internet's, which revokes every unlock.
             // Reload rather than leave an admin page whose every button 403s.
-            if (!this._remoteAdminEnabled && !this._isRealHostMachine) {
+            const closedOnItself =
+                !this._remoteAdminEnabled ||
+                (body.internet === false && !this._remoteAdminInternet);
+            if (closedOnItself && !this._isRealHostMachine) {
                 setTimeout(() => window.location.reload(), 600);
                 return;
             }
@@ -776,41 +795,7 @@ export class AdminView {
                         : ''
                 }
 
-                <!-- Remote admin access (LAN password) -->
-                <div class="settings-section">
-                    <h3 class="settings-section-title">${t('admin.remoteAdmin')}</h3>
-                    <div class="settings-field u-pt-0">
-                        <label class="settings-checkbox-label">
-                            <input type="checkbox" id="chk-remote-admin"
-                                   ${this._remoteAdminEnabled ? 'checked' : ''} />
-                            <span class="settings-checkbox-text">${t('admin.remoteAdminEnable')}</span>
-                        </label>
-                        <p class="setting-desc">${t('admin.remoteAdminDesc')}</p>
-                        ${
-                            !this._remoteAdminEnabled
-                                ? ''
-                                : this._adminPasswordSet
-                                  ? `<p class="settings-hint">${t('admin.remoteAdminCustom')}</p>`
-                                  : `<div class="settings-status settings-status-pending">
-                                         ${t('admin.remoteAdminNoPassword')}
-                                     </div>`
-                        }
-                        ${
-                            this._remoteAdminEnabled
-                                ? `
-                        <input type="password" id="admin-remote-password" class="settings-input u-mt-2"
-                               autocomplete="new-password"
-                               placeholder="${this.esc(t('admin.remoteAdminPlaceholder'))}" />
-                        <div class="u-mt-2">
-                            <button class="btn btn-neutral" id="btn-set-admin-password">
-                                ${t('admin.remoteAdminChange')}
-                            </button>
-                        </div>
-                        <p class="settings-hint u-mt-2">${t('admin.remoteAdminHint')}</p>`
-                                : ''
-                        }
-                    </div>
-                </div>
+                ${this._renderRemoteAdmin()}
 
                 <!-- Internet -->
                 <div class="settings-section" id="admin-section-internet">
@@ -1384,6 +1369,12 @@ export class AdminView {
         const remoteChk = this.container.querySelector('#chk-remote-admin');
         if (remoteChk) {
             remoteChk.addEventListener('change', () => this._toggleRemoteAdmin(remoteChk.checked));
+        }
+        const internetAdminChk = this.container.querySelector('#chk-remote-admin-internet');
+        if (internetAdminChk) {
+            internetAdminChk.addEventListener('change', () =>
+                this._toggleRemoteAdminInternet(internetAdminChk.checked),
+            );
         }
         const setPassBtn = this.container.querySelector('#btn-set-admin-password');
         const passInput = this.container.querySelector('#admin-remote-password');
@@ -2125,6 +2116,52 @@ export class AdminView {
             console.warn('[Admin] Failed to save transport prefs:', err);
             Toast.error(t('admin.transportSaveFailed'));
         }
+    }
+
+    // --- Remote admin access: the password door, the LAN's and on request the
+    // internet's (through the rendezvous only) ---
+    _renderRemoteAdmin() {
+        return `
+                <div class="settings-section">
+                    <h3 class="settings-section-title">${t('admin.remoteAdmin')}</h3>
+                    <div class="settings-field u-pt-0">
+                        <label class="settings-checkbox-label">
+                            <input type="checkbox" id="chk-remote-admin"
+                                   ${this._remoteAdminEnabled ? 'checked' : ''} />
+                            <span class="settings-checkbox-text">${t('admin.remoteAdminEnable')}</span>
+                        </label>
+                        <p class="setting-desc">${t('admin.remoteAdminDesc')}</p>
+                        ${
+                            !this._remoteAdminEnabled
+                                ? ''
+                                : this._adminPasswordSet
+                                  ? `<p class="settings-hint">${t('admin.remoteAdminCustom')}</p>`
+                                  : `<div class="settings-status settings-status-pending">
+                                         ${t('admin.remoteAdminNoPassword')}
+                                     </div>`
+                        }
+                        ${
+                            this._remoteAdminEnabled
+                                ? `
+                        <input type="password" id="admin-remote-password" class="settings-input u-mt-2"
+                               autocomplete="new-password"
+                               placeholder="${this.esc(t('admin.remoteAdminPlaceholder'))}" />
+                        <div class="u-mt-2">
+                            <button class="btn btn-neutral" id="btn-set-admin-password">
+                                ${t('admin.remoteAdminChange')}
+                            </button>
+                        </div>
+                        <p class="settings-hint u-mt-2">${t('admin.remoteAdminHint')}</p>
+                        <label class="settings-checkbox-label u-mt-2">
+                            <input type="checkbox" id="chk-remote-admin-internet"
+                                   ${this._remoteAdminInternet ? 'checked' : ''} />
+                            <span class="settings-checkbox-text">${t('admin.remoteAdminInternet')}</span>
+                        </label>
+                        <p class="setting-desc">${t('admin.remoteAdminInternetDesc')}</p>`
+                                : ''
+                        }
+                    </div>
+                </div>`;
     }
 
     // --- Advanced: the picture chain of a native session ---

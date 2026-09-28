@@ -159,8 +159,17 @@ public:
     void setRemoteAdminEnabled(bool enabled);
     /// Whether remote administration is enabled (mirrors AppSettings).
     bool remoteAdminEnabled() const;
+    /// Open or close the internet side of the door (off by default). Closing
+    /// it revokes every unlock: which ones the internet bought is not recorded,
+    /// and a session unlocked on the LAN is honoured from anywhere afterwards.
+    void setRemoteAdminInternet(bool enabled);
+    /// Whether the password is also accepted from outside the LAN, through the
+    /// rendezvous tunnel (mirrors AppSettings). See canUnlockAdmin().
+    bool remoteAdminInternet() const;
     /// Rate-limited verification. Always InvalidPin when remote admin is off or
-    /// no password has been set.
+    /// no password has been set. An attempt from outside the LAN is also
+    /// counted in one bucket shared by the whole internet, since an address is
+    /// free to change there (kInternetAdminBucket).
     ValidateResult validateAdminPassword(const QString& ip, const QString& password);
 
     static constexpr int MIN_ADMIN_PASSWORD_LEN = 8;
@@ -347,12 +356,18 @@ public:
      *  Unlike isPrivateIP this understands IPv6, which matters because it gates
      *  the admin password unlock. */
     static bool isLanAddress(const QString& ip);
-    /** True when a caller may spend the remote admin password: the door is LAN
-     *  only, by explicit design.
+    /** True when a caller may spend the remote admin password: the door is the
+     *  LAN's, and the internet's only when the owner opened it (@p internet,
+     *  remote_admin_internet, off by default).
      *
-     *  @p ip must be a LAN address in every case. What the second condition is
-     *  worth depends on how the request arrived, which is why @p viaTunnel is
-     *  part of the question:
+     *  From the internet, only through the rendezvous tunnel: the caller holds
+     *  a session it earned with the PIN over that link, and the password comes
+     *  on top. A direct connection from a public address stays refused, since a
+     *  proxy on this machine (Tailscale Funnel, cloudflared) is exactly what
+     *  forwards the whole internet here.
+     *
+     *  On the LAN, what the second condition is worth depends on how the
+     *  request arrived, which is why @p viaTunnel is part of the question:
      *
      *    socket  the peer address alone is not enough — a TLS-terminating
      *            tunnel running on this machine forwards every visitor on earth
@@ -368,7 +383,8 @@ public:
      *            connectivity check to a private address succeed. This is the
      *            same statement /api/auth/host-key already trusts on this path.
      */
-    static bool canUnlockAdmin(const QString& ip, bool hostTrusted, bool viaTunnel);
+    static bool canUnlockAdmin(const QString& ip, bool hostTrusted, bool viaTunnel,
+                               bool internet = false);
     /** Rate-limit bucket key for an address: the raw IPv4, or the /64 prefix for
      *  IPv6 (a single client trivially owns a whole /64, so per-/128 buckets are
      *  pointless against guessing). */

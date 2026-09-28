@@ -687,10 +687,12 @@ static int runStatusCommand(quint16 persistedHttpsPort)
     // the only way anyone reaches it. There is no built-in default: until one is
     // set the door is shut, and the operator has no other way to find that out.
     if (auth.value("remote_admin_enabled").toBool(false)) {
-        if (auth.value("admin_password_set").toBool(false))
+        if (auth.value("admin_password_set").toBool(false)) {
             out << "  Admin password set   (change it with:  moonlightweb "
                    "--set-admin-password)\n";
-        else
+            if (auth.value("remote_admin_internet").toBool(false))
+                out << "                 also accepted from the internet, through the link\n";
+        } else
             out << "  Admin password none set — no computer on your network can open the admin\n"
                 << "                 page. Set one with:  moonlightweb --set-admin-password\n";
     }

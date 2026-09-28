@@ -86,8 +86,9 @@ The consent is the master switch: `internet_access_enabled` gates the per-sessio
 | `hmac_key` | string (Base64) | generated | Session-token HMAC key, persisted so sessions survive restarts. |
 | `certificate_token` | string | generated first boot | The downloadable auth token file content. |
 | `cert_auth_enabled` | bool | `false` | Enable certificate-file authentication. |
-| `admin_password` | string | absent | PBKDF2-SHA256 digest (`pbkdf2-sha256$iters$salt$key`) of the remote admin password — the one a LAN machine spends to open the admin page. **Absent means no password has been set**, so the LAN unlock door is shut and the admin page says so — there is no built-in default. Set from the admin page, or with `moonlightweb --set-admin-password`. See [Security §6.2.1](06-Security.md#621-remote-admin-password-lan-only). |
+| `admin_password` | string | absent | PBKDF2-SHA256 digest (`pbkdf2-sha256$iters$salt$key`) of the remote admin password — the one a LAN machine (or, when `remote_admin_internet` allows it, a device on the internet) spends to open the admin page. **Absent means no password has been set**, so the unlock door is shut and the admin page says so — there is no built-in default. Set from the admin page, or with `moonlightweb --set-admin-password`. See [Security §6.2.1](06-Security.md#621-remote-admin-password-lan-internet-on-request). |
 | `remote_admin_enabled` | bool | `true` | Whether the LAN may unlock admin access at all. Set to `false` for host-only administration; the stored digest is kept, so re-enabling restores your password rather than the default. |
+| `remote_admin_internet` | bool | `false` | Whether the password is also accepted from outside the LAN, through the rendezvous tunnel only (never on a direct connection). Attempts from the internet share one extra rate-limit bucket; turning it off revokes every unlock. |
 | *(host key)* | string | generated | Single-use host-machine key embedded as `?mwk=` in host-side entry URLs; rotates on redemption. |
 
 ### Lifecycle

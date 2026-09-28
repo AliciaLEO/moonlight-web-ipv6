@@ -701,13 +701,15 @@ export class BackendClient {
         }
         return resp;
     }
-    /** Spend the remote admin password to give this (already authenticated,
-     *  LAN) session the same admin access the host machine has. */
+    /** Spend the remote admin password to give this (already authenticated)
+     *  session the same admin access the host machine has — from the LAN, or
+     *  from the internet through the rendezvous when the owner allowed it. */
     static async adminUnlock(password) {
         return this.post('/api/auth/admin-unlock', { password });
     }
     /** Change the remote admin password and/or turn remote administration on
-     *  and off. Body may carry either or both of {password, enabled}. */
+     *  and off, from the LAN and from the internet. Body may carry any of
+     *  {password, enabled, internet}. */
     static async saveRemoteAdmin(body) {
         return this.post('/api/admin/password', body);
     }
