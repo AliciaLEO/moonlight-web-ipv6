@@ -29,6 +29,9 @@
 #ifdef MW_VK_LAB_EGL
 #include "Egl.h"
 #endif
+#ifdef MW_VK_LAB_VA
+#include "VaTarget.h"
+#endif
 
 #include <cstdio>
 #include <string>
@@ -47,6 +50,9 @@ void usage()
 #endif
 #ifdef MW_VK_LAB_EGL
               "  egl     the witness: the same conversion in GLES, with a context priority\n"
+#endif
+#ifdef MW_VK_LAB_VA
+              "  vatarget  compute writes into the surface VA-API encodes from, read back\n"
 #endif
               "Run a command with --help for its options.\n");
 }
@@ -101,6 +107,15 @@ int main(int argc, char** argv)
             return 0;
         }
         return lab::runEgl(argc - 2, argv + 2);
+    }
+#endif
+#ifdef MW_VK_LAB_VA
+    if (command == "vatarget") {
+        if (help) {
+            lab::vaTargetUsage();
+            return 0;
+        }
+        return lab::runVaTarget(argc - 2, argv + 2);
     }
 #endif
     usage();

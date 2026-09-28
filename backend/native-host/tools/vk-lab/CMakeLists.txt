@@ -66,8 +66,27 @@ if(MW_GLSLANG_VALIDATOR)
     target_sources(mw-vk-lab PRIVATE src/Queues.cpp ${_mw_vk_lab_spv}/ConvertSpv.h)
     target_include_directories(mw-vk-lab PRIVATE ${_mw_vk_lab_spv})
     target_compile_definitions(mw-vk-lab PRIVATE MW_VK_LAB_SHADERS=1)
+
+    # `vatarget`: compute writes into the surface VA-API encodes from — the
+    # split route's last link. Needs libva as the engine links it.
+    pkg_check_modules(MW_VK_LAB_VA libva libva-drm)
+    if(MW_VK_LAB_VA_FOUND)
+        add_custom_command(
+            OUTPUT ${_mw_vk_lab_spv}/FillSpv.h
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${_mw_vk_lab_spv}
+            COMMAND ${MW_GLSLANG_VALIDATOR} -V --target-env vulkan1.1 --vn kFillSpv
+                    -o ${_mw_vk_lab_spv}/FillSpv.h ${CMAKE_CURRENT_SOURCE_DIR}/shaders/fill.comp
+            DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/fill.comp
+            VERBATIM)
+        target_sources(mw-vk-lab PRIVATE src/VaTarget.cpp ${_mw_vk_lab_spv}/FillSpv.h)
+        target_include_directories(mw-vk-lab SYSTEM PRIVATE ${MW_VK_LAB_VA_INCLUDE_DIRS})
+        target_link_libraries(mw-vk-lab PRIVATE ${MW_VK_LAB_VA_LIBRARIES})
+        target_compile_definitions(mw-vk-lab PRIVATE MW_VK_LAB_VA=1)
+    else()
+        message(STATUS "mw-vk-lab: no libva, built without `vatarget`")
+    endif()
 else()
-    message(STATUS "mw-vk-lab: no glslangValidator, built without `queues`")
+    message(STATUS "mw-vk-lab: no glslangValidator, built without `queues` and `vatarget`")
 endif()
 
 # `egl`, the witness of `queues`: the chain of today in GLES, as GlConvert sets

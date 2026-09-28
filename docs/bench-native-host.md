@@ -2560,6 +2560,41 @@ du labo), HEVC 1080p60, RADV 26.2.3 :
 - L'encodeur Vulkan du produit écrira la profondeur complète. Une priorité de
   file d'encodage ne compte que si une soumission passe : on redescend sinon.
 
+### 8o.4 La surface de l'encodeur VA-API, écrite en compute (28/09/2026)
+
+Le dernier maillon de la route scindée : une file compute Vulkan qui écrit
+directement dans la surface que VA-API encode.
+
+**Montage.**
+- `mw-vk-lab vatarget`. La surface est créée comme `VaapiEncoder` crée son
+  entrée (`vaCreateSurfaces`, NV12, rien d'autre) et exportée en deux
+  couches, une par plan.
+- Les plans sont importés comme images R8 et RG8 à ce modificateur, puis
+  écrits par un shader compute (`imageStore`, un motif exact sur 8 bits).
+- Ils sont ensuite rendus à la famille « foreign », la CPU attend la file
+  (l'équivalent du `glFinish` de `GlConvert`), et VA-API relit la surface
+  (`vaGetImage`) : chaque échantillon est comparé.
+- Mesa 23.2 du système, RADV et VA-API : ce que le produit rencontre sur
+  Ubuntu 22.04.
+
+**Résultats.**
+- La surface d'entrée est **linéaire** (modificateur 0), pas de 2048, la
+  chrominance à 2 228 224 octets dans le même objet.
+- RADV y accepte R8 et RG8 en `storage`, en échantillonnage filtré et en copie.
+- Import des deux plans : 0,05 ms. Écriture et attente : 0,23 ms en 1080p,
+  0,14 ms en 720p.
+- VA-API relit exactement ce que Vulkan a écrit : **0 échantillon faux** sur
+  2 073 600 de luminance et 518 400 de chrominance, en 1080p comme en 720p.
+- Piège de labo : RADV 26 du préfixe, chargé dans le même processus que le
+  VA-API du système, hérite du `libdrm_amdgpu` que libva a chargé avant lui
+  (même soname) et ne s'initialise pas. Le produit charge les pilotes du
+  système, jamais un mélange.
+
+**Ce qu'on en retient.** La conversion Vulkan écrit directement dans la
+surface de l'encodeur : ni copie, ni changement de propriétaire de la
+surface. La route scindée a ses deux bouts, l'import de la capture (§8o.2) et
+cette écriture.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
