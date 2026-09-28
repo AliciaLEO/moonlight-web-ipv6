@@ -2550,6 +2550,52 @@ vraie session HDR tient en D3D12 sur 15 s sur le VDD en HDR. Elle donne 262
 images, une keyframe, un flux Main 10 PQ BT.2020 que ffmpeg décode sans
 erreur.
 
+### 8n.15 C8.4 : l'écran verrouillé, par Bruno, et le worker SYSTEM qui ne servait pas (28/09/2026)
+
+**Montage.** Édition dev de la branche installée sur DualRTX
+(`0.3.1-c08939c9-dev`, réglage `d3d12`). Bruno streame depuis son Mac, par
+Internet (`stream.dev`) : l'écran de l'Arc, puis un stream HDR sur l'écran
+virtuel de l'édition dev.
+
+**Premier essai.**
+- Le verrouillage (Démarrer → avatar → Verrouiller) s'affiche dans le stream,
+  et la souris s'y déplace. Mais sur l'écran du PIN, la souris disparaît et le
+  clavier ne tape rien.
+- Le stream HDR et l'overlay (« D3D12 VE (Intel) », de retour après chaque
+  bascule) sont justes.
+- Le journal donne la cause : chaque session refuse le worker SYSTEM (« pipe
+  client is "" (pid N), not this executable ») et prend la tâche élevée
+  (« this user, elevated (task) »). Ce worker a la classe REALTIME, mais sur
+  `Winlogon` la duplication lui est refusée (`0x80070005`, passage par WGC et
+  D3D11 comme C8.3 bis), et `SendInput` aussi (erreur 5).
+- Les journaux de la prod montrent la même chose depuis le 26/09 : **le niveau
+  2 du §31 du design n'a jamais servi en v0.3.1**. Le serveur, non élevé, ne
+  peut pas lire l'image d'un processus SYSTEM laissé à la DACL par défaut de son
+  jeton, et le contrôle d'image échoue.
+
+**Correctif `f1e8e8e3`.** Le service crée le worker avec une DACL à lui : pour
+l'utilisateur qui l'a demandé, lecture de l'image, attente et arrêt, rien de
+plus.
+
+**Second essai (`0.3.1-f1e8e8e3-dev`)** : **le déverrouillage marche**. Le
+journal :
+- « Worker spawned through its launcher as "SYSTEM (launcher service)" » et
+  « GPU scheduling class REALTIME (token SYSTEM) » ;
+- « input: running as SYSTEM — following the desktop switch » ;
+- au verrouillage, « now on the "Winlogon" desktop », une duplication rouverte
+  sur `Winlogon` et « D3D12 Video Encode ready » ;
+- au retour, « now on the "Default" desktop », une nouvelle duplication, D3D12
+  encore. Pas de WGC, pas de D3D11, pas d'erreur.
+
+**Trouvé en lisant ce journal.** `keyboard_debug`, posé à la main dans les
+réglages dev et prod de ce poste pour le chantier clavier, écrivait chaque
+touche tapée en stream, et donc le PIN, dans le journal du worker. Avec
+l'accord de Bruno, le réglage est coupé dans les deux éditions, et les 114 828
+lignes `[KBD]` de 327 journaux (dev et prod) sont effacées sur place, à longueur
+égale. Le correctif `1887b2ea` empêche que ça recommence : les diagnostics
+clavier se taisent tant que l'entrée n'est pas sur le bureau de l'utilisateur,
+quoi que dise le réglage.
+
 ## 8o. Linux : la chaîne Vulkan (28/09/2026 →)
 
 Phase 13 du plan D3D12 : la même forme de chaîne sous Linux, en Vulkan Video

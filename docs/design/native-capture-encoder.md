@@ -4901,6 +4901,12 @@ de Sunshine. Elle est réduite à ce que la fonction exige :
   **ce même exe** ;
 - le worker vérifie la même chose dans l'autre sens avant de lire un octet de
   config ;
+- le serveur vérifie aussi le worker (son image, avant de croire les tubes).
+  Il ne le peut que parce que le service donne au worker une DACL à lui :
+  SYSTEM et les administrateurs comme d'habitude, et l'utilisateur qui l'a
+  demandé avec `PROCESS_QUERY_LIMITED_INFORMATION`, `SYNCHRONIZE` et
+  `PROCESS_TERMINATE` — ce qu'il a déjà sur son worker élevé, rien qui touche
+  la mémoire, les threads ou le jeton (28/09, voir §31.7) ;
 - la DACL du tube de contrôle est `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x12019f;;;IU)`
   — la DACL par défaut d'un tube laisserait entrer toutes les sessions
   d'ouverture de la machine.
@@ -4985,10 +4991,10 @@ l'utilisateur), et le journal comme les minidumps du worker SYSTEM atterrissent
 `moonlightweb-worker-service.log`, sous l'AppData de SYSTEM — le seul endroit
 où un processus LocalSystem est certain de pouvoir écrire.
 
-Conséquence assumée : le worker SYSTEM lit `AppSettings` depuis le profil de
-SYSTEM, donc aux valeurs par défaut. Sans effet en pratique — toute la
-configuration de session arrive par stdin, et il ne reste que le bouton de
-débogage clavier.
+Le worker SYSTEM lit aussi les réglages de l'utilisateur par ce chemin (vu le
+28/09 : `keyboard_debug`, posé à la main, y est actif). Toute la configuration
+de session arrive de toute façon par stdin ; il ne reste que le bouton de
+débogage clavier, qui se tait sur le bureau sécurisé (§31.7).
 
 ### 31.7 Vérifié
 
@@ -5001,6 +5007,29 @@ déverrouillage au mot de passe tapé depuis le client ; (3) le bouton
 `C+A+Suppr` ouvre l'écran de sécurité. Puis les mêmes trois avec le service
 arrêté (`sc stop "MoonlightWeb Worker"`), qui doivent retomber sur le niveau 1 —
 stream normal, fenêtres admin toujours pilotables, bureau sécurisé noir.
+
+**Le 28/09, première vraie installation (C8.4 du plan D3D12) : le niveau 2
+n'avait jamais servi.** Le service était installé et démarré, mais chaque
+session le refusait (« pipe client is "" (pid N), not this executable ») et
+tombait sur la tâche élevée : REALTIME, mais ni duplication (`0x80070005`) ni
+`SendInput` (erreur 5) sur `Winlogon`. Verrouillé depuis le stream, l'écran du
+PIN ne prenait ni souris ni clavier. La cause : le serveur vérifie l'image du
+worker, et un processus créé avec un jeton SYSTEM hérite de la DACL par défaut
+de ce jeton, qui n'admet que SYSTEM et les administrateurs ; le serveur, non
+élevé, lisait une image vide. Toute la v0.3.1 en est là (journaux de la prod
+depuis le 26/09). Correctif `f1e8e8e3` : la DACL du worker du §31.2. **Vérifié
+par Bruno** depuis son Mac, par Internet : verrouillage, PIN tapé dans le
+stream, déverrouillage. Le journal dit « SYSTEM (launcher service) »,
+« GPU scheduling class REALTIME (token SYSTEM) », « now on the "Winlogon"
+desktop », une duplication rouverte sur `Winlogon` et la chaîne D3D12 de l'Arc
+reconstruite des deux côtés de la bascule, sans passer par WGC ni D3D11.
+
+Trouvé au même test : `keyboard_debug`, posé à la main sur ce poste, a écrit le
+PIN touche par touche dans le journal du worker. Les diagnostics clavier se
+taisent désormais sur le bureau sécurisé, quoi que dise le réglage
+(`1887b2ea` : `NativeHost::secureDesktopHasInput()`, demandé à chaque touche
+par `Win32Input` et par une sonde du codec d'entrée) ; les lignes déjà écrites
+ont été effacées et le réglage coupé sur ce poste.
 
 **Concrètement, pour l'utilisateur** : le stream ne s'arrête plus devant une
 porte. Quand Windows demande une autorisation administrateur, l'invite apparaît
@@ -5399,9 +5428,18 @@ ce même plan passe. Le convertisseur D3D12 dessine donc son noir, par un
 `color_convert12_gpu` rejoue ces étapes sur chaque vrai GPU, et plus seulement
 sur WARP.
 
+**Le test de Bruno (C8.4), sur l'édition dev installée.** Écran verrouillé
+depuis le stream, puis déverrouillé en tapant le PIN dans le stream, et un
+stream HDR sur l'écran virtuel : l'overlay reste sur « D3D12 VE (Intel) ». Le
+premier essai a d'abord montré que le worker SYSTEM n'avait jamais servi, en
+v0.3.1 non plus (§31.7, `f1e8e8e3`). Une fois corrigé, la duplication se
+rouvre sur le bureau `Winlogon` et la chaîne D3D12 se reconstruit des deux
+côtés de la bascule, sans passer par WGC ni D3D11 (§8n.15 du banc).
+
 **Concrètement, pour l'utilisateur** : si la carte graphique décroche en
 plein stream (pilote qui plante ou se met à jour, GPU bloqué), l'image se fige
 une demi-seconde, trois secondes et demie au pire, puis repart d'elle-même
-par l'ancien chemin, sans rien à relancer. Et là où le worker ne tourne pas
-en SYSTEM (édition de développement, banc), un écran verrouillé ne fait plus
-perdre le chemin rapide jusqu'à la fin du stream.
+par l'ancien chemin, sans rien à relancer. Un PC verrouillé se déverrouille
+depuis le stream, comme avec Parsec, ce que la v0.3.1 promettait sans le
+tenir. Et là où le worker ne tourne pas en SYSTEM (banc, `--dev`), un écran
+verrouillé ne fait plus perdre le chemin rapide jusqu'à la fin du stream.
