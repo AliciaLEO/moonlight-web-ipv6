@@ -1,5 +1,5 @@
 /*
- * MoonlightWeb — native capture & encoding engine: D3D12 lab.
+ * MoonlightWeb — native capture & encoding engine: lab tools.
  * Copyright (C) 2026 Bruno Martin <brunoocto@gmail.com>
  *
  * This program is free software: you can redistribute it and/or modify it

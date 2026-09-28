@@ -470,10 +470,11 @@ endif()
 
 # ── Lab tools ───────────────────────────────────────────────────────────────
 # Instruments for deciding things about the engine, never shipped: off by
-# default, outside the library's licence boundary (tools/ is not scanned, and
-# nothing here links into mw-native-host). One per platform so far: a D3D11
-# shader bench on Windows, and on macOS the probe that measures the pointer
-# acceleration MacPointerAccel has to reproduce.
+# default, outside the library's licence boundary (tools/ is not scanned; the
+# D3D12 lab links mw-native-host to time the engine's own classes, never the
+# other way round). On Windows a D3D11 shader bench and the D3D12 lab, on macOS
+# the probe that measures the pointer acceleration MacPointerAccel has to
+# reproduce, on Linux the Vulkan lab, and everywhere a game-like GPU load.
 option(MW_BUILD_TOOLS "Build the native host's lab tools (scaler bench, mouse probe)" OFF)
 if(MW_BUILD_TOOLS AND WIN32)
     add_subdirectory(tools/scaler-bench)
@@ -481,6 +482,10 @@ if(MW_BUILD_TOOLS AND WIN32)
 endif()
 if(MW_BUILD_TOOLS AND APPLE)
     add_subdirectory(tools/mouse-accel-probe)
+endif()
+# Linux: what the Vulkan Video chain of Phase 13 can count on, asked first.
+if(MW_BUILD_TOOLS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_subdirectory(tools/vk-lab)
 endif()
 # Every OS: a game-like load on the encoder's GPU (needs Qt's qtshadertools).
 if(MW_BUILD_TOOLS)

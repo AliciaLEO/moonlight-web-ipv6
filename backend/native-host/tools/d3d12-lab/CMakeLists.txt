@@ -33,7 +33,9 @@ set_target_properties(mw-d3d12-lab PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OF
 target_compile_features(mw-d3d12-lab PRIVATE cxx_std_17)
 target_compile_definitions(mw-d3d12-lab PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
 # The engine's own sources directory too: the probes use its internal classes.
+# tools/common holds what the labs share (the JSON writer).
 target_include_directories(mw-d3d12-lab PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
+                                                ${CMAKE_CURRENT_SOURCE_DIR}/../common
                                                 ${CMAKE_CURRENT_SOURCE_DIR}/../../src)
 # The vendors' headers, as the engine takes them (`vendors` drives NVENC and AMF
 # through the engine's own loaders).
