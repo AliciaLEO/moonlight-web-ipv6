@@ -23,7 +23,9 @@
 // Two questions, in this order. The encoder: VA-API (today's), Vulkan Video,
 // or the CPU — the bench key over the setting over the vendor table. Then,
 // in front of VA-API, the conversion: GL, or Vulkan on a compute queue (the
-// split route, plan §9-17) — the bench key over the vendor table.
+// split route, plan §9-17) — the bench key, then VA-API asked for by name
+// (GL in front, the chain as it always ran: the way back from whatever the
+// table moved), then the vendor table.
 //
 // Whatever cannot carry THIS build is refused, by name, and the chain drops to
 // the next one down — Vulkan Video → VA-API → the CPU, Vulkan compute → GL —
@@ -65,6 +67,8 @@ struct LinuxRouteFacts
 
     // ── What rules a chain out for this build ───────────────────────────────
 
+    /// The pictures come through the portal (PipeWire), not off the scanout.
+    bool portal = false;
     /// The portal hands shared memory, not a DMA-BUF: only the CPU reads it.
     bool sharedMemory = false;
     /// VA-API encodes but writes no parameter sets (VaapiEncoder::
@@ -120,20 +124,28 @@ struct LinuxRoute
 inline VideoPipeline autoLinuxPipeline(uint32_t vendorId)
 {
     switch (vendorId) {
-    case 0x1002: return VideoPipeline::Vaapi; // AMD: G5 first (C13.7)
+    case 0x1002: return VideoPipeline::Vaapi; // AMD: behind the setting until G5 (§9-21)
     case 0x8086: return VideoPipeline::Vaapi; // Intel: ANV's encoder still young (§4.8)
     case 0x10DE: return VideoPipeline::Vaapi; // NVIDIA: the Selector gives it the CPU
     default: return VideoPipeline::Vaapi;
     }
 }
 
-/// The vendor table's conversion in front of VA-API: GL everywhere until the
-/// split route's bench (C13.4 ter) has measured a vendor and Bruno has moved
-/// its line.
-inline EncoderTuning::ConvertLinux autoLinuxConversion(uint32_t vendorId)
+/// The vendor table's conversion in front of VA-API.
+///
+/// AMD: Vulkan on a compute queue, the split route — Bruno's decision of
+/// 28/09/2026 (plan §9-20), on the bench's word (§8o.5): under a game that
+/// fills the 780M, GL waited behind it and caught 16 of its 45 pictures a
+/// second, 38 ms from present to encoded; the compute queue ran beside it,
+/// 44 pictures in 8 ms, and 0.3 ms less at rest. Off the scanout only, the
+/// one import a bench has measured: the portal's buffers (@p portal) keep GL
+/// until theirs is (C13.3). GL for the others, until a bench has measured a
+/// vendor and Bruno has moved its line.
+inline EncoderTuning::ConvertLinux autoLinuxConversion(uint32_t vendorId, bool portal)
 {
     switch (vendorId) {
-    case 0x1002: return EncoderTuning::ConvertLinux::Gl; // bench §8o, then Bruno
+    case 0x1002: // AMD: §9-20
+        return portal ? EncoderTuning::ConvertLinux::Gl : EncoderTuning::ConvertLinux::Vulkan;
     case 0x8086: return EncoderTuning::ConvertLinux::Gl;
     default: return EncoderTuning::ConvertLinux::Gl;
     }
@@ -215,6 +227,9 @@ inline LinuxRoute chooseLinuxRoute(const LinuxRouteFacts& f)
     // ── The encoder ──
     VideoPipeline wanted = VideoPipeline::Auto;
     std::string why;
+    // A chain named by the bench key or the setting, rather than the table's.
+    const bool asked = linuxValue(f.benchKey) != VideoPipeline::Auto ||
+                       linuxValue(f.setting) != VideoPipeline::Auto;
     if (linuxValue(f.benchKey) != VideoPipeline::Auto) {
         wanted = f.benchKey;
         why = std::string("the bench key pipeline=") + toString(f.benchKey);
@@ -254,26 +269,35 @@ inline LinuxRoute chooseLinuxRoute(const LinuxRouteFacts& f)
             return cpuRoute(refusedBecause + "; the CPU runs: " + cpu, true);
         // Refused only when someone asked for VA-API by name; the table's
         // VA-API on a machine without it is the CPU tier doing its job.
-        const bool asked = linuxValue(f.benchKey) != VideoPipeline::Auto ||
-                           linuxValue(f.setting) != VideoPipeline::Auto;
         return cpuRoute(asked ? why + " asks for VA-API; the CPU runs: " + cpu : cpu, asked);
     }
 
     // ── The conversion in front of VA-API ──
+    //
+    // VA-API asked for by name keeps GL in front of it: the chain as it always
+    // ran, and the way back — from the admin page — from whatever the table
+    // moved. Vulkan Video asked for and refused is not VA-API by name: that
+    // stream takes the table's conversion.
     LinuxRoute r;
     r.encoder = LinuxRoute::Encoder::Vaapi;
     r.pipeline = VideoPipeline::Vaapi;
     r.refused = !refusedBecause.empty();
     std::string convertWhy;
+    std::string asker; // who asked for Vulkan compute, in a refusal's words
     EncoderTuning::ConvertLinux conversion = f.convertKey;
     if (conversion != EncoderTuning::ConvertLinux::Default) {
         convertWhy = std::string("the bench key convert=") +
                      (conversion == EncoderTuning::ConvertLinux::Vulkan ? "vulkan" : "gl");
+        asker = convertWhy;
+    } else if (asked && wanted == VideoPipeline::Vaapi) {
+        conversion = EncoderTuning::ConvertLinux::Gl;
+        convertWhy = "VA-API by name converts with GL, as it always has";
     } else {
-        conversion = autoLinuxConversion(f.vendorId);
+        conversion = autoLinuxConversion(f.vendorId, f.portal);
         convertWhy = std::string("the vendor table converts with ") +
                      (conversion == EncoderTuning::ConvertLinux::Vulkan ? "Vulkan compute" : "GL") +
-                     " for " + vendorName(f.vendorId);
+                     " for " + vendorName(f.vendorId) + (f.portal ? " on the portal" : "");
+        asker = std::string("the vendor table for ") + vendorName(f.vendorId);
     }
     if (conversion == EncoderTuning::ConvertLinux::Vulkan) {
         const std::string no = vulkanConvertRefusal(f);
@@ -284,7 +308,7 @@ inline LinuxRoute chooseLinuxRoute(const LinuxRouteFacts& f)
             r.conversion = LinuxRoute::Conversion::Gl;
             r.route = "EGL → VA-API";
             r.refused = true;
-            convertWhy += " asks for Vulkan compute, GL converts: " + no;
+            convertWhy = asker + " asks for Vulkan compute, GL converts: " + no;
         }
     } else {
         r.conversion = LinuxRoute::Conversion::Gl;

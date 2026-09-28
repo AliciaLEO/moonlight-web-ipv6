@@ -5132,8 +5132,8 @@ d'aujourd'hui.
   bilinéaire (`test_vulkan_convert`).
 - `core/LinuxRouteChoice.h` : le choix de la chaîne, pur et testé, à chaque
   construction. La clé de banc, puis le réglage, puis une table par vendeur ; la
-  table dit GL partout tant qu'un banc et Bruno n'ont pas bougé une ligne. La clé
-  `convert=vulkan` prend la route scindée.
+  table dit GL partout tant qu'un banc et Bruno n'ont pas bougé une ligne (AMD
+  l'a été le 28/09, §32.8). La clé `convert=vulkan` prend la route scindée.
 
 **La règle (Bruno, 28/09) : jamais Vulkan forcé.** Ce qui ne peut pas tourner
 est refusé, nommé, et la chaîne descend d'un cran — Vulkan Video → VA-API → CPU,
@@ -5231,3 +5231,38 @@ Vulkan n'est prise que si on la demande (réglage, clé de banc), en attendant
 que le banc tranche par vendeur. Même demandée, elle ne sert que sur une carte
 dont le pilote a prouvé, image à l'appui, qu'il encode juste. Sinon le stream
 part sur VA-API comme aujourd'hui, et la raison est écrite dans le journal.
+
+### 32.8 Linux : la route scindée par défaut sur AMD (décision de Bruno, 28/09/2026)
+
+Plan §9-20, sur la foi du banc §8o.5. Sous un jeu qui sature le 780M, la
+conversion GL attendait le jeu : 16 images captées par seconde sur 45, et 38 ms
+de la présentation à l'image encodée. La file compute de Vulkan tournait à côté
+du jeu : 44 images, 8 ms. Au repos, elle gagnait encore 0,3 ms.
+
+**Ce qui change.** La ligne AMD de la table des vendeurs
+(`autoLinuxConversion`) passe à Vulkan compute devant VA-API. L'encodeur reste
+VA-API : la chaîne Vulkan Video reste derrière le réglage jusqu'à G5 (§9-21),
+et `auto` ne la prend jamais.
+
+**Ce qui ne change pas.**
+- Intel et NVIDIA gardent GL.
+- Le portail garde GL, même sur AMD. Seul l'import du tampon KMS a été mesuré
+  au pixel (§8o.2) ; les tampons de PipeWire attendent leur banc (C13.3).
+- `vaapi` choisi dans l'admin, ou `pipeline=vaapi` au banc, reprend la chaîne
+  d'avant, GL devant VA-API. C'est le retour arrière, sans clé de banc.
+- La clé `convert=gl|vulkan` passe devant tout, pour les bancs.
+
+**Le repli, en deux marches au besoin.** Une conversion Vulkan qui ne démarre
+pas (pas de chargeur, pas de Vulkan 1.3) laisse GL convertir dès le départ.
+Une qui lâche en plein stream (périphérique perdu, tampon refusé) cède la place
+à GL sur l'image même. Nouveau depuis cette décision : sur AMD, la chaîne
+Vulkan Video qui lâche descend d'abord sur la route scindée, qui peut refuser
+le même tampon. La session redescend alors jusqu'à GL, toujours sur la même
+image, au lieu de couper le stream (`convertPicture`). La raison est au
+journal ; `refused` dit qu'une conversion demandée n'a pas pu tourner.
+
+**Concrètement, pour l'utilisateur** : sur un PC Linux à carte AMD, rien à
+régler. Sous un jeu qui occupe tout le GPU, le stream capte toutes les images
+du jeu au lieu d'une sur trois, avec 8 ms de retard au lieu de 38. Si la carte
+ou son pilote ne s'y prêtent pas, le stream reprend l'ancien chemin sans
+coupure, et « VA-API » dans l'admin y revient à la main.

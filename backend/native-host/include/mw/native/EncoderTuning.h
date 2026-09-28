@@ -292,8 +292,9 @@ struct EncoderTuning
 
     /// The conversion in front of VA-API: GL through EGL, or Vulkan on a
     /// compute queue — the split route (§9-17). The engine's own is the
-    /// vendor table's (core/LinuxRouteChoice.h), GL until a bench has
-    /// measured a vendor and Bruno has moved its line.
+    /// vendor table's (core/LinuxRouteChoice.h): Vulkan compute on AMD off
+    /// the scanout since §9-20, GL elsewhere and whenever VA-API is asked for
+    /// by name.
     enum class ConvertLinux
     {
         Default,

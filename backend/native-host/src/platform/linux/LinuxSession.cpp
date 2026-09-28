@@ -220,7 +220,7 @@ convert::ScaleFilter scaleFilterFromEnvironment(bool& pinned)
 /// Two converters wear this shape, with one interface: GlConvert, rendering on
 /// the graphics ring through EGL — the Linux path as it was — and VulkanConvert,
 /// on a compute queue that runs beside a game rather than behind it — the split
-/// route (plan §9-17). The encoder is today's either way.
+/// route (plan §9-17), AMD's own since §9-20. The encoder is today's either way.
 template <class Converter> class VaapiPipeline final : public VideoPipeline
 {
 public:
@@ -1096,6 +1096,7 @@ private:
         f.encoder = m_Target.encoder;
         f.codec = m_Target.codec;
         f.vendorId = m_VendorId;
+        f.portal = m_Target.capture == CaptureApi::PipeWire;
         f.sharedMemory = sharedMemory;
         f.vaapiUnusable = m_GpuEncoderUnusable;
 #if defined(MW_NATIVE_LINUX_VULKAN)
@@ -1139,18 +1140,21 @@ private:
         m_Info.videoPipelineRefused = m_Route.refused;
     }
 
-    /// The picture through the pair; and when the split route's Vulkan
-    /// conversion gives up while streaming — its device lost, a buffer it
-    /// cannot import — the same picture again through GL, after rebuilding the
-    /// pair at the same size. For the rest of the session: m_RouteChanged
-    /// tells the loop to put its bitrate back on the new encoder, and a
-    /// keyframe starts it.
+    /// The picture through the pair; and when a Vulkan half gives up while
+    /// streaming — its device lost, a buffer it cannot import — the same
+    /// picture again through the pair a step down, rebuilt at the same size.
+    /// Possibly twice: on AMD the Vulkan Video chain's step down is the split
+    /// route (§9-20), whose import may refuse the same buffer. Each step only
+    /// moves down — the chain, the split route, GL — so this ends on a pair
+    /// that converted or on GL's own failure. For the rest of the session:
+    /// m_RouteChanged tells the loop to put its bitrate back on the new
+    /// encoder, and a keyframe starts it.
     bool convertPicture(const capture::KmsFrame& frame, const capture::CursorState& cursor,
                         std::string& error)
     {
-        if (m_Pipeline->convert(frame, cursor, cursorDraw(), error)) return true;
-        if (!leaveVulkan(error)) return false;
-        return m_Pipeline->convert(frame, cursor, cursorDraw(), error);
+        while (!m_Pipeline->convert(frame, cursor, cursorDraw(), error))
+            if (!leaveVulkan(error)) return false;
+        return true;
     }
 
     /// A Vulkan half gave up while streaming — the Vulkan Video chain, or the

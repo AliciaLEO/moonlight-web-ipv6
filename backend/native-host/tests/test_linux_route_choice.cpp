@@ -59,21 +59,137 @@ bool contains(const std::string& text, const std::string& piece)
 
 void run_linux_route_choice_tests()
 {
-    SECTION("LinuxRoute — the vendor table: VA-API fed by GL, until a bench and Bruno move a "
-            "line");
+    SECTION("LinuxRoute — the vendor table: VA-API everywhere; on AMD fed by Vulkan compute off "
+            "the scanout (§9-20), by GL elsewhere");
     {
-        for (uint32_t vendor : {0x1002u, 0x8086u, 0x10DEu, 0u}) {
+        for (uint32_t vendor : {0x1002u, 0x8086u, 0x10DEu, 0u})
             CHECK(autoLinuxPipeline(vendor) == VideoPipeline::Vaapi);
-            CHECK(autoLinuxConversion(vendor) == EncoderTuning::ConvertLinux::Gl);
-        }
-        const LinuxRoute r = chooseLinuxRoute(amd());
+        CHECK(autoLinuxConversion(0x1002, false) == EncoderTuning::ConvertLinux::Vulkan);
+        CHECK(autoLinuxConversion(0x1002, true) == EncoderTuning::ConvertLinux::Gl);
+        for (uint32_t vendor : {0x8086u, 0x10DEu, 0u})
+            for (bool portal : {false, true})
+                CHECK(autoLinuxConversion(vendor, portal) == EncoderTuning::ConvertLinux::Gl);
+
+        LinuxRoute r = chooseLinuxRoute(amd());
         CHECK(r.encoder == LinuxRoute::Encoder::Vaapi);
-        CHECK(r.conversion == LinuxRoute::Conversion::Gl);
+        CHECK(r.conversion == LinuxRoute::Conversion::Vulkan);
         CHECK(r.pipeline == VideoPipeline::Vaapi);
-        CHECK_EQ(r.route, std::string("EGL → VA-API"));
+        CHECK_EQ(r.route, std::string("Vulkan compute → VA-API"));
         CHECK(!r.refused);
         CHECK(contains(r.reason, "vendor table has VA-API for AMD"));
-        CHECK(contains(r.reason, "converts with GL for AMD"));
+        CHECK(contains(r.reason, "converts with Vulkan compute for AMD"));
+
+        // Intel: GL, as it always was.
+        LinuxRouteFacts intel = amd();
+        intel.vendorId = 0x8086;
+        r = chooseLinuxRoute(intel);
+        CHECK(r.conversion == LinuxRoute::Conversion::Gl);
+        CHECK_EQ(r.route, std::string("EGL → VA-API"));
+        CHECK(!r.refused);
+        CHECK(contains(r.reason, "converts with GL for Intel"));
+    }
+
+    SECTION("LinuxRoute — AMD in auto, a Vulkan that cannot convert: GL, and the reason says "
+            "why");
+    {
+        LinuxRouteFacts f = amd();
+        f.vulkanConvertBuilt = false;
+        LinuxRoute r = chooseLinuxRoute(f);
+        CHECK(r.encoder == LinuxRoute::Encoder::Vaapi);
+        CHECK(r.conversion == LinuxRoute::Conversion::Gl);
+        CHECK_EQ(r.route, std::string("EGL → VA-API"));
+        CHECK(r.refused);
+        CHECK(contains(r.reason, "the vendor table for AMD asks for Vulkan compute, GL converts: "
+                                 "the Vulkan conversion is not built in"));
+
+        // What the session learns — at the start, or while streaming — comes
+        // back as a refusal, and GL converts for the rest of it.
+        f.vulkanConvertBuilt = true;
+        for (const char* learned :
+             {"the Vulkan conversion could not start (no libvulkan.so.1)",
+              "the Vulkan conversion gave up while streaming (VK_ERROR_DEVICE_LOST)"}) {
+            f.vulkanConvertRefusal = learned;
+            r = chooseLinuxRoute(f);
+            CHECK(r.conversion == LinuxRoute::Conversion::Gl);
+            CHECK_EQ(r.route, std::string("EGL → VA-API"));
+            CHECK(r.refused);
+            CHECK(contains(r.reason, std::string("GL converts: ") + learned));
+        }
+    }
+
+    SECTION("LinuxRoute — AMD through the portal: GL, until the portal's buffers are imported on "
+            "a bench (C13.3)");
+    {
+        LinuxRouteFacts f = amd();
+        f.portal = true;
+        LinuxRoute r = chooseLinuxRoute(f);
+        CHECK(r.conversion == LinuxRoute::Conversion::Gl);
+        CHECK_EQ(r.route, std::string("EGL → VA-API"));
+        CHECK(!r.refused);
+        CHECK(contains(r.reason, "converts with GL for AMD on the portal"));
+        // The bench key still measures it there.
+        f.convertKey = EncoderTuning::ConvertLinux::Vulkan;
+        r = chooseLinuxRoute(f);
+        CHECK(r.conversion == LinuxRoute::Conversion::Vulkan);
+        CHECK(!r.refused);
+    }
+
+    SECTION("LinuxRoute — VA-API by name is the chain as it always ran, GL in front: the way "
+            "back from the table");
+    {
+        for (bool bench : {false, true}) {
+            LinuxRouteFacts f = amd();
+            (bench ? f.benchKey : f.setting) = VideoPipeline::Vaapi;
+            LinuxRoute r = chooseLinuxRoute(f);
+            CHECK(r.encoder == LinuxRoute::Encoder::Vaapi);
+            CHECK(r.conversion == LinuxRoute::Conversion::Gl);
+            CHECK_EQ(r.route, std::string("EGL → VA-API"));
+            CHECK(!r.refused);
+            CHECK(contains(r.reason, bench ? "pipeline=vaapi" : "the setting (vaapi)"));
+            CHECK(contains(r.reason, "VA-API by name converts with GL"));
+            // convert= over it: the bench measures the split route either way.
+            f.convertKey = EncoderTuning::ConvertLinux::Vulkan;
+            r = chooseLinuxRoute(f);
+            CHECK(r.conversion == LinuxRoute::Conversion::Vulkan);
+            CHECK(contains(r.reason, "convert=vulkan"));
+        }
+    }
+
+    SECTION("LinuxRoute — the bench key first: convert=gl over the table, pipeline= over the "
+            "setting");
+    {
+        LinuxRouteFacts f = amd();
+        f.convertKey = EncoderTuning::ConvertLinux::Gl;
+        LinuxRoute r = chooseLinuxRoute(f);
+        CHECK(r.conversion == LinuxRoute::Conversion::Gl);
+        CHECK(!r.refused);
+        CHECK(contains(r.reason, "convert=gl"));
+
+        // pipeline=vulkan over a setting of vaapi: Vulkan Video, not built
+        // here, refused — and that stream takes the table's conversion, for
+        // nobody asked for VA-API by name.
+        f = amd();
+        f.setting = VideoPipeline::Vaapi;
+        f.benchKey = VideoPipeline::Vulkan;
+        r = chooseLinuxRoute(f);
+        CHECK(r.encoder == LinuxRoute::Encoder::Vaapi);
+        CHECK(r.conversion == LinuxRoute::Conversion::Vulkan);
+        CHECK(r.refused);
+        CHECK(contains(r.reason, "pipeline=vulkan asks for Vulkan Video"));
+    }
+
+    SECTION("LinuxRoute — auto never takes Vulkan Video, even trusted: behind the setting until "
+            "G5 (§9-21)");
+    {
+        for (uint32_t vendor : {0x1002u, 0x8086u, 0x10DEu, 0u}) {
+            LinuxRouteFacts f = amdWithVulkanEncoder();
+            f.vendorId = vendor;
+            CHECK(!linuxRouteWantsVulkanVideo(f));
+            const LinuxRoute r = chooseLinuxRoute(f);
+            CHECK(r.encoder == LinuxRoute::Encoder::Vaapi);
+            CHECK(r.pipeline == VideoPipeline::Vaapi);
+            CHECK(!r.refused);
+        }
     }
 
     SECTION("LinuxRoute — convert=vulkan: the split route, Vulkan compute into VA-API");
@@ -110,6 +226,7 @@ void run_linux_route_choice_tests()
 
         // Asked by nobody, the table's GL is no refusal, whatever Vulkan's state.
         f.convertKey = EncoderTuning::ConvertLinux::Default;
+        f.vendorId = 0x8086;
         CHECK(!chooseLinuxRoute(f).refused);
     }
 
@@ -123,6 +240,9 @@ void run_linux_route_choice_tests()
         CHECK(r.refused);
         CHECK(contains(r.reason, "the setting (vulkan) asks for Vulkan Video, which cannot run: "
                                  "the Vulkan Video encoder is not built in; VA-API runs"));
+        // One step down, not two: the split route, the table's on AMD.
+        CHECK(r.conversion == LinuxRoute::Conversion::Vulkan);
+        CHECK_EQ(r.route, std::string("Vulkan compute → VA-API"));
     }
 
     SECTION("LinuxRoute — the Vulkan Video chain converts in Vulkan: what refused the conversion "

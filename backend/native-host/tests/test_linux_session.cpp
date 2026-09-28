@@ -150,6 +150,9 @@ void run_linux_session_tests()
         grantedToken = token;
     });
 
+    // The audio tap opens inside start(): its packets are counted against the
+    // time from here to the end of stop().
+    const auto startedAt = std::chrono::steady_clock::now();
     CHECK(session->start(error));
     if (!error.empty()) std::fprintf(stderr, "  %s\n", error.c_str());
     if (grants.load() > 0)
@@ -160,6 +163,10 @@ void run_linux_session_tests()
     std::fprintf(stderr, "  session: %dx%d %s via %s on %s, intra-refresh %s, capture %s\n",
                  info.width, info.height, toString(info.codec), toString(info.encoder),
                  info.gpuName.c_str(), info.intraRefresh ? "on" : "off", toString(info.capture));
+    // The engine's own chain, nothing asked: on AMD off the scanout, the split
+    // route since §9-20 — checked in its own section below.
+    std::fprintf(stderr, "  route \"%s\"%s\n    reason: %s\n", info.videoRoute.c_str(),
+                 info.videoPipelineRefused ? " (refused)" : "", info.videoPipelineReason.c_str());
     CHECK_EQ(info.width, display->width);
     CHECK_EQ(info.height, display->height);
     if (viaPortal) {
@@ -207,10 +214,12 @@ void run_linux_session_tests()
     session->requestKeyframe();
     std::this_thread::sleep_for(std::chrono::milliseconds(700));
     session->stop();
+    const double streamedS =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - startedAt).count();
     out.close();
 
-    std::fprintf(stderr, "  %d frame(s), %d keyframe(s), worst host latency %.2f ms%s\n",
-                 frames.load(), keyframes.load(), worstProcessingUs.load() / 1000.0,
+    std::fprintf(stderr, "  %d frame(s), %d keyframe(s) in %.2f s, worst host latency %.2f ms%s\n",
+                 frames.load(), keyframes.load(), streamedS, worstProcessingUs.load() / 1000.0,
                  ended.empty() ? "" : (", ended: " + ended).c_str());
     CHECK(ended.empty());
     CHECK(frames.load() >= 3);
@@ -224,13 +233,19 @@ void run_linux_session_tests()
         // session said so in the log and streams silent. Nothing to check.
         std::fprintf(stderr, "  audio: skipped — the session has no audio (see the log above)\n");
     } else {
-        // 2.7 s at 200 packets/s is 540; the bounds leave room for the pacer's
-        // start-up and the stop() timing, and would catch a tap that fired in
-        // bursts or a pacer that stalled.
-        std::fprintf(stderr, "  audio: %d packet(s), %zu bytes (%.1f/s)\n", audioPackets.load(),
-                     audioBytes.load(), audioPackets.load() / 2.7);
-        CHECK(audioPackets.load() >= 400);
-        CHECK(audioPackets.load() <= 700);
+        // 200 packets a second over the time the session ran, start() and
+        // stop() included — measured, not assumed: 2.7 s was assumed here
+        // when the named loss added 0.6 s to the run, and a session that
+        // took a little longer to start went over the bound (690 to 702
+        // packets, 28/09/2026). The bounds leave room for the pacer's
+        // start-up, and would catch a tap that fired in bursts or a pacer
+        // that stalled.
+        const double expected = 200.0 * streamedS;
+        std::fprintf(stderr, "  audio: %d packet(s), %zu bytes (%.1f/s over %.2f s)\n",
+                     audioPackets.load(), audioBytes.load(), audioPackets.load() / streamedS,
+                     streamedS);
+        CHECK(audioPackets.load() >= static_cast<int>(expected * 0.75));
+        CHECK(audioPackets.load() <= static_cast<int>(expected * 1.1));
         CHECK(audioFrameSizeOk.load());
 
 #if defined(MW_NATIVE_TESTS_HAVE_OPUS)
@@ -461,18 +476,36 @@ void run_linux_session_tests()
     //
     // 720p of a bigger display goes through the Lanczos-2 pass by default on
     // the GPU tier, and through the plain bilinear one under MW_SCALER=
-    // bilinear. Both are run, and the conversion time per frame — on this
-    // platform the pass ends in glFinish, so convertedUs − submittedUs is the
-    // GPU's work too — is printed side by side: the figure that decides
-    // whether the 780M keeps the default (design §28.3).
+    // bilinear. Both are run, through each conversion the build has — GL, and
+    // Vulkan compute where it is built (AMD's own since §9-20), so that the
+    // table's choice never leaves the other untested — and the conversion
+    // time per frame is printed side by side: the figure that decides whether
+    // the 780M keeps the default (design §28.3). Either pass ends in a wait
+    // for the GPU, so convertedUs − submittedUs is the GPU's work too.
     if (display && display->height > 720) {
-        SECTION("Linux — a 720p stream of a bigger display, Lanczos-2 then bilinear");
-        for (const char* scaler : {"lanczos2", "bilinear"}) {
+        SECTION("Linux — a 720p stream of a bigger display, Lanczos-2 then bilinear, through each "
+                "conversion");
+        struct Run
+        {
+            EncoderTuning::ConvertLinux conversion;
+            const char* scaler;
+        };
+        const Run runs[] = {
+            {EncoderTuning::ConvertLinux::Gl, "lanczos2"},
+            {EncoderTuning::ConvertLinux::Gl, "bilinear"},
+#if defined(MW_NATIVE_LINUX_VULKAN)
+            {EncoderTuning::ConvertLinux::Vulkan, "lanczos2"},
+            {EncoderTuning::ConvertLinux::Vulkan, "bilinear"},
+#endif
+        };
+        for (const Run& run : runs) {
+            const char* scaler = run.scaler;
             ::setenv("MW_SCALER", scaler, 1);
             SessionConfig small = config;
             small.clientCodecs = {Codec::H264};
             small.height = 720;
             small.width = 0;
+            small.tuning.convertLinux = run.conversion;
 
             std::atomic<int> smallFrames{0};
             std::atomic<int64_t> convertSumUs{0};
@@ -506,9 +539,9 @@ void run_linux_session_tests()
             smallSession->stop();
             const int n = smallFrames.load();
             std::fprintf(stderr,
-                         "  %s: %dx%d, %d frame(s), convert mean %.2f ms worst %.2f ms, encode "
-                         "mean %.2f ms%s\n",
-                         scaler, smallInfo.width, smallInfo.height, n,
+                         "  %s, %s: %dx%d, %d frame(s), convert mean %.2f ms worst %.2f ms, "
+                         "encode mean %.2f ms%s\n",
+                         smallInfo.videoRoute.c_str(), scaler, smallInfo.width, smallInfo.height, n,
                          n ? convertSumUs.load() / 1000.0 / n : 0.0, convertWorstUs.load() / 1000.0,
                          n ? encodeSumUs.load() / 1000.0 / n : 0.0,
                          smallEnded.empty() ? "" : (", ended: " + smallEnded).c_str());
@@ -522,35 +555,41 @@ void run_linux_session_tests()
 
     // ── The split route, and its way back to GL ──────────────────────────────
     //
-    // Plan §9-17: Vulkan on a compute queue in front of VA-API (convert=vulkan,
-    // the bench's key until the vendor table takes it). And Bruno's rule of
-    // 28/09/2026 on the same road: a Vulkan that cannot carry the stream is
-    // never forced — the session converts through GL instead, and says so. Run
-    // three times: the route itself; the Vulkan conversion failing at its first
+    // Plan §9-17: Vulkan on a compute queue in front of VA-API — the bench's
+    // key convert=vulkan, and since §9-20 (Bruno, 28/09/2026) the vendor
+    // table's own on AMD, off the scanout. And Bruno's rule of the same day on
+    // the same road: a Vulkan that cannot carry the stream is never forced —
+    // the session converts through GL instead, and says so. Run four times:
+    // the route under its key; the route with nothing asked, the table's on
+    // AMD and GL elsewhere; the Vulkan conversion failing at its first
     // picture, as a lost device would (MW_VK_CONVERT_FAIL_AT=1), which must
-    // leave a stream that goes on through GL; and a Vulkan conversion that does
-    // not start, as on a machine without Vulkan (=0), which must leave a
-    // stream that starts on GL. Not by hiding the drivers with VK_DRIVER_FILES:
-    // the loader reads it with secure_getenv, which a binary carrying file
-    // capabilities — this one, for the scanout — never sees.
+    // leave a stream that goes on through GL; and a Vulkan conversion that
+    // does not start, as on a machine without Vulkan (=0), which must leave a
+    // stream that starts on GL. Not by hiding the drivers with
+    // VK_DRIVER_FILES: the loader reads it with secure_getenv, which a binary
+    // carrying file capabilities — this one, for the scanout — never sees.
 #if defined(MW_NATIVE_LINUX_VULKAN)
     if (!h264Only) {
-        SECTION("Linux — the split route: Vulkan compute into VA-API, GL when Vulkan gives up");
+        SECTION("Linux — the split route: Vulkan compute into VA-API, AMD's own, GL when Vulkan "
+                "gives up");
         struct Run
         {
             const char* what;
             const char* failAt; // MW_VK_CONVERT_FAIL_AT, or null
+            bool keyed;         // convert=vulkan, or nothing asked
         };
         const Run runs[] = {
-            {"split route", nullptr},
-            {"Vulkan lost at its first picture", "1"},
-            {"no Vulkan conversion at all", "0"},
+            {"split route, convert=vulkan", nullptr, true},
+            {"nothing asked, the vendor table's", nullptr, false},
+            {"Vulkan lost at its first picture", "1", true},
+            {"no Vulkan conversion at all", "0", true},
         };
+        const bool amdGpu = gpu->vendorId == 0x1002;
         for (const Run& run : runs) {
             if (run.failAt) ::setenv("MW_VK_CONVERT_FAIL_AT", run.failAt, 1);
             SessionConfig split = config;
             split.clientCodecs = {Codec::H264};
-            split.tuning.convertLinux = EncoderTuning::ConvertLinux::Vulkan;
+            if (run.keyed) split.tuning.convertLinux = EncoderTuning::ConvertLinux::Vulkan;
             std::atomic<int> splitFrames{0};
             std::atomic<int> splitKeyframes{0};
             std::atomic<int64_t> convertSumUs{0};
@@ -558,7 +597,9 @@ void run_linux_session_tests()
             std::string splitError;
             const std::string failAt = run.failAt ? run.failAt : "";
             std::ofstream splitOut(std::string("/tmp/mw-linux-split-") +
-                                       (failAt.empty() ? "vulkan" : "fail" + failAt) + ".h264",
+                                       (failAt.empty() ? std::string(run.keyed ? "vulkan" : "auto")
+                                                       : "fail" + failAt) +
+                                       ".h264",
                                    std::ios::binary | std::ios::trunc);
             std::unique_ptr<Session> splitSession = NativeHost::createSession(
                 split,
@@ -597,8 +638,16 @@ void run_linux_session_tests()
             CHECK(splitEnded.empty());
             CHECK(n >= 2);
             CHECK(splitKeyframes.load() >= 1);
-            if (failAt.empty()) {
+            if (failAt.empty() && (run.keyed || amdGpu)) {
                 CHECK_EQ(splitInfo.videoRoute, std::string("Vulkan compute → VA-API"));
+                CHECK(!splitInfo.videoPipelineRefused);
+                if (!run.keyed)
+                    CHECK(splitInfo.videoPipelineReason.find(
+                              "the vendor table converts with Vulkan compute for AMD") !=
+                          std::string::npos);
+            } else if (failAt.empty()) {
+                // Intel: the table's GL, which nobody refused.
+                CHECK_EQ(splitInfo.videoRoute, std::string("EGL → VA-API"));
                 CHECK(!splitInfo.videoPipelineRefused);
             } else {
                 CHECK_EQ(splitInfo.videoRoute, std::string("EGL → VA-API"));
@@ -700,19 +749,33 @@ void run_linux_session_tests()
             CHECK(n >= 2);
             CHECK(vkKeyframes.load() >= 1);
             const std::string& reason = vkInfo.videoPipelineReason;
+            // Where VA-API takes over, the conversion in front of it is the
+            // vendor table's (§9-20): Vulkan compute on AMD while a Vulkan
+            // device converts, GL once the conversion gave up too — the fault
+            // runs, where the chain falls twice, through the split route to
+            // GL — or on another vendor.
+            const std::string vaapiRoute = !node.empty() && id.vendorId == 0x1002 && !run.failAt
+                                               ? "Vulkan compute → VA-API"
+                                               : "EGL → VA-API";
             if (!capable) {
-                CHECK_EQ(vkInfo.videoRoute, std::string("EGL → VA-API"));
+                CHECK_EQ(vkInfo.videoRoute, vaapiRoute);
                 CHECK(vkInfo.videoPipelineRefused);
-                CHECK(reason.find("the pixel proof could not run") != std::string::npos);
+                // The proof's word — or, once the split route's conversion
+                // gave up too (the fault runs), that failure's, which rules
+                // the chain out before any proof is asked for again.
+                const char* expected = !run.failAt ? "the pixel proof could not run"
+                                       : std::string(run.failAt) == "0" ? "could not start"
+                                                                        : "gave up while streaming";
+                CHECK(reason.find(expected) != std::string::npos);
             } else if (run.depth) {
                 // AMD's firmware codes the full depth whatever the SPS says.
                 if (id.vendorId == 0x1002) {
-                    CHECK_EQ(vkInfo.videoRoute, std::string("EGL → VA-API"));
+                    CHECK_EQ(vkInfo.videoRoute, vaapiRoute);
                     CHECK(vkInfo.videoPipelineRefused);
                     CHECK(reason.find("the pixel proof failed") != std::string::npos);
                 }
             } else if (run.failAt) {
-                CHECK_EQ(vkInfo.videoRoute, std::string("EGL → VA-API"));
+                CHECK_EQ(vkInfo.videoRoute, vaapiRoute);
                 CHECK(vkInfo.videoPipelineRefused);
                 CHECK(reason.find(std::string(run.failAt) == "0"
                                       ? "could not start"

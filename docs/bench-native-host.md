@@ -2650,6 +2650,9 @@ repos et sous un jeu qui sature le GPU.
 - Proposé à Bruno (plan §9-20) : la ligne AMD de la table des vendeurs passe
   à la route scindée (`autoLinuxConversion`). GL reste le repli automatique
   (Vulkan absent, import refusé, périphérique perdu), testé.
+- **Décision de Bruno du 28/09 : par défaut.** Sur la capture KMS ; le portail
+  garde GL jusqu'à son propre banc. `vaapi` dans l'admin reprend GL devant
+  VA-API (design §32.8).
 - Leçon de banc : sous `mw-gpu-load` 248, refroidir à 47 °C et attendre 20 s
   avant chaque passe. À 58 °C, le radiateur encore chaud laisse la garde
   couper en quelques secondes.
