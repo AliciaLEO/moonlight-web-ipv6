@@ -67,6 +67,12 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v5
+      # A release publishes README.next.md as README.md: a tag that skipped the
+      # promotion would ship a README one release behind.
+      - name: README promoted for the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: .
+        run: bash scripts/promote-readme.sh --check
       - uses: actions/setup-node@v5
         with:
           node-version: 22

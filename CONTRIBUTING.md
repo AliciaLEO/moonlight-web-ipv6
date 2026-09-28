@@ -103,6 +103,7 @@ bash scripts/run-tests.sh
 - **Branch** from `main`, keep changes focused on one domain (backend **or** frontend **or** config).
 - **Commit messages** follow **[Conventional Commits](https://www.conventionalcommits.org/)** — e.g. `feat(stream): …`, `fix(webrtc): …`, `build:`, `ci:`, `docs:` (see the git history for the style).
 - Make sure `bash scripts/run-tests.sh` and `npm run check` pass.
+- **README**: edit [`README.next.md`](README.next.md), not `README.md`. `README.md` describes the latest release; the draft replaces it when the next one is tagged (`bash scripts/promote-readme.sh`, checked by CI on the tag). The [wiki](docs/wiki/) follows `main` directly.
 - Open the PR against **`main`** with a short description and, for UI changes, a screenshot.
 
 ---
