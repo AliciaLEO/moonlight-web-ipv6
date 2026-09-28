@@ -1688,6 +1688,23 @@ d'abord, à chaque ouverture **et à chaque redémarrage** : un changement de mo
 un redémarrage de pilote est exactement le moment où le bon backend change, et
 rejouer le choix ne coûte qu'une tentative DDA ratée.
 
+**Et en plein stream (28/09/2026, plan D3D12 C8.3 bis).** Un redémarrage ne
+vient que d'une capture perdue, et WGC ne se perd pas. Un worker qui n'est pas
+SYSTEM, repassé sur WGC après un refus de la duplication (le bureau sécurisé,
+`0x80070005`), y restait donc jusqu'à la fin, en D3D11. Désormais, après un refus
+qui peut passer, la boucle cherche la duplication. `DxgiDuplication::refusalMayPass`
+tient pour passager tout refus, sauf `DXGI_ERROR_UNSUPPORTED` et l'absence
+d'`IDXGIOutput1`.
+- Toutes les demi-secondes, un regard sur le bureau d'entrée. Sans SYSTEM, le
+  bureau sécurisé ne se lit même pas : rien n'est tenté tant qu'il est là.
+- Ensuite, une duplication ouverte à côté. Tant qu'elle échoue, les essais
+  s'espacent de 1 à 30 s.
+- Dès qu'elle s'ouvre, le redémarrage ordinaire la reprend, et la chaîne D3D12
+  revient avec elle.
+
+`MW_DDA_REFUSE=[<à>+]<secondes>` simule ce refus au banc, là où il faudrait
+sinon un écran verrouillé que quelqu'un déverrouille.
+
 ⚠️ **Pas de chiffre de comparaison ici.** Deux mesures au banc sur le même écran
 se sont contredites (DDA 0,19 ms puis 2,19 ms de moyenne d'`acquire`, WGC 1,81
 puis 1,05), parce qu'un bureau immobile ne présente presque rien : avec 16 trames
@@ -5331,7 +5348,18 @@ ouvert. Il dure 3,6 s pour `timeout`, dont les 3 s qui séparent un GPU perdu
 d'un GPU occupé. `open` donne D3D11 dès le départ, raison à l'appui. Le banc
 écrit la chaîne de chaque image dans son CSV, et résume la bascule.
 
+**Le retour à la duplication (C8.3 bis).** Un worker qui n'est pas SYSTEM
+passe sur WGC, donc en D3D11, quand la duplication est refusée derrière un
+écran verrouillé. Il y restait pour la fin de la session (G2). Il revient
+maintenant à DDA dès que le bureau de l'utilisateur est de retour, et à D3D12
+avec (§17.1). Au banc de l'Arc, avec `MW_DDA_REFUSE=3+4` : la duplication est
+perdue à 3 s, WGC prend le relais en D3D11 (0,7 s sans image), puis D3D12
+revient 0,4 s après la fin du refus (0,5 s sans image). Chaque bascule se fait
+sur une keyframe, sans erreur de décodage (§8n.12 du banc).
+
 **Concrètement, pour l'utilisateur** : si la carte graphique décroche en
 plein stream (pilote qui plante ou se met à jour, GPU bloqué), l'image se fige
 une demi-seconde, trois secondes et demie au pire, puis repart d'elle-même
-par l'ancien chemin, sans rien à relancer.
+par l'ancien chemin, sans rien à relancer. Et là où le worker ne tourne pas
+en SYSTEM (édition de développement, banc), un écran verrouillé ne fait plus
+perdre le chemin rapide jusqu'à la fin du stream.

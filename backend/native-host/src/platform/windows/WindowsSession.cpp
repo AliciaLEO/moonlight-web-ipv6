@@ -47,6 +47,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cwchar>
 #include <exception>
@@ -774,19 +775,26 @@ private:
         }
 
         std::string ddaError;
+        // Whether Desktop Duplication may serve this display later in the
+        // session, so that the fallback below keeps looking for it.
+        bool ddaMayReturn = false;
         if (m_DuplicationPaintsPointer) {
             // Settled earlier in this session, and a restart would not unsettle
             // it: the driver has no hardware pointer. See PaintedPointer.h.
             ddaError = "it paints the pointer into the picture";
-        } else if (!forceWgc) {
+        } else if (forceWgc) {
+            ddaError = "MW_CAPTURE=wgc";
+        } else if (ddaRefusedOnPurpose(ddaError)) {
+            ddaMayReturn = true;
+        } else {
             m_Capture = std::make_unique<capture::DxgiDuplication>(m_Target.captureAdapterHandle,
                                                                    m_Target.outputIndex);
             if (m_Capture->start(ddaError)) {
                 m_CaptureApi = CaptureApi::DxgiDuplication;
+                m_DdaMayReturn = false;
                 return true;
             }
-        } else {
-            ddaError = "MW_CAPTURE=wgc";
+            ddaMayReturn = static_cast<capture::DxgiDuplication&>(*m_Capture).refusalMayPass();
         }
 
         if (!capture::WgcCapture::available()) {
@@ -818,7 +826,108 @@ private:
         // AMF and oneVPL are held to in §16.3). The session downgrades itself
         // below, on the format the capture really hands over.
         m_CaptureApi = CaptureApi::WindowsGraphicsCapture;
+        // A refusal that may pass — the secure desktop, for a worker below
+        // SYSTEM, is the usual one — is not the session's last word: the loop
+        // looks for the duplication to come back (duplicationBack), and with
+        // it the D3D12 chain WGC cannot feed (plan C8.3 bis).
+        m_DdaMayReturn = ddaMayReturn;
+        m_DdaTries = 0;
+        m_NextDdaLookUs = steadyNowUs() + kDdaLookUs;
         return true;
+    }
+
+    /// While Windows.Graphics.Capture stands in for a duplication refused for
+    /// a reason that may pass: whether Desktop Duplication would open this
+    /// display now. A cheap look every half second first — below SYSTEM the
+    /// secure desktop cannot even be read, so nothing is tried until the
+    /// user's desktop is back — then a duplication opened on the side, tried
+    /// less and less often while it keeps failing; WGC streams on meanwhile.
+    /// True sends the loop through the ordinary restart, whose openCapture()
+    /// takes Desktop Duplication first.
+    bool duplicationBack()
+    {
+        const int64_t nowUs = steadyNowUs();
+        if (nowUs < m_NextDdaLookUs) return false;
+        m_NextDdaLookUs = nowUs + kDdaLookUs;
+        // The secure desktop, or the bench's stand-in for it: nothing to try
+        // until the user's desktop is back, and then at once.
+        std::string why;
+        if (ddaRefusedOnPurpose(why) ||
+            (!platform::runningAsSystem() && platform::inputDesktopName() != "Default"))
+            return false;
+
+        capture::DxgiDuplication probe(m_Target.captureAdapterHandle, m_Target.outputIndex);
+        if (probe.start(why)) {
+            probe.stop();
+            log::info("[native] Desktop Duplication serves this display again — leaving "
+                      "Windows.Graphics.Capture");
+            return true;
+        }
+        if (!probe.refusalMayPass()) {
+            m_DdaMayReturn = false;
+            log::info("[native] Desktop Duplication will not serve this display (" + why +
+                      ") — Windows.Graphics.Capture for the rest of the session");
+            return false;
+        }
+        // 1 s, 2 s, 4 s … then every 30 s.
+        ++m_DdaTries;
+        const int64_t waitUs = kDdaTryUs << (m_DdaTries < 6 ? m_DdaTries - 1 : 5);
+        m_NextDdaLookUs = nowUs + (waitUs < kDdaTryMaxUs ? waitUs : kDdaTryMaxUs);
+        if (m_DdaTries == 1)
+            log::info("[native] Desktop Duplication still refuses this display (" + why +
+                      ") — asking again, less and less often");
+        return false;
+    }
+
+    /// MW_DDA_REFUSE=[<at>+]<seconds>: Desktop Duplication refused as the
+    /// secure desktop refuses a worker below SYSTEM (0x80070005), for that
+    /// long — from the session's first capture, or from <at> seconds after
+    /// it, when the duplication running then is lost first, as a lock screen
+    /// would take it. How the road to the fallback and back is put on the
+    /// bench without a lock screen someone has to unlock (plan C8.3 bis);
+    /// nothing happens without the variable.
+    bool ddaRefusedOnPurpose(std::string& why)
+    {
+        readDdaRefusal();
+        const int64_t nowUs = steadyNowUs();
+        if (nowUs < m_RefuseDdaFromUs || nowUs >= m_RefuseDdaUntilUs) return false;
+        why = "could not start Desktop Duplication (0x80070005, MW_DDA_REFUSE)";
+        return true;
+    }
+
+    /// MW_DDA_REFUSE with an <at>: true once, when the duplication running
+    /// then is to be taken as lost.
+    bool ddaLostOnPurpose()
+    {
+        readDdaRefusal();
+        if (m_DdaLostOnPurpose || m_RefuseDdaFromUs <= m_RefuseDdaReadUs) return false;
+        if (steadyNowUs() < m_RefuseDdaFromUs) return false;
+        m_DdaLostOnPurpose = true;
+        log::info("[native] MW_DDA_REFUSE: the duplication taken as lost, as a lock screen would");
+        return true;
+    }
+
+    void readDdaRefusal()
+    {
+        if (m_RefuseDdaReadUs >= 0) return;
+        m_RefuseDdaReadUs = steadyNowUs();
+        char value[32] = {};
+        const DWORD n = ::GetEnvironmentVariableA("MW_DDA_REFUSE", value, sizeof(value));
+        if (n == 0 || n >= sizeof(value)) return;
+        const char* plus = std::strchr(value, '+');
+        const int at = plus ? std::atoi(value) : 0;
+        const int seconds = std::atoi(plus ? plus + 1 : value);
+        if (seconds <= 0 || at < 0) {
+            log::info(std::string("[native] MW_DDA_REFUSE=") + value +
+                      " is not [<at>+]<seconds> — ignored");
+            return;
+        }
+        m_RefuseDdaFromUs = m_RefuseDdaReadUs + static_cast<int64_t>(at) * 1000000;
+        m_RefuseDdaUntilUs = m_RefuseDdaFromUs + static_cast<int64_t>(seconds) * 1000000;
+        log::info("[native] MW_DDA_REFUSE in effect: Desktop Duplication refused for " +
+                  std::to_string(seconds) + " s" +
+                  (at > 0 ? ", " + std::to_string(at) + " s into the session" : std::string()) +
+                  ", as the secure desktop refuses a worker below SYSTEM");
     }
 
     /// What the choice of a chain needs to know about this build.
@@ -1208,6 +1317,8 @@ private:
         }
         m_Info.width = m_Pipeline->outputWidth();
         m_Info.height = m_Pipeline->outputHeight();
+        // The backend too: a restart may have fallen back to WGC, or left it.
+        m_Info.capture = m_CaptureApi;
 
         // Absolute mouse input is aimed at the display's rectangle on the
         // virtual desktop, and a resolution change is exactly what moves it.
@@ -1818,11 +1929,16 @@ private:
                 log::info("[native] moving this display to Windows.Graphics.Capture, which leaves "
                           "the pointer out of the picture");
             }
+            // The other way, the same road: WGC standing in for a duplication
+            // that serves the display again (duplicationBack) hands it back.
+            const bool leaveWgc = m_CaptureApi == CaptureApi::WindowsGraphicsCapture &&
+                                  m_DdaMayReturn && duplicationBack();
+            const bool leaveDda = m_CaptureApi == CaptureApi::DxgiDuplication &&
+                                  (m_DuplicationPaintsPointer || ddaLostOnPurpose());
             const int64_t acquireStartUs = steadyNowUs();
-            const capture::AcquireStatus status =
-                m_DuplicationPaintsPointer && m_CaptureApi == CaptureApi::DxgiDuplication
-                    ? capture::AcquireStatus::Lost
-                    : m_Capture->acquire(timeoutMs, frame);
+            const capture::AcquireStatus status = leaveDda || leaveWgc
+                                                      ? capture::AcquireStatus::Lost
+                                                      : m_Capture->acquire(timeoutMs, frame);
             m_AcquireWaitUs += steadyNowUs() - acquireStartUs;
             if (status == capture::AcquireStatus::PointerOnly)
                 m_PointerWakes++;
@@ -2786,6 +2902,22 @@ private:
     /// Desktop Duplication was found to paint the pointer into the picture on
     /// this display: every (re)open goes straight to WGC. Capture thread only.
     bool m_DuplicationPaintsPointer = false;
+    /// Windows.Graphics.Capture stands in for a duplication refused for a
+    /// reason that may pass (DxgiDuplication::refusalMayPass): the loop looks
+    /// for it to come back — duplicationBack(), when to look next, and how
+    /// many tries have failed. Capture thread only.
+    bool m_DdaMayReturn = false;
+    int64_t m_NextDdaLookUs = 0;
+    int m_DdaTries = 0;
+    static constexpr int64_t kDdaLookUs = 500 * 1000;
+    static constexpr int64_t kDdaTryUs = 1000 * 1000;
+    static constexpr int64_t kDdaTryMaxUs = 30 * 1000 * 1000;
+    /// MW_DDA_REFUSE: when the variable was read (-1 before), and when Desktop
+    /// Duplication is refused on purpose — none without it.
+    int64_t m_RefuseDdaReadUs = -1;
+    int64_t m_RefuseDdaFromUs = 0;
+    int64_t m_RefuseDdaUntilUs = 0;
+    bool m_DdaLostOnPurpose = false;
     /// Held from start() to stop(); see StreamPriority.
     StreamPriority m_Priority;
     /// Everything between the captured picture and the bitstream: the

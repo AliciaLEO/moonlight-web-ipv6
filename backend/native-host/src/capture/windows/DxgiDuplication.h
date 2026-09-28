@@ -78,6 +78,14 @@ public:
     bool pointerPaintedIn() const override { return m_PaintedPointer.paintedIn(); }
     int64_t foldedPresents() const override { return m_FoldedPresents; }
 
+    /// Whether the last start() was refused for a reason that can pass, so
+    /// that a later one may succeed: the secure desktop below SYSTEM
+    /// (E_ACCESSDENIED), another program's duplication in the way, a display
+    /// between two modes. False after a success, and for the refusals that
+    /// stay — DXGI_ERROR_UNSUPPORTED above all, a display another GPU drives,
+    /// the hybrid laptop Windows.Graphics.Capture exists for.
+    bool refusalMayPass() const { return m_RefusalMayPass; }
+
 private:
     /// Ask Win32 where the pointer is, for as long as PaintedPointer has no
     /// verdict. Costs one GetCursorInfo per acquire, and nothing afterwards.
@@ -144,6 +152,8 @@ private:
     std::vector<uint8_t> m_ShapeBuffer;
     /// Whether this duplication keeps the pointer apart at all. Reset by start().
     PaintedPointer m_PaintedPointer;
+    /// See refusalMayPass().
+    bool m_RefusalMayPass = false;
 
     /// Calibration for qpcToMicroseconds: ticks per second, plus one sample of
     /// both clocks taken at the same instant in start().

@@ -2394,6 +2394,40 @@ lui-même.
 - `removed` n'a rien bloqué côté D3D11 : la duplication, qui attendait la
   fence B du périphérique retiré, a été rouverte sans attente.
 
+### 8n.12 C8.3 bis : le retour à la duplication, sur l'Arc (28/09/2026)
+
+Au §8n.4 (endurance), un worker non SYSTEM perdait la duplication derrière un
+écran verrouillé, repassait sur WGC, donc en D3D11, et n'en revenait jamais.
+Désormais, tant que WGC remplace une duplication refusée pour une raison qui
+peut passer, la boucle guette son retour. Elle regarde toutes les 500 ms si le
+bureau de l'utilisateur est revenu. Elle ouvre alors une duplication à côté,
+en espaçant les essais de 1 à 30 s tant qu'ils échouent. Dès que l'une
+s'ouvre, le redémarrage ordinaire reprend DDA, et la chaîne D3D12 avec.
+
+**Montage.** Le même banc qu'au §8n.11, sur 12 s. `MW_DDA_REFUSE` tient lieu
+d'écran verrouillé : la duplication est refusée comme le bureau sécurisé la
+refuse (`0x80070005`). Avec `<à>+`, la duplication en cours est d'abord
+perdue, comme un verrouillage la perd.
+
+| `MW_DDA_REFUSE` | bascules (trou sans image) | images | keyframes (images) | erreurs de décodage |
+|---|---|---|---|---|
+| `3+4` | D3D12 → D3D11 sur WGC après l'image 167 (678 ms), D3D11 → D3D12 après l'image 381 (470 ms) | 441 D3D12, 214 D3D11 | 0, 168, 382 | 0 |
+| `4` | départ sur WGC en D3D11, D3D11 → D3D12 après l'image 221 (369 ms) | 222 D3D11, 480 D3D12 | 0, 222 | 0 |
+
+- Journal : « Desktop Duplication refused this display (… 0x80070005 …) —
+  falling back to Windows.Graphics.Capture », puis la chaîne D3D11 et sa
+  raison (« captured through Windows.Graphics.Capture, which hands its
+  pictures to D3D11 only »), puis « Desktop Duplication serves this display
+  again — leaving Windows.Graphics.Capture », puis D3D12.
+- D3D12 revient à 0,4 s près de la fin du refus, comme après un
+  déverrouillage réel. Sans SYSTEM, rien ne s'essaie tant que le bureau
+  sécurisé est là, donc rien ne s'espace.
+- Le premier essai de ce banc espaçait aussi les refus simulés (1, 2 puis
+  4 s) : D3D12 revenait 3,6 s après la fin du refus. La simulation suit
+  désormais le vrai bureau sécurisé.
+- Sur WGC, `host_total` monte à 9,0-9,7 ms en moyenne, contre 6,6-7,5 en D3D12
+  sur la duplication, pour le même contenu (images capturées, hors keyframes).
+
 ## 8o. Linux : la chaîne Vulkan (28/09/2026 →)
 
 Phase 13 du plan D3D12 : la même forme de chaîne sous Linux, en Vulkan Video
