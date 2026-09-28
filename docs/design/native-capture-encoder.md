@@ -5353,7 +5353,7 @@ arrive à l'écran environ 16 ms plus tôt. Si le PC ne s'y prête pas (Windows 
 sans HEVC), le stream prend l'ancien chemin sans coupure, et « D3D11 » dans
 l'admin y revient à la main.
 
-### 32.10 Windows : la robustesse, mise à l'épreuve (phase 8, 28/09/2026 →)
+### 32.10 Windows : la robustesse, mise à l'épreuve (phase 8, 28/09/2026)
 
 Depuis §32.9, D3D12 porte les streams d'Intel par défaut. La phase 8 vérifie
 sa promesse avant la fusion de la branche, sur l'Arc et le N95.
@@ -5436,13 +5436,23 @@ v0.3.1 non plus (§31.7, `f1e8e8e3`). Une fois corrigé, la duplication se
 rouvre sur le bureau `Winlogon` et la chaîne D3D12 se reconstruit des deux
 côtés de la bascule, sans passer par WGC ni D3D11 (§8n.15 du banc).
 
+**Les deux dernières passes, après la fusion dans `main` (§8n.17 du banc).**
+- Dans un vrai Chrome, la bascule D3D12 → D3D11 ne coupe pas le stream. Le
+  décodeur du navigateur repart sur la keyframe de l'encodeur D3D11, 0,6 s
+  après la panne, sans erreur ni demande de keyframe.
+- 30 min sous RE9 dans la classe du worker installé (REALTIME) : 40 131 images
+  en D3D12, sans perte ni repli, et une mémoire plate. De la présentation à
+  l'image encodée, 6,7 ms en moyenne, contre 24,3 en classe HIGH.
+
 **Concrètement, pour l'utilisateur** : si la carte graphique décroche en
 plein stream (pilote qui plante ou se met à jour, GPU bloqué), l'image se fige
 une demi-seconde, trois secondes et demie au pire, puis repart d'elle-même
-par l'ancien chemin, sans rien à relancer. Un PC verrouillé se déverrouille
-depuis le stream, comme avec Parsec, ce que la v0.3.1 promettait sans le
-tenir. Et là où le worker ne tourne pas en SYSTEM (banc, `--dev`), un écran
-verrouillé ne fait plus perdre le chemin rapide jusqu'à la fin du stream.
+par l'ancien chemin, sans rien à relancer : le navigateur suit sans erreur.
+Une longue partie tient aussi : 30 minutes sous un vrai jeu, sans une image
+perdue ni mémoire qui grimpe. Un PC verrouillé se déverrouille depuis le
+stream, comme avec Parsec, ce que la v0.3.1 promettait sans le tenir. Et là où
+le worker ne tourne pas en SYSTEM (banc, `--dev`), un écran verrouillé ne fait
+plus perdre le chemin rapide jusqu'à la fin du stream.
 
 ### 32.11 Le scaler matériel d'Intel, mesuré et écarté (§9-15, 28/09/2026)
 

@@ -2669,6 +2669,69 @@ latence n'est pas meilleure (11,2 contre 10,9 ms en moyenne). Son seul gain,
 quelques images par seconde rendues au jeu, disparaît dès que le pointeur est
 composé. Et il coûterait le HDR et le pointeur en inversion.
 
+### 8n.17 Les deux dernières passes de la phase 8 : la bascule dans Chrome, 30 min en REALTIME (28/09/2026)
+
+Build de `main` juste après la fusion de la branche (`1db193d9`), sur DualRTX.
+L'écran de l'Arc est le principal ce jour-là (celui de la RTX a quitté le
+bureau), celui de l'AMD est à sa droite.
+
+**La bascule D3D12 → D3D11 vue par un vrai navigateur (C8.1).** Le banc du
+§8n.11 relit le flux avec ffmpeg. Un navigateur, lui, doit reconfigurer son
+décodeur quand un autre encodeur reprend le flux sur sa keyframe.
+- Montage : une instance `--dev` du build, avec `MW_D3D12_FAULT=encode@900`
+  dans son environnement. Son worker en hérite : une `--dev` n'a ni service ni
+  tâche à son nom, et son worker part en enfant simple. L'écran de l'Arc fait
+  défiler du texte. Le client est un Chrome dédié sur l'écran de l'AMD, rendu
+  par l'AMD, jamais par le GPU qui encode. HEVC 4:2:0 1080p60, débit auto (20
+  Mb/s au plus). L'overlay est relevé par CDP toutes les 4 s
+  (`c81-stream.ps1`).
+- La session part en D3D12 (conversion DIRECT, puis D3D12 Video Encode). La
+  panne tombe sur la 900e image, 15 s après le départ : « D3D12 lost (…) —
+  back to D3D11 » à 18:37:49,374, oneVPL prêt en D3D11 à 18:37:49,982. Soit
+  0,6 s, comme au banc.
+- Le client ne s'arrête pas : 60 i/s avant, 45 sur la fenêtre de relevé qui
+  contient la bascule, 60 après. Le flux reste en HEVC d'un bout à l'autre,
+  vers 18 Mb/s, avec une latence affichée de 7,2 à 10 ms. Aucune erreur de
+  décodage, aucune demande de keyframe, rien dans la console de la page.
+- Au moment de céder, la chaîne D3D12 fait son bilan : 900 images à QP 31,2 en
+  moyenne, aucune très au-dessus de son budget, 24 recodées.
+- Le premier essai est à jeter. Le Chrome de banc demandait le 4:4:4, que
+  l'AMD ne décode pas en HEVC, et la négociation a fini en H.264 4:2:0. La
+  route D3D12 ne prend pas encore le H.264 : D3D11 dès le départ, donc pas de
+  bascule à voir. Relancé en HEVC 4:2:0.
+- En passant : revenue en D3D11, la session lâche le Lanczos-2 dix secondes
+  plus tard (« conversion + encode took 13 ms a frame against a 16 ms
+  interval ») et continue en bilinéaire. La chaîne D3D12 l'avait gardé pendant
+  ses 15 s, sur le même contenu.
+
+**30 min sous RE9, en classe REALTIME (C8.2).** Le §8n.13 a tenu 30 min en
+classe HIGH, celle d'un worker au jeton limité. Restait la classe du worker
+installé, REALTIME.
+- Montage : RE9 est lancé sans élévation, comme un joueur le lance (copie
+  propre, réglages légers, scène de la pluie, 3D de l'Arc à 99,8 %). Seul
+  `--native-bench` est élevé, par un exécuteur à commande fixe
+  (`c82rt-bench.ps1`) : « GPU scheduling class REALTIME (token elevated) »,
+  conversion sur la file DIRECT en GLOBAL_REALTIME. Chaîne prise par `auto`
+  (D3D12), HEVC 1080p60 à 20 Mb/s, 1 800 s. La mémoire et la VRAM du processus
+  sont relevées toutes les 10 s.
+- 40 131 images, toutes en D3D12, une seule keyframe : ni perte ni repli, et
+  une seule image recodée. RE9 rend ~22 i/s, et chacune de ses images est
+  encodée. ffmpeg relit les 40 131 paquets sans une erreur (`-err_detect
+  crccheck+bitstream+buffer`), et les images tirées toutes les 5 min montrent
+  la scène, justes.
+- Présentation → image encodée : 6,69 ms de moyenne, 9,22 au p95, 10,24 au p99,
+  contre 24,25, 30,72 et 36,86 en classe HIGH. La classe REALTIME sort la
+  chaîne de la file du jeu, comme au §8n.7. D'une tranche de 5 min à l'autre,
+  la moyenne ne bouge pas (6,65 à 6,78 ms).
+- 138 images sur 40 128 (0,3 %) dépassent 16,7 ms. Quatre dépassent 80 ms (85
+  à 115 ms), toujours dans l'encodage. Le maximum, 262 ms, est la première
+  image : l'attente de la première capture.
+- Mémoire plate : privée de 220,2 à 220,7 Mo du début à la fin, VRAM au
+  processus 49,6 Mo et mémoire partagée 61,5 Mo sans un octet de plus, 387 à
+  394 handles, 10 à 16 threads.
+- RE9 remis comme avant : préférence GPU d'origine (la RTX), `config.ini` à
+  son empreinte.
+
 ## 8o. Linux : la chaîne Vulkan (28/09/2026 →)
 
 Phase 13 du plan D3D12 : la même forme de chaîne sous Linux, en Vulkan Video
