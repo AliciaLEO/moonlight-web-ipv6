@@ -178,7 +178,10 @@ QString ownExecutable()
 }
 
 /// Full image path of a process, or empty. PROCESS_QUERY_LIMITED_INFORMATION is
-/// granted across integrity levels, so this works on an elevated worker too.
+/// granted across integrity levels, so this works on an elevated worker too —
+/// and on the SYSTEM worker only because the service writes its DACL for the
+/// user (WorkerService, launchWorker): left to the SYSTEM default, it answers
+/// "" to a server that is not elevated.
 QString processImage(DWORD pid)
 {
     HANDLE process = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);

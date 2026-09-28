@@ -59,6 +59,11 @@
  *    this same executable under the installation directory.
  *  - The worker checks the same thing from its side before it reads a byte of
  *    config: a pipe server that is not this executable is refused.
+ *  - The server checks the worker too, which it can only do because the
+ *    service gives the worker a DACL of its own: the user who asked may read
+ *    its image, wait on it and stop it — no more (a SYSTEM token's default
+ *    DACL shuts a non-elevated server out, and v0.3.1 fell back to the task on
+ *    every session for that alone).
  *  - The service is demand-start and does nothing until asked.
  *
  * What it deliberately does NOT claim: a user who can run the installed
