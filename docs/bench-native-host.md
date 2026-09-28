@@ -2477,6 +2477,24 @@ passer la conversion devant un jeu qui tient le GPU ?
   `CAP_SYS_NICE`, divise l'attente par deux (46 → 23 ms) pour un seul
   attribut.
 
+### 8o.2 L'image capturée dans Vulkan (28/09/2026)
+
+- `mw-vk-lab import` (`83b4cf15`), en root, sur le bureau GNOME de
+  l'UM790Pro. Plan primaire 1920 × 1080 XR24,
+  `GFX11, 64K_R_X, DCC, DCC_RETILE…` : trois plans dans un seul objet
+  (décalages 0, 8 847 360 et 8 896 512). Vulkan attend bien trois plans pour
+  ce modificateur.
+- Import (image, mémoire, liaison) : 0,02 à 0,04 ms. Copie linéaire : 0,2 à
+  0,4 ms de GPU, après la barrière implicite du tampon (`sync_file`, par
+  `DMA_BUF_IOCTL_EXPORT_SYNC_FILE`).
+- La lecture par Vulkan et celle par EGL (comme `GlConvert`) sont identiques
+  au pixel, et l'image est bien le bureau.
+- Pareil avec le RADV du Mesa 23.2 du système : l'import n'a pas besoin du
+  préfixe, seul l'encodeur en dépend.
+
+**Ce qu'on en retient.** Le premier maillon de la route scindée tient : un
+tampon KMS s'importe dans Vulkan sans copie, sur le Mesa d'Ubuntu 22.04.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
