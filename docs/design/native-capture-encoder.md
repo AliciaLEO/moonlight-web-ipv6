@@ -5151,3 +5151,83 @@ que le banc n'a pas mesuré la route et que Bruno n'a pas basculé AMD. Ensuite,
 un PC Linux AMD, l'image n'attendra plus derrière le jeu pour être convertie. Et
 si la carte ou son pilote ne s'y prêtent pas, le stream reste sur le chemin
 d'aujourd'hui, sans coupure.
+
+### 32.7 Linux : la chaîne Vulkan Video, prise sur la parole du pixel (28/09/2026)
+
+C13.5 du plan : la chaîne entière en Vulkan, sur un seul périphérique. La capture
+KMS est convertie en compute directement dans l'image d'entrée de l'encodeur,
+puis encodée en HEVC par Vulkan Video. Une copie par image, le flux.
+
+**Le code.**
+- `encode/linux/VulkanHevcEncoder` : le jumeau Linux de `VideoEncode12`.
+  - Il possède son entrée : une image NV12 aux dimensions codées (des CTB
+    entiers, la leçon de C5.3) et deux vues de plan, R8 et RG8, que la
+    conversion écrit en stockage. Entre deux images, elle reste en
+    `VIDEO_ENCODE_SRC`. Les rangées et colonnes hors de l'image sont noires,
+    écrites une fois.
+  - L'encodage attend la conversion sur le GPU, par le sémaphore de la
+    dernière soumission (`VulkanDevice::afterLast`) : c'est lui qui rend
+    visibles les écritures de la file compute. La CPU n'attend que le flux.
+  - Nos en-têtes en structures StdVideo, les octets ceux du pilote
+    (`vkGetEncodedVideoSessionParametersKHR`), posés juste devant les
+    tranches : une IDR sort d'un seul tenant. Les premières tranches sont
+    relues avec ces en-têtes (la garde de `VideoEncode12`).
+  - **La profondeur de transformée complète** (CtbLog2SizeY − MinTbLog2SizeY) :
+    le micrologiciel d'AMD découpe jusque-là quoi que dise le SPS, et à 2 toutes
+    les P qui bougeaient étaient fausses sur le 780M (banc §8o.3).
+  - `HevcDpb` : quatre images gardées, une perte guérie par un delta. Le CBR du
+    pilote avec le VBV commun (`RateControl.h`), changé en vol par une commande
+    de contrôle, sans remise à zéro.
+  - La file d'encodage reste à la priorité par défaut : en HIGH, le noyau 6.8
+    refuse sa première soumission (§8o.3).
+- `encode/linux/VulkanHevcDecoder` : les yeux de la preuve. Un décodeur HEVC
+  Vulkan Video juste assez large pour les flux du moteur (I et P, ensembles de
+  références propres à la tranche, ni tuiles ni listes de quantification). Tout
+  le reste est refusé par son nom. Sur VCN 4, la sortie est distincte du DPB,
+  et RADV lit l'unité d'accès entière (lu dans Mesa, sous licence MIT).
+- `encode/linux/VulkanHevcProof` : la preuve au pixel.
+  - Une courte séquence qui bouge (les images du labo, celles qui avaient
+    attrapé la faute) passe par l'encodeur du produit, à la taille du stream.
+    En route, les images 4 et 5 sont perdues et guéries depuis la 3, et une
+    image clé est demandée.
+  - Le décodeur Vulkan du même GPU relit le tout, comparé image par image et
+    rangée de CTB par rangée de CTB.
+  - Juste : au moins 22 dB par image et 18 dB par rangée. Un flux juste en
+    donne 37 à 40, les P fausses du §8o.3 en donnaient 5.
+- `core/LinuxRouteChoice.h` : la preuve ne tourne que là où la chaîne serait
+  prise (`linuxRouteWantsVulkanVideo`). La table des vendeurs dit VA-API
+  partout, donc personne n'est obligé de prouver quoi que ce soit.
+
+**Un import par conversion.** RADV 26 envoie toute la mémoire du périphérique
+avec chaque soumission : sa liste de BO est globale. Un tampon d'affichage gardé
+importé (le cache de `VulkanConvert` en gardait jusqu'à quatre) faisait attendre
+chaque soumission, encodage compris, que le compositeur finisse l'image suivante
+du jeu : 15 ms d'encodage sous charge au lieu de 2. Le tampon n'est donc plus
+gardé d'une image à l'autre. Il est importé pour la conversion et relâché dès
+la fin de l'attente, pour 0,02 à 0,04 ms (banc §8o.6).
+
+**Le verdict, gardé.** Une preuve coûte 70 à 260 ms sur le 780M. Le verdict va
+dans le cache de l'utilisateur (`$XDG_CACHE_HOME/MoonlightWeb/vulkan-video-proofs.txt`).
+Il est rangé sous ce qui pourrait le changer : le GPU (UUID), le pilote et sa
+version, le noyau, le micrologiciel VCN (lisible par tous sous amdgpu), la
+taille, et la révision de l'encodeur du moteur. Seule une comparaison est
+gardée ; une preuve qui n'a pas pu tourner est reposée la fois suivante.
+
+**La règle de Bruno, appliquée au bout.**
+- Un pilote qui ne montre pas d'encodeur (le Mesa 23.2 d'Ubuntu 22.04) est
+  refusé par son nom, sans même ouvrir de périphérique.
+- Un pilote qui code autre chose que son SPS échoue la preuve.
+  `MW_VK_ENCODE_DEPTH=2` rejoue la faute du §8o.3 pour les tests.
+- Une chaîne qui ne démarre pas laisse VA-API encoder dès le départ.
+- Une chaîne qui lâche en plein stream, à la conversion comme à l'encodage,
+  cède la place à VA-API sur l'image même, avec une image clé, pour le reste de
+  la session.
+
+La raison est chaque fois dans le journal et dans `SessionInfo`. Testé sur le
+780M avec les deux pilotes (`test_vulkan_hevc`, `test_linux_session`).
+
+**Concrètement, pour l'utilisateur** : rien ne change par défaut. La chaîne
+Vulkan n'est prise que si on la demande (réglage, clé de banc), en attendant
+que le banc tranche par vendeur. Même demandée, elle ne sert que sur une carte
+dont le pilote a prouvé, image à l'appui, qu'il encode juste. Sinon le stream
+part sur VA-API comme aujourd'hui, et la raison est écrite dans le journal.

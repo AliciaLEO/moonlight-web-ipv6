@@ -2654,6 +2654,102 @@ repos et sous un jeu qui sature le GPU.
   avant chaque passe. À 58 °C, le radiateur encore chaud laisse la garde
   couper en quelques secondes.
 
+### 8o.6 La chaîne Vulkan Video et sa preuve au pixel (28/09/2026)
+
+C13.5 : la chaîne entière en Vulkan (`5549c48e`, design §32.7). La preuve au
+pixel d'abord, puis la chaîne contre VA-API, au repos et sous la même charge
+qu'au §8o.5.
+
+**La preuve au pixel sur le 780M.**
+- Le Mesa 23.2 d'Ubuntu 22.04 (celui que charge le produit) ne montre pas
+  d'encodeur Vulkan : refus nommé, sans ouvrir de périphérique, VA-API encode.
+- RADV 26.2.3 (préfixe, en root) : la preuve passe en 120 à 130 ms à 1080p
+  (70 ms à 720p). Pire image 39,8 dB, pire rangée de CTB 37,4 dB, chrominance
+  42,1 dB, sur 10 images relues (12 encodées, deux perdues en route).
+- Le témoin, profondeur de transformée 2 (la faute du §8o.3) : **5,2 dB**, pire
+  rangée 4,7 dB. La preuve échoue, la session prend VA-API et le dit.
+- En session (`test_linux_session`), les quatre cas se tiennent, et les flux se
+  décodent sans une erreur :
+  - la chaîne prise quand la preuve passe ;
+  - le témoin refusé ;
+  - la chaîne lâchée en plein stream, VA-API sur l'image même ;
+  - une chaîne qui ne démarre pas, VA-API dès l'ouverture.
+
+**La chaîne contre VA-API.**
+- Même montage qu'au §8o.5, mais en root avec RADV 26.2.3 (les capacités de
+  fichier du binaire lui cacheraient `VK_DRIVER_FILES`). libdrm du même
+  préfixe pour tout le processus (le piège du §8o.4). VA-API et GL restent
+  ceux du système.
+- Trois routes : GL → VA-API (HIGH, root tient `CAP_SYS_NICE`), la route
+  scindée (Vulkan compute HIGH → VA-API), la chaîne Vulkan Video (Vulkan
+  compute HIGH → Vulkan Video). Deux tours au repos, deux sous la charge.
+- Sorties : `bench-out\vk-lab\vkvbench-2026-09-28.tgz`.
+
+| route | repos : encodage | repos : présentation → encodé, moy. / p99 | charge : conversion, moy. / p99 | charge : encodage | charge : présentation → encodé, moy. / p99 | images captées sous la charge |
+|---|---|---|---|---|---|---|
+| GL → VA-API | 3,8 ms | 4,7 / 5,4 ms | 22,4 / 39,6 ms | 4,4 ms | 26,8 / 44,3 ms | 23 i/s |
+| Vulkan compute → VA-API | 3,9 ms | 4,5 / 5,3 ms | 11,4 / 35,1 ms | 4,2 ms | 15,6 / 39,4 ms | 38 i/s |
+| Vulkan compute → Vulkan Video | **1,7 ms** | **2,3 / 3,0 ms** | 9,7 / 40,8 ms | **15,2 ms** | 24,9 / 52,9 ms | 29 i/s |
+
+- **Au repos, la chaîne Vulkan Video divise la latence par deux** : l'encodeur
+  Vulkan rend le flux en 1,7 ms là où VA-API en met 3,8 sur le même bloc VCN.
+- **Sous la charge, elle perd** : l'encodage passe à 15 ms en moyenne (45 au
+  p95), VA-API reste à 4,2. Le jeu garde ses 43 à 45 i/s.
+- Même la route scindée est moins bonne qu'au §8o.5 : 11,4 ms de conversion
+  sous la charge contre 3,7 avec le RADV 23.2 du système, au même endroit.
+
+**Pourquoi RADV 26 perd sous la charge.**
+- Pas root : la route scindée en root avec le RADV 23.2 du système fait
+  4,1 ms de conversion, comme en utilisateur au §8o.5.
+- Pas un mélange de pilotes : `mw-vk-lab vatarget` (VA-API 23.2 et RADV 26
+  dans un même processus) écrit la surface en 1,2 ms sous la charge, comme
+  avec RADV 25.
+- Pas l'encodeur : `mw-vk-lab encode` seul, sous la charge, rend le flux en
+  2,7 ms avec RADV 25 comme avec RADV 26 (2,4 au repos).
+- Avec RADV 25.2.8 dans le produit, tout va bien : chaîne Vulkan Video à
+  3,0-3,4 ms de conversion, **2,1 ms d'encodage, 5,1-5,5 ms de bout en bout**
+  sur deux tours, 44 i/s captées ; route scindée 3,3 ms de conversion.
+- **La cause.** RADV 26 envoie toute la mémoire du périphérique avec chaque
+  soumission : sa liste de BO est globale, toujours (celle de RADV 25 était
+  propre à chaque command buffer, globale seulement sur demande). Or la
+  conversion gardait importés les deux ou trois tampons d'affichage entre
+  lesquels le compositeur tourne. Le noyau synchronisait alors chaque
+  soumission, conversion comme encodage, avec le compositeur en train d'écrire
+  l'image suivante du jeu dans l'un d'eux.
+- **La preuve.** RADV 25 avec sa liste globale forcée (`RADV_PERFTEST=bolist`)
+  reproduit exactement RADV 26 : conversion 9,8 ms, encodage 16,4 ms, 26,2 ms
+  de bout en bout pour la chaîne Vulkan Video ; 11,5 ms de conversion pour la
+  route scindée.
+- **Le correctif.** Un import par conversion, relâché dès la fin de l'attente
+  (0,02 à 0,04 ms, §8o.2), au lieu d'un cache par tampon. Avec RADV 26 sous la
+  même charge :
+
+| sous la charge | conversion | encodage | présentation → encodé, moy. / p99 | images captées |
+|---|---|---|---|---|
+| Vulkan Video, RADV 26, avant | 9,7 ms | 15,2 ms | 24,9 / 52,9 ms | 29 i/s |
+| Vulkan Video, RADV 26, après | 3,6 ms | 1,95 ms | **5,5 / 14,1 ms** | 44 i/s |
+| Vulkan Video, RADV 25 + `bolist`, après | 3,8 ms | 1,96 ms | 5,7 / 14,4 ms | 43 i/s |
+| route scindée, RADV 26, avant | 11,4 ms | 4,2 ms | 15,6 / 39,4 ms | 38 i/s |
+| route scindée, RADV 26, après | 3,4 ms | 4,2 ms | 7,7 / 15,9 ms | 43 i/s |
+| route scindée, RADV 23.2 du système, après | 3,2 ms | 4,3 ms | 7,5 / 12,4 ms | 43 i/s |
+
+- Deux tours sous la charge pour RADV 26, un pour les autres lignes. Au
+  repos, après le correctif : 2,3 ms pour la chaîne Vulkan Video, 4,4 pour la
+  route scindée. Le jeu garde 44 à 45 i/s partout.
+- Sorties : `bench-out\vk-lab\vkv-investigation-2026-09-28.tgz` (et les
+  scripts `vkv-*.sh` à côté).
+
+**Ce qu'on en retient.**
+- La chaîne Vulkan Video est la meilleure route mesurée sur le 780M, au
+  repos (÷2) comme sous un jeu qui sature l'iGPU (5,5 ms contre 7,7 pour la
+  route scindée et 27 pour GL), avec RADV 25 et, corrigée, avec RADV 26.
+- Ubuntu 22.04 ne l'aura pas : son Mesa 23.2 n'a pas d'encodeur Vulkan, et la
+  preuve le dit. Ubuntu 24.04 à jour a Mesa 25.2.8, la version mesurée ici ;
+  26.04 a Mesa 26.0.3.
+- Tout import d'un tampon qui ne nous appartient pas doit vivre le temps de
+  son usage : avec une liste de BO globale, il pèse sur chaque soumission du
+  périphérique.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
