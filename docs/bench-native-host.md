@@ -2419,6 +2419,64 @@ matériel ce qu'il sait faire.
 - La preuve au pixel attrape ce que les en-têtes relus ne voient pas : QP et
   RPS justes, flux faux.
 
+### 8o.1 Où la conversion attend derrière un jeu (28/09/2026)
+
+La question qui a tranché G1 sous Windows : une priorité de file fait-elle
+passer la conversion devant un jeu qui tient le GPU ?
+
+**Montage.**
+- Même 780M. Files Vulkan : RADV 25.2.8 du préfixe. Témoin GL : le Mesa 23.2
+  du système, le chemin du produit aujourd'hui.
+- La conversion : un Lanczos-2 d'une image 2560 × 1440 vers la luminance
+  1920 × 1080 et sa chrominance 960 × 540, 60 fois par seconde. En compute
+  (`shaders/convert.comp`), ou en deux passes GLES faisant le même calcul,
+  suivies d'un `glFinish` comme dans `GlConvert`. Elle coûte 2,2 ms de GPU
+  aux horloges du repos, 0,76 ms quand le GPU est lancé.
+- La charge : `mw-gpu-load` au niveau 248, soit 45 i/s et 21,8 ms de GPU par
+  image, un jeu qui sature l'iGPU. 60 s au plus ; la garde thermique l'a
+  arrêtée trois fois à 85 °C, toujours après les passes retenues.
+- Root (`CAP_SYS_NICE`) pour HIGH et REALTIME. Une priorité après l'autre,
+  6 s chacune ; l'heure de chaque passe est recoupée avec le journal de la
+  charge.
+- Binaires de `21fa9c63`. Sorties dans `bench-out\vk-lab`.
+
+| chemin de la conversion | repos | sous la charge : moy. / p99 |
+|---|---|---|
+| GLES, file graphique, sans priorité (le produit aujourd'hui) | 3,9 ms | 46,0 / 47,5 ms |
+| GLES, contexte EGL HIGH | 3,9 ms | 23,3 / 24,3 ms |
+| Vulkan, file graphique MEDIUM | 2,7 ms | 45,7 / 47,4 ms |
+| Vulkan, file graphique HIGH / REALTIME | 2,7 ms | 23,1 / 23,0 ms (p99 23,9 / 24,0) |
+| Vulkan, file compute LOW / MEDIUM | 2,6 ms | 10,5 / 10,6 ms (p99 18,2 / 18,4) |
+| Vulkan, file compute HIGH / REALTIME | 2,6 ms | 8,0 / 8,1 ms (p99 14,5 / 15,3) |
+
+- **File graphique** : la conversion attend l'image du jeu en cours. À la
+  priorité du jeu, elle attend aussi la suivante : deux images de 22 ms.
+  HIGH passe devant l'image suivante, pas au milieu de celle en cours. GL et
+  Vulkan font exactement pareil.
+- **File compute** : la conversion tourne à côté du jeu, sur les unités qu'il
+  laisse, au lieu d'attendre son tour. Sans aucun privilège, 10,6 ms au lieu
+  de 46. HIGH retire encore 2,6 ms en moyenne et 4 ms au p99.
+- LOW affame la file (plus de 2 s d'attente) : jamais pour le produit.
+- Mesa 23.2 répond « HIGH accordé » pour un contexte EGL que le noyau a
+  refusé faute de `CAP_SYS_NICE` (`amdgpu_cs_ctx_create2 failed (-13)`) : ne
+  pas se fier à la relecture.
+- Le jeu passe de 45-46 à 44 i/s pendant les passes : la conversion lui
+  coûte 2 à 4 % à 60 conversions par seconde.
+- Réserve : l'unique dessin plein écran de `mw-gpu-load` exagère les attentes
+  de la file graphique (la leçon de G1). Un vrai jeu (Counter-Strike 2, en
+  G5) dira combien il en reste. La file compute ne dépend pas de ce
+  découpage.
+
+**Ce qu'on en retient.**
+- Sur AMD, le gain de la Phase 13 tient d'abord à la **file compute**, pas à
+  l'encodeur : une conversion Vulkan en compute, devant l'encodeur VA-API
+  d'aujourd'hui (une route scindée, par DMA-BUF), retire 35 ms sous une
+  charge qui sature le GPU. Elle ne dépend ni du micrologiciel VCN ni de
+  Vulkan Video.
+- Le témoin bon marché : un contexte EGL HIGH dans `GlConvert`, avec
+  `CAP_SYS_NICE`, divise l'attente par deux (46 → 23 ms) pour un seul
+  attribut.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
