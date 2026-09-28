@@ -5494,3 +5494,59 @@ autre pilote.
 puce Intel où un jeu occupe toute la carte graphique, l'image du stream reste
 préparée par le même chemin, parce que le circuit spécialisé d'Intel, mesuré,
 fait la queue derrière le jeu tout autant et n'irait pas plus vite.
+
+### 32.12 G4 : NVENC et AMF en D3D12 ne battent pas leur chemin D3D11 (28/09/2026)
+
+La phase 7 a donné aux SDK des fabricants une entrée D3D12. NVENC prend une
+image D3D12 depuis `NvencEncoder12`, AMF depuis `AmfEncoder12`. Leur
+configuration est partagée avec le chemin D3D11 (`NvencConfig`,
+`AmfConfig`), et une empreinte prouve qu'elle est identique d'un chemin à
+l'autre. G4 les a mesurés face à D3D11, sous RE9 et au repos (§8n.18 du banc).
+
+Aucune ne passe : NVENC en D3D12 coûte 0,2 à 0,3 ms et 16 à 24 % au p99, AMF
+0,7 à 1,2 ms et 4 ms au p99. D3D11 ne perdait déjà rien sur ces GPU (G2).
+Leur interface D3D12 ajoute des fences, une attente CPU (NVENC), une file pont
+et une remise d'état (AMF).
+
+Les lignes NVIDIA et AMD de la table restent donc D3D11. Les routes restent
+joignables par le réglage et par `enc12=` au banc. Sur l'iGPU AMD, AMF en
+D3D12 bat VE de 5 à 7 ms : c'est lui qu'il faudrait si la route D3D12 devait
+un jour servir sur AMD (C12.1, à Bruno).
+
+**Concrètement, pour l'utilisateur** : rien ne change sur un PC à carte
+NVIDIA ou AMD. Le stream reste sur le chemin qui s'est montré le plus rapide
+au banc, sous un jeu comme sur le bureau.
+
+### 32.13 Le H.264 par D3D12 Video Encode (C9.1, 28/09/2026)
+
+VE codait le HEVC seul. Il code maintenant le H.264, dans la forme que VA-API
+envoie depuis toujours : profil High, une image gardée, fenêtre glissante,
+`frame_num` sur 16 bits, POC de type 2. Le pilote écrit les tranches ; nous
+écrivons SPS et PPS, placés devant l'IDR comme les en-têtes HEVC.
+
+- **Négociation** (`H264EncodeNegotiation`). On prend CABAC et la
+  transformée 8×8 là où le pilote les code : l'iGPU AMD n'a pas la 8×8, et le
+  PPS le dit. Un pilote qui ne filtre pas tous les bords n'a pas d'encodeur :
+  le PPS le promet. Pour le reste, l'échelle de régulation et la règle
+  d'intra-refresh sont celles du HEVC, et le niveau vient du pilote, 5.1 à
+  défaut.
+- **Planification.** `HevcDpb`, à une image de capacité : la précédente,
+  toujours utilisée. Une perte coûte donc une keyframe, comme en VA-API.
+  Invalider une référence demanderait des opérations de gestion mémoire dans
+  chaque tranche, que D3D12 laisse à l'appelant. C'est un pas pour plus tard,
+  si une porte le demande.
+- **Garde** (`H264SliceParser`). Les tranches des six premières images sont
+  relues avec nos SPS et PPS. La garde vérifie le type d'image, `frame_num`,
+  une référence gardée par la fenêtre glissante et une seule référence
+  prédite. Un pilote qui écrit autre chose renvoie la session en D3D11 avant
+  qu'un client voie du bruit.
+- **Table.** La ligne D3D12 d'Intel a été mesurée en HEVC seulement
+  (`autoD3d12Codec`). En Auto, le H.264 d'Intel reste donc en D3D11 ; le
+  réglage et la clé de banc atteignent la nouvelle route.
+
+Sur les trois GPU de DualRTX, les flux se décodent sans erreur, et chaque
+image est bien la sienne (§8n.19 du banc).
+
+**Concrètement, pour l'utilisateur** : rien ne change par défaut. Un
+utilisateur qui choisit « D3D12 » dans l'admin et dont le navigateur ne lit
+que le H.264 garde maintenant la route D3D12. Avant, il retombait en D3D11.

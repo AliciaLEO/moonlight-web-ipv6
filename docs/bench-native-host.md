@@ -2732,6 +2732,86 @@ installé, REALTIME.
 - RE9 remis comme avant : préférence GPU d'origine (la RTX), `config.ini` à
   son empreinte.
 
+### 8n.18 G4 : NVENC et AMF en entrée D3D12, face à leur chemin D3D11 (28/09/2026)
+
+La porte G4 du plan (§5) : une route D3D12 dont l'encodeur est le SDK du
+fabricant (phase 7) reste candidate si elle fait au moins aussi bien que
+D3D11. En moyenne de `host_total`, pas pire ; au p99, pas plus de 5 % pire ;
+et mieux de 10 % ou de 0,5 ms sur l'un des deux. Au repos, pas plus de 0,2 ms
+pire.
+
+**Montage.**
+- DualRTX. L'écran de la RTX 5060 Ti est le principal (0,0) ; ceux de l'iGPU
+  AMD (« AMD Radeon(TM) Graphics ») et de l'Arc sont à sa droite.
+- Build `559db975` (C7.4), dans `bench-out\d3d12v2\g4-bin`.
+- Passes de 12 s, alternées entre les bras, HEVC 1080p à 20 Mb/s, en classe
+  REALTIME : un exécuteur élevé à commande fixe (`g4-runner.ps1`) ne lance que
+  `ab-native-bench.ps1`.
+- Bras : `d3d11`, `nvenc12` ou `amf12` (le SDK en D3D12, `strict12=1`) et
+  `ve12` (D3D12 Video Encode, pour mémoire).
+- Charge : RE9 (copie propre, lancé sans élévation, 3D de la RTX à 96 %).
+  Repos : texte qui défile.
+
+**Résultats** (moyenne / p99 de `host_total`, en ms).
+
+| Cas | d3d11 | SDK en D3D12 | ve12 |
+|---|---|---|---|
+| RTX sous RE9, 1080p60 (4 tours) | 1,87 / 2,57 | nvenc12 2,12 / 3,17 | 5,36 / 6,07 |
+| RTX sous RE9, 1080p120 (4 tours) | 1,83 / 2,60 | nvenc12 2,06 / 3,02 | — |
+| RTX au repos, 1080p60 (8 tours) | 2,08 / 3,38 | nvenc12 2,41 / 4,12 | — |
+| iGPU AMD au repos, 1080p60 (8 tours) | 8,64 / 14,62 | amf12 9,80 / 18,80 | 15,41 / 20,87 |
+| iGPU AMD au repos, 1080p120 (8 tours) | 8,51 / 14,65 | amf12 9,24 / 18,29 | 16,60 / 22,56 |
+
+- Aucune route ne passe. NVENC en D3D12 coûte 0,2 à 0,3 ms de plus que son
+  chemin D3D11 et 16 à 24 % au p99, sous le jeu comme au repos. AMF en D3D12
+  coûte 0,7 à 1,2 ms et 4 ms au p99.
+- Les débits d'images tiennent (60 et 122 i/s sur la RTX, 116 sur l'AMD), sauf
+  VE sur l'AMD à 120 i/s (80 i/s). Le jeu ne perd rien : 269 i/s en D3D11, 283
+  avec nvenc12, 271 avec ve12.
+- Pourquoi. D3D11 ne perdait déjà rien sur ces deux GPU (G2) : NVENC et AMF y
+  encodent sur leur moteur, et la conversion passe devant le jeu dès la classe
+  REALTIME. En D3D12, NVENC ne synchronise rien lui-même : il faut des fences
+  en entrée et en sortie, et une attente CPU avant de verrouiller le flux.
+  AMF en D3D12 veut une file pont et rend l'image dans un état qu'il faut
+  remettre sur le GPU. Ces allers-retours sont le surcoût mesuré.
+- Les soaks de 30 min ne sont pas lancés : ils ne servent qu'à une route
+  candidate.
+
+**Verdict.** Les lignes NVIDIA et AMD de la table restent D3D11. Les routes
+D3D12 par SDK restent joignables par le réglage et par `enc12=` au banc :
+NVENC est l'encodeur D3D12 des GPU NVIDIA (G1), AMF celui qu'on essaie à la
+main sur AMD. Sur l'iGPU AMD, AMF en D3D12 bat VE de 5 à 7 ms : si un jour la
+route D3D12 devait servir sur AMD, ce serait par AMF.
+
+### 8n.19 C9.1 : le H.264 par D3D12 Video Encode (28/09/2026)
+
+Build `69c8ea53`. VE code désormais le H.264 comme le HEVC : profil High, une
+image gardée, fenêtre glissante, POC de type 2.
+
+**Tests matériels** (`mw-native-tests video_encode12`, les trois GPU).
+- 40 images, keyframe forcée à la 30e, perte de la 18e annoncée à la 20e :
+  l'IDR suit, faute d'image plus ancienne gardée. La garde relit les en-têtes
+  de tranche du pilote avec nos SPS et PPS, sans écart.
+- La RTX et l'Arc codent en CABAC avec la transformée 8×8. L'iGPU AMD n'a pas
+  la 8×8 : le PPS le dit.
+- ffmpeg relit les trois flux sans une erreur (High, niveau 4.2,
+  1920×1080 recadré depuis 1088). Chaque image est plus proche de sa propre
+  entrée que de ses voisines, d'au moins 11,6 dB (`align-psnr.py`).
+
+**Le chemin produit** (`--native-bench`, `codec=h264,pipeline=d3d12,enc12=ve`,
+texte qui défile, 8 s, 20 Mb/s).
+
+| GPU | Images | host_total moy. / p99 (ms) | Encodage moy. (ms) |
+|---|---|---|---|
+| RTX 5060 Ti | 481 | 2,18 / 3,54 | 1,82 |
+| iGPU AMD | 475 (59 i/s) | 14,89 / 29,05 | 12,84 |
+| Arc A380 | 481 | 5,34 / 12,63 | 5,03 |
+
+Une seule keyframe par flux, zéro erreur au décodage, et les images tirées
+montrent le texte net. Pas de porte pour autant : en Auto, la ligne D3D12
+d'Intel ne vaut que pour le HEVC (`autoD3d12Codec`), et le H.264 reste en
+D3D11 tant qu'un banc ne l'a pas mesuré.
+
 ## 8o. Linux : la chaîne Vulkan (28/09/2026 →)
 
 Phase 13 du plan D3D12 : la même forme de chaîne sous Linux, en Vulkan Video
