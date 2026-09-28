@@ -5587,3 +5587,31 @@ sienne (§8n.20 du banc). L'iGPU AMD n'a pas d'AV1 en D3D12.
 utilisateur qui choisit « D3D12 » dans l'admin et dont le navigateur demande
 l'AV1 garde maintenant la route D3D12 sur une carte NVIDIA ou Intel Arc.
 Avant, il retombait en D3D11.
+
+### 32.15 G3 : la RTX en témoin du contrôle de débit maison (28/09/2026)
+
+Le contrôle de débit maison (`QpRateController`) a été réglé sur l'Arc, qui ne
+change pas de débit en cours de séquence. La RTX le sait, et fait donc tourner
+ce contrôle en témoin, sans rien y changer (`rc12=qp`, §8n.21 du banc). Il
+tient G3 sur ce second fabricant :
+- 7 fenêtres de 2 s sur 9 dans ±10 % de la cible, et les ratés sont sous la
+  cible ;
+- un p95 de taille d'image de 1,23 à 1,96 budget ;
+- des marches de débit suivies en 3 images ;
+- un écran fixe amené à QP 18 ;
+- des pertes réparées sans image clé.
+
+Il fait mieux que le débit du pilote NVIDIA par la même voie : le pilote
+reste sous la cible sur le clip et met jusqu'à 27 images à suivre une marche
+montante. Le pilote code le QP demandé sur chaque image, comme celui de l'Arc.
+
+Le témoin ne change pas la table. Sur la RTX au repos, VE encode une image en
+environ 8 ms, NVENC par D3D11 en 2 ms, et NVENC tient mieux le budget que les
+deux.
+Le résultat vaut pour plus tard : si VE devait porter un GPU qui ne
+reconfigure pas son débit, ou la chaîne Vulkan de Linux (§32.7), le même
+contrôle s'y branche tel quel.
+
+**Concrètement, pour l'utilisateur** : rien ne change sur un PC NVIDIA. Ce
+banc confirme que la régulation qui fait tenir son débit aux PC Intel n'est
+pas un réglage propre à une carte.

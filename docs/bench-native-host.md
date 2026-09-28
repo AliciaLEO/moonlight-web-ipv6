@@ -2856,6 +2856,83 @@ L'AV1 de l'A380 est le plus lent de ses trois codecs en D3D12 : 9,3 ms
 d'encodage, contre 5,0 en H.264 au §8n.19. En Auto, rien ne change :
 `autoD3d12Codec` ne vaut que pour le HEVC.
 
+### 8n.21 G3 : la RTX en témoin du contrôle de débit maison (28/09/2026)
+
+Le contrôle de débit maison a été mis au point sur l'Arc (§8n.6 à §8n.10). La
+RTX, qui sait changer de débit en cours de séquence, le fait tourner en
+témoin (`rc12=qp`) : il s'agit de savoir s'il tient sur l'encodeur d'un autre
+fabricant, sans rien changer à son réglage.
+
+**Montage.**
+- DualRTX, écran de la RTX 5060 Ti (le principal), contenu rendu par la RTX
+  dans le Chrome de banc en kiosque.
+- Build `e623f62c`, figé dans `bench-out\d3d12v2\g3rtx-bin`.
+- Exécuteur élevé à commande fixe (`g3rtx-runner.ps1`, celui du §8n.7 posé
+  sur l'écran de la RTX) : classe REALTIME, HEVC 1080p, 20 Mb/s,
+  `governor=0`, passes de 20 s.
+- Trois bras :
+  - notre contrôle de débit sur D3D12 Video Encode (`enc12=ve,rc12=qp`) ;
+  - le débit du pilote par la même voie (`rc12=driver` : CBR, VBV,
+    changement de débit à l'image suivante) ;
+  - NVENC par D3D11, la voie par défaut des GPU NVIDIA.
+- Sorties dans `bench-out\d3d12v2\g3rtx`, lues par `rate-report.py`
+  (`report.txt`).
+
+| contenu | bras | fenêtres à ±10 % | taille / budget : moy. / p95 | très au-dessus | `host_total` moy. / p99 (ms) |
+|---|---|---|---|---|---|
+| défilement 60 i/s (2 passes) | notre débit | 7 / 9 et 7 / 9 (0,78 à 0,97) | 0,92 / 1,35 | 0 | 8,34 / 9,12 et 8,17 / 9,53 |
+| | débit du pilote | 6 / 9 et 6 / 9 (0,61 à 0,94) | 0,86 / 1,03 | 0 | 8,12 / 9,28 et 8,11 / 8,74 |
+| | NVENC (D3D11) | 7 / 9 et 7 / 9 (0,76 à 0,94) | 0,90 / 0,98 | 0 | 2,18 / 2,81 et 2,16 / 3,13 |
+| clip de jeu 60 i/s | notre débit | 7 / 9 (0,89 à 0,96) | 0,93 / 1,23 | 0 | 7,88 / 9,21 |
+| | débit du pilote | 0 / 9 (0,80 à 0,89) | 0,84 / 0,95 | 0 | 7,74 / 8,77 |
+| | NVENC (D3D11) | 4 / 9 (0,83 à 0,95) | 0,89 / 0,96 | 0 | 2,12 / 2,64 |
+| défilement 120 i/s | notre débit | 7 / 9 (0,82 à 0,96) | 0,93 / 1,96 | 0 | 6,68 / 12,14 |
+| | débit du pilote | 7 / 9 (0,79 à 1,00) | 0,96 / 1,51 | 2 | 6,59 / 8,28 |
+| | NVENC (D3D11) | 7 / 9 (0,80 à 0,94) | 0,91 / 1,06 | 0 | 1,87 / 2,44 |
+
+- Rampe 20 ↔ 5 Mb/s : notre débit suit 8 marches sur 9 en 3 images (p95
+  1,63, aucune image très au-dessus). Le pilote en suit 7 sur 10 : il met
+  27 images à une montée et 8 à une descente, et laisse passer 2 images très
+  au-dessus. NVENC les suit toutes en une image.
+- Pertes (`lose=45`) : 5 sur 5 réparées par invalidation, sans image clé ;
+  7 fenêtres sur 9, p95 1,33.
+- Pause puis défilement : la première image après l'arrêt fait au plus 1,2
+  budget (0,1 à 1,2 sur 5 arrêts).
+- Écran fixe : QP 18 atteint, puis 38 renvois de 2,5 Ko à QP 18.
+- Le pilote code le QP demandé sur chaque image : aucun écart sur les
+  9 passes.
+- Images recodées : 2 à 6 par passe à 60 i/s (0,2 à 0,5 %), 47 sur 2 393
+  à 120 i/s (2 %), 11 sur la rampe, aux marches descendantes.
+- Première image clé : 92 à 100 Ko avec notre débit, 316 Ko avec le CBR du
+  pilote (7,6 budgets).
+
+**Lecture.**
+- Notre contrôle tient G3 sur un second fabricant, réglé sur l'Arc et
+  inchangé. Il fait mieux que le débit du pilote NVIDIA par la même voie :
+  sur le clip (7 fenêtres sur 9 contre 0), sur les marches, et sans image
+  très au-dessus. Le pilote colle plus près du budget au p95, mais reste
+  sous la cible (0,84 à 0,86 en moyenne).
+- NVENC par D3D11 reste la référence : p95 au plus 1,06 et marches suivies en
+  une image, pour 2 ms d'hôte. La voie par défaut de NVIDIA ne change pas.
+- VE encode une image en 7,4 à 8,0 ms sur une RTX au repos à 60 i/s, 6,2 ms
+  à 120 i/s, quand le GPU tourne plus vite (5,4 ms de `host_total` sous RE9
+  au §8n.18) ; NVENC en 1,7 à 1,9 ms. En moyenne, notre débit coûte autant
+  que celui du pilote. Au p99, il coûte plus là où il recode : 12,1 contre
+  8,3 ms à 120 i/s, 15,6 contre 9,4 ms sur la rampe. Chaque ré-encodage est
+  un encodage VE de plus.
+
+**Critères G3 sur la RTX.**
+- Débit à ±10 % : 7 fenêtres sur 9 dans chaque passe ; les ratés sont sous
+  la cible (0,78 à 0,89).
+- p95 ≤ 2 × budget : tenu (1,23 à 1,96).
+- Marches suivies en 3 images : 8 sur 9.
+- Écran fixe à QP 18 : tenu.
+- Latence : égale au débit du pilote en moyenne. Au p99, +3,9 ms à 120 i/s
+  et +6,3 ms sur la rampe : le ré-encodage sur un encodeur lent.
+
+**Reste pour G3** : le profil « Internet » sur un vrai stream (pertes, RTT,
+marches de bande passante, gouverneur actif), puis le test de Bruno.
+
 ## 8o. Linux : la chaîne Vulkan (28/09/2026 →)
 
 Phase 13 du plan D3D12 : la même forme de chaîne sous Linux, en Vulkan Video
