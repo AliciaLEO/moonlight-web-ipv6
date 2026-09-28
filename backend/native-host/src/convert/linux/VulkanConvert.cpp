@@ -86,27 +86,15 @@ struct Image
     VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
 };
 
-/// A scanout buffer met before, kept imported: the compositor rotates between
-/// two or three of them. Keyed by the DMA-BUF itself (its inode), since
-/// KmsCapture hands out a fresh fd for the same buffer every frame.
-struct Source
+/// The scanout buffer a conversion reads, what was checked of its format last:
+/// the driver's answer does not change from one frame to the next.
+struct SourceFormat
 {
-    dev_t dev = 0;
-    ino_t ino = 0;
-    uint64_t modifier = 0;
     uint32_t fourcc = 0;
-    int width = 0;
-    int height = 0;
-    uint32_t offsets[4] = {};
-    uint32_t pitches[4] = {};
-    Image image;
-    uint64_t lastUse = 0;
+    uint64_t modifier = 0;
+    int planes = 0;
+    bool usable = false;
 };
-
-/// A buffer unused this many frames is let go: a compositor that reallocated
-/// its buffers (a mode change) must not keep the old ones alive in VRAM.
-constexpr uint64_t kSourceIdleFrames = 120;
-constexpr size_t kMaxSources = 4;
 
 struct ScalePush
 {
@@ -202,7 +190,7 @@ struct VulkanConvert::Impl
     bool targetBound = false;
     bool targetTouched = false;
 
-    std::vector<Source> sources;
+    SourceFormat sourceFormat;
     uint64_t frames = 0;
     bool failed = false;
     bool saidNoFence = false;
@@ -926,7 +914,17 @@ bool VulkanConvert::convert(const capture::KmsFrame& frame, const capture::Curso
     if (d->failAt && d->frames == d->failAt)
         return fail("fault injected (MW_VK_CONVERT_FAIL_AT=" + std::to_string(d->failAt) + ")");
 
-    // ── The scanout buffer, imported once and kept ──
+    // ── The scanout buffer, imported for this conversion only ──
+    //
+    // ⚠️ Never kept between frames. RADV from Mesa 26 sends every buffer the
+    // device holds with every submission (its BO list is global, always), and
+    // the kernel then syncs each submission — the Vulkan encoder's included —
+    // with every scanout buffer still imported: the compositor writing the
+    // game's next frame into the one after this. Kept imported (two or three
+    // of them, the compositor's rotation), they cost the conversion 11 ms and
+    // the encode 15 under a load that saturates the 780M, against 3.3 and 2.1
+    // with RADV 25, whose list is per command buffer (bench §8o.6). An import
+    // is 0.02 to 0.04 ms (§8o.2).
     if (frame.planeCount <= 0 || frame.fds[0] < 0)
         return fail("the frame has no DMA-BUF (shared memory is the CPU route's)");
     struct stat st = {};
@@ -938,35 +936,10 @@ bool VulkanConvert::convert(const capture::KmsFrame& frame, const capture::Curso
             return fail("the scanout's planes live in several objects, which this does not "
                         "import");
     }
-    Source* source = nullptr;
-    for (Source& s : d->sources) {
-        if (s.dev == st.st_dev && s.ino == st.st_ino && s.modifier == frame.modifier &&
-            s.fourcc == frame.fourcc && s.width == frame.width && s.height == frame.height &&
-            std::memcmp(s.offsets, frame.offsets, sizeof(s.offsets)) == 0 &&
-            std::memcmp(s.pitches, frame.pitches, sizeof(s.pitches)) == 0) {
-            source = &s;
-            break;
-        }
-    }
-    if (!source) {
-        // Let go of the buffers the compositor stopped showing, then of the
-        // oldest if there are still too many.
-        d->sources.erase(std::remove_if(d->sources.begin(), d->sources.end(),
-                                        [&](Source& s) {
-                                            if (d->frames - s.lastUse < kSourceIdleFrames)
-                                                return false;
-                                            destroyImage(*d->device, s.image);
-                                            return true;
-                                        }),
-                         d->sources.end());
-        while (d->sources.size() >= kMaxSources) {
-            auto oldest = std::min_element(
-                d->sources.begin(), d->sources.end(),
-                [](const Source& a, const Source& b) { return a.lastUse < b.lastUse; });
-            destroyImage(*d->device, oldest->image);
-            d->sources.erase(oldest);
-        }
-        const VkFormat format = sourceFormat(frame.fourcc);
+    const VkFormat format = sourceFormat(frame.fourcc);
+    SourceFormat& checked = d->sourceFormat;
+    if (!checked.usable || checked.fourcc != frame.fourcc || checked.modifier != frame.modifier ||
+        checked.planes != frame.planeCount) {
         VkFormatFeatureFlags2 features = 0;
         uint32_t planes = 0;
         const bool listed = format != VK_FORMAT_UNDEFINED &&
@@ -985,26 +958,22 @@ bool VulkanConvert::convert(const capture::KmsFrame& frame, const capture::Curso
                         (listed ? ", driver wants " + std::to_string(planes) : ", not listed") +
                         ")");
         }
-        Source s;
-        s.dev = st.st_dev;
-        s.ino = st.st_ino;
-        s.modifier = frame.modifier;
-        s.fourcc = frame.fourcc;
-        s.width = frame.width;
-        s.height = frame.height;
-        std::memcpy(s.offsets, frame.offsets, sizeof(s.offsets));
-        std::memcpy(s.pitches, frame.pitches, sizeof(s.pitches));
-        const VkResult r = importImage(*d->device, frame.fds[0], frame.modifier, frame.planeCount,
-                                       frame.offsets, frame.pitches, format, frame.width,
-                                       frame.height, VK_IMAGE_USAGE_SAMPLED_BIT, s.image);
-        if (r != VK_SUCCESS) {
-            destroyImage(*d->device, s.image);
-            return fail("Vulkan refused the scanout buffer: " + resultText(r));
-        }
-        d->sources.push_back(s);
-        source = &d->sources.back();
+        checked = SourceFormat{frame.fourcc, frame.modifier, frame.planeCount, true};
     }
-    source->lastUse = d->frames;
+    Image sourceImage;
+    // Let go when this conversion returns, whatever it returns: past the CPU
+    // wait below, the GPU is done with it.
+    struct Release
+    {
+        vulkan::VulkanDevice& device;
+        Image& image;
+        ~Release() { destroyImage(device, image); }
+    } release{*d->device, sourceImage};
+    const VkResult imported = importImage(
+        *d->device, frame.fds[0], frame.modifier, frame.planeCount, frame.offsets, frame.pitches,
+        format, frame.width, frame.height, VK_IMAGE_USAGE_SAMPLED_BIT, sourceImage);
+    if (imported != VK_SUCCESS)
+        return fail("Vulkan refused the scanout buffer: " + resultText(imported));
 
     // ── The pointer: new bytes when its shape changed ──
     const bool upload = cursor.width > 0 && cursor.height > 0 &&
@@ -1017,7 +986,7 @@ bool VulkanConvert::convert(const capture::KmsFrame& frame, const capture::Curso
     // ── The scene the conversion samples: the scanout, or the scaled picture ──
     const bool resampled = m_Filter != ScaleFilter::Bilinear;
     {
-        VkDescriptorImageInfo sourceRead = {resampled ? d->nearest : d->linear, source->image.view,
+        VkDescriptorImageInfo sourceRead = {resampled ? d->nearest : d->linear, sourceImage.view,
                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkWriteDescriptorSet w = {};
         w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1086,7 +1055,7 @@ bool VulkanConvert::convert(const capture::KmsFrame& frame, const capture::Curso
     // The scanout, taken over from the compositor (the foreign queue family):
     // what it drew is visible once its implicit fence, waited on below, has
     // signalled.
-    before.push_back(imageBarrier(source->image.image, VK_IMAGE_LAYOUT_GENERAL,
+    before.push_back(imageBarrier(sourceImage.image, VK_IMAGE_LAYOUT_GENERAL,
                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                   VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, kCompute, kSampled,
                                   VK_QUEUE_FAMILY_FOREIGN_EXT, family));
@@ -1230,7 +1199,7 @@ bool VulkanConvert::convert(const capture::KmsFrame& frame, const capture::Curso
                 plane->image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, kCompute, kWrite,
                 VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, family, VK_QUEUE_FAMILY_FOREIGN_EXT));
     }
-    after.push_back(imageBarrier(source->image.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    after.push_back(imageBarrier(sourceImage.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                  VK_IMAGE_LAYOUT_GENERAL, kCompute, kSampled,
                                  VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, family,
                                  VK_QUEUE_FAMILY_FOREIGN_EXT));
@@ -1315,9 +1284,6 @@ void VulkanConvert::stop()
         const vulkan::DeviceFunctions& fn = device.fn();
         VkDevice dev = device.device();
         if (fn.vkDeviceWaitIdle) fn.vkDeviceWaitIdle(dev);
-        for (Source& s : d->sources)
-            destroyImage(device, s.image);
-        d->sources.clear();
         releaseScaler();
         destroyImage(device, d->luma);
         destroyImage(device, d->chroma);
