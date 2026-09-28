@@ -2595,6 +2595,65 @@ surface de l'encodeur : ni copie, ni changement de propriétaire de la
 surface. La route scindée a ses deux bouts, l'import de la capture (§8o.2) et
 cette écriture.
 
+### 8o.5 La route scindée dans le produit, contre GL (28/09/2026)
+
+C13.4 ter : la route scindée (conversion Vulkan en compute, encodeur VA-API)
+telle que le produit la construit, contre la conversion GL d'aujourd'hui, au
+repos et sous un jeu qui sature le GPU.
+
+**Montage.**
+- UM790Pro, 780M, Mesa 23.2 du système (RADV et radeonsi) : ce que le
+  binaire du produit charge, puisqu'il porte des capacités de fichier.
+- L'édition dev (binaires de `ea8edb89`) en `--native-bench` : capture
+  KMS 1920 × 1080 à 60 Hz, HEVC VA-API à 20 Mbit/s, 20 s par passe.
+- Quatre conversions :
+  - GL sans priorité (le produit avant §9-18, sans `CAP_SYS_NICE`) ;
+  - GL en HIGH (§9-18) ;
+  - Vulkan compute sans priorité (`convert=vulkan,priovk=normal`) ;
+  - Vulkan compute en HIGH (`convert=vulkan`, le défaut de la route quand
+    `CAP_SYS_NICE` est tenu).
+- Au repos, Chrome fait défiler la page de banc. Sous la charge,
+  `mw-gpu-load` au niveau 248 (45 i/s, 21,8 ms de GPU par image) est seul à
+  l'écran : la capture voit les images du « jeu ».
+- Deux tours au repos, trois sous la charge, dans l'ordre inverse d'un tour
+  à l'autre. La garde thermique (85 °C) a coupé la charge au bout de 2 à 4 s
+  dans trois passes du deuxième tour, avant la fenêtre du banc : passes
+  écartées, refaites au troisième tour après un refroidissement à 47 °C.
+- Script et sorties : `bench-out\vk-lab\split-*` et
+  `splitbench-2026-09-28.tgz`.
+
+| conversion | repos : moy. / p99 | charge : moy. / p99 | images captées sous la charge | présentation → encodé sous la charge : moy. / p99 |
+|---|---|---|---|---|
+| GL, sans priorité | 0,86 / 1,34 ms | 33,7 / 40,6 ms | 16 i/s | 38,0 / 44,8 ms |
+| GL, HIGH | 0,86 / 1,23 ms | 15,6 / 39,6 ms | 22 à 32 i/s | 19,9 / 44,2 ms |
+| Vulkan compute, sans priorité | 0,54 / 0,79 ms | 3,7 / 13,4 ms | 44 i/s | 8,0 / 17,6 ms |
+| Vulkan compute, HIGH | 0,57 / 0,93 ms | 4,1 / 14,0 ms | 44 i/s | 8,4 / 18,2 ms |
+
+- **Sous la charge**, la conversion GL attend le jeu : 16 images captées par
+  seconde sur 45, et 38 ms de la présentation à l'image encodée. HIGH la
+  double sans la sauver (p99 inchangé, 40 ms).
+- La route scindée **capte toutes les images du jeu** (44 sur 45 i/s), en
+  8 ms en moyenne et 18 ms au p99. HIGH n'y ajoute rien sur cette charge :
+  c'est la file compute qui compte, pas le privilège.
+- **Au repos**, la route scindée gagne 0,3 ms de conversion (0,55 contre
+  0,86) et 0,2 ms de bout en bout.
+- L'encodeur VA-API ne bouge pas (4,2 à 4,5 ms) et le jeu garde ses
+  44,3 à 45,1 i/s dans les quatre cas : la conversion ne lui coûte rien de
+  mesurable.
+- Au repos, la page défilée par Chrome ne présente que 27 à 40 i/s, dans
+  toutes les variantes : c'est le contenu, pas la chaîne.
+
+**Ce qu'on en retient.**
+- Sur le 780M, la route scindée est meilleure partout : un peu au repos, du
+  tout au tout sous un jeu. Elle tourne avec les pilotes d'Ubuntu 22.04,
+  sans Vulkan Video, et sans `CAP_SYS_NICE`.
+- Proposé à Bruno (plan §9-20) : la ligne AMD de la table des vendeurs passe
+  à la route scindée (`autoLinuxConversion`). GL reste le repli automatique
+  (Vulkan absent, import refusé, périphérique perdu), testé.
+- Leçon de banc : sous `mw-gpu-load` 248, refroidir à 47 °C et attendre 20 s
+  avant chaque passe. À 58 °C, le radiateur encore chaud laisse la garde
+  couper en quelques secondes.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
