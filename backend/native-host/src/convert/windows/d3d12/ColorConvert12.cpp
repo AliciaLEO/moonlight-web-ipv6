@@ -115,6 +115,8 @@ void ColorConvert12::release()
     m_RootSignature.Reset();
     m_LumaPso.Reset();
     m_ChromaPso.Reset();
+    m_FillLumaPso.Reset();
+    m_FillChromaPso.Reset();
     m_ScaleHPso.Reset();
     m_ScaleVPso.Reset();
     m_VertexShader.Reset();
@@ -303,16 +305,19 @@ bool ColorConvert12::createPipeline(std::string& error)
 
     // The bytecode ColorConvert draws: the pair this session needs, with the
     // source the tone-map flag says.
-    ComPtr<ID3DBlob> luma, chroma;
+    ComPtr<ID3DBlob> luma, chroma, fill;
     if (!compileConvertShader("VsMain", "vs_5_0", m_ToneMap, m_VertexShader, error) ||
         !compileConvertShader(m_Hdr ? "PsLumaHdr" : "PsLuma", "ps_5_0", m_ToneMap, luma, error) ||
         !compileConvertShader(m_Hdr ? "PsChromaHdr" : "PsChroma", "ps_5_0", m_ToneMap, chroma,
-                              error))
+                              error) ||
+        !compileConvertShader("PsFill", "ps_5_0", m_ToneMap, fill, error))
         return false;
-    if (!createPso(m_VertexShader.Get(), luma.Get(),
-                   m_Hdr ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM, m_LumaPso, error) ||
-        !createPso(m_VertexShader.Get(), chroma.Get(),
-                   m_Hdr ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM, m_ChromaPso, error))
+    const DXGI_FORMAT lumaFormat = m_Hdr ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
+    const DXGI_FORMAT chromaFormat = m_Hdr ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
+    if (!createPso(m_VertexShader.Get(), luma.Get(), lumaFormat, m_LumaPso, error) ||
+        !createPso(m_VertexShader.Get(), chroma.Get(), chromaFormat, m_ChromaPso, error) ||
+        !createPso(m_VertexShader.Get(), fill.Get(), lumaFormat, m_FillLumaPso, error) ||
+        !createPso(m_VertexShader.Get(), fill.Get(), chromaFormat, m_FillChromaPso, error))
         return false;
 
     D3D12_DESCRIPTOR_HEAP_DESC heap = {};
@@ -622,6 +627,14 @@ bool ColorConvert12::recordConvert(ID3D12GraphicsCommandList* list, ID3D12Resour
         }
     }
 
+    transition(list, m_Output.Get(), m_OutputState, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    // The band outside the picture, once: nothing ever draws there again.
+    // Ahead of the pointer's constants, which the black overwrites.
+    if (!m_OutputCleared) {
+        recordBlack(list);
+        m_OutputCleared = true;
+    }
+
     // Where the pointer goes: the same constants ColorConvert writes.
     const OverlayConstants overlay =
         overlayConstants(cursor, draw, m_CursorPixels != nullptr, m_SourceWidth, m_SourceHeight,
@@ -635,18 +648,8 @@ bool ColorConvert12::recordConvert(ID3D12GraphicsCommandList* list, ID3D12Resour
                        m_CursorPixels != nullptr)
                : table(source, m_SourceFormat, m_CursorPixels != nullptr));
 
-    transition(list, m_Output.Get(), m_OutputState, D3D12_RESOURCE_STATE_RENDER_TARGET);
     const D3D12_CPU_DESCRIPTOR_HANDLE luma = rtv(RtvLuma);
     const D3D12_CPU_DESCRIPTOR_HANDLE chroma = rtv(RtvChroma);
-    if (!m_OutputCleared) {
-        // The band outside the picture, once: nothing ever draws there again.
-        const float lumaBlack[4] = {m_Hdr ? 4096.0f / 65535.0f : 16.0f / 255.0f, 0.0f, 0.0f, 0.0f};
-        const float chromaGrey[4] = {m_Hdr ? 32768.0f / 65535.0f : 128.0f / 255.0f,
-                                     m_Hdr ? 32768.0f / 65535.0f : 128.0f / 255.0f, 0.0f, 0.0f};
-        list->ClearRenderTargetView(luma, lumaBlack, 0, nullptr);
-        list->ClearRenderTargetView(chroma, chromaGrey, 0, nullptr);
-        m_OutputCleared = true;
-    }
 
     // Luma at full resolution, chroma at half: 4:2:0.
     list->OMSetRenderTargets(1, &luma, FALSE, nullptr);
@@ -727,21 +730,37 @@ bool ColorConvert12::recordClearBlack(ID3D12GraphicsCommandList* list, std::stri
         error = "colour conversion is not initialized";
         return false;
     }
-    // Limited-range black: 16 and 128 of 255 in 8 bits; 64 and 512 of 1023 in
-    // P010, whose ten bits sit at the top of each 16-bit word (64 << 6, 512
-    // << 6). A UNORM clear lands on those codes exactly.
-    const float lumaBlack[4] = {m_Hdr ? 4096.0f / 65535.0f : 16.0f / 255.0f, 0.0f, 0.0f, 0.0f};
-    const float chromaGrey[4] = {m_Hdr ? 32768.0f / 65535.0f : 128.0f / 255.0f,
-                                 m_Hdr ? 32768.0f / 65535.0f : 128.0f / 255.0f, 0.0f, 0.0f};
-    D3D12_CPU_DESCRIPTOR_HANDLE luma = m_RtvHeap->GetCPUDescriptorHandleForHeapStart();
-    D3D12_CPU_DESCRIPTOR_HANDLE chroma = luma;
-    chroma.ptr += static_cast<SIZE_T>(RtvChroma) * m_RtvStride;
+    list->SetGraphicsRootSignature(m_RootSignature.Get());
+    list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     transition(list, m_Output.Get(), m_OutputState, D3D12_RESOURCE_STATE_RENDER_TARGET);
-    list->ClearRenderTargetView(luma, lumaBlack, 0, nullptr);
-    list->ClearRenderTargetView(chroma, chromaGrey, 0, nullptr);
+    recordBlack(list);
     m_OutputCleared = true;
     transition(list, m_Output.Get(), m_OutputState, D3D12_RESOURCE_STATE_COMMON);
     return true;
+}
+
+void ColorConvert12::recordBlack(ID3D12GraphicsCommandList* list)
+{
+    // Limited-range black: 16 and 128 of 255 in 8 bits; 64 and 512 of 1023 in
+    // P010, whose ten bits sit at the top of each 16-bit word (64 << 6, 512
+    // << 6). A UNORM target stores those codes exactly. The fill's value is
+    // the Overlay's first four floats (PsFill); the rest is left at zero.
+    const float black[8] = {m_Hdr ? 4096.0f / 65535.0f : 16.0f / 255.0f};
+    const float grey[8] = {m_Hdr ? 32768.0f / 65535.0f : 128.0f / 255.0f,
+                           m_Hdr ? 32768.0f / 65535.0f : 128.0f / 255.0f};
+    const auto plane = [&](Rtv which, ID3D12PipelineState* pso, int width, int height,
+                           const float* value) {
+        D3D12_CPU_DESCRIPTOR_HANDLE target = m_RtvHeap->GetCPUDescriptorHandleForHeapStart();
+        target.ptr += static_cast<SIZE_T>(which) * m_RtvStride;
+        list->OMSetRenderTargets(1, &target, FALSE, nullptr);
+        viewport(list, 0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), width,
+                 height);
+        list->SetPipelineState(pso);
+        list->SetGraphicsRoot32BitConstants(0, 8, value, 0);
+        list->DrawInstanced(3, 1, 0, 0);
+    };
+    plane(RtvLuma, m_FillLumaPso.Get(), m_CodedWidth, m_CodedHeight, black);
+    plane(RtvChroma, m_FillChromaPso.Get(), m_CodedWidth / 2, m_CodedHeight / 2, grey);
 }
 
 void ColorConvert12::frameCompleted()

@@ -92,8 +92,13 @@ public:
 
     /// Records output() cleared to limited-range black — 16/128 in 8 bits,
     /// 64/512 in P010's ten — what a capture restart shows. The same bytes as
-    /// ColorConvert converting a black picture with no pointer.
+    /// ColorConvert converting a black picture with no pointer. Drawn, not
+    /// cleared: see recordBlack.
     bool recordClearBlack(ID3D12GraphicsCommandList* list, std::string& error);
+
+    /// The tests' way to record a conversion alone: the next recordConvert()
+    /// skips the one clear of the band outside the picture.
+    void assumeOutputCleared() { m_OutputCleared = true; }
 
     /// The list recorded by the last recordConvert() has completed: its
     /// resample timing, if it had one, is read.
@@ -132,11 +137,21 @@ private:
     D3D12_GPU_DESCRIPTOR_HANDLE table(ID3D12Resource* source, DXGI_FORMAT format, bool cursor);
     void transition(ID3D12GraphicsCommandList* list, ID3D12Resource* resource,
                     D3D12_RESOURCE_STATES& state, D3D12_RESOURCE_STATES next);
+    /// The whole output, both planes, at limited-range black (16/128 in 8
+    /// bits, 64/512 in P010's ten), the output already a render target. Drawn,
+    /// never ClearRenderTargetView: that clear on a P010 plane loses the
+    /// device of the N95's UHD Graphics (driver 32.0.101.7088, 28/09/2026),
+    /// where the same draw is fine. The same bytes as the clear everywhere.
+    /// The root signature is set; the root constants are overwritten.
+    void recordBlack(ID3D12GraphicsCommandList* list);
 
     Microsoft::WRL::ComPtr<ID3D12Device> m_Device;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> m_RootSignature;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> m_LumaPso;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> m_ChromaPso;
+    /// A plane at the value of the root constants (recordBlack).
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> m_FillLumaPso;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> m_FillChromaPso;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> m_ScaleHPso;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> m_ScaleVPso;
     Microsoft::WRL::ComPtr<ID3DBlob> m_VertexShader;

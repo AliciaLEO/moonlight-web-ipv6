@@ -311,6 +311,13 @@ float2 PsChromaHdr(VsOut i) : SV_TARGET
     // Limited range, 10-bit: chroma 64..960 around a 512 centre.
     return float2(P010Code(cb, 896.0, 512.0), P010Code(cr, 896.0, 512.0));
 }
+
+// A plane at one value, the Overlay's first four floats: the D3D12 converter's
+// black, drawn where a clear loses some drivers' device (ColorConvert12).
+float4 PsFill(VsOut i) : SV_TARGET
+{
+    return CursorRect;
+}
 )HLSL";
 
 // ── The resample pass: Lanczos-2 dilated to the ratio, separable ────────────

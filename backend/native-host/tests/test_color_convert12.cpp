@@ -7,6 +7,7 @@
 #if defined(_WIN32)
 #include "convert/windows/ColorConvert.h"
 #include "convert/windows/d3d12/ColorConvert12.h"
+#include "platform/windows/IndirectDisplay.h"
 #include "platform/windows/d3d12/D3d12Device.h"
 
 #include <d3d11.h>
@@ -15,7 +16,9 @@
 #include <wrl/client.h>
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -535,5 +538,92 @@ void run_color_convert12_tests()
 
     std::string gone;
     CHECK(!rig.device->removed(gone));
+#endif
+}
+
+// ColorConvert12 on each real GPU, not WARP (plan C8.2): the steps of a
+// session's first picture, each waited for. The N95's UHD Graphics lost its
+// device (DXGI_ERROR_DEVICE_HUNG) on the first picture of every HDR session
+// on D3D12, whatever the scaling (28/09/2026), while D3D12 Video Encode took
+// P010 pictures uploaded by copy. MW_TEST_CONVERT12_STEP=clear|draw runs one
+// P010 step alone, in a process of its own: a hung device is the process's
+// device on that GPU, gone for every test after it.
+void run_color_convert12_gpu_tests()
+{
+#if defined(_WIN32)
+    SECTION("ColorConvert12 — a session's first picture, step by step, on each GPU");
+
+    std::string step = "all";
+    if (const char* value = std::getenv("MW_TEST_CONVERT12_STEP"); value && *value) step = value;
+    ComPtr<IDXGIFactory4> factory;
+    if (FAILED(::CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
+        std::fprintf(stderr, "  no DXGI factory — skipped\n");
+        return;
+    }
+    // As the product's first HDR picture: the desktop in FP16, 1440p, to 1080p
+    // coded at 1088 — the band below cleared once.
+    struct GpuCase
+    {
+        const char* name;
+        bool hdr;
+    };
+    const GpuCase cases[] = {{"NV12 (tone map)", false}, {"P010 (BT.2020 PQ)", true}};
+    std::set<uint64_t> seen;
+    ComPtr<IDXGIAdapter1> adapter;
+    for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i) {
+        DXGI_ADAPTER_DESC1 desc = {};
+        adapter->GetDesc1(&desc);
+        if ((desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) ||
+            !seen.insert(d3d12::luidValue(desc.AdapterLuid)).second ||
+            platform::isIndirectDisplayOnly(desc.AdapterLuid))
+            continue;
+        Rig rig;
+        std::string error;
+        if (!rig.init(adapter.Get(), error)) continue;
+        const std::string gpu = rig.device->name();
+        const std::vector<uint8_t> pixels = picture(2560, 1440, true, false);
+        ComPtr<ID3D12Resource> source =
+            rig.texture(2560, 1440, DXGI_FORMAT_R16G16B16A16_FLOAT, pixels, error);
+        CHECK(source != nullptr);
+        if (!source) continue;
+        for (const GpuCase& c : cases) {
+            // One P010 step alone asks for P010 alone.
+            if (step != "all" && !c.hdr) continue;
+            convert::ColorConvert12 converter;
+            std::string why;
+            if (!converter.init(rig.device->device(), rig.queue.queue.Get(),
+                                DXGI_FORMAT_R16G16B16A16_FLOAT, 2560, 1440, 1920, 1080, 1920, 1088,
+                                c.hdr, convert::ScaleFilter::Bilinear, why)) {
+                std::fprintf(stderr, "  %s, %s: refused (%s)\n", gpu.c_str(), c.name, why.c_str());
+                CHECK(false);
+                continue;
+            }
+            converter.setSdrWhite(2.5f);
+            const auto runStep = [&](const char* what, bool draw) {
+                ID3D12GraphicsCommandList* list = rig.begin();
+                const bool recorded =
+                    draw ? converter.recordConvert(list, source.Get(), capture::CursorState{},
+                                                   convert::CursorDraw{}, why)
+                         : converter.recordClearBlack(list, why);
+                const bool ran = recorded && rig.run(error);
+                std::string removed;
+                const bool lost = rig.device->removed(removed);
+                std::fprintf(stderr, "  %s, %s, %s: %s\n", gpu.c_str(), c.name, what,
+                             lost  ? ("DEVICE LOST — " + removed).c_str()
+                             : ran ? "done"
+                                   : ("failed — " + (recorded ? error : why)).c_str());
+                CHECK(ran && !lost);
+                return ran && !lost;
+            };
+            bool alive = true;
+            if (step == "all" || step == "clear") alive = runStep("the clear to black", false);
+            if (alive && (step == "all" || step == "draw")) {
+                if (step == "draw") converter.assumeOutputCleared();
+                alive =
+                    runStep(step == "draw" ? "the conversion, no clear" : "the conversion", true);
+            }
+            if (!alive) break;
+        }
+    }
 #endif
 }

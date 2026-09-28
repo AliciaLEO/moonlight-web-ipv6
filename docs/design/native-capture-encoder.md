@@ -5374,6 +5374,31 @@ vide : une ligne n'y entre qu'avec une panne que les gardes de la route
 n'attrapent pas déjà (garde d'en-têtes, délai des fences, retour en D3D11), et
 avec sa preuve.
 
+**Les scénarios (C8.2).** Le banc capture un écran virtuel rendu par l'Arc
+pendant que son mode et son HDR changent (§8n.13 du banc) :
+- quatre modes, dont un en 4:3 ;
+- le HDR activé puis coupé sous une session SDR (le bureau passe en FP16, la
+  conversion D3D12 fait le tone mapping) ;
+- le HDR coupé puis réactivé sous une session HDR (elle se reconstruit en SDR) ;
+- deux sessions à la fois sur deux écrans de l'Arc, en deux processus comme
+  deux workers.
+
+Tout reste en D3D12 : chaque redémarrage de capture reconstruit la chaîne sur
+une keyframe, et aucun flux n'a d'erreur de décodage. Le passage de la
+duplication à WGC et retour est celui de C8.3 bis. Pendant 30 min sous RE9,
+sur l'Arc : 42 053 images en D3D12, sans perte ni repli, et une mémoire plate
+(221 Mo privés, 50 Mo de VRAM, du début à la fin).
+
+**Ce que la phase 8 a trouvé : le HDR de l'UHD d'un N95.** Une session HDR en
+D3D12 y perdait le périphérique dès sa première image (`DEVICE_HUNG`). Le
+repli l'a rattrapée : D3D11, HDR compris, sans erreur. Mais le GPU se
+réinitialisait à chaque session. La cause est `ClearRenderTargetView` sur un
+plan de P010 : le pilote 32.0.101.7088 le prend mal, alors que le dessin dans
+ce même plan passe. Le convertisseur D3D12 dessine donc son noir, par un
+`PsFill` qui rend les mêmes octets partout (§8n.14 du banc). Le test
+`color_convert12_gpu` rejoue ces étapes sur chaque vrai GPU, et plus seulement
+sur WARP.
+
 **Concrètement, pour l'utilisateur** : si la carte graphique décroche en
 plein stream (pilote qui plante ou se met à jour, GPU bloqué), l'image se fige
 une demi-seconde, trois secondes et demie au pire, puis repart d'elle-même

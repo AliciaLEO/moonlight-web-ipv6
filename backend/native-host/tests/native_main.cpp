@@ -22,6 +22,7 @@ void run_capabilities_tests();
 void run_capture_tests();
 void run_color_convert_tests();
 void run_color_convert12_tests();
+void run_color_convert12_gpu_tests();
 void run_d3d11_video_pipeline_tests();
 void run_d3d12_device_tests();
 void run_dda_interop_tests();
@@ -154,6 +155,9 @@ int main(int argc, char** argv)
     RUN(dda_interop);
     RUN(video_encode_caps12);
     RUN(video_encode12);
+    // Last of the D3D12 groups: a GPU that hangs on it takes the process's
+    // D3D12 device on that GPU with it.
+    RUN(color_convert12_gpu);
     RUN(win32_cursor);
     RUN(host_mute);
     RUN(evdev_keymap);

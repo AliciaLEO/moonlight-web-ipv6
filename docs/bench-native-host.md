@@ -2394,6 +2394,22 @@ lui-même.
 - `removed` n'a rien bloqué côté D3D11 : la duplication, qui attendait la
   fence B du périphérique retiré, a été rouverte sans attente.
 
+**Le N95** (mw-intel, pilote 32.0.101.7088), mêmes pannes. Le banc tourne sur
+l'écran de l'UHD (1920×1080 à 60 Hz), en HEVC 1080p60 à 20 Mb/s pendant 12 s,
+avec le jeton limité et un exécuteur dans la session console :
+
+| panne | trou sans image | images D3D12 / D3D11 | keyframes (images) | erreurs de décodage |
+|---|---|---|---|---|
+| `encode@180` | 1 396 ms | 179 / 398 | 0, 179 | 0 |
+| `convert@180` | 1 080 ms | 179 / 416 | 0, 179 | 0 |
+| `timeout@180` | 4 039 ms | 179 / 256 | 0, 179 | 0 |
+| `removed@180` | 1 148 ms | 179 / 429 | 0, 179 | 0 |
+| `open@1` | — (D3D11 dès le départ) | 0 / 641 | 0 | 0 |
+
+Même comportement que sur l'Arc. Le trou est deux fois plus long : un N95 met
+plus de temps à ouvrir oneVPL en D3D11. La ligne de session donne le pilote
+(C8.3) : « on Intel(R) UHD Graphics (driver 32.0.101.7088) ».
+
 ### 8n.12 C8.3 bis : le retour à la duplication, sur l'Arc (28/09/2026)
 
 Au §8n.4 (endurance), un worker non SYSTEM perdait la duplication derrière un
@@ -2427,6 +2443,112 @@ perdue, comme un verrouillage la perd.
   désormais le vrai bureau sécurisé.
 - Sur WGC, `host_total` monte à 9,0-9,7 ms en moyenne, contre 6,6-7,5 en D3D12
   sur la duplication, pour le même contenu (images capturées, hors keyframes).
+- **N95**, `3+4` : D3D12 → D3D11 sur WGC après l'image 124 (1 520 ms), puis
+  D3D11 → D3D12 après l'image 202 (493 ms). 388 images en D3D12 et 78 en
+  D3D11, keyframes aux images 0, 125 et 203, aucune erreur de décodage. Sur
+  WGC, le N95 ne suit que ~20 i/s en D3D11.
+
+### 8n.13 C8.2 : les scénarios, sur l'Arc (28/09/2026)
+
+Le VDD de Bruno est rendu par l'Arc et activé pour l'occasion (§8n.5 : jamais
+le mode d'un écran physique). `--native-bench` le capture pendant qu'un script
+change son mode et son HDR, puis remet tout en place. Chaîne prise par `auto`,
+HEVC 1080p60 à 20 Mb/s, jeton limité.
+
+| scénario | ce qui change en plein stream | images | redémarrages de capture | keyframes | erreurs de décodage |
+|---|---|---|---|---|---|
+| session SDR, 50 s | 1920×1080 à 60 Hz, puis à 120 Hz, 1440×1080 (4:3), retour en 2560×1440, HDR activé, HDR coupé | 678, toutes en D3D12 | 7 | 7 | 0 |
+| session HDR (`hdr=1`), 30 s | HDR coupé, puis réactivé | 1 755, toutes en D3D12 | 3 | 3 | 0 |
+| deux sessions, 30 s | l'écran physique de l'Arc et le VDD, deux processus en même temps | 1 091 + 1 312, toutes en D3D12 | — | 1 + 1 | 0 |
+
+- Chaque redémarrage reconstruit la chaîne D3D12. Aucun ne repasse en
+  D3D11, pas même quand le bureau devient FP16 sous une session SDR : la
+  conversion D3D12 fait le tone mapping.
+- Le 4:3 ramène l'image à 1440×1080, la taille de l'écran. Revenu à
+  2560×1440, l'écran ne la fait pas regrandir : c'est le comportement d'avant
+  (`frameForDisplay`), la session ne suit la forme qu'avec
+  `followDisplayShape`.
+- La session HDR qui voit l'écran quitter le HDR se reconstruit en SDR
+  (« the display left HDR — rebuilding on the SDR path »), toujours en D3D12.
+  Au retour du HDR, elle reste en SDR avec tone mapping : ce que le client a
+  négocié ne change pas en cours de route.
+- Deux sessions sur l'Arc : deux périphériques D3D12, un par processus, comme
+  deux workers. 36 et 44 i/s, avec 4,7 et 5,1 ms de moyenne de la
+  présentation à l'image encodée. L'Arc rend en plus deux pages de défilement
+  en 1440p, dont une à 120 Hz.
+- Le premier essai des deux sessions n'avait qu'un écran en mouvement : le
+  lancement de la page au profil `.chrome-bench` tue aussi celle au profil
+  `.chrome-bench2` (filtre `*.chrome-bench*` de `kiosk.ps1`). Il faut lancer
+  le profil par défaut d'abord.
+- À la désactivation du VDD, l'agencement est revenu à l'identique : DISPLAY1
+  principal, 59,95 et 60 Hz, HDR coupé partout, `vdd_settings.xml` intact.
+
+**30 min sous RE9.** RE9 tourne sur l'Arc (la copie propre, réglages légers
+de G2, scène de la pluie, 3D à 99 %). `--native-bench` capture l'écran de
+l'Arc pendant 1 800 s, en HEVC 1080p60, jeton limité (classe HIGH). La
+mémoire du processus et sa VRAM sont relevées toutes les 10 s.
+- 42 053 images, toutes en D3D12, une seule keyframe : ni perte, ni repli, ni
+  image recodée. RE9 rend ~23 i/s, et chacune de ses images est encodée.
+- Mémoire plate de la 1re à la 29e minute : privée 221,3 à 221,5 Mo, VRAM de
+  l'Arc au processus 49,7 Mo et mémoire partagée 61,5 Mo sans un octet de
+  plus, 408 à 414 handles, 10 à 13 threads.
+- 24,3 ms de moyenne de la présentation à l'image encodée, 36,9 au p99 : en
+  classe HIGH, les files D3D12 attendent le jeu (§8n.2). Le worker installé,
+  en REALTIME, faisait 5,7 ms sous RE9 (§8n.7). Ce banc mesure la tenue, pas
+  la latence.
+- RE9 remis comme avant : préférence GPU d'origine (la RTX), `config.ini` à
+  son empreinte.
+
+**Le N95** (VDD rendu par l'UHD, 2560×1440 à 120 Hz ; mêmes scripts à
+distance) :
+- Session SDR, 50 s : 1 140 images, toutes en D3D12, sept redémarrages de
+  capture, six keyframes, aucune erreur de décodage. Le 1440×1080 est refusé
+  par le VDD du N95 (`ChangeDisplaySettingsEx` −2, mode absent) : trois modes
+  au lieu de quatre, HDR activé puis coupé compris.
+- Deux sessions (l'écran de l'UHD et le VDD) : toutes deux en D3D12 jusqu'au
+  bout, aucune erreur. Mais l'UHD rend aussi les deux pages de défilement,
+  dont une en 1440p à 120 Hz : 7,6 et 10,4 images/s, 125 et 66 ms de moyenne
+  avec des pointes à 2,6 s. C'est la limite du N95, pas une panne.
+- ⚠️ **Session HDR : le périphérique D3D12 est perdu dès la première image**
+  (`0x887A0006`, DXGI_ERROR_DEVICE_HUNG). La session repasse en D3D11 et
+  continue en HDR, sans erreur de décodage : le repli a joué sur une vraie
+  panne. Trois passes courtes l'ont reproduit à chaque fois, en bilinéaire,
+  en 1:1 et en Lanczos-2 : la mise à l'échelle n'y est pour rien.
+  `video_encode12` encode du Main 10 sur l'UHD à partir d'images P010 copiées
+  depuis le CPU (106/106) : l'encodeur n'y est pour rien non plus. Reste le
+  rendu de la conversion dans les plans du P010 (suite au §8n.14).
+
+### 8n.14 Le HDR du N95 : un effacement qui perdait le GPU (28/09/2026)
+
+**Le test.** `color_convert12_gpu`, nouveau, rejoue sur chaque vrai GPU (et
+plus seulement sur WARP) les étapes de la première image d'une session :
+l'effacement de la sortie au noir, puis la conversion, 1440p FP16 → 1080p
+codé en 1088. Chaque étape attend sa fence. `MW_TEST_CONVERT12_STEP=clear|draw`
+fait tourner une étape P010 seule, dans son propre processus, parce qu'un GPU
+perdu emporte le périphérique D3D12 du processus.
+
+| sur l'UHD du N95 (pilote 32.0.101.7088) | NV12 | P010 |
+|---|---|---|
+| effacement (`ClearRenderTargetView` sur les deux plans) | passe | **périphérique perdu** (`0x887A0006`), deux fois sur deux |
+| conversion seule, sans effacement | passe | passe |
+
+L'Arc, l'iGPU AMD et la RTX passent tout. **La cause :**
+`ClearRenderTargetView` sur une vue d'un plan de P010 (R16 ou R16G16). Le
+dessin dans ces mêmes vues passe. La première image de chaque session HDR
+efface la bande sous l'image, et l'image noire d'un écran verrouillé fait de
+même.
+
+**Le correctif.** Le noir est dessiné au lieu d'être effacé : `PsFill`, un
+point d'entrée du HLSL commun qui rend la valeur des constantes, et un PSO par
+plan. Il couvre la bande de la première image et l'image noire
+(`recordClearBlack`), en NV12 comme en P010. Les octets sont les mêmes : sur
+WARP, la conversion D3D12 reste identique à celle de D3D11, noirs 8 bits et
+P010 compris, bande noire comprise.
+
+**Vérifié sur le N95** : `color_convert12_gpu` passe en entier (5/5), et une
+vraie session HDR tient en D3D12 sur 15 s sur le VDD en HDR. Elle donne 262
+images, une keyframe, un flux Main 10 PQ BT.2020 que ffmpeg décode sans
+erreur.
 
 ## 8o. Linux : la chaîne Vulkan (28/09/2026 →)
 
