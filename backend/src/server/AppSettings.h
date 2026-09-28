@@ -117,6 +117,11 @@ public:
     // needs is a knob that invites being turned. Add "keyboard_debug": true by
     // hand, restart, type — the README says so. Default false.
     //
+    // Never on the secure desktop, whatever the file says: the lock screen's PIN
+    // and a UAC prompt's password are typed there, and since the SYSTEM worker
+    // reaches that desktop they would have been written down key by key
+    // (NativeHost::secureDesktopHasInput, InputMsg::setQuietProbe).
+    //
     // Read once at startup rather than per keystroke: a settings file re-read on
     // every key press would put disk I/O on the input path.
 

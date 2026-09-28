@@ -181,8 +181,9 @@ int runStreamWorker(QCoreApplication& app)
     // path reads has to be read again on this side of the fork.
     if (AppSettings().keyboardDebug()) {
         InputMsg::setDebug(true);
+        InputMsg::setQuietProbe(&mw::native::NativeHost::secureDesktopHasInput);
         mw::native::NativeHost::setKeyboardDiagnostics(true);
-        qInfo() << "[KBD] keyboard diagnostics on in the worker";
+        qInfo() << "[KBD] keyboard diagnostics on in the worker (never on the secure desktop)";
     }
 
     // ── First stdin line = session config ────────────────────────────────────

@@ -23,6 +23,10 @@
 #include "Selector.h"
 #include "Session.h"
 
+#ifdef _WIN32
+#include "../platform/windows/InputDesktop.h"
+#endif
+
 #ifndef MW_NATIVE_VERSION
 #define MW_NATIVE_VERSION "0.1.0-dev"
 #endif
@@ -222,6 +226,15 @@ void NativeHost::setKeyboardDiagnostics(bool on)
 bool NativeHost::keyboardDiagnostics()
 {
     return input::keyboardDiagnostics();
+}
+
+bool NativeHost::secureDesktopHasInput()
+{
+#ifdef _WIN32
+    return platform::inputDesktopName() != "Default";
+#else
+    return false;
+#endif
 }
 
 const char* NativeHost::version()

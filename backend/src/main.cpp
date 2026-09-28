@@ -5300,8 +5300,10 @@ int main(int argc, char* argv[])
     // own layout did with it, and neither can speak for the other.
     if (appSettings.keyboardDebug()) {
         InputMsg::setDebug(true);
+        InputMsg::setQuietProbe(&mw::native::NativeHost::secureDesktopHasInput);
         mw::native::NativeHost::setKeyboardDiagnostics(true);
-        qInfo() << "[KBD] keyboard diagnostics on — one line per printable key press";
+        qInfo() << "[KBD] keyboard diagnostics on — one line per printable key press, never on "
+                   "the secure desktop";
     }
 
     // The hairpin verdict decides between the domain and loopback, and it can

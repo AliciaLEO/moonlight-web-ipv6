@@ -478,6 +478,16 @@ public:
     static void setKeyboardDiagnostics(bool on);
     static bool keyboardDiagnostics();
 
+    /// Whether the input is on a desktop other than the user's own: on Windows
+    /// the secure one, `Winlogon`, where the lock screen's PIN and the UAC
+    /// prompt's password are typed — or one this process cannot even read,
+    /// which from below SYSTEM is that same desktop. The keyboard diagnostics,
+    /// this module's and the input codec's, keep silent while it answers true:
+    /// what is typed there never belongs in a log, whatever a settings file
+    /// says. Asked live, on a key press, only when the diagnostics are on.
+    /// False on the other platforms.
+    static bool secureDesktopHasInput();
+
     /// Version of this module, independent of MoonlightWeb's — it may one day
     /// ship on its own.
     static const char* version();
