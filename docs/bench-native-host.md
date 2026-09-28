@@ -2405,19 +2405,17 @@ matériel ce qu'il sait faire.
   ou 3 emplacements, envoi par la file compute ou graphique.
 - **En tout intra (`--idr-every 1`), il est juste** : 0 erreur, 27,2 dB
   constants. La même machine en VA-API (`hevc_vaapi`) : 0 erreur.
-- Mesa l'explique : « VCN 4 FW 1.22 has all the necessary pieces to pass
-  CTS ». En dessous, RADV cache son encodeur et son décodeur derrière
-  `RADV_PERFTEST`.
+- Attribué ce jour-là au micrologiciel (Mesa : « VCN 4 FW 1.22 has all the
+  necessary pieces to pass CTS » ; en dessous, RADV cache son encodeur
+  derrière `RADV_PERFTEST`). **À tort** : la faute était dans notre SPS,
+  la profondeur de transformée (§8o.3).
 
 **Ce qu'on en retient.**
 - Le produit ne pose jamais `RADV_PERFTEST` : la chaîne Vulkan n'est offerte
-  que là où le pilote expose l'encodeur de lui-même. Sur ce banc tel quel,
-  c'est VA-API.
-- Mesurer RADV pour de vrai demande un micrologiciel VCN ≥ 1.22 sur
-  l'UM790Pro (un fichier plus récent de `linux-firmware`, puis un
-  redémarrage), ou une distribution plus récente.
+  que là où le pilote expose l'encodeur de lui-même.
 - La preuve au pixel attrape ce que les en-têtes relus ne voient pas : QP et
-  RPS justes, flux faux.
+  RPS justes, flux faux. Elle a aussi montré plus tard que la cause
+  supposée, le micrologiciel, n'était pas la bonne (§8o.3).
 
 ### 8o.1 Où la conversion attend derrière un jeu (28/09/2026)
 
@@ -2494,6 +2492,73 @@ passer la conversion devant un jeu qui tient le GPU ?
 
 **Ce qu'on en retient.** Le premier maillon de la route scindée tient : un
 tampon KMS s'importe dans Vulkan sans copie, sur le Mesa d'Ubuntu 22.04.
+
+### 8o.3 Le micrologiciel VCN 1.24, et la vraie cause des P fausses (28/09/2026)
+
+**Montage.**
+- Décision §9-16 du plan : le `vcn_4_0_2.bin` de `linux-firmware` en amont
+  (11/09/2026, `0x09118022`, soit ENC 1.24, DEC 9, révision 34) posé dans
+  `/lib/firmware/updates/amdgpu/`. Le paquet d'Ubuntu n'est pas touché (son
+  `vcn_4_0_2.bin` est un lien vers `vcn_4_0_0.bin`, ENC 1.19) ; `amdgpu`
+  n'est pas dans l'initramfs, rien à régénérer. Retour arrière : effacer le
+  fichier.
+- Redémarrage sous Ubuntu garanti par `efibootmgr -n 0001` (`BootNext`, une
+  seule fois) : l'ordre permanent du dual boot reste Windows d'abord, GRUB
+  démarre son entrée 0 (Ubuntu). Revenu en 45 s, `Found VCN firmware
+  Version ENC: 1.24 DEC: 9`, session GNOME et prod relancées.
+- RADV de Mesa 25.2.8 (préfixe de labo) et de Mesa 26.2.3 (préfixe
+  `~/mesa-26`, RADV seul, libdrm 2.4.134, compilé ce jour) : l'encodeur
+  H.264, HEVC **et AV1** est exposé sans `RADV_PERFTEST`.
+
+**Les P restaient fausses.**
+- ENC 1.24, sur les deux Mesa : même défaut qu'en 1.19, et même flux à
+  l'octet près (IDR 136 932 octets, P 36 639 en moyenne).
+- Témoin : ffmpeg 7.1 `hevc_vulkan`, compilé à part. Il ne démarre pas :
+  `VK_ERROR_DEVICE_LOST` dès la réinitialisation de la session, sans remise à
+  zéro du GPU dans le journal du noyau.
+- `--still` (chaque P identique à sa référence) : juste, 0 erreur, le PSNR de
+  l'IDR. Dès que l'image bouge, le décodeur décroche après quelques rangées
+  de CTB.
+- La cause est dans radeonsi, qui pilote le même bloc VCN et code juste en
+  VA-API. Il écrit toujours `max_transform_hierarchy_depth_inter/intra =
+  log2_diff_max_min_luma_coding_block_size + 1`, soit 4 en CTB 64 : le
+  micrologiciel découpe les transformées jusque-là.
+- RADV reprend la profondeur de l'application sans la corriger ni la
+  transmettre (le labo mettait 2). Les `split_transform_flag` que le
+  micrologiciel écrit au-delà ne sont pas lus par le décodeur : un grand
+  bloc inter les déclenche, les petits blocs intra de la mire non.
+
+**Avec la profondeur complète** (`--depth`, 4 en CTB 64, désormais le défaut
+du labo), HEVC 1080p60, RADV 26.2.3 :
+
+| variante | erreurs ffmpeg | PSNR luma, min / médiane |
+|---|---|---|
+| QP 30, profondeur 2 (avant) | 32 | 4,9 / 5,4 dB |
+| QP 30, profondeur 4 | 0 | 27,2 / 27,5 dB |
+| QP de 22 à 42, un pas par image | 0 | 26,7 / 27,4 dB |
+| CBR 20 Mbit/s | 0 | 26,6 / 27,5 dB |
+| deux références gardées | 0 | 27,2 / 27,5 dB |
+| AMP et lissage intra | 0 | 27,2 / 27,5 dB |
+
+- RADV 25.2.8 donne la même chose : profondeur 2 fausse, profondeur 4 juste
+  (27,2 / 27,5 dB en QP 30, 26,7 / 27,5 en CBR).
+- Latence : 2,4 ms en moyenne de la soumission au flux en main, 3,0 ms au
+  p99, envoi de l'image compris.
+- **File d'encodage en HIGH** : le périphérique se crée (§8o.0), mais le
+  noyau refuse la première soumission (`CS rejected (-22)`, puis
+  `VK_ERROR_DEVICE_LOST`), sur les deux Mesa. La conversion en compute HIGH,
+  elle, tourne (§8o.1).
+
+**Ce qu'on en retient.**
+- Le micrologiciel n'était pas en cause pour les P (§8o.0 corrigé). La mise
+  à jour reste utile : l'encodeur est exposé d'office, et l'AV1 arrive.
+- Ni le numéro du micrologiciel ni la version de Mesa ne disaient « fiable » :
+  ENC 1.24 avec Mesa 26.2.3 codait faux avec notre SPS. Pour le produit, il
+  faut une preuve au pixel à l'ouverture de l'encodeur Vulkan (une courte
+  séquence connue, encodée puis décodée sur le même GPU, et comparée) et le
+  repli automatique sur VA-API (plan, C13.5 et §9-19).
+- L'encodeur Vulkan du produit écrira la profondeur complète. Une priorité de
+  file d'encodage ne compte que si une soumission passe : on redescend sinon.
 
 ## 9. Pour l'A/B
 

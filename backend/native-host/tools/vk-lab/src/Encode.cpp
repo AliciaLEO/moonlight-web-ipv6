@@ -87,6 +87,15 @@ struct Options
     /// An IDR every that many pictures; 0 = the first only, 1 = all intra.
     int idrEvery = 0;
     bool sao = false;
+    /// amp_enabled_flag and strong_intra_smoothing_enabled_flag in the SPS —
+    /// both on in the product's VA-API sets (VaapiEncoder, ParameterSets.h).
+    bool amp = false;
+    bool smoothing = false;
+    /// The same input picture every time (makePictures).
+    bool still = false;
+    /// max_transform_hierarchy_depth_inter/intra in the SPS; -1 = the full
+    /// depth the CTB allows.
+    int depth = -1;
     std::string priority = "default";
     std::string upload = "compute";
     bool split = false;
@@ -101,13 +110,16 @@ uint32_t alignUp(uint32_t v, uint32_t a)
 /// The eight input pictures, NV12 at the coded size: a ramp that moves, fine
 /// stripes (a text's worth of detail), blocks that come and go — so that
 /// neither a still picture nor noise sets the rate.
-std::vector<uint8_t> makePictures(uint32_t w, uint32_t h, int count)
+/// With @p still, all of them are the first: every P then predicts a picture
+/// identical to its reference, which leaves nothing to code but the syntax.
+std::vector<uint8_t> makePictures(uint32_t w, uint32_t h, int count, bool still)
 {
     const size_t luma = static_cast<size_t>(w) * h;
     const size_t picture = luma + luma / 2;
     std::vector<uint8_t> all(picture * static_cast<size_t>(count));
-    for (int k = 0; k < count; ++k) {
-        uint8_t* y = all.data() + picture * static_cast<size_t>(k);
+    for (int n = 0; n < count; ++n) {
+        const int k = still ? 0 : n;
+        uint8_t* y = all.data() + picture * static_cast<size_t>(n);
         uint8_t* uv = y + luma;
         for (uint32_t row = 0; row < h; ++row) {
             for (uint32_t col = 0; col < w; ++col) {
@@ -197,6 +209,15 @@ bool parse(int argc, char** argv, Options& o)
             o.idrEvery = std::stoi(v);
         } else if (a == "--sao") {
             o.sao = true;
+        } else if (a == "--amp") {
+            o.amp = true;
+        } else if (a == "--smoothing") {
+            o.smoothing = true;
+        } else if (a == "--still") {
+            o.still = true;
+        } else if (a == "--depth") {
+            if (!next(v)) return false;
+            o.depth = std::stoi(v);
         } else if (a == "--priority") {
             if (!next(o.priority)) return false;
         } else if (a == "--upload") {
@@ -348,7 +369,8 @@ void encodeUsage()
     say("mw-vk-lab encode [--device <index|name>] [--size 1920x1080] [--align 8|16|32|64]\n"
         "                 [--fps 60] [--seconds 10] [--rc cqp|cbr|vbr] [--qp 30] [--qp-walk]\n"
         "                 [--kbps 20000] [--change] [--quality 0] [--dpb 3] [--keep 1|2]\n"
-        "                 [--idr-every N] [--sao]\n"
+        "                 [--idr-every N] [--sao] [--amp] [--smoothing] [--still]\n"
+        "                 [--depth N]\n"
         "                 [--priority default|high|realtime] [--upload compute|graphics]\n"
         "                 [--split] [--dump x.hevc] [--dump-input x.nv12] [--csv x.csv]\n"
         "                 [--json x.json]\n"
@@ -359,7 +381,11 @@ void encodeUsage()
         "  one-picture buffer, --change steps it every 2 s without a reset.\n"
         "  --align: the coded size is a multiple of it (64 = whole CTBs, the conformance\n"
         "  window crops); --keep 2 keeps an unused older reference in the RPS; --idr-every 1\n"
-        "  codes every picture intra (the references ruled out); --split waits\n"
+        "  codes every picture intra (the references ruled out); --amp and --smoothing set\n"
+        "  amp_enabled_flag and strong_intra_smoothing_enabled_flag; --still repeats the\n"
+        "  first input picture, so every P predicts its own twin; --depth sets\n"
+        "  max_transform_hierarchy_depth_inter/intra (default: the full depth the CTB\n"
+        "  allows, what AMD's firmware codes); --split waits\n"
         "  for the upload too, to split the wall time; high/realtime need CAP_SYS_NICE.\n"
         "  The driver's parameter sets are compared with the ones asked for.\n");
 }
@@ -627,7 +653,7 @@ int runEncode(int argc, char** argv)
     const size_t luma = static_cast<size_t>(codedW) * codedH;
     const size_t pictureBytes = luma + luma / 2;
     constexpr int kPictures = 8;
-    const std::vector<uint8_t> pictures = makePictures(codedW, codedH, kPictures);
+    const std::vector<uint8_t> pictures = makePictures(codedW, codedH, kPictures, o.still);
     const VkDeviceSize bitstreamSize = 8u << 20;
     VkBuffer staging = VK_NULL_HANDLE, bitstream = VK_NULL_HANDLE;
     {
@@ -731,6 +757,8 @@ int runEncode(int argc, char** argv)
     sps.flags.sps_sub_layer_ordering_info_present_flag = 1;
     sps.flags.conformance_window_flag = (codedW != o.width || codedH != o.height) ? 1 : 0;
     sps.flags.sample_adaptive_offset_enabled_flag = o.sao ? 1 : 0;
+    sps.flags.amp_enabled_flag = o.amp ? 1 : 0;
+    sps.flags.strong_intra_smoothing_enabled_flag = o.smoothing ? 1 : 0;
     sps.flags.vui_parameters_present_flag = 1;
     sps.chroma_format_idc = STD_VIDEO_H265_CHROMA_FORMAT_IDC_420;
     sps.pic_width_in_luma_samples = codedW;
@@ -740,8 +768,16 @@ int runEncode(int argc, char** argv)
     sps.log2_diff_max_min_luma_coding_block_size = static_cast<uint8_t>(log2Ctb - 3);
     sps.log2_min_luma_transform_block_size_minus2 = 0;
     sps.log2_diff_max_min_luma_transform_block_size = 3;
-    sps.max_transform_hierarchy_depth_inter = 2;
-    sps.max_transform_hierarchy_depth_intra = 2;
+    // The transform tree's depth is not in the Vulkan capabilities, and a
+    // driver that neither honours nor overrides it leaves the SPS lying: RADV
+    // takes ours as it is, and AMD's firmware splits as deep as the CTB allows
+    // (radeonsi writes log2_diff_max_min_luma_coding_block_size + 1 for that
+    // reason). At 2, every P picture with motion broke on the 780M (§8o.3).
+    // -1 = the full depth, CtbLog2SizeY - MinTbLog2SizeY.
+    const int fullDepth = static_cast<int>(log2Ctb) - 2;
+    const int depth = o.depth < 0 ? fullDepth : o.depth;
+    sps.max_transform_hierarchy_depth_inter = static_cast<uint8_t>(depth);
+    sps.max_transform_hierarchy_depth_intra = static_cast<uint8_t>(depth);
     sps.conf_win_right_offset = (codedW - o.width) / 2;
     sps.conf_win_bottom_offset = (codedH - o.height) / 2;
     sps.pProfileTierLevel = &ptl;
@@ -762,6 +798,7 @@ int runEncode(int argc, char** argv)
     askedSps.log2MinCodingBlock = 3;
     askedSps.log2CodingTreeBlock = static_cast<int>(log2Ctb);
     askedSps.sampleAdaptiveOffset = o.sao;
+    askedSps.asymmetricMotionPartitions = o.amp;
     HevcPpsFields askedPps;
     askedPps.defaultActiveL0 = 1;
     askedPps.defaultActiveL1 = 1;
@@ -903,8 +940,10 @@ int runEncode(int argc, char** argv)
         say(" QP %d\n", o.qp);
     else
         say(" %d kb/s%s\n", o.kbps, o.change ? ", stepped every 2 s" : "");
-    say("  DPB %u slots, %u reference(s) kept, quality level %d, SAO %s\n", o.dpbSlots, o.keep,
-        o.quality, o.sao ? "on" : "off");
+    say("  DPB %u slots, %u reference(s) kept, quality level %d, SAO %s, AMP %s, strong intra "
+        "smoothing %s, transform depth %d\n",
+        o.dpbSlots, o.keep, o.quality, o.sao ? "on" : "off", o.amp ? "on" : "off",
+        o.smoothing ? "on" : "off", depth);
     say("  driver's parameter sets: %zu bytes, overrides %s (VPS %s, SPS %s, PPS %s)%s%s\n",
         headers.size(), overrides ? "yes" : "no", vpsOverride ? "yes" : "no",
         spsOverride ? "yes" : "no", ppsOverride ? "yes" : "no",
