@@ -5550,3 +5550,40 @@ image est bien la sienne (§8n.19 du banc).
 **Concrètement, pour l'utilisateur** : rien ne change par défaut. Un
 utilisateur qui choisit « D3D12 » dans l'admin et dont le navigateur ne lit
 que le H.264 garde maintenant la route D3D12. Avant, il retombait en D3D11.
+
+### 32.14 L'AV1 par D3D12 Video Encode (C9.2, 28/09/2026)
+
+En AV1, D3D12 laisse au pilote la tuile et à l'application tout le reste.
+Après l'image, les métadonnées résolues disent où est la tuile et quelles
+valeurs d'en-tête le pilote a choisies : quantificateur, filtre de boucle,
+CDEF, segmentation. `Av1Obu.h` écrit alors, d'après la spécification, le
+délimiteur temporel, l'en-tête de séquence (devant chaque image clé) et
+l'en-tête de `OBU_FRAME`. Le reste :
+- **Négociation** (`Av1EncodeNegotiation`). On prend les fonctions que le
+  pilote exige, plus CDEF et les order hints quand il les a. Un outil exigé
+  que nos en-têtes ne savent pas dire (outils d'écran, super-résolution,
+  copie intra, carte de segments fournie) veut dire pas d'encodeur. Une
+  seule tuile : jusqu'à 4096 de large et 4096×2304 de surface. Le niveau
+  vient de la taille et de la cadence, pas du pilote : l'Arc propose 6.0
+  pour du 1080p60, et un décodeur peut refuser un niveau qu'il n'atteint
+  pas.
+- **Références.** Chaque image rafraîchit les huit emplacements, qui
+  gardent donc tous l'image précédente. C'est `HevcDpb` à une image, comme
+  en H.264 : une perte coûte une image clé.
+- **Régulation.** Celle du pilote seulement, sur l'échelle qindex de l'AV1
+  (0 à 255). Notre régulation parle le QP du HEVC et du H.264.
+- **Ce que les pilotes ne disent pas.** Une fonction exigée doit aussi être
+  allumée sur chaque image (la segmentation automatique de la RTX). L'Arc
+  écrit son AV1 au début du tampon, quel que soit le décalage de début de
+  trame. La tuile est donc prise là, puis déplacée derrière les en-têtes, en
+  quelques microsecondes.
+- **Table.** Le réglage et la clé de banc atteignent la route ; en Auto,
+  rien ne bouge.
+
+Sur la RTX et l'Arc, dav1d décode sans erreur, et chaque image est bien la
+sienne (§8n.20 du banc). L'iGPU AMD n'a pas d'AV1 en D3D12.
+
+**Concrètement, pour l'utilisateur** : rien ne change par défaut. Un
+utilisateur qui choisit « D3D12 » dans l'admin et dont le navigateur demande
+l'AV1 garde maintenant la route D3D12 sur une carte NVIDIA ou Intel Arc.
+Avant, il retombait en D3D11.

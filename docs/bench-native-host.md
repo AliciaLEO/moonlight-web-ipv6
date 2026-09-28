@@ -2812,6 +2812,50 @@ montrent le texte net. Pas de porte pour autant : en Auto, la ligne D3D12
 d'Intel ne vaut que pour le HEVC (`autoD3d12Codec`), et le H.264 reste en
 D3D11 tant qu'un banc ne l'a pas mesuré.
 
+### 8n.20 C9.2 : l'AV1 par D3D12 Video Encode (28/09/2026)
+
+Build `e623f62c`. En AV1, le pilote code la tuile et rien d'autre. Le
+délimiteur, l'en-tête de séquence et l'en-tête de trame sont écrits par nous,
+une fois l'image codée, avec les valeurs que le pilote a choisies.
+
+**Ce que disent les pilotes** (`mw-d3d12-lab caps`, étendu à l'AV1).
+- RTX 5060 Ti : exige la restauration de boucle, CDEF et la segmentation
+  automatique. Il rend après l'image le quantificateur, les deltas, le filtre
+  de boucle, CDEF, le mode composé et la trame primaire. Une tuile suffit
+  jusqu'en 4K.
+- Arc A380 : n'exige rien et ne déclare aucune valeur rendue après l'image.
+  Il les remplit pourtant toutes (qindex de sa régulation, filtre 5/5/4/4,
+  CDEF sur 3 bits), comme Mesa les lit.
+- iGPU AMD : pas d'encodeur AV1 en D3D12.
+
+**Deux pièges, trouvés en route.**
+- La RTX refuse la liste d'encodage (`E_INVALIDARG`). La couche de
+  validation (`MW_D3D12_DEBUG=1`) le dit : une fonction exigée, ici la
+  segmentation automatique, doit aussi être allumée sur chaque image.
+- L'Arc écrit son AV1 au début du tampon, quel que soit le décalage de
+  début de trame. En HEVC et en H.264, il le respecte. Lue au décalage, la
+  tuile était du vide suivi de restes, et dav1d rejetait tout après l'image
+  clé. Le diagnostic est venu d'une sonde hors ligne. Elle réemballe la
+  tuile sous 128 variantes d'en-tête, et aucune ne décodait : l'en-tête était
+  hors de cause, restait l'emplacement. La tuile est désormais prise au début
+  du tampon, puis déplacée derrière les en-têtes.
+
+**Résultats.**
+- Tests matériels : 40 images, une image clé forcée, une perte réparée par
+  une image clé. dav1d relit les deux flux sans une erreur, et chaque image
+  est plus proche de sa propre entrée que de ses voisines, d'au moins
+  12,7 dB. Les en-têtes de séquence acceptés sont figés en test.
+- Chemin produit (`codec=av1,pipeline=d3d12,enc12=ve`, texte qui défile) :
+
+| GPU | Images | host_total moy. / p99 (ms) | Encodage moy. (ms) | qindex moyen |
+|---|---|---|---|---|
+| RTX 5060 Ti | 481 | 1,91 / 2,59 | 1,57 | 150 |
+| Arc A380 | 477 | 10,24 / 22,48 | 9,33 | 126 |
+
+L'AV1 de l'A380 est le plus lent de ses trois codecs en D3D12 : 9,3 ms
+d'encodage, contre 5,0 en H.264 au §8n.19. En Auto, rien ne change :
+`autoD3d12Codec` ne vaut que pour le HEVC.
+
 ## 8o. Linux : la chaîne Vulkan (28/09/2026 →)
 
 Phase 13 du plan D3D12 : la même forme de chaîne sous Linux, en Vulkan Video
