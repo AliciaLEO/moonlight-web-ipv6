@@ -160,11 +160,14 @@ inline VideoPipeline linuxValue(VideoPipeline p)
 /// Why the Vulkan Video chain cannot carry this build, or "".
 inline std::string vulkanEncoderRefusal(const LinuxRouteFacts& f)
 {
-    if (!f.vulkanEncoderBuilt) return "the Vulkan Video encoder is not built yet";
+    if (!f.vulkanEncoderBuilt) return "the Vulkan Video encoder is not built in";
     if (!f.vulkanEncoderRefusal.empty()) return f.vulkanEncoderRefusal;
     if (f.sharedMemory) return "the portal gives shared memory, which only the CPU reads";
     if (f.codec != Codec::Hevc)
         return std::string(toString(f.codec)) + " is not done by the Vulkan Video encoder yet";
+    // The chain converts in Vulkan too: what refused the conversion refuses it.
+    if (!f.vulkanConvertBuilt) return "the Vulkan conversion is not built in";
+    if (!f.vulkanConvertRefusal.empty()) return f.vulkanConvertRefusal;
     return {};
 }
 
@@ -189,6 +192,21 @@ inline LinuxRoute cpuRoute(std::string reason, bool refused)
 }
 
 } // namespace linuxroute_detail
+
+/// Whether this build would take the Vulkan Video chain if nothing refused
+/// it — the bench key, the setting or the vendor table asks for it, the
+/// codec is HEVC, and nothing already learned stands in the way. The one
+/// case the session runs the pixel proof for (VulkanHevcProof): a machine
+/// that was not going to encode in Vulkan is never made to prove it can.
+inline bool linuxRouteWantsVulkanVideo(const LinuxRouteFacts& f)
+{
+    using namespace linuxroute_detail;
+    const VideoPipeline wanted = linuxValue(f.benchKey) != VideoPipeline::Auto ? f.benchKey
+                                 : linuxValue(f.setting) != VideoPipeline::Auto
+                                     ? f.setting
+                                     : autoLinuxPipeline(f.vendorId);
+    return wanted == VideoPipeline::Vulkan && vulkanEncoderRefusal(f).empty();
+}
 
 inline LinuxRoute chooseLinuxRoute(const LinuxRouteFacts& f)
 {

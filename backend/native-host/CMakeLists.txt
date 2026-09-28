@@ -250,6 +250,9 @@ else()
                 target_sources(mw-native-host PRIVATE
                     src/platform/linux/vulkan/VulkanDevice.cpp
                     src/convert/linux/VulkanConvert.cpp
+                    src/encode/linux/VulkanHevcEncoder.cpp
+                    src/encode/linux/VulkanHevcDecoder.cpp
+                    src/encode/linux/VulkanHevcProof.cpp
                     ${_mw_spirv_headers})
                 target_include_directories(mw-native-host PRIVATE ${_mw_spirv})
                 target_include_directories(mw-native-host SYSTEM PRIVATE
@@ -447,6 +450,7 @@ if(MW_BUILD_TESTS)
         tests/test_wayland_layout.cpp
         tests/test_linux_pipeline.cpp
         tests/test_vulkan_convert.cpp
+        tests/test_vulkan_hevc.cpp
         tests/test_linux_session.cpp
         tests/test_mac_keymap.cpp
         tests/test_mac_session.cpp
@@ -491,6 +495,7 @@ if(MW_BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nvenc-headers
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/amf-headers
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vpl-headers
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vulkan-headers/include
     )
     # Same terms for libdrm, which lives outside the default include path: the
     # Linux pipeline test asks the kernel about the display's planes itself, so

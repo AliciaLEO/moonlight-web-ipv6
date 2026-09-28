@@ -21,6 +21,9 @@
 #if defined(MW_NATIVE_LINUX_AUDIO) && defined(MW_NATIVE_TESTS_HAVE_OPUS)
 #include <opus.h>
 #endif
+#if defined(MW_NATIVE_LINUX_VULKAN)
+#include "platform/linux/vulkan/VulkanDevice.h"
+#endif
 
 using namespace mw::native;
 
@@ -605,6 +608,121 @@ void run_linux_session_tests()
                       std::string::npos);
             }
         }
+    }
+
+    // ── The Vulkan Video chain, and its ways back to VA-API ──────────────────
+    //
+    // C13.5, and Bruno's rule on its main road: the whole chain in Vulkan is
+    // taken only where the pixel proof passed on this GPU, driver and firmware
+    // (VulkanHevcProof). A driver that shows no encoder — Ubuntu 22.04's Mesa
+    // 23.2 — or one that codes something other than its SPS says — the
+    // witness, MW_VK_ENCODE_DEPTH=2, what coded wrong on the 780M — leaves
+    // VA-API encoding, by name; a chain that does not start, or gives up while
+    // streaming, leaves a stream that goes on through VA-API. The chain itself
+    // needs a driver with an encoder: run as root, VK_DRIVER_FILES at such a
+    // RADV (a binary with file capabilities never sees the variable).
+    if (!h264Only) {
+        SECTION("Linux — the Vulkan Video chain: taken on the pixel's word, VA-API otherwise");
+        std::string node;
+        vulkan::DeviceIdentity id;
+        for (int minor = 128; minor < 136 && node.empty(); ++minor) {
+            const std::string path = "/dev/dri/renderD" + std::to_string(minor);
+            std::string why;
+            if (vulkan::VulkanDevice::identify(path, id, why)) node = path;
+        }
+        const bool capable = !node.empty() && id.encodesHevc && id.decodesHevc;
+        std::fprintf(stderr, "  %s: %s\n", node.empty() ? "no Vulkan device" : id.name.c_str(),
+                     capable ? "a Vulkan Video encoder and decoder"
+                             : "no Vulkan Video encoder to prove");
+        struct Run
+        {
+            const char* what;
+            const char* depth;  // MW_VK_ENCODE_DEPTH, or null
+            const char* failAt; // MW_VK_CONVERT_FAIL_AT, or null
+        };
+        const Run runs[] = {
+            {"Vulkan Video", nullptr, nullptr},
+            {"the witness, transform depth 2", "2", nullptr},
+            {"the chain lost at its first picture", nullptr, "1"},
+            {"no Vulkan conversion at all", nullptr, "0"},
+        };
+        ::setenv("MW_VK_PROOF_CACHE", "0", 1);
+        int index = 0;
+        for (const Run& run : runs) {
+            if (run.depth) ::setenv("MW_VK_ENCODE_DEPTH", run.depth, 1);
+            if (run.failAt) ::setenv("MW_VK_CONVERT_FAIL_AT", run.failAt, 1);
+            SessionConfig vk = config;
+            vk.clientCodecs = {Codec::Hevc};
+            vk.tuning.pipeline = VideoPipeline::Vulkan;
+            std::atomic<int> vkFrames{0};
+            std::atomic<int> vkKeyframes{0};
+            std::atomic<int64_t> encodeSumUs{0};
+            std::string vkEnded;
+            std::string vkError;
+            std::ofstream vkOut("/tmp/mw-linux-vkvideo-" + std::to_string(index++) + ".hevc",
+                                std::ios::binary | std::ios::trunc);
+            std::unique_ptr<Session> vkSession = NativeHost::createSession(
+                vk,
+                [&](const EncodedFrame& f) {
+                    vkFrames.fetch_add(1);
+                    if (f.keyframe) vkKeyframes.fetch_add(1);
+                    encodeSumUs.fetch_add(f.encodedUs - f.convertedUs);
+                    vkOut.write(reinterpret_cast<const char*>(f.data),
+                                static_cast<std::streamsize>(f.size));
+                },
+                nullptr, nullptr, nullptr, [&](const std::string& reason) { vkEnded = reason; },
+                vkError);
+            if (!vkSession) {
+                std::fprintf(stderr, "  createSession failed: %s\n", vkError.c_str());
+                CHECK(false);
+                continue;
+            }
+            CHECK(vkSession->start(vkError));
+            std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+            vkSession->requestKeyframe();
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            vkSession->stop();
+            vkOut.close();
+            ::unsetenv("MW_VK_ENCODE_DEPTH");
+            ::unsetenv("MW_VK_CONVERT_FAIL_AT");
+            const SessionInfo& vkInfo = vkSession->info();
+            const int n = vkFrames.load();
+            std::fprintf(stderr,
+                         "  %s: route \"%s\"%s, %d frame(s), %d keyframe(s), encode mean %.2f "
+                         "ms%s\n    reason: %s\n",
+                         run.what, vkInfo.videoRoute.c_str(),
+                         vkInfo.videoPipelineRefused ? " (refused)" : "", n, vkKeyframes.load(),
+                         n ? encodeSumUs.load() / 1000.0 / n : 0.0,
+                         vkEnded.empty() ? "" : (", ended: " + vkEnded).c_str(),
+                         vkInfo.videoPipelineReason.c_str());
+            // Whatever Vulkan did, the stream went on: that is the rule.
+            CHECK(vkEnded.empty());
+            CHECK(n >= 2);
+            CHECK(vkKeyframes.load() >= 1);
+            const std::string& reason = vkInfo.videoPipelineReason;
+            if (!capable) {
+                CHECK_EQ(vkInfo.videoRoute, std::string("EGL → VA-API"));
+                CHECK(vkInfo.videoPipelineRefused);
+                CHECK(reason.find("the pixel proof could not run") != std::string::npos);
+            } else if (run.depth) {
+                // AMD's firmware codes the full depth whatever the SPS says.
+                if (id.vendorId == 0x1002) {
+                    CHECK_EQ(vkInfo.videoRoute, std::string("EGL → VA-API"));
+                    CHECK(vkInfo.videoPipelineRefused);
+                    CHECK(reason.find("the pixel proof failed") != std::string::npos);
+                }
+            } else if (run.failAt) {
+                CHECK_EQ(vkInfo.videoRoute, std::string("EGL → VA-API"));
+                CHECK(vkInfo.videoPipelineRefused);
+                CHECK(reason.find(std::string(run.failAt) == "0"
+                                      ? "could not start"
+                                      : "gave up while streaming") != std::string::npos);
+            } else {
+                CHECK_EQ(vkInfo.videoRoute, std::string("Vulkan compute → Vulkan Video"));
+                CHECK(!vkInfo.videoPipelineRefused);
+            }
+        }
+        ::unsetenv("MW_VK_PROOF_CACHE");
     }
 #endif
 #endif

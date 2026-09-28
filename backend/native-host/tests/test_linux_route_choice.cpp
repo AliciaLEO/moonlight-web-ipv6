@@ -122,7 +122,53 @@ void run_linux_route_choice_tests()
         CHECK(r.pipeline == VideoPipeline::Vaapi);
         CHECK(r.refused);
         CHECK(contains(r.reason, "the setting (vulkan) asks for Vulkan Video, which cannot run: "
-                                 "the Vulkan Video encoder is not built yet; VA-API runs"));
+                                 "the Vulkan Video encoder is not built in; VA-API runs"));
+    }
+
+    SECTION("LinuxRoute — the Vulkan Video chain converts in Vulkan: what refused the conversion "
+            "refuses the chain");
+    {
+        LinuxRouteFacts f = amdWithVulkanEncoder();
+        f.setting = VideoPipeline::Vulkan;
+        f.vulkanConvertRefusal = "the Vulkan conversion gave up while streaming (device lost)";
+        LinuxRoute r = chooseLinuxRoute(f);
+        CHECK(r.encoder == LinuxRoute::Encoder::Vaapi);
+        CHECK(r.conversion == LinuxRoute::Conversion::Gl);
+        CHECK(r.refused);
+        CHECK(contains(r.reason, "gave up while streaming (device lost); VA-API runs"));
+
+        f.vulkanConvertRefusal.clear();
+        f.vulkanConvertBuilt = false;
+        r = chooseLinuxRoute(f);
+        CHECK(r.encoder == LinuxRoute::Encoder::Vaapi);
+        CHECK(contains(r.reason, "the Vulkan conversion is not built in"));
+    }
+
+    SECTION("LinuxRoute — the pixel proof runs only where Vulkan Video would be taken");
+    {
+        // The vendor table has VA-API everywhere: nobody is made to prove.
+        LinuxRouteFacts f = amdWithVulkanEncoder();
+        CHECK(!linuxRouteWantsVulkanVideo(f));
+        f.setting = VideoPipeline::Vulkan;
+        CHECK(linuxRouteWantsVulkanVideo(f));
+        f.setting = VideoPipeline::Auto;
+        f.benchKey = VideoPipeline::Vulkan;
+        CHECK(linuxRouteWantsVulkanVideo(f));
+        // The bench key over the setting, as for the choice itself.
+        f.setting = VideoPipeline::Vulkan;
+        f.benchKey = VideoPipeline::Vaapi;
+        CHECK(!linuxRouteWantsVulkanVideo(f));
+        // Nothing to prove for a stream it would not carry, or once refused.
+        f = amdWithVulkanEncoder();
+        f.setting = VideoPipeline::Vulkan;
+        f.codec = Codec::H264;
+        CHECK(!linuxRouteWantsVulkanVideo(f));
+        f.codec = Codec::Hevc;
+        f.vulkanEncoderRefusal = "the pixel proof failed";
+        CHECK(!linuxRouteWantsVulkanVideo(f));
+        f = amd();
+        f.setting = VideoPipeline::Vulkan;
+        CHECK(!linuxRouteWantsVulkanVideo(f)); // not built in
     }
 
     SECTION("LinuxRoute — Bruno's rule: an encoder the firmware or the driver do not make "
@@ -183,6 +229,7 @@ void run_linux_route_choice_tests()
         CHECK(contains(r.reason, "no GPU encoder on this machine"));
 
         f.vulkanEncoderBuilt = true;
+        f.vulkanConvertBuilt = true;
         f.setting = VideoPipeline::Vulkan;
         r = chooseLinuxRoute(f);
         CHECK(r.encoder == LinuxRoute::Encoder::Vulkan);

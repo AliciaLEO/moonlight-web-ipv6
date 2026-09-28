@@ -18,6 +18,7 @@
 #include "VulkanConvert.h"
 
 #include "../../core/Log.h"
+#include "../../encode/linux/VulkanHevcEncoder.h"
 #include "../../platform/linux/vulkan/VulkanDevice.h"
 #include "../../platform/macos/FrameFit.h"
 
@@ -153,7 +154,8 @@ VkImageMemoryBarrier2 imageBarrier(VkImage image, VkImageLayout from, VkImageLay
 
 struct VulkanConvert::Impl
 {
-    std::unique_ptr<vulkan::VulkanDevice> device;
+    /// Shared with the Vulkan Video encoder on that route.
+    std::shared_ptr<vulkan::VulkanDevice> device;
     const vulkan::DeviceFunctions* fn = nullptr;
     VkDevice dev = VK_NULL_HANDLE;
 
@@ -191,9 +193,12 @@ struct VulkanConvert::Impl
     void* stagingMapped = nullptr;
     VkDeviceSize stagingSize = 0;
 
-    // The encoder's surface, its two planes.
+    // The encoder's surface, its two planes: VA-API's, imported.
     Image luma;
     Image chroma;
+    // Or the Vulkan Video encoder's input, an image of this device: its
+    // plane views are the encoder's, written here, never owned.
+    VkImage encoderInput = VK_NULL_HANDLE;
     bool targetBound = false;
     bool targetTouched = false;
 
@@ -373,6 +378,30 @@ bool VulkanConvert::init(const std::string& renderNode, uint32_t sourceFourcc, i
                          int sourceHeight, int outputWidth, int outputHeight, ScaleFilter filter,
                          std::string& error)
 {
+    if (!setUp(sourceFourcc, sourceWidth, sourceHeight, outputWidth, outputHeight, filter, error))
+        return false;
+    d->device = vulkan::VulkanDevice::open(renderNode, m_WantHigh, error);
+    if (!d->device) return false;
+    return start(error);
+}
+
+bool VulkanConvert::init(const std::shared_ptr<vulkan::VulkanDevice>& device, uint32_t sourceFourcc,
+                         int sourceWidth, int sourceHeight, int outputWidth, int outputHeight,
+                         ScaleFilter filter, std::string& error)
+{
+    if (!setUp(sourceFourcc, sourceWidth, sourceHeight, outputWidth, outputHeight, filter, error))
+        return false;
+    if (!device) {
+        error = "no Vulkan device to convert on";
+        return false;
+    }
+    d->device = device;
+    return start(error);
+}
+
+bool VulkanConvert::setUp(uint32_t sourceFourcc, int sourceWidth, int sourceHeight, int outputWidth,
+                          int outputHeight, ScaleFilter filter, std::string& error)
+{
     stop();
     d = std::make_unique<Impl>();
 
@@ -426,8 +455,11 @@ bool VulkanConvert::init(const std::string& renderNode, uint32_t sourceFourcc, i
         log::info("[native] MW_VK_CONVERT_FAIL_AT in effect: conversion " +
                   std::to_string(d->failAt) + " fails as a lost device would");
     }
-    d->device = vulkan::VulkanDevice::open(renderNode, m_WantHigh, error);
-    if (!d->device) return false;
+    return true;
+}
+
+bool VulkanConvert::start(std::string& error)
+{
     d->fn = &d->device->fn();
     d->dev = d->device->device();
     m_Priority = d->device->queueDescription();
@@ -436,6 +468,7 @@ bool VulkanConvert::init(const std::string& renderNode, uint32_t sourceFourcc, i
     if (!createPipelines(error)) return false;
     if (m_Filter != ScaleFilter::Bilinear && !createScaler(error)) return false;
 
+    const bool scaling = m_OutputWidth != m_SourceWidth || m_OutputHeight != m_SourceHeight;
     log::info("[native] colour conversion: " + std::to_string(m_SourceWidth) + "x" +
               std::to_string(m_SourceHeight) + " XRGB -> " + std::to_string(m_OutputWidth) + "x" +
               std::to_string(m_OutputHeight) + " NV12 4:2:0 (BT.709 limited), via Vulkan compute" +
@@ -754,6 +787,41 @@ bool VulkanConvert::bindTarget(const Nv12Target& target, std::string& error)
     return true;
 }
 
+bool VulkanConvert::bindTarget(const encode::VulkanPicture& target, std::string& error)
+{
+    if (!d->device) {
+        error = "Vulkan conversion is not initialized";
+        return false;
+    }
+    if (target.width != m_OutputWidth || target.height != m_OutputHeight) {
+        error = "the encoder's input is not the size the converter produces";
+        return false;
+    }
+    if (!target.image || !target.luma || !target.chroma) {
+        error = "the Vulkan encoder has no input to write";
+        return false;
+    }
+    // Its own plane views, R8 and RG8 storage (VulkanHevcEncoder): the same
+    // two bindings the imported planes take.
+    const VkDescriptorImageInfo infos[2] = {
+        {VK_NULL_HANDLE, target.luma, VK_IMAGE_LAYOUT_GENERAL},
+        {VK_NULL_HANDLE, target.chroma, VK_IMAGE_LAYOUT_GENERAL}};
+    VkWriteDescriptorSet writes[2] = {};
+    for (uint32_t i = 0; i < 2; ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = d->nv12Set;
+        writes[i].dstBinding = 3 + i;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[i].pImageInfo = &infos[i];
+    }
+    d->fn->vkUpdateDescriptorSets(d->dev, 2, writes, 0, nullptr);
+    d->encoderInput = target.image;
+    d->targetBound = true;
+    d->targetTouched = false;
+    return true;
+}
+
 bool VulkanConvert::updateCursor(const capture::CursorState& cursor, std::string& error)
 {
     // New images when the size changed; the bytes land in the staging buffer,
@@ -1022,16 +1090,26 @@ bool VulkanConvert::convert(const capture::KmsFrame& frame, const capture::Curso
                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                   VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, kCompute, kSampled,
                                   VK_QUEUE_FAMILY_FOREIGN_EXT, family));
-    // The encoder's planes: from VA-API after the first frame, which is what
-    // read them last; overwritten whole, so the first time needs no contents.
-    for (Image* plane : {&d->luma, &d->chroma}) {
-        before.push_back(
-            d->targetTouched
-                ? imageBarrier(plane->image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
-                               VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, kCompute, kWrite,
-                               VK_QUEUE_FAMILY_FOREIGN_EXT, family)
-                : imageBarrier(plane->image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
-                               VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, kCompute, kWrite));
+    if (d->encoderInput) {
+        // The Vulkan encoder's input, from where the encoder leaves it —
+        // after the encode that read it, which the submission waits for at
+        // this stage. Its contents are kept: the black past the picture.
+        before.push_back(imageBarrier(d->encoderInput, VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR,
+                                      VK_IMAGE_LAYOUT_GENERAL, kCompute, VK_ACCESS_2_NONE, kCompute,
+                                      kWrite));
+    } else {
+        // The encoder's planes: from VA-API after the first frame, which is
+        // what read them last; overwritten whole, so the first time needs no
+        // contents.
+        for (Image* plane : {&d->luma, &d->chroma}) {
+            before.push_back(
+                d->targetTouched
+                    ? imageBarrier(plane->image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+                                   VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, kCompute, kWrite,
+                                   VK_QUEUE_FAMILY_FOREIGN_EXT, family)
+                    : imageBarrier(plane->image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                                   VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, kCompute, kWrite));
+        }
     }
     if (upload) {
         for (Image* image : {&d->cursorPixels, &d->cursorInvert})
@@ -1138,12 +1216,20 @@ bool VulkanConvert::convert(const capture::KmsFrame& frame, const capture::Curso
     fn.vkCmdDispatch(cmd, (static_cast<uint32_t>(m_OutputWidth) + 15) / 16,
                      (static_cast<uint32_t>(m_OutputHeight) + 15) / 16, 1);
 
-    // ── Handed back: the planes to VA-API, the scanout to the compositor ──
+    // ── Handed back: the planes to VA-API (or the input to the Vulkan
+    // encoder, whose submission waits on this one's), the scanout to the
+    // compositor ──
     std::vector<VkImageMemoryBarrier2> after;
-    for (Image* plane : {&d->luma, &d->chroma})
-        after.push_back(imageBarrier(plane->image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
-                                     kCompute, kWrite, VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
-                                     family, VK_QUEUE_FAMILY_FOREIGN_EXT));
+    if (d->encoderInput) {
+        after.push_back(imageBarrier(d->encoderInput, VK_IMAGE_LAYOUT_GENERAL,
+                                     VK_IMAGE_LAYOUT_VIDEO_ENCODE_SRC_KHR, kCompute, kWrite,
+                                     VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_ACCESS_2_NONE));
+    } else {
+        for (Image* plane : {&d->luma, &d->chroma})
+            after.push_back(imageBarrier(
+                plane->image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, kCompute, kWrite,
+                VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, family, VK_QUEUE_FAMILY_FOREIGN_EXT));
+    }
     after.push_back(imageBarrier(source->image.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                  VK_IMAGE_LAYOUT_GENERAL, kCompute, kSampled,
                                  VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, family,
@@ -1151,7 +1237,14 @@ bool VulkanConvert::convert(const capture::KmsFrame& frame, const capture::Curso
     barriers(after);
     fn.vkEndCommandBuffer(cmd);
 
-    // ── The scanout's implicit fence, as a sync_file the queue waits on ──
+    // ── The scanout's implicit fence, as a sync_file the queue waits on — and,
+    // writing the Vulkan encoder's input, the encode that read it last ──
+    VkSemaphoreSubmitInfo waitList[2] = {};
+    uint32_t listed = 0;
+    if (d->encoderInput) {
+        const VkSemaphoreSubmitInfo previous = d->device->afterLast(kCompute);
+        if (previous.semaphore) waitList[listed++] = previous;
+    }
     VkSemaphoreSubmitInfo wait = {};
     uint32_t waits = 0;
     if (d->implicitFence) {
@@ -1181,8 +1274,9 @@ bool VulkanConvert::convert(const capture::KmsFrame& frame, const capture::Curso
         log::info("[native] the scanout's implicit fence is not waited on (no sync_file from "
                   "the kernel or the driver): the buffer is read as it stands");
     }
+    if (waits) waitList[listed++] = wait;
     std::string why;
-    if (!d->device->run(cmd, waits ? &wait : nullptr, waits, why))
+    if (!d->device->run(cmd, listed ? waitList : nullptr, listed, why))
         return fail("the Vulkan conversion failed: " + why);
     d->targetTouched = true;
     if (upload) {

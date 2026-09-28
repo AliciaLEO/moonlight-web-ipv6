@@ -68,6 +68,9 @@
 namespace mw::native::vulkan {
 class VulkanDevice;
 }
+namespace mw::native::encode {
+struct VulkanPicture;
+}
 
 namespace mw::native::convert {
 
@@ -91,6 +94,11 @@ public:
     bool init(const std::string& renderNode, uint32_t sourceFourcc, int sourceWidth,
               int sourceHeight, int outputWidth, int outputHeight, ScaleFilter filter,
               std::string& error);
+    /// The same on @p device, the one the Vulkan Video encoder is on: the
+    /// whole chain in one API (the route "Vulkan compute → Vulkan Video").
+    bool init(const std::shared_ptr<vulkan::VulkanDevice>& device, uint32_t sourceFourcc,
+              int sourceWidth, int sourceHeight, int outputWidth, int outputHeight,
+              ScaleFilter filter, std::string& error);
 
     ScaleFilter scaleFilter() const { return m_Filter; }
     /// Give up the resample pass for the rest of the session (GlConvert's).
@@ -100,6 +108,11 @@ public:
 
     /// The encoder's surface as the target, imported once per session.
     bool bindTarget(const Nv12Target& target, std::string& error);
+    /// The Vulkan Video encoder's input as the target: an image of this very
+    /// device, written through its plane views, nothing imported. It rests
+    /// in VIDEO_ENCODE_SRC between pictures; convert() takes it to GENERAL
+    /// and back, after the encode that read it last.
+    bool bindTarget(const encode::VulkanPicture& target, std::string& error);
 
     /// Convert one frame into the bound target and wait for the GPU.
     bool convert(const capture::KmsFrame& frame, const capture::CursorState& cursor,
@@ -127,6 +140,9 @@ private:
     struct Impl;
     std::unique_ptr<Impl> d;
 
+    bool setUp(uint32_t sourceFourcc, int sourceWidth, int sourceHeight, int outputWidth,
+               int outputHeight, ScaleFilter filter, std::string& error);
+    bool start(std::string& error);
     bool createPipelines(std::string& error);
     bool createScaler(std::string& error);
     void releaseScaler();

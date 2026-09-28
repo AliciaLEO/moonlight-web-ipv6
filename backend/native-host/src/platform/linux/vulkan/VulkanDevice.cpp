@@ -68,6 +68,11 @@ std::string resultText(VkResult result)
     X(vkCreateDevice)                                                                              \
     X(vkGetDeviceProcAddr)
 
+// VK_KHR_video_queue's: null where the loader has none.
+#define MW_VULKAN_INSTANCE_OPTIONAL_FUNCTIONS(X)                                                   \
+    X(vkGetPhysicalDeviceVideoCapabilitiesKHR)                                                     \
+    X(vkGetPhysicalDeviceVideoFormatPropertiesKHR)
+
 class Loader
 {
 public:
@@ -97,6 +102,7 @@ public:
 
     PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr = nullptr;
     MW_VULKAN_INSTANCE_FUNCTIONS(MW_VULKAN_DECLARE)
+    MW_VULKAN_INSTANCE_OPTIONAL_FUNCTIONS(MW_VULKAN_DECLARE)
 
 private:
     Loader() = default;
@@ -148,6 +154,10 @@ private:
     }
         MW_VULKAN_INSTANCE_FUNCTIONS(MW_VULKAN_LOAD_INSTANCE)
 #undef MW_VULKAN_LOAD_INSTANCE
+#define MW_VULKAN_LOAD_INSTANCE_OPTIONAL(name)                                                     \
+    name = reinterpret_cast<PFN_##name>(vkGetInstanceProcAddr(m_Instance, #name));
+        MW_VULKAN_INSTANCE_OPTIONAL_FUNCTIONS(MW_VULKAN_LOAD_INSTANCE_OPTIONAL)
+#undef MW_VULKAN_LOAD_INSTANCE_OPTIONAL
         return true;
     }
 
@@ -176,6 +186,51 @@ bool has(const std::vector<std::string>& names, const char* name)
     return false;
 }
 
+/// The physical device behind the render node @p node, matched by its DRM
+/// numbers (VK_EXT_physical_device_drm), with its properties, its name for
+/// the log and its extensions. Null, with the reason, when none is or it is
+/// older than Vulkan 1.3.
+VkPhysicalDevice physicalFor(const Loader& loader, const std::string& renderNode,
+                             const struct stat& node, VkPhysicalDeviceProperties& properties,
+                             std::string& name, std::vector<std::string>& extensions,
+                             std::string& error)
+{
+    uint32_t count = 0;
+    loader.vkEnumeratePhysicalDevices(loader.instance(), &count, nullptr);
+    std::vector<VkPhysicalDevice> physicals(count);
+    loader.vkEnumeratePhysicalDevices(loader.instance(), &count, physicals.data());
+    for (VkPhysicalDevice candidate : physicals) {
+        std::vector<std::string> ext = extensionsOf(loader, candidate);
+        if (!has(ext, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME)) continue;
+        VkPhysicalDeviceDrmPropertiesEXT drm = {};
+        drm.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT;
+        VkPhysicalDeviceDriverProperties driver = {};
+        driver.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
+        driver.pNext = &drm;
+        VkPhysicalDeviceProperties2 p2 = {};
+        p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        p2.pNext = &driver;
+        loader.vkGetPhysicalDeviceProperties2(candidate, &p2);
+        if (!drm.hasRender || drm.renderMajor != static_cast<int64_t>(major(node.st_rdev)) ||
+            drm.renderMinor != static_cast<int64_t>(minor(node.st_rdev)))
+            continue;
+        if (p2.properties.apiVersion < VK_API_VERSION_1_3) {
+            error = std::string(p2.properties.deviceName) + " offers Vulkan " +
+                    std::to_string(VK_API_VERSION_MAJOR(p2.properties.apiVersion)) + "." +
+                    std::to_string(VK_API_VERSION_MINOR(p2.properties.apiVersion)) +
+                    ", the engine needs 1.3";
+            return VK_NULL_HANDLE;
+        }
+        properties = p2.properties;
+        name = std::string(p2.properties.deviceName) + ", " + driver.driverName + " " +
+               driver.driverInfo;
+        extensions = std::move(ext);
+        return candidate;
+    }
+    error = "no Vulkan device for " + renderNode;
+    return VK_NULL_HANDLE;
+}
+
 } // namespace
 
 // ── The device ──────────────────────────────────────────────────────────────
@@ -197,13 +252,56 @@ void VulkanDevice::destroy()
     if (m_Fn.vkDestroyDevice) m_Fn.vkDestroyDevice(m_Device, nullptr);
     m_Device = VK_NULL_HANDLE;
     m_Queue = VK_NULL_HANDLE;
+    m_EncodeQueue = VK_NULL_HANDLE;
+    m_DecodeQueue = VK_NULL_HANDLE;
     m_Fn = DeviceFunctions{};
     m_Submitted = 0;
+}
+
+bool VulkanDevice::identify(const std::string& renderNode, DeviceIdentity& out, std::string& error)
+{
+    struct stat node = {};
+    if (::stat(renderNode.c_str(), &node) != 0 || !S_ISCHR(node.st_mode)) {
+        error = "no render node " + renderNode;
+        return false;
+    }
+    const std::shared_ptr<Loader> loader = Loader::get(error);
+    if (!loader) return false;
+    VkPhysicalDeviceProperties properties = {};
+    std::vector<std::string> extensions;
+    DeviceIdentity id;
+    const VkPhysicalDevice physical =
+        physicalFor(*loader, renderNode, node, properties, id.name, extensions, error);
+    if (!physical) return false;
+    id.vendorId = properties.vendorID;
+    id.driverVersion = properties.driverVersion;
+    VkPhysicalDeviceIDProperties ids = {};
+    ids.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+    VkPhysicalDeviceProperties2 p2 = {};
+    p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    p2.pNext = &ids;
+    loader->vkGetPhysicalDeviceProperties2(physical, &p2);
+    std::memcpy(id.uuid, ids.deviceUUID, VK_UUID_SIZE);
+    id.encodesHevc = has(extensions, VK_KHR_VIDEO_ENCODE_QUEUE_EXTENSION_NAME) &&
+                     has(extensions, VK_KHR_VIDEO_ENCODE_H265_EXTENSION_NAME);
+    id.decodesHevc = has(extensions, VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME) &&
+                     has(extensions, VK_KHR_VIDEO_DECODE_H265_EXTENSION_NAME);
+    out = id;
+    return true;
 }
 
 std::unique_ptr<VulkanDevice> VulkanDevice::open(const std::string& renderNode, bool wantHigh,
                                                  std::string& error)
 {
+    DeviceOptions options;
+    options.wantHigh = wantHigh;
+    return open(renderNode, options, error);
+}
+
+std::unique_ptr<VulkanDevice> VulkanDevice::open(const std::string& renderNode,
+                                                 const DeviceOptions& options, std::string& error)
+{
+    const bool wantHigh = options.wantHigh;
     struct stat node = {};
     if (::stat(renderNode.c_str(), &node) != 0 || !S_ISCHR(node.st_mode)) {
         error = "no render node " + renderNode;
@@ -214,45 +312,11 @@ std::unique_ptr<VulkanDevice> VulkanDevice::open(const std::string& renderNode, 
     if (!device->m_Loader) return nullptr;
     const Loader& loader = *device->m_Loader;
 
-    uint32_t count = 0;
-    loader.vkEnumeratePhysicalDevices(loader.instance(), &count, nullptr);
-    std::vector<VkPhysicalDevice> physicals(count);
-    loader.vkEnumeratePhysicalDevices(loader.instance(), &count, physicals.data());
     std::vector<std::string> extensions;
     VkPhysicalDeviceProperties properties = {};
-    for (VkPhysicalDevice candidate : physicals) {
-        std::vector<std::string> ext = extensionsOf(loader, candidate);
-        if (!has(ext, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME)) continue;
-        VkPhysicalDeviceDrmPropertiesEXT drm = {};
-        drm.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT;
-        VkPhysicalDeviceDriverProperties driver = {};
-        driver.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES;
-        driver.pNext = &drm;
-        VkPhysicalDeviceProperties2 p2 = {};
-        p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
-        p2.pNext = &driver;
-        loader.vkGetPhysicalDeviceProperties2(candidate, &p2);
-        if (!drm.hasRender || drm.renderMajor != static_cast<int64_t>(major(node.st_rdev)) ||
-            drm.renderMinor != static_cast<int64_t>(minor(node.st_rdev)))
-            continue;
-        if (p2.properties.apiVersion < VK_API_VERSION_1_3) {
-            error = std::string(p2.properties.deviceName) + " offers Vulkan " +
-                    std::to_string(VK_API_VERSION_MAJOR(p2.properties.apiVersion)) + "." +
-                    std::to_string(VK_API_VERSION_MINOR(p2.properties.apiVersion)) +
-                    ", the conversion needs 1.3";
-            return nullptr;
-        }
-        device->m_Physical = candidate;
-        properties = p2.properties;
-        device->m_Name = std::string(p2.properties.deviceName) + ", " + driver.driverName + " " +
-                         driver.driverInfo;
-        extensions = std::move(ext);
-        break;
-    }
-    if (!device->m_Physical) {
-        if (error.empty()) error = "no Vulkan device for " + renderNode;
-        return nullptr;
-    }
+    device->m_Physical =
+        physicalFor(loader, renderNode, node, properties, device->m_Name, extensions, error);
+    if (!device->m_Physical) return nullptr;
     for (const char* name :
          {VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME,
           VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
@@ -271,6 +335,18 @@ std::unique_ptr<VulkanDevice> VulkanDevice::open(const std::string& renderNode, 
     }
     loader.vkGetPhysicalDeviceMemoryProperties(device->m_Physical, &device->m_Memory);
     device->m_TimestampPeriod = properties.limits.timestampPeriod;
+    device->m_Options = options;
+    device->m_VendorId = properties.vendorID;
+    device->m_DriverVersion = properties.driverVersion;
+    {
+        VkPhysicalDeviceIDProperties id = {};
+        id.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+        VkPhysicalDeviceProperties2 p2 = {};
+        p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        p2.pNext = &id;
+        loader.vkGetPhysicalDeviceProperties2(device->m_Physical, &p2);
+        std::memcpy(device->m_DeviceUuid, id.deviceUUID, VK_UUID_SIZE);
+    }
 
     // The queue: compute without graphics where the GPU has one — the queue
     // that runs beside a game rather than behind it (§8o.1) — and the
@@ -278,12 +354,70 @@ std::unique_ptr<VulkanDevice> VulkanDevice::open(const std::string& renderNode, 
     uint32_t familyCount = 0;
     loader.vkGetPhysicalDeviceQueueFamilyProperties2(device->m_Physical, &familyCount, nullptr);
     std::vector<VkQueueFamilyProperties2> families(familyCount);
-    for (auto& f : families) {
-        f = {};
-        f.sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
+    std::vector<VkQueueFamilyVideoPropertiesKHR> videoFamilies(familyCount);
+    const bool videoQueries = has(extensions, VK_KHR_VIDEO_QUEUE_EXTENSION_NAME);
+    for (uint32_t i = 0; i < familyCount; ++i) {
+        videoFamilies[i] = {};
+        videoFamilies[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_VIDEO_PROPERTIES_KHR;
+        families[i] = {};
+        families[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
+        families[i].pNext = videoQueries ? &videoFamilies[i] : nullptr;
     }
     loader.vkGetPhysicalDeviceQueueFamilyProperties2(device->m_Physical, &familyCount,
                                                      families.data());
+
+    // The video queues asked for: a family that says it takes HEVC, and the
+    // extensions that drive it. A driver that hides its encoder (RADV below
+    // VCN firmware ENC 1.22, §8o.0) has neither: refused here, by name.
+    auto videoFamily = [&](VkQueueFlags flag, VkVideoCodecOperationFlagsKHR operation) {
+        for (uint32_t i = 0; i < familyCount; ++i)
+            if ((families[i].queueFamilyProperties.queueFlags & flag) &&
+                (videoFamilies[i].videoCodecOperations & operation))
+                return i;
+        return UINT32_MAX;
+    };
+    if (options.encodeHevc) {
+        for (const char* name :
+             {VK_KHR_VIDEO_QUEUE_EXTENSION_NAME, VK_KHR_VIDEO_ENCODE_QUEUE_EXTENSION_NAME,
+              VK_KHR_VIDEO_ENCODE_H265_EXTENSION_NAME}) {
+            if (!has(extensions, name)) {
+                error = device->m_Name + " offers no Vulkan Video encoder (" + name + ")";
+                return nullptr;
+            }
+        }
+        device->m_EncodeFamily = videoFamily(VK_QUEUE_VIDEO_ENCODE_BIT_KHR,
+                                             VK_VIDEO_CODEC_OPERATION_ENCODE_H265_BIT_KHR);
+        if (device->m_EncodeFamily == UINT32_MAX) {
+            error = device->m_Name + " has no queue that encodes HEVC";
+            return nullptr;
+        }
+        if (!loader.vkGetPhysicalDeviceVideoCapabilitiesKHR ||
+            !loader.vkGetPhysicalDeviceVideoFormatPropertiesKHR) {
+            error = "the Vulkan loader has no VK_KHR_video_queue queries";
+            return nullptr;
+        }
+    }
+    if (options.decodeHevc) {
+        for (const char* name :
+             {VK_KHR_VIDEO_QUEUE_EXTENSION_NAME, VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME,
+              VK_KHR_VIDEO_DECODE_H265_EXTENSION_NAME}) {
+            if (!has(extensions, name)) {
+                error = device->m_Name + " offers no Vulkan Video decoder (" + name + ")";
+                return nullptr;
+            }
+        }
+        device->m_DecodeFamily = videoFamily(VK_QUEUE_VIDEO_DECODE_BIT_KHR,
+                                             VK_VIDEO_CODEC_OPERATION_DECODE_H265_BIT_KHR);
+        if (device->m_DecodeFamily == UINT32_MAX) {
+            error = device->m_Name + " has no queue that decodes HEVC";
+            return nullptr;
+        }
+        if (!loader.vkGetPhysicalDeviceVideoCapabilitiesKHR ||
+            !loader.vkGetPhysicalDeviceVideoFormatPropertiesKHR) {
+            error = "the Vulkan loader has no VK_KHR_video_queue queries";
+            return nullptr;
+        }
+    }
     for (uint32_t pass = 0; pass < 2 && device->m_Family == UINT32_MAX; ++pass) {
         for (uint32_t i = 0; i < familyCount; ++i) {
             const VkQueueFlags flags = families[i].queueFamilyProperties.queueFlags;
@@ -357,17 +491,40 @@ bool VulkanDevice::create(bool high, std::string& error)
         enable.push_back(has(extensions, "VK_KHR_global_priority") ? "VK_KHR_global_priority"
                                                                    : "VK_EXT_global_priority");
     }
+    const bool video = m_Options.encodeHevc || m_Options.decodeHevc;
+    if (video) enable.push_back(VK_KHR_VIDEO_QUEUE_EXTENSION_NAME);
+    if (m_Options.encodeHevc) {
+        enable.push_back(VK_KHR_VIDEO_ENCODE_QUEUE_EXTENSION_NAME);
+        enable.push_back(VK_KHR_VIDEO_ENCODE_H265_EXTENSION_NAME);
+    }
+    if (m_Options.decodeHevc) {
+        enable.push_back(VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME);
+        enable.push_back(VK_KHR_VIDEO_DECODE_H265_EXTENSION_NAME);
+    }
 
+    // One queue per family asked for. Only the conversion's carries a
+    // priority: an encode queue at HIGH is created and then refused at its
+    // first submission on the 780M (§8o.3), so the video queues keep the
+    // default — the encode is a few milliseconds on a block no game uses.
     const float one = 1.0f;
     VkDeviceQueueGlobalPriorityCreateInfoKHR priority = {};
     priority.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_GLOBAL_PRIORITY_CREATE_INFO_KHR;
     priority.globalPriority = VK_QUEUE_GLOBAL_PRIORITY_HIGH_KHR;
-    VkDeviceQueueCreateInfo queue = {};
-    queue.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-    queue.pNext = high ? &priority : nullptr;
-    queue.queueFamilyIndex = m_Family;
-    queue.queueCount = 1;
-    queue.pQueuePriorities = &one;
+    std::vector<VkDeviceQueueCreateInfo> queues;
+    for (uint32_t family : {m_Family, m_EncodeFamily, m_DecodeFamily}) {
+        if (family == UINT32_MAX) continue;
+        bool seen = false;
+        for (const auto& q : queues)
+            seen = seen || q.queueFamilyIndex == family;
+        if (seen) continue;
+        VkDeviceQueueCreateInfo queue = {};
+        queue.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        queue.pNext = high && family == m_Family ? &priority : nullptr;
+        queue.queueFamilyIndex = family;
+        queue.queueCount = 1;
+        queue.pQueuePriorities = &one;
+        queues.push_back(queue);
+    }
     VkPhysicalDeviceVulkan13Features f13 = {};
     f13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
     f13.synchronization2 = VK_TRUE;
@@ -382,8 +539,8 @@ bool VulkanDevice::create(bool high, std::string& error)
     VkDeviceCreateInfo dci = {};
     dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     dci.pNext = &features;
-    dci.queueCreateInfoCount = 1;
-    dci.pQueueCreateInfos = &queue;
+    dci.queueCreateInfoCount = static_cast<uint32_t>(queues.size());
+    dci.pQueueCreateInfos = queues.data();
     dci.enabledExtensionCount = static_cast<uint32_t>(enable.size());
     dci.ppEnabledExtensionNames = enable.data();
     VkResult r;
@@ -414,7 +571,27 @@ bool VulkanDevice::create(bool high, std::string& error)
     MW_VULKAN_OPTIONAL_DEVICE_FUNCTIONS(MW_VULKAN_LOAD_OPTIONAL)
 #undef MW_VULKAN_LOAD_OPTIONAL
     if (!m_Fn.vkImportSemaphoreFdKHR) m_SyncFile = false;
+#define MW_VULKAN_LOAD_DEVICE(name)                                                                \
+    m_Fn.name = reinterpret_cast<PFN_##name>(loader.vkGetDeviceProcAddr(m_Device, #name));         \
+    if (!m_Fn.name) {                                                                              \
+        error = "the Vulkan device has no " #name;                                                 \
+        return false;                                                                              \
+    }
+    if (video) {
+        MW_VULKAN_VIDEO_FUNCTIONS(MW_VULKAN_LOAD_DEVICE)
+    }
+    if (m_Options.encodeHevc) {
+        MW_VULKAN_VIDEO_ENCODE_FUNCTIONS(MW_VULKAN_LOAD_DEVICE)
+    }
+    if (m_Options.decodeHevc) {
+        MW_VULKAN_VIDEO_DECODE_FUNCTIONS(MW_VULKAN_LOAD_DEVICE)
+    }
+#undef MW_VULKAN_LOAD_DEVICE
     m_Fn.vkGetDeviceQueue(m_Device, m_Family, 0, &m_Queue);
+    if (m_EncodeFamily != UINT32_MAX)
+        m_Fn.vkGetDeviceQueue(m_Device, m_EncodeFamily, 0, &m_EncodeQueue);
+    if (m_DecodeFamily != UINT32_MAX)
+        m_Fn.vkGetDeviceQueue(m_Device, m_DecodeFamily, 0, &m_DecodeQueue);
 
     VkSemaphoreTypeCreateInfo kind = {};
     kind.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
@@ -493,8 +670,53 @@ bool VulkanDevice::modifierFeatures(VkFormat format, uint64_t modifier,
     return false;
 }
 
+VkResult VulkanDevice::videoCapabilities(const VkVideoProfileInfoKHR& profile,
+                                         VkVideoCapabilitiesKHR& capabilities) const
+{
+    if (!m_Loader->vkGetPhysicalDeviceVideoCapabilitiesKHR) return VK_ERROR_EXTENSION_NOT_PRESENT;
+    return m_Loader->vkGetPhysicalDeviceVideoCapabilitiesKHR(m_Physical, &profile, &capabilities);
+}
+
+VkResult VulkanDevice::videoFormats(const VkPhysicalDeviceVideoFormatInfoKHR& info,
+                                    std::vector<VkVideoFormatPropertiesKHR>& formats) const
+{
+    formats.clear();
+    if (!m_Loader->vkGetPhysicalDeviceVideoFormatPropertiesKHR)
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
+    uint32_t count = 0;
+    VkResult r =
+        m_Loader->vkGetPhysicalDeviceVideoFormatPropertiesKHR(m_Physical, &info, &count, nullptr);
+    if (r != VK_SUCCESS) return r;
+    formats.resize(count);
+    for (auto& f : formats) {
+        f = {};
+        f.sType = VK_STRUCTURE_TYPE_VIDEO_FORMAT_PROPERTIES_KHR;
+    }
+    r = m_Loader->vkGetPhysicalDeviceVideoFormatPropertiesKHR(m_Physical, &info, &count,
+                                                              formats.data());
+    formats.resize(count);
+    return r;
+}
+
 bool VulkanDevice::run(VkCommandBuffer cmd, const VkSemaphoreSubmitInfo* waits, uint32_t waitCount,
                        std::string& error)
+{
+    return runOn(m_Queue, cmd, waits, waitCount, error);
+}
+
+VkSemaphoreSubmitInfo VulkanDevice::afterLast(VkPipelineStageFlags2 stage) const
+{
+    VkSemaphoreSubmitInfo wait = {};
+    wait.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+    if (m_Submitted == 0) return wait;
+    wait.semaphore = m_Timeline;
+    wait.value = m_Submitted;
+    wait.stageMask = stage;
+    return wait;
+}
+
+bool VulkanDevice::runOn(VkQueue queue, VkCommandBuffer cmd, const VkSemaphoreSubmitInfo* waits,
+                         uint32_t waitCount, std::string& error)
 {
     if (m_Lost) {
         error = "the Vulkan device is lost";
@@ -516,7 +738,7 @@ bool VulkanDevice::run(VkCommandBuffer cmd, const VkSemaphoreSubmitInfo* waits, 
     submit.pCommandBufferInfos = &cmdInfo;
     submit.signalSemaphoreInfoCount = 1;
     submit.pSignalSemaphoreInfos = &signal;
-    VkResult r = m_Fn.vkQueueSubmit2(m_Queue, 1, &submit, VK_NULL_HANDLE);
+    VkResult r = m_Fn.vkQueueSubmit2(queue, 1, &submit, VK_NULL_HANDLE);
     if (r != VK_SUCCESS) {
         m_Lost = true;
         error = "vkQueueSubmit2: " + resultText(r);

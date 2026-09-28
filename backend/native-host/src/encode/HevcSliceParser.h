@@ -279,7 +279,6 @@ inline std::vector<uint8_t> payload(const uint8_t* data, size_t size, size_t lim
     return h264vui_detail::unescape(data + 2, n);
 }
 
-/// profile_tier_level(1, maxSubLayersMinus1): read past, nothing kept.
 /// profile_tier_level(1, maxSubLayersMinus1): the general part into @p s, the
 /// sub-layers' skipped.
 inline void readProfileTierLevel(BitReader& r, uint32_t maxSubLayersMinus1, HevcSpsFields& s)

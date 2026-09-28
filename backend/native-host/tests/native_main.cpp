@@ -37,6 +37,7 @@ void run_absolute_map_tests();
 void run_wayland_layout_tests();
 void run_linux_pipeline_tests();
 void run_vulkan_convert_tests();
+void run_vulkan_hevc_tests();
 void run_cpu_cursor_tests();
 void run_portal_tests();
 void run_encode_load_cap_tests();
@@ -162,6 +163,7 @@ int main(int argc, char** argv)
     RUN(mac_keymap);
     RUN(linux_pipeline);
     RUN(vulkan_convert);
+    RUN(vulkan_hevc);
     RUN(cpu_cursor);
     RUN(portal);
     RUN(linux_session);

@@ -54,6 +54,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace mw::native::vulkan {
 
@@ -119,10 +120,31 @@ constexpr uint64_t kGpuGoneMs = 3000;
     X(vkCmdBindDescriptorSets)                                                                     \
     X(vkCmdPushConstants)                                                                          \
     X(vkCmdDispatch)                                                                               \
+    X(vkCmdCopyImageToBuffer)                                                                      \
+    X(vkCmdBeginQuery)                                                                             \
+    X(vkCmdEndQuery)                                                                               \
     X(vkGetMemoryFdPropertiesKHR)
 
 // An extension's, null where the device lacks it.
 #define MW_VULKAN_OPTIONAL_DEVICE_FUNCTIONS(X) X(vkImportSemaphoreFdKHR)
+
+// VK_KHR_video_queue and its encode and decode halves: the Vulkan Video
+// encoder (C13.5), and the decoder its pixel proof reads it back with. Loaded
+// only on a device opened with a video queue.
+#define MW_VULKAN_VIDEO_FUNCTIONS(X)                                                               \
+    X(vkCreateVideoSessionKHR)                                                                     \
+    X(vkDestroyVideoSessionKHR)                                                                    \
+    X(vkGetVideoSessionMemoryRequirementsKHR)                                                      \
+    X(vkBindVideoSessionMemoryKHR)                                                                 \
+    X(vkCreateVideoSessionParametersKHR)                                                           \
+    X(vkDestroyVideoSessionParametersKHR)                                                          \
+    X(vkCmdBeginVideoCodingKHR)                                                                    \
+    X(vkCmdEndVideoCodingKHR)                                                                      \
+    X(vkCmdControlVideoCodingKHR)
+#define MW_VULKAN_VIDEO_ENCODE_FUNCTIONS(X)                                                        \
+    X(vkGetEncodedVideoSessionParametersKHR)                                                       \
+    X(vkCmdEncodeVideoKHR)
+#define MW_VULKAN_VIDEO_DECODE_FUNCTIONS(X) X(vkCmdDecodeVideoKHR)
 
 #define MW_VULKAN_DECLARE(name) PFN_##name name = nullptr;
 
@@ -130,9 +152,38 @@ struct DeviceFunctions
 {
     MW_VULKAN_DEVICE_FUNCTIONS(MW_VULKAN_DECLARE)
     MW_VULKAN_OPTIONAL_DEVICE_FUNCTIONS(MW_VULKAN_DECLARE)
+    MW_VULKAN_VIDEO_FUNCTIONS(MW_VULKAN_DECLARE)
+    MW_VULKAN_VIDEO_ENCODE_FUNCTIONS(MW_VULKAN_DECLARE)
+    MW_VULKAN_VIDEO_DECODE_FUNCTIONS(MW_VULKAN_DECLARE)
+};
+
+/// What a device is opened for, beyond the conversion's compute queue.
+struct DeviceOptions
+{
+    /// The compute queue at HIGH where the process may have it.
+    bool wantHigh = true;
+    /// A queue that encodes HEVC (Vulkan Video): the whole chain in Vulkan.
+    bool encodeHevc = false;
+    /// A queue that decodes HEVC: the encoder's pixel proof reads its own
+    /// stream back with it.
+    bool decodeHevc = false;
 };
 
 class Loader;
+
+/// What a GPU's Vulkan driver is, asked without opening a device: the key the
+/// Vulkan encoder's verdict is kept under.
+struct DeviceIdentity
+{
+    /// "AMD Radeon Graphics (RADV GFX1103_R1), radv Mesa 26.2.3".
+    std::string name;
+    uint32_t vendorId = 0;
+    uint32_t driverVersion = 0;
+    uint8_t uuid[VK_UUID_SIZE] = {};
+    /// The driver shows a Vulkan Video HEVC encoder, and a decoder.
+    bool encodesHevc = false;
+    bool decodesHevc = false;
+};
 
 /// The Vulkan device of the GPU behind one DRM render node, with the one
 /// compute queue the conversion runs on.
@@ -143,6 +194,10 @@ public:
     VulkanDevice(const VulkanDevice&) = delete;
     VulkanDevice& operator=(const VulkanDevice&) = delete;
 
+    /// The driver of the GPU behind @p renderNode, matched as open() matches
+    /// it; false, with the reason, when there is none.
+    static bool identify(const std::string& renderNode, DeviceIdentity& out, std::string& error);
+
     /// The device of the GPU behind @p renderNode ("/dev/dri/renderD128"),
     /// matched by its DRM node numbers (VK_EXT_physical_device_drm), with a
     /// compute queue at HIGH when @p wantHigh, the process holds CAP_SYS_NICE
@@ -151,12 +206,33 @@ public:
     /// or it lacks what importing a DMA-BUF and writing into one need.
     static std::unique_ptr<VulkanDevice> open(const std::string& renderNode, bool wantHigh,
                                               std::string& error);
+    /// The same, with the video queues @p options asks for: refused, with the
+    /// reason, when the GPU's driver offers none that takes HEVC.
+    static std::unique_ptr<VulkanDevice> open(const std::string& renderNode,
+                                              const DeviceOptions& options, std::string& error);
 
     const DeviceFunctions& fn() const { return m_Fn; }
     VkDevice device() const { return m_Device; }
     VkPhysicalDevice physical() const { return m_Physical; }
     VkQueue queue() const { return m_Queue; }
     uint32_t family() const { return m_Family; }
+    /// The video queues, VK_NULL_HANDLE and UINT32_MAX when not asked for.
+    VkQueue encodeQueue() const { return m_EncodeQueue; }
+    uint32_t encodeFamily() const { return m_EncodeFamily; }
+    VkQueue decodeQueue() const { return m_DecodeQueue; }
+    uint32_t decodeFamily() const { return m_DecodeFamily; }
+    /// The driver as the physical device reports it, for the Vulkan encoder's
+    /// verdict: a pixel proof holds for one driver on one GPU.
+    uint32_t vendorId() const { return m_VendorId; }
+    uint32_t driverVersion() const { return m_DriverVersion; }
+    const uint8_t* deviceUuid() const { return m_DeviceUuid; }
+
+    /// VK_KHR_video_queue's physical-device queries (VK_ERROR_EXTENSION_NOT_PRESENT
+    /// where the loader has none).
+    VkResult videoCapabilities(const VkVideoProfileInfoKHR& profile,
+                               VkVideoCapabilitiesKHR& capabilities) const;
+    VkResult videoFormats(const VkPhysicalDeviceVideoFormatInfoKHR& info,
+                          std::vector<VkVideoFormatPropertiesKHR>& formats) const;
 
     /// "AMD Radeon 780M Graphics (RADV PHOENIX), Mesa 23.2.1": the log's name.
     const std::string& name() const { return m_Name; }
@@ -190,6 +266,15 @@ public:
     /// lost() then says so and nothing more is submitted.
     bool run(VkCommandBuffer cmd, const VkSemaphoreSubmitInfo* waits, uint32_t waitCount,
              std::string& error);
+    /// run() on another of the device's queues: the encode or the decode one.
+    bool runOn(VkQueue queue, VkCommandBuffer cmd, const VkSemaphoreSubmitInfo* waits,
+               uint32_t waitCount, std::string& error);
+    /// A wait on the last submission, whichever queue ran it, for @p stage of
+    /// the next: what makes the conversion's writes visible to the encoder on
+    /// another queue. A CPU that waited in between orders the two, it does
+    /// not make memory visible — a semaphore does. Null semaphore before the
+    /// first submission.
+    VkSemaphoreSubmitInfo afterLast(VkPipelineStageFlags2 stage) const;
     bool lost() const { return m_Lost; }
 
 private:
@@ -198,11 +283,19 @@ private:
     void destroy();
 
     std::shared_ptr<Loader> m_Loader;
+    DeviceOptions m_Options;
     DeviceFunctions m_Fn;
     VkPhysicalDevice m_Physical = VK_NULL_HANDLE;
     VkDevice m_Device = VK_NULL_HANDLE;
     VkQueue m_Queue = VK_NULL_HANDLE;
     uint32_t m_Family = UINT32_MAX;
+    VkQueue m_EncodeQueue = VK_NULL_HANDLE;
+    uint32_t m_EncodeFamily = UINT32_MAX;
+    VkQueue m_DecodeQueue = VK_NULL_HANDLE;
+    uint32_t m_DecodeFamily = UINT32_MAX;
+    uint32_t m_VendorId = 0;
+    uint32_t m_DriverVersion = 0;
+    uint8_t m_DeviceUuid[VK_UUID_SIZE] = {};
     bool m_AsyncCompute = false;
     bool m_PriorityExtension = false;
     bool m_High = false;

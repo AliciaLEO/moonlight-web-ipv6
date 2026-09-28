@@ -22,6 +22,9 @@
 #include "../../convert/linux/GlConvert.h"
 #if defined(MW_NATIVE_LINUX_VULKAN)
 #include "../../convert/linux/VulkanConvert.h"
+#include "../../encode/linux/VulkanHevcEncoder.h"
+#include "../../encode/linux/VulkanHevcProof.h"
+#include "vulkan/VulkanDevice.h"
 #endif
 #include "../../core/CadenceAlign.h"
 #include "../../core/CursorPositionGate.h"
@@ -186,7 +189,30 @@ public:
     /// streaming — where GL would not have: the session rebuilds the pair with
     /// GL converting (LinuxRouteChoice.h). False for every other failure.
     virtual bool conversionGivenUp() const { return false; }
+    /// The Vulkan Video chain gave up — at init(), converting or encoding:
+    /// the session rebuilds with VA-API. False on every other pair.
+    virtual bool vulkanChainGivenUp() const { return false; }
 };
+
+/// The resample filter for a stream smaller than the screen: the bench's pick
+/// (Lanczos-2 dilated, linear light — docs/bench-native-host §8j), the GPU
+/// tier being the one with a GPU to spend on it — kept only where it is
+/// cheap (ResampleCost). MW_SCALER=bilinear|lanczos2 is the A/B on a real
+/// stream, and pins the filter.
+convert::ScaleFilter scaleFilterFromEnvironment(bool& pinned)
+{
+    convert::ScaleFilter filter = convert::ScaleFilter::Lanczos2;
+    pinned = false;
+    if (const char* value = std::getenv("MW_SCALER"); value && *value) {
+        if (convert::parseScaleFilter(value, filter)) {
+            pinned = true;
+            log::info(std::string("[native] MW_SCALER in effect: ") + toString(filter));
+        } else
+            log::info(std::string("[native] MW_SCALER=") + value +
+                      " is not a filter (bilinear, lanczos2) — ignored");
+    }
+    return filter;
+}
 
 /// KMS → a GPU conversion → VA-API: the encoder owns the NV12 surface, the
 /// converter writes into it. One copy per frame, the bitstream leaving VRAM.
@@ -214,21 +240,8 @@ public:
                              outputHeight > 0 ? outputHeight : capture.height(), fps, bitrateKbps,
                              intraRefresh, tuning, error))
             return false;
-        // The resample filter for a stream smaller than the screen: the
-        // bench's pick (Lanczos-2 dilated, linear light — docs/bench-native-host
-        // §8j), the GPU tier being the one with a GPU to spend on it — kept
-        // only where it is cheap, see noteResampleCost().
-        // MW_SCALER=bilinear|lanczos2 is the A/B on a real stream.
-        convert::ScaleFilter filter = convert::ScaleFilter::Lanczos2;
-        m_ScalerPinned = false;
-        if (const char* value = std::getenv("MW_SCALER"); value && *value) {
-            if (convert::parseScaleFilter(value, filter)) {
-                m_ScalerPinned = true;
-                log::info(std::string("[native] MW_SCALER in effect: ") + toString(filter));
-            } else
-                log::info(std::string("[native] MW_SCALER=") + value +
-                          " is not a filter (bilinear, lanczos2) — ignored");
-        }
+        // Kept only where it is cheap, see noteResampleCost().
+        const convert::ScaleFilter filter = scaleFilterFromEnvironment(m_ScalerPinned);
         m_Converter = std::make_unique<Converter>();
 #if defined(MW_NATIVE_LINUX_VULKAN)
         // The compute queue at HIGH where the process may have it — the
@@ -336,6 +349,106 @@ private:
 
 /// The Linux path as it was: GL on the graphics ring into VA-API.
 using GpuPipeline = VaapiPipeline<convert::GlConvert>;
+
+#if defined(MW_NATIVE_LINUX_VULKAN)
+/// KMS → Vulkan compute → Vulkan Video (plan pipeline-video-d3d12-v2, C13.5):
+/// the whole chain in one API on one device. The encoder owns its NV12 input
+/// image, the conversion writes it in place through its plane views, the
+/// encode waits for that on the GPU. One copy per frame, the bitstream.
+///
+/// Built only once the route choice let it (LinuxRouteChoice.h) — the pixel
+/// proof passed for this GPU (VulkanHevcProof) — and given up on at the first
+/// failure, opening or streaming: the session goes on through VA-API.
+class VulkanPipeline final : public VideoPipeline
+{
+public:
+    bool init(const capture::IScreenCapture& capture, Codec codec, int outputWidth,
+              int outputHeight, int fps, int bitrateKbps, bool intraRefresh,
+              const EncoderTuning& tuning, std::string& error) override
+    {
+        (void)intraRefresh; // none through Vulkan Video yet: keyframes on demand
+        m_Failed = true;
+        // The conversion's queue at HIGH where the process may have it; the
+        // encode queue keeps the default (VulkanHevcEncoder).
+        vulkan::DeviceOptions options;
+        options.wantHigh = tuning.prioVk != EncoderTuning::PriorityVk::Normal;
+        options.encodeHevc = true;
+        std::shared_ptr<vulkan::VulkanDevice> device =
+            vulkan::VulkanDevice::open(capture.renderNodePath(), options, error);
+        if (!device) return false;
+        m_Encoder = std::make_unique<encode::VulkanHevcEncoder>();
+        if (!m_Encoder->init(device, codec, outputWidth > 0 ? outputWidth : capture.width(),
+                             outputHeight > 0 ? outputHeight : capture.height(), fps, bitrateKbps,
+                             tuning, error, encode::witnessFromEnvironment()))
+            return false;
+        const convert::ScaleFilter filter = scaleFilterFromEnvironment(m_ScalerPinned);
+        m_Converter = std::make_unique<convert::VulkanConvert>();
+        if (!m_Converter->init(device, capture.fourcc(), capture.width(), capture.height(),
+                               m_Encoder->input().width, m_Encoder->input().height, filter,
+                               error) ||
+            !m_Converter->bindTarget(m_Encoder->input(), error))
+            return false;
+        m_Failed = false;
+        return true;
+    }
+    bool convert(const capture::KmsFrame& frame, const capture::CursorState& cursor,
+                 const convert::CursorDraw& draw, std::string& error) override
+    {
+        if (!m_Converter->convert(frame, cursor, draw, error)) {
+            m_Failed = true;
+            return false;
+        }
+        int64_t costUs = 0;
+        if (m_Converter->takeResampleCost(costUs) && !convert::ResampleCost::affordable(costUs) &&
+            !m_ScalerPinned && m_Converter->dropResample())
+            log::info("[native] resample dropped: Lanczos-2 costs " +
+                      std::to_string(costUs / 1000) + " ms of GPU a frame here — bilinear");
+        return true;
+    }
+    bool encode(bool forceKeyframe, uint32_t frameNumber, encode::EncoderOutput& out,
+                std::string& error) override
+    {
+        if (!m_Encoder->encode(forceKeyframe, frameNumber, out, error)) {
+            m_Failed = true;
+            return false;
+        }
+        return true;
+    }
+    bool vulkanChainGivenUp() const override { return m_Failed; }
+    void releaseOutput() override { m_Encoder->releaseOutput(); }
+    bool setBitrate(int kbps, std::string& error) override
+    {
+        return m_Encoder->setBitrate(kbps, error);
+    }
+    bool intraRefreshEnabled() const override { return false; }
+    int intraRefreshFrames() const override { return 0; }
+    bool supportsReferenceInvalidation() const override
+    {
+        return m_Encoder->supportsReferenceInvalidation();
+    }
+    bool invalidateReference(uint32_t frameNumber, std::string& error) override
+    {
+        return m_Encoder->invalidateReference(frameNumber, error);
+    }
+    int outputWidth() const override { return m_Converter->outputWidth(); }
+    int outputHeight() const override { return m_Converter->outputHeight(); }
+    int copiesPerFrame() const override { return 1; }
+    std::string describe(const char* source) const override
+    {
+        return std::string("via Vulkan Video — ") + source + " → Vulkan compute" +
+               (m_Converter->highPriority() ? " (high priority)" : "") + " → " +
+               m_Encoder->describe() + ", 1 copy (the bitstream)";
+    }
+
+private:
+    // The converter goes first, then the encoder, then — with the last of
+    // them — the device they share.
+    std::unique_ptr<encode::VulkanHevcEncoder> m_Encoder;
+    std::unique_ptr<convert::VulkanConvert> m_Converter;
+    bool m_ScalerPinned = false;
+    bool m_Failed = false;
+};
+#endif
 
 /// KMS → DMA-BUF mmap → CPU → OpenH264: the converter owns the I420 planes, the
 /// encoder reads them. Two copies per frame — the pixels into the planes, the
@@ -923,9 +1036,23 @@ private:
         // below can only move down — Vulkan → GL, VA-API → the CPU — and the
         // loop ends on a pair that came up or on the CPU's own failure.
         for (;;) {
-            m_Route = chooseLinuxRoute(routeFacts(sharedMemory));
+            LinuxRouteFacts facts = routeFacts(sharedMemory);
+#if defined(MW_NATIVE_LINUX_VULKAN)
+            // Vulkan Video only on the pixel's word (VulkanHevcProof), asked
+            // only where the chain would be taken.
+            if (linuxRouteWantsVulkanVideo(facts))
+                facts.vulkanEncoderRefusal = proofRefusal(outputWidth, outputHeight);
+#endif
+            m_Route = chooseLinuxRoute(facts);
             m_UsingCpuPair = m_Route.encoder == LinuxRoute::Encoder::Cpu;
             if (buildPair(outputWidth, outputHeight, error)) break;
+            // The Vulkan Video chain did not come up — a device, an encoder
+            // or a conversion that refused: VA-API encodes, as it always has.
+            if (m_Pipeline && m_Pipeline->vulkanChainGivenUp()) {
+                m_VulkanEncoderRefusal = "the Vulkan Video chain could not start (" + error + ")";
+                log::warning("[native] " + m_VulkanEncoderRefusal + " — encoding through VA-API");
+                continue;
+            }
             // The split route's Vulkan half did not come up: no loader, no
             // Vulkan 1.3, a modifier it cannot import. GL converts instead, as
             // it always has — never a stream refused for want of Vulkan.
@@ -973,10 +1100,34 @@ private:
         f.vaapiUnusable = m_GpuEncoderUnusable;
 #if defined(MW_NATIVE_LINUX_VULKAN)
         f.vulkanConvertBuilt = true;
+        f.vulkanEncoderBuilt = true;
 #endif
         f.vulkanConvertRefusal = m_VulkanConvertRefusal;
+        f.vulkanEncoderRefusal = m_VulkanEncoderRefusal;
         return f;
     }
+
+#if defined(MW_NATIVE_LINUX_VULKAN)
+    /// Why this GPU's Vulkan Video encoder is not trusted at this size, or "":
+    /// the pixel proof's verdict, kept for the session per size (and across
+    /// sessions in the user's cache, VulkanHevcProof).
+    std::string proofRefusal(int outputWidth, int outputHeight)
+    {
+        const int width = outputWidth > 0 ? outputWidth : m_Capture->width();
+        const int height = outputHeight > 0 ? outputHeight : m_Capture->height();
+        if (!m_ProofDone || width != m_ProofWidth || height != m_ProofHeight) {
+            const encode::VulkanHevcProof proof = encode::vulkanHevcVerdict(
+                m_Capture->renderNodePath(), width, height, m_EncodeFps, m_Config.tuning);
+            m_ProofDone = true;
+            m_ProofWidth = width;
+            m_ProofHeight = height;
+            m_ProofRefusal = proof.passed ? std::string()
+                             : proof.ran  ? "the pixel proof failed: " + proof.summary
+                                          : "the pixel proof could not run: " + proof.summary;
+        }
+        return m_ProofRefusal;
+    }
+#endif
 
     /// The chain in SessionInfo — the log's line, the stats overlay, the
     /// bench's rows. After every build: a fallback changes it mid-stream.
@@ -998,13 +1149,35 @@ private:
                         std::string& error)
     {
         if (m_Pipeline->convert(frame, cursor, cursorDraw(), error)) return true;
-        if (!m_Pipeline->conversionGivenUp()) return false;
-        m_VulkanConvertRefusal = "the Vulkan conversion gave up while streaming (" + error + ")";
-        log::warning("[native] " + m_VulkanConvertRefusal + " — converting through EGL from here");
+        if (!leaveVulkan(error)) return false;
+        return m_Pipeline->convert(frame, cursor, cursorDraw(), error);
+    }
+
+    /// A Vulkan half gave up while streaming — the Vulkan Video chain, or the
+    /// split route's conversion: remembered as a refusal for the rest of the
+    /// session, and the pair rebuilt at the same size with the next chain
+    /// down. False, @p error untouched, for any other failure. The loop puts
+    /// its bitrate back on the new encoder (m_RouteChanged); a keyframe
+    /// starts it.
+    bool leaveVulkan(std::string& error)
+    {
+        if (m_Pipeline->vulkanChainGivenUp()) {
+            m_VulkanEncoderRefusal =
+                "the Vulkan Video chain gave up while streaming (" + error + ")";
+            log::warning("[native] " + m_VulkanEncoderRefusal +
+                         " — encoding through VA-API from here");
+        } else if (m_Pipeline->conversionGivenUp()) {
+            m_VulkanConvertRefusal =
+                "the Vulkan conversion gave up while streaming (" + error + ")";
+            log::warning("[native] " + m_VulkanConvertRefusal +
+                         " — converting through EGL from here");
+        } else {
+            return false;
+        }
         m_Pipeline->detachThread();
         std::string rebuildError;
         if (!buildPipeline(m_Info.width, m_Info.height, rebuildError)) {
-            error = "no pair after the Vulkan conversion gave up: " + rebuildError;
+            error = "no pair after Vulkan gave up: " + rebuildError;
             return false;
         }
         noteRoute();
@@ -1013,7 +1186,7 @@ private:
         // A new encoder holds no reconstructions: a loss named against the
         // old one means nothing.
         m_PendingInvalidation.store(0);
-        return m_Pipeline->convert(frame, cursor, cursorDraw(), error);
+        return true;
     }
 
     /// The pair itself, once m_UsingCpuPair is settled: pick the codec that pair
@@ -1059,6 +1232,8 @@ private:
 
         if (m_UsingCpuPair) m_Pipeline = std::make_unique<CpuPipeline>();
 #if defined(MW_NATIVE_LINUX_VULKAN)
+        else if (m_Route.encoder == LinuxRoute::Encoder::Vulkan)
+            m_Pipeline = std::make_unique<VulkanPipeline>();
         else if (m_Route.conversion == LinuxRoute::Conversion::Vulkan)
             m_Pipeline = std::make_unique<VaapiPipeline<convert::VulkanConvert>>();
 #endif
@@ -1426,6 +1601,12 @@ private:
             if (m_PendingResize.exchange(false) && applyLoadCap() && haveFrame) {
                 if (!reconvertHeld(resendStamps(steadyNowUs()))) return;
             }
+            // Same for the pair VA-API brought in when the Vulkan Video chain
+            // gave up encoding (emit).
+            if (m_ReconvertHeld) {
+                m_ReconvertHeld = false;
+                if (haveFrame && !reconvertHeld(resendStamps(steadyNowUs()))) return;
+            }
 
             // The portal route: a mode change may never reach the stream. GNOME
             // 42 simply stops delivering frames at one — measured on the
@@ -1644,6 +1825,13 @@ private:
         const bool forceKeyframe = m_ForceKeyframe.exchange(false);
         encode::EncoderOutput encoded;
         if (!m_Pipeline->encode(forceKeyframe, frameNumber, encoded, error)) {
+            // The Vulkan Video chain gave up on this picture: VA-API takes
+            // over, and the loop sends the held picture through it first (it
+            // has converted nothing yet). Nothing went out under this number.
+            if (leaveVulkan(error)) {
+                m_ReconvertHeld = true;
+                return true;
+            }
             finish("encode failed: " + error);
             return false;
         }
@@ -1980,9 +2168,19 @@ private:
     /// it did not start, or it failed while streaming — and "" while it has
     /// not: a refusal every later build carries, so GL converts from then on.
     std::string m_VulkanConvertRefusal;
-    /// The pair was rebuilt under the loop (convertPicture): the loop puts its
+    /// The same for the Vulkan Video chain: VA-API encodes from then on.
+    std::string m_VulkanEncoderRefusal;
+    /// The pixel proof's verdict for this session, and the size it was for.
+    std::string m_ProofRefusal;
+    int m_ProofWidth = 0;
+    int m_ProofHeight = 0;
+    bool m_ProofDone = false;
+    /// The pair was rebuilt under the loop (leaveVulkan): the loop puts its
     /// bitrate back on the new encoder.
     bool m_RouteChanged = false;
+    /// The Vulkan Video chain gave up encoding a picture (emit): the loop
+    /// converts the held one into the new pair and sends it.
+    bool m_ReconvertHeld = false;
 
     /// The size the session was opened at, which the cap scales FROM — never
     /// from the current one, or a run of reductions would compound.
