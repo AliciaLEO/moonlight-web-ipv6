@@ -8,6 +8,7 @@
 #include "encode/ConfigFingerprint.h"
 #include "encode/windows/AmfEncoder.h"
 #include "encode/windows/NvencEncoder.h"
+#include "encode/windows/d3d12/AmfEncoder12.h"
 #include "encode/windows/d3d12/NvencEncoder12.h"
 #include "mw/native/NativeHost.h"
 #include "platform/windows/d3d12/D3d12Device.h"
@@ -178,6 +179,15 @@ std::string openD3d12(EncoderApi api, const std::shared_ptr<d3d12::D3d12Device>&
     opened = false;
     if (api == EncoderApi::Nvenc) {
         auto encoder = std::make_unique<encode::NvencEncoder12>();
+        opened = encoder->init(device, row.codec, row.width, row.height, row.fps, row.kbps, row.hdr,
+                               row.intraRefresh, row.tuning, error);
+        const uint32_t fingerprint = encoder->configFingerprint();
+        encoder->stop();
+        if (opened) return encode::ConfigFingerprint::text(fingerprint);
+        return "refused: " + error;
+    }
+    if (api == EncoderApi::Amf) {
+        auto encoder = std::make_unique<encode::AmfEncoder12>();
         opened = encoder->init(device, row.codec, row.width, row.height, row.fps, row.kbps, row.hdr,
                                row.intraRefresh, row.tuning, error);
         const uint32_t fingerprint = encoder->configFingerprint();

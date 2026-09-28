@@ -19,6 +19,7 @@
 
 #include "../../../convert/windows/ConvertShaders.h"
 #include "../../../core/Log.h"
+#include "../../../encode/windows/d3d12/AmfEncoder12.h"
 #include "../../../encode/windows/d3d12/NvencEncoder12.h"
 #include "../../../encode/windows/d3d12/VideoEncode12.h"
 
@@ -293,9 +294,7 @@ bool D3d12VideoPipeline::buildEncoder(const capture::IWindowsCapture& capture,
     case EncoderTuning::Encoder12::Nvenc:
         encoder = std::make_unique<encode::NvencEncoder12>();
         break;
-    case EncoderTuning::Encoder12::Amf:
-        error = "AMF fed D3D12 pictures is not built yet";
-        return false;
+    case EncoderTuning::Encoder12::Amf: encoder = std::make_unique<encode::AmfEncoder12>(); break;
     default: encoder = std::make_unique<encode::VideoEncode12>(); break;
     }
     if (!encoder->init(m_Device, build.codec, m_Converter->outputWidth(),
@@ -425,6 +424,16 @@ bool D3d12VideoPipeline::submit(uint64_t acquired, bool signalCapture, std::stri
         return false;
     }
     if (acquired && !m_Interop.conversionWaits(m_Queue.queue.Get(), acquired, error)) return false;
+    // The encoder may still be handing the picture back (inputReleased).
+    uint64_t released = 0;
+    if (ID3D12Fence* fence = m_Encoder ? m_Encoder->inputReleased(released) : nullptr) {
+        const HRESULT waited = m_Queue.queue->Wait(fence, released);
+        if (FAILED(waited)) {
+            error = "the wait for the encoder's release was refused (" +
+                    d3d12::hresultText(waited) + ")";
+            return false;
+        }
+    }
     if (m_StallNext && !stall(error)) return false;
     ID3D12CommandList* lists[] = {m_List.Get()};
     m_Queue.queue->ExecuteCommandLists(1, lists);

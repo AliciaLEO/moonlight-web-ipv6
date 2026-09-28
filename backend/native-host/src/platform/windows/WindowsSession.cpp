@@ -32,6 +32,7 @@
 #include "../../encode/EncodeLoadCap.h"
 #include "../../encode/RateControl.h"
 #include "../../encode/RateGovernor.h"
+#include "../../encode/windows/AmfApi.h"
 #include "../../encode/windows/NvencApi.h"
 #include "../../input/windows/Win32Input.h"
 #include "InputDesktop.h"
@@ -950,11 +951,13 @@ private:
         // then known, and the builds after it choose D3D11 from the start.
         f.videoEncode12 =
             D3d12VideoPipeline::videoEncodeMissing(m_Target.encodeAdapterHandle).empty();
-        // NVENC's runtime takes D3D12 pictures wherever it loads (the header
-        // this is built against has the interface; an older driver refuses at
-        // load, with its reason).
+        // The vendors' runtimes take D3D12 pictures wherever they load: the
+        // headers this is built against have the interfaces, and an older
+        // driver refuses at load, with its reason (AMF's is asked for the
+        // headers' 1.5, past the 1.4.33 its DX12 needs).
         f.nvenc12 =
             m_Target.encoder == EncoderApi::Nvenc && encode::NvencApi::instance()->available();
+        f.amf12 = m_Target.encoder == EncoderApi::Amf && encode::AmfApi::instance()->available();
         f.driverExcluded =
             d3d12DriverExcluded(m_Target.encodeVendorId, m_Target.encodeDriverVersion);
         return f;

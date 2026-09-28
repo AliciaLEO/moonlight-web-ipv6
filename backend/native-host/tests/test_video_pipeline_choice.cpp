@@ -261,12 +261,12 @@ void run_video_pipeline_choice_tests()
                  f.enc12 = EncoderTuning::Encoder12::Nvenc;
              },
              "NVENC takes no D3D12 picture on this machine"},
-            {"AMF12 not built",
+            {"AMF12 unavailable",
              [](VideoPipelineFacts& f) {
                  f.encoder = EncoderApi::Amf;
                  f.enc12 = EncoderTuning::Encoder12::Amf;
              },
-             "AMF fed D3D12 pictures is not built yet"},
+             "AMF takes no D3D12 picture on this machine"},
             {"excluded driver",
              [](VideoPipelineFacts& f) { f.driverExcluded = "driver 1.2.3.4: a fault"; },
              "the D3D12 route stays off driver 1.2.3.4: a fault"},

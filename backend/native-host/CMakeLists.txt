@@ -77,6 +77,7 @@ if(WIN32)
         src/encode/windows/d3d12/VideoEncodeCaps12.cpp
         src/encode/windows/d3d12/VideoEncode12.cpp
         src/encode/windows/d3d12/NvencEncoder12.cpp
+        src/encode/windows/d3d12/AmfEncoder12.cpp
         src/audio/windows/WasapiLoopback.cpp
         src/audio/windows/HostMute.cpp
     )

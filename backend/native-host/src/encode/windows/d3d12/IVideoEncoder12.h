@@ -75,6 +75,16 @@ public:
         return false;
     }
 
+    /// Where whatever writes the picture next must wait, on the GPU, before it
+    /// does: the fence and its value — the encoder may still be putting the
+    /// picture back in the COMMON state the conversion expects (AMF leaves it
+    /// in COPY_SOURCE). Null when the bitstream's arrival said it all.
+    virtual ID3D12Fence* inputReleased(uint64_t& value) const
+    {
+        value = 0;
+        return nullptr;
+    }
+
     /// Release the buffer handed out by the last encode(). Must be called
     /// before the next encode().
     virtual void releaseOutput() = 0;

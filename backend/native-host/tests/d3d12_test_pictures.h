@@ -103,9 +103,11 @@ struct Uploader
     }
 
     /// Picture @p frame of the pattern (patternValue) into @p target; the
-    /// fence value the encoder is to wait for, 0 on failure.
+    /// fence value the encoder is to wait for, 0 on failure. @p after /
+    /// @p afterValue: where the copy waits first, on the GPU, as the
+    /// conversion does in the product (IVideoEncoder12::inputReleased).
     uint64_t upload(ID3D12Resource* target, int frame, bool tenBit, std::string& error,
-                    bool flat = false)
+                    bool flat = false, ID3D12Fence* after = nullptr, uint64_t afterValue = 0)
     {
         uint8_t* p = nullptr;
         if (FAILED(staging->Map(0, nullptr, reinterpret_cast<void**>(&p)))) return 0;
@@ -149,6 +151,7 @@ struct Uploader
         std::swap(b.Transition.StateBefore, b.Transition.StateAfter);
         list->ResourceBarrier(1, &b);
         list->Close();
+        if (after) queue.queue->Wait(after, afterValue);
         ID3D12CommandList* lists[] = {list.Get()};
         queue.queue->ExecuteCommandLists(1, lists);
         const uint64_t value = fence.signal(queue.queue.Get(), error);

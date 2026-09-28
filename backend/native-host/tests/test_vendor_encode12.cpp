@@ -6,6 +6,7 @@
 
 #if defined(_WIN32)
 #include "d3d12_test_pictures.h"
+#include "encode/windows/d3d12/AmfEncoder12.h"
 #include "encode/windows/d3d12/NvencEncoder12.h"
 #include "mw/native/NativeHost.h"
 #include "platform/windows/IndirectDisplay.h"
@@ -148,12 +149,17 @@ void runOn(IVideoEncoder12& encoder, const std::shared_ptr<d3d12::D3d12Device>& 
     size_t bytes = 0;
     for (int n = 0; n < frames; ++n) {
         encoder.releaseOutput();
-        const bool force = n == 30;
+        // The first picture asked as a keyframe, as a session's is: AMF's
+        // H.264 puts its parameter sets on a forced IDR only (AmfConfig).
+        const bool force = n == 0 || n == 30;
         if (n == 20 && encoder.supportsReferenceInvalidation()) {
             std::string why;
             CHECK(encoder.invalidateReference(18, why));
         }
-        const uint64_t ready = uploader.upload(input.Get(), n, tenBit, error);
+        uint64_t released = 0;
+        ID3D12Fence* after = encoder.inputReleased(released);
+        const uint64_t ready =
+            uploader.upload(input.Get(), n, tenBit, error, false, after, released);
         EncoderOutput out;
         if (!ready || !encoder.encode(input.Get(), uploader.fence.fence(), ready, force,
                                       static_cast<uint32_t>(n), out, error)) {
@@ -194,7 +200,10 @@ void runOn(IVideoEncoder12& encoder, const std::shared_ptr<d3d12::D3d12Device>& 
     CHECK(changed);
     if (changed) {
         encoder.releaseOutput();
-        const uint64_t ready = uploader.upload(input.Get(), frames, tenBit, error);
+        uint64_t released = 0;
+        ID3D12Fence* after = encoder.inputReleased(released);
+        const uint64_t ready =
+            uploader.upload(input.Get(), frames, tenBit, error, false, after, released);
         EncoderOutput out;
         CHECK(encoder.encode(input.Get(), uploader.fence.fence(), ready, false,
                              static_cast<uint32_t>(frames), out, error));
@@ -222,7 +231,7 @@ const GpuInfo* gpuFor(const Capabilities& caps, uint64_t luid)
 
 void run_vendor_encode12_tests()
 {
-    SECTION("Vendor encoders fed D3D12 pictures — NVENC (D3D12), on each GPU that has it");
+    SECTION("Vendor encoders fed D3D12 pictures — NVENC and AMF (D3D12), on each GPU that has one");
 
 #if !defined(_WIN32)
     std::fprintf(stderr, "  skipped: Windows only\n");
@@ -244,7 +253,9 @@ void run_vendor_encode12_tests()
             mw::native::platform::isIndirectDisplayOnly(desc.AdapterLuid))
             continue;
         const GpuInfo* gpu = gpuFor(caps, luid);
-        if (!gpu || gpu->encoders.empty() || gpu->encoders.front() != EncoderApi::Nvenc) continue;
+        if (!gpu || gpu->encoders.empty()) continue;
+        const EncoderApi api = gpu->encoders.front();
+        if (api != EncoderApi::Nvenc && api != EncoderApi::Amf) continue;
         std::string error;
         const std::shared_ptr<d3d12::D3d12Device> device =
             d3d12::D3d12Device::forAdapter(adapter.Get(), error);
@@ -256,14 +267,21 @@ void run_vendor_encode12_tests()
         for (Codec codec : {Codec::Hevc, Codec::H264, Codec::Av1}) {
             if (std::find(gpu->codecs.begin(), gpu->codecs.end(), codec) == gpu->codecs.end())
                 continue;
-            NvencEncoder12 encoder;
-            runOn(encoder, device, codec, false, codec == Codec::Hevc ? 40 : 20);
-            if (gpu->supports10Bit && codec != Codec::H264) {
-                NvencEncoder12 tenBit;
-                runOn(tenBit, device, codec, true, 8);
+            const int frames = codec == Codec::Hevc ? 40 : 20;
+            if (api == EncoderApi::Nvenc) {
+                NvencEncoder12 encoder;
+                runOn(encoder, device, codec, false, frames);
+                if (gpu->supports10Bit && codec != Codec::H264) {
+                    NvencEncoder12 tenBit;
+                    runOn(tenBit, device, codec, true, 8);
+                }
+            } else {
+                // AMF's HDR is not done on either path (AmfConfig).
+                AmfEncoder12 encoder;
+                runOn(encoder, device, codec, false, frames);
             }
         }
     }
-    if (ran == 0) std::fprintf(stderr, "  no NVENC GPU here — skipped\n");
+    if (ran == 0) std::fprintf(stderr, "  no NVENC or AMF GPU here — skipped\n");
 #endif
 }

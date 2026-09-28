@@ -61,8 +61,8 @@ struct VideoPipelineFacts
     /// The GPU's D3D12 Video Encode takes this codec: an ID3D12VideoDevice3
     /// (none on Windows 10) and a profile for it.
     bool videoEncode12 = false;
-    /// The vendors' SDKs take D3D12 pictures on this machine: NVENC's runtime
-    /// is there (NvencEncoder12); AMF's, once it is built (C7.4).
+    /// The vendors' SDKs take D3D12 pictures on this machine: their runtime is
+    /// there (NvencEncoder12, AmfEncoder12).
     bool nvenc12 = false;
     bool amf12 = false;
     /// Why this GPU's driver is kept off the D3D12 route, "" when it is not
@@ -147,7 +147,7 @@ inline std::string refusal(const VideoPipelineFacts& f, EncoderTuning::Encoder12
     if (encoder == E::Amf && f.encoder != EncoderApi::Amf)
         return "enc12=amf on a GPU AMF does not drive";
     if (encoder == E::Nvenc && !f.nvenc12) return "NVENC takes no D3D12 picture on this machine";
-    if (encoder == E::Amf && !f.amf12) return "AMF fed D3D12 pictures is not built yet";
+    if (encoder == E::Amf && !f.amf12) return "AMF takes no D3D12 picture on this machine";
     // The vendors' SDKs code what their D3D11 path codes; D3D12 Video Encode
     // is HEVC until Phase 9.
     if (encoder == E::VideoEncode && f.codec != Codec::Hevc)
