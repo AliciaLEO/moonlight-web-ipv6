@@ -347,6 +347,7 @@ def run_pass(d, chapter, machine, spec, base, seconds, settle, access):
 
     load = None
     shown = False
+    host_before = None
     try:
         want_url = access["rendezvous"] if rec["via"] == "rendezvous" else access["lan"]
         if not want_url:
@@ -387,6 +388,18 @@ def run_pass(d, chapter, machine, spec, base, seconds, settle, access):
             d.navigate(want_url)
             access["_current"] = want_url
             d.wait_library(access["name"], access["pin"], tries=patience)
+
+        # hostSettings: what lives on the host and not in the browser — the
+        # native engine's video pipeline, the latency flag. Written through the
+        # host's own API before the stream starts (the engine reads them at
+        # session start), and put back in `finally`.
+        if spec.get("hostSettings"):
+            try:
+                host_before = fleet.host_settings(machine, access.get("httpPort"),
+                                                  spec["hostSettings"])
+            except (RuntimeError, fleet.RemoteError) as e:
+                raise drive.PassFailed(str(e))
+            rec["hostSettings"] = {"requested": spec["hostSettings"], "previous": host_before}
 
         d.apply_settings(settings)
         if not d.wait_library(access["name"], access["pin"], tries=patience):
@@ -495,6 +508,12 @@ def run_pass(d, chapter, machine, spec, base, seconds, settle, access):
             load.stop()
         if shown:
             content_stop()
+        if host_before:
+            try:
+                fleet.host_settings(machine, access.get("httpPort"), host_before)
+            except Exception as e:  # the pass is recorded either way
+                print("      could not put the host settings back: %s" % e, flush=True)
+                rec["hostSettingsNotRestored"] = str(e)
 
     rec["verdict"], why = verdict(machine, rec["status"], rec.get("stats"), rec.get("reason", ""))
     if why and not rec.get("reason"):
@@ -555,6 +574,9 @@ def run_chapter(key, matrix, access_by_machine, only=None, one_pass=None, resume
             lan = fleet.lan_url(machine, probe)
             if lan:
                 access["lan"] = lan
+            # The loopback port the host's own API answers on: hostSettings
+            # passes write through it (fleet.host_settings).
+            access["httpPort"] = probe.get("httpPort")
             print("  fresh pin=%s lan=%s" % (bool(pin), access.get("lan")), flush=True)
         except Exception as e:
             print("  could not re-probe (%s) — using chapter 1's access" % e, flush=True)

@@ -31,6 +31,8 @@ explicite, faute de quoi la propriété ci-dessus est perdue.
 | AMD AMF (en-têtes) | MIT |
 | Intel oneVPL / libvpl | MIT |
 | libva, libva-drm | MIT (Expat) |
+| Khronos Vulkan-Headers (en-têtes, `third_party/vulkan-headers`) | Apache-2.0 OR MIT |
+| libvulkan.so.1 (chargeur Khronos du système, ouvert par `dlopen`) | Apache-2.0 |
 | libdrm | MIT |
 | libpipewire-0.3 | MIT (Expat) — voir la note ci-dessous |
 | libsystemd (sd-bus) | **LGPL-2.1+** — exception bornée, voir ci-dessous |

@@ -344,6 +344,32 @@ void run_keyboard_layout_tests()
         CHECK(!InputMsg::debugEnabled());
     }
     {
+        // Never a line while the secure desktop has the keyboard, switch or no
+        // switch: the lock screen's PIN went into the worker log key by key
+        // once the SYSTEM worker could reach it (28/09/2026).
+        static int lines = 0;
+        static bool secure = false;
+        const QtMessageHandler previous =
+            qInstallMessageHandler([](QtMsgType, const QMessageLogContext&, const QString& text) {
+                if (text.startsWith(QStringLiteral("[KBD]"))) ++lines;
+            });
+        const QJsonObject msg = key(kVk1, "Digit1", "1");
+        const KeyPlan plan = resolveKey(msg, KeyboardMode::SunshineWindows);
+        InputMsg::setDebug(true);
+        InputMsg::logKey(msg, KeyboardMode::SunshineWindows, plan, true);
+        CHECK_EQ(lines, 1);
+        InputMsg::setQuietProbe([]() { return secure; });
+        secure = true;
+        InputMsg::logKey(msg, KeyboardMode::SunshineWindows, plan, true);
+        CHECK_EQ(lines, 1);
+        secure = false;
+        InputMsg::logKey(msg, KeyboardMode::SunshineWindows, plan, true);
+        CHECK_EQ(lines, 2);
+        InputMsg::setQuietProbe(nullptr);
+        InputMsg::setDebug(false);
+        qInstallMessageHandler(previous);
+    }
+    {
         // The modifier mask is read off the message, not off the key plan, so
         // it is the same whether the key goes out as a position or as a
         // character. The character path used to drop it, and the macOS host —

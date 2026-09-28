@@ -305,6 +305,15 @@ INPUT makeKeyInput(int vk, bool down, bool nonNormalized)
 //             its US label because that is how bindings are written. A real
 //             key press scores OK; Unicode text scores KO, and always will —
 //             it types the character perfectly and presses nothing.
+//
+// Never on the secure desktop, switch or no switch: what is typed there is the
+// lock screen's PIN or a UAC prompt's password (NativeHost::
+// secureDesktopHasInput). A desktop this process cannot read counts as that one.
+
+bool diagnosing()
+{
+    return keyboardDiagnostics() && platform::inputDesktopName() == "Default";
+}
 
 std::string toUtf8(const std::wstring& text)
 {
@@ -846,7 +855,7 @@ void Win32Input::injectKey(const InputEvent& event, bool down)
     INPUT input = makeKeyInput(vk, down, nonNormalized);
     sendOne(input);
 
-    if (down && keyboardDiagnostics() && !nonNormalized) {
+    if (down && !nonNormalized && diagnosing()) {
         // Positional path: the key's US position went out untouched and the
         // host's layout decides. What it decided is exactly what the viewer
         // wants to know when the wrong character appears.
@@ -872,7 +881,7 @@ void Win32Input::injectChar(const std::string& utf8, bool down)
     if (units != 1) {
         if (down) {
             injectText(utf8);
-            if (keyboardDiagnostics()) reportCharAsText(utf8);
+            if (diagnosing()) reportCharAsText(utf8);
         }
         return;
     }
@@ -888,7 +897,7 @@ void Win32Input::injectChar(const std::string& utf8, bool down)
         // character still appears, it simply is not a key press.
         if (down) {
             injectText(utf8);
-            if (keyboardDiagnostics()) reportCharAsText(utf8);
+            if (diagnosing()) reportCharAsText(utf8);
         }
         return;
     }
@@ -980,7 +989,7 @@ void Win32Input::injectChar(const std::string& utf8, bool down)
     }
     sendBatch(inputs.data(), static_cast<int>(inputs.size()));
 
-    if (down && keyboardDiagnostics())
+    if (down && diagnosing())
         reportChar(wide[0], vk,
                    ::MapVirtualKeyExW(static_cast<UINT>(vk), MAPVK_VK_TO_VSC_EX, layout), needed,
                    layout);

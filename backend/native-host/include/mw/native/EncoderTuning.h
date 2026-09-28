@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include "VideoPipeline.h"
+
 #include <string>
 
 namespace mw::native {
@@ -171,6 +173,12 @@ struct EncoderTuning
     /// possible on either vendor — for the cost of the feature.
     int dpbFrames = 0;
 
+    /// The link governor (encode::RateGovernor). Off, the encoder's target is
+    /// the setting, moved both ways at once by setTargetBitrate: a bench has
+    /// no receiver, so the governor would cut the rate for the silence and
+    /// never pass a step back up. Every other value is the engine's own: on.
+    Choice linkGovernor = Choice::Default;
+
     /// The VBV, in frames at the stream's own rate — exactly, with no floor.
     /// 0 is the engine's rule: one frame, never less than a sixtieth of a
     /// second's worth (RateControl.h says why). 1 and 2 are the two bounds the
@@ -192,6 +200,119 @@ struct EncoderTuning
     };
     Fallback fallback = Fallback::None;
 
+    // ── The D3D12 pipeline (plan pipeline-video-d3d12-v2) ───────────────────
+    //
+    // Each one defaults to the engine's own choice, like everything above;
+    // none means anything to a session running D3D11.
+
+    /// The chain, over the setting and the vendor table (VideoPipeline.h).
+    VideoPipeline pipeline = VideoPipeline::Auto;
+    /// The D3D12 conversion's queue: DIRECT with the pixel shaders D3D11 runs
+    /// (the engine's own), or COMPUTE.
+    enum class ConvertQueue12
+    {
+        Default,
+        Direct,
+        Compute
+    };
+    ConvertQueue12 conv12 = ConvertQueue12::Default;
+    /// The D3D12 route's encoder: D3D12 Video Encode (the engine's own), or
+    /// the vendor's SDK fed D3D12 pictures.
+    enum class Encoder12
+    {
+        Default,
+        VideoEncode,
+        Nvenc,
+        Amf
+    };
+    Encoder12 enc12 = Encoder12::Default;
+    /// D3D12 Video Encode's rate control: the driver's CBR where it can move
+    /// its target, the in-house QP controller where it cannot (Intel). Qp
+    /// runs the in-house one everywhere, as a witness where it is not needed.
+    enum class RateControl12
+    {
+        Default,
+        Driver,
+        Qp
+    };
+    RateControl12 rc12 = RateControl12::Default;
+    /// The in-house rate control only: a picture far over its budget is coded
+    /// again at the QP that fits it — an encode more on that picture, against
+    /// a burst on the link. On is the engine's own since the bench of
+    /// 27/09/2026 (plan §9-5): scrolling text went from 12 such pictures sent
+    /// to 1, for the same mean host time. Off is the bench's "before".
+    Choice reencode12 = Choice::Default;
+    /// How that picture is coded again. On, the engine's own since
+    /// 28/09/2026: at two budgets — under the overshoot line — by the slope
+    /// learned, then by the textbook if it still lands far over. Off, the
+    /// bench's "before": once, at its budget, by the textbook's slope. On
+    /// scrolling text, on went from 0.68 to 0.83 of the target on the N95 and
+    /// sent no picture far over on either the N95 or the Arc, for a third
+    /// encode on 0.5 % of the pictures (bench §8n.9-§8n.10, plan §9-14).
+    Choice reencodeFit12 = Choice::Default;
+    /// The in-house rate control only: a new picture is never believed to
+    /// cost under 1/2^k of an intra one. 0 is the engine's own — no floor,
+    /// since 27/09/2026: a page of text scrolling costs a thirtieth of its
+    /// intra picture, and a floor of a quarter held it at QP 38-45 on a 20
+    /// Mbit/s stream; -1 no floor either.
+    int interFloor12 = 0;
+    /// The priority of the D3D12 queues. The engine's own follows the
+    /// process's GPU class: GLOBAL_REALTIME under REALTIME, HIGH otherwise.
+    enum class Priority12
+    {
+        Default,
+        Normal,
+        High,
+        GlobalRealtime
+    };
+    Priority12 prio12 = Priority12::Default;
+    /// A CreatorID of each queue's own (the engine's) rather than the
+    /// runtime's shared one, whose priority hardware scheduling ignores.
+    Choice ownCreator12 = Choice::Default;
+    /// How the capture and the D3D12 read of its surface are ordered: fences
+    /// on the GPU both ways (the engine's own), none, or the CPU waiting for
+    /// the read before ReleaseFrame. Measured: without it, reads come out
+    /// stale or from the next frame.
+    enum class DdaSync
+    {
+        Default,
+        None,
+        Gpu,
+        Cpu
+    };
+    DdaSync ddaSync = DdaSync::Default;
+    /// Timestamps on the D3D12 queues, into EncodedFrame's GPU times. Off by
+    /// default: a query pair per pass is not free.
+    bool gpuTiming = false;
+    /// A session asked to run D3D12 that has to run D3D11 ends instead: a
+    /// bench row labelled D3D12 is never a D3D11 one.
+    bool strict12 = false;
+
+    // ── The Linux chain (plan pipeline-video-d3d12-v2, Phase 13) ────────────
+
+    /// The conversion in front of VA-API: GL through EGL, or Vulkan on a
+    /// compute queue — the split route (§9-17). The engine's own is the
+    /// vendor table's (core/LinuxRouteChoice.h): Vulkan compute on AMD off
+    /// the scanout since §9-20, GL elsewhere and whenever VA-API is asked for
+    /// by name.
+    enum class ConvertLinux
+    {
+        Default,
+        Gl,
+        Vulkan
+    };
+    ConvertLinux convertLinux = ConvertLinux::Default;
+    /// The Vulkan conversion's queue priority. The engine's own is HIGH when
+    /// the process holds CAP_SYS_NICE, normal otherwise; Normal measures the
+    /// route without it on a process that has it.
+    enum class PriorityVk
+    {
+        Default,
+        Normal,
+        High
+    };
+    PriorityVk prioVk = PriorityVk::Default;
+
     bool isDefault() const
     {
         return nvencPreset == 0 && nvencTuning == Latency::Default &&
@@ -204,8 +325,14 @@ struct EncoderTuning
                vplExtBrc == Choice::Default && vplLowDelayBrc == Choice::Default &&
                vplGamingScenario == Choice::Default && vplWinBrcFrames == 0 &&
                vplRateControl == VplRateControl::Default && vplIntraRefreshQpDelta == 0 &&
-               vplIntraRefreshDist == 0 && vbvFrames == 0 && dpbFrames == 0 &&
-               fallback == Fallback::None;
+               vplIntraRefreshDist == 0 && linkGovernor == Choice::Default && vbvFrames == 0 &&
+               dpbFrames == 0 && fallback == Fallback::None && pipeline == VideoPipeline::Auto &&
+               conv12 == ConvertQueue12::Default && enc12 == Encoder12::Default &&
+               rc12 == RateControl12::Default && reencode12 == Choice::Default &&
+               reencodeFit12 == Choice::Default && interFloor12 == 0 &&
+               prio12 == Priority12::Default && ownCreator12 == Choice::Default &&
+               ddaSync == DdaSync::Default && !gpuTiming && !strict12 &&
+               convertLinux == ConvertLinux::Default && prioVk == PriorityVk::Default;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -251,6 +378,7 @@ struct EncoderTuning
         if (vplRateControl == VplRateControl::Qvbr) add("rc=qvbr" + std::to_string(vplQvbrQuality));
         if (vplIntraRefreshQpDelta != 0) add("irqp=" + std::to_string(vplIntraRefreshQpDelta));
         if (vplIntraRefreshDist != 0) add("irdist=" + std::to_string(vplIntraRefreshDist));
+        if (linkGovernor != Choice::Default) add(std::string("governor=") + choice(linkGovernor));
         if (vbvFrames > 0) add("vbv=" + std::to_string(vbvFrames) + "f");
         if (dpbFrames > 0) add("dpb=" + std::to_string(dpbFrames));
         if (fallback == Fallback::Tier) add("fallback=1");
@@ -258,6 +386,32 @@ struct EncoderTuning
         if (fallback == Fallback::MediaFoundationSoftware) add("fallback=mfsw");
         if (fallback == Fallback::MediaFoundationCpuInput) add("fallback=mfcpu");
         if (fallback == Fallback::Cpu) add("fallback=cpu");
+        if (pipeline != VideoPipeline::Auto) add(std::string("pipeline=") + toString(pipeline));
+        if (conv12 == ConvertQueue12::Direct) add("conv12=direct");
+        if (conv12 == ConvertQueue12::Compute) add("conv12=compute");
+        if (enc12 == Encoder12::VideoEncode) add("enc12=ve");
+        if (enc12 == Encoder12::Nvenc) add("enc12=nvenc");
+        if (enc12 == Encoder12::Amf) add("enc12=amf");
+        if (rc12 == RateControl12::Driver) add("rc12=driver");
+        if (rc12 == RateControl12::Qp) add("rc12=qp");
+        if (reencode12 != Choice::Default) add(std::string("reencode=") + choice(reencode12));
+        if (reencodeFit12 != Choice::Default) add(std::string("refit=") + choice(reencodeFit12));
+        if (interFloor12 < 0) add("interfloor=off");
+        if (interFloor12 > 0) add("interfloor=" + std::to_string(interFloor12));
+        if (prio12 == Priority12::Normal) add("prio12=normal");
+        if (prio12 == Priority12::High) add("prio12=high");
+        if (prio12 == Priority12::GlobalRealtime) add("prio12=realtime");
+        if (ownCreator12 == Choice::On) add("creator12=own");
+        if (ownCreator12 == Choice::Off) add("creator12=default");
+        if (ddaSync == DdaSync::None) add("ddasync=none");
+        if (ddaSync == DdaSync::Gpu) add("ddasync=gpu");
+        if (ddaSync == DdaSync::Cpu) add("ddasync=cpu");
+        if (gpuTiming) add("gputiming=1");
+        if (strict12) add("strict12=1");
+        if (convertLinux == ConvertLinux::Gl) add("convert=gl");
+        if (convertLinux == ConvertLinux::Vulkan) add("convert=vulkan");
+        if (prioVk == PriorityVk::Normal) add("priovk=normal");
+        if (prioVk == PriorityVk::High) add("priovk=high");
         return s;
     }
 };

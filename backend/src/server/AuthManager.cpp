@@ -344,11 +344,14 @@ bool AuthManager::isLanAddress(const QString& ip)
     return false;
 }
 
-bool AuthManager::canUnlockAdmin(const QString& ip, bool hostTrusted, bool viaTunnel)
+bool AuthManager::canUnlockAdmin(const QString& ip, bool hostTrusted, bool viaTunnel, bool internet)
 {
-    // The one condition that never bends: the password buys nothing from an
-    // address outside this LAN, whichever way the request came in.
-    if (!isLanAddress(ip)) return false;
+    if (!isLanAddress(ip)) {
+        // Outside the LAN the password buys nothing unless the owner opened
+        // that door, and then only on the rendezvous tunnel, from a peer ICE
+        // gave an address to — a label ("peer-4f2a") parses as nothing.
+        return internet && viaTunnel && !QHostAddress(cleanClientAddress(ip)).isNull();
+    }
 
     // On the tunnel, that address is ICE's own conclusion and is the whole
     // proof — see the header for why the Host header cannot stand in for it
@@ -580,6 +583,31 @@ void AuthManager::setRemoteAdminEnabled(bool enabled)
     Logger::info(QString("[Auth] Remote administration %1").arg(enabled ? "enabled" : "disabled"));
 }
 
+bool AuthManager::remoteAdminInternet() const
+{
+    return m_settings && m_settings->remoteAdminInternet();
+}
+
+void AuthManager::setRemoteAdminInternet(bool enabled)
+{
+    if (!m_settings) return;
+    m_settings->setRemoteAdminInternet(enabled);
+    // Which sessions the internet unlocked is not recorded, and one unlocked
+    // on the LAN is honoured wherever it goes next: closing the internet side
+    // takes back every unlock, like a password change does.
+    if (!enabled) demoteAdminSessions();
+    Logger::info(QString("[Auth] Remote administration from the internet %1")
+                     .arg(enabled ? "enabled" : "disabled"));
+}
+
+namespace {
+// One bucket for every attempt from outside the LAN. On the internet an
+// address costs nothing to change, so the per-address counter alone would let
+// a caller with many of them guess on; this one does not care where the next
+// attempt comes from. It never touches the LAN's attempts.
+const QString kInternetAdminBucket = QStringLiteral("admin|internet");
+} // namespace
+
 AuthManager::ValidateResult AuthManager::validateAdminPassword(const QString& ip,
                                                                const QString& password)
 {
@@ -587,7 +615,10 @@ AuthManager::ValidateResult AuthManager::validateAdminPassword(const QString& ip
 
     // Own counter, so failed unlock attempts never lock a user out of PIN login.
     const QString bucket = QStringLiteral("admin|") + rateLimitKey(ip);
-    if (const int locked = bucketLockout(bucket); locked > 0) {
+    const bool internet = !isLanAddress(ip);
+    int locked = bucketLockout(bucket);
+    if (internet) locked = qMax(locked, bucketLockout(kInternetAdminBucket));
+    if (locked > 0) {
         Logger::info(
             QString("[Auth] Admin unlock rate limited for %1: %2s remaining").arg(ip).arg(locked));
         return {RateLimited, 0, locked};
@@ -601,7 +632,15 @@ AuthManager::ValidateResult AuthManager::validateAdminPassword(const QString& ip
         const QString digest = m_settings->adminPasswordDigest();
         matched = !digest.isEmpty() && passwordMatches(digest, password);
     }
-    return recordAttempt(bucket, matched, ip, QStringLiteral("admin password"));
+    ValidateResult result = recordAttempt(bucket, matched, ip, QStringLiteral("admin password"));
+    if (internet) {
+        // The stricter of the two counters is the caller's answer.
+        const ValidateResult shared = recordAttempt(kInternetAdminBucket, matched, ip,
+                                                    QStringLiteral("admin password (internet)"));
+        result.remainingAttempts = qMin(result.remainingAttempts, shared.remainingAttempts);
+        result.lockoutSeconds = qMax(result.lockoutSeconds, shared.lockoutSeconds);
+    }
+    return result;
 }
 
 QString AuthManager::createSession(const QString& ip, const QString& machineName, bool isHost,

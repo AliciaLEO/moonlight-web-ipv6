@@ -28,12 +28,54 @@ let text = "";
 for (let i = 0; i < 4000; i++) text += words[i % words.length] + " ";
 col.textContent = text;
 
-const speed = Number(new URLSearchParams(location.search).get("px") ?? 600); // px/s
+const params = new URLSearchParams(location.search);
+const speed = Number(params.get("px") ?? 600); // px/s
+// ?pause=<s>: scroll for <s> seconds, stand still for <s>, and again. A still
+// page is refined to its sharpest by the host; the scroll that follows is
+// the picture a rate control deciding frame by frame gets wrong first (G3).
+const pause = Number(params.get("pause") ?? 0);
+
+// ?band=1: this frame's number, coded in a band at the top-left corner and
+// another at the bottom-left, so the host can tell which frame it read and
+// whether both ends of it come from the same one (mw-d3d12-lab tear). 24 bits,
+// an 8x8 block each, white for 1; the 8 rows below hold the complement, so a
+// block caught half-written reads as invalid instead of as a wrong bit. Drawn
+// in DEVICE pixels whatever the display's scale: 192x16 of them, at x = 0,
+// y = 0 and y = height - 16.
+const bands = [];
+if (params.get("band") === "1") {
+  const dpr = window.devicePixelRatio || 1;
+  for (const edge of ["top", "bottom"]) {
+    const c = document.createElement("canvas");
+    c.width = 192;
+    c.height = 16;
+    c.style.cssText = "position:fixed;left:0;" + edge + ":0;z-index:10;image-rendering:pixelated;" +
+      "width:" + 192 / dpr + "px;height:" + 16 / dpr + "px";
+    document.body.appendChild(c);
+    bands.push(c.getContext("2d"));
+  }
+}
+let counter = 0;
+function drawBands() {
+  counter = (counter + 1) & 0xffffff;
+  for (const g of bands) {
+    for (let bit = 0; bit < 24; bit++) {
+      const one = (counter >> bit) & 1;
+      g.fillStyle = one ? "#fff" : "#000";
+      g.fillRect(bit * 8, 0, 8, 8);
+      g.fillStyle = one ? "#000" : "#fff";
+      g.fillRect(bit * 8, 8, 8, 8);
+    }
+  }
+}
+
 let y = 0, last = 0;
 function frame(t) {
-  if (last) y = (y + speed * (t - last) / 1000) % (col.scrollHeight || 1);
+  const moving = !(pause > 0) || Math.floor(t / 1000 / pause) % 2 === 0;
+  if (last && moving) y = (y + speed * (t - last) / 1000) % (col.scrollHeight || 1);
   last = t;
   col.style.transform = "translateY(" + (-y) + "px)";
+  if (bands.length) drawBands();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

@@ -8,6 +8,7 @@
 
 #ifdef _WIN32
 #include "encode/windows/MfCapabilities.h"
+#include "platform/windows/IndirectDisplay.h"
 #endif
 
 #include <string>
@@ -181,10 +182,12 @@ void run_capabilities_tests()
                      caps.diagnostic.empty() ? toString(caps.reason) : caps.diagnostic.c_str());
         std::fprintf(stderr, "  capture: %s\n", toString(caps.capture));
         for (const GpuInfo& gpu : caps.gpus) {
-            std::fprintf(stderr, "  gpu %d: %s [%04x:%04x] luid=%016llx encoders=%zu codecs=%zu\n",
-                         gpu.id, gpu.name.c_str(), gpu.vendorId, gpu.deviceId,
-                         static_cast<unsigned long long>(gpu.nativeHandle), gpu.encoders.size(),
-                         gpu.codecs.size());
+            std::fprintf(
+                stderr, "  gpu %d: %s [%04x:%04x] luid=%016llx driver=%s encoders=%zu codecs=%zu\n",
+                gpu.id, gpu.name.c_str(), gpu.vendorId, gpu.deviceId,
+                static_cast<unsigned long long>(gpu.nativeHandle),
+                gpu.driverVersion ? driverVersionText(gpu.driverVersion).c_str() : "-",
+                gpu.encoders.size(), gpu.codecs.size());
             for (EncoderApi e : gpu.encoders)
                 std::fprintf(stderr, "        encoder: %s\n", toString(e));
         }
@@ -198,6 +201,27 @@ void run_capabilities_tests()
         // Selector down the cross-GPU path on a machine that does not need it.
         for (const DisplayInfo& d : caps.displays)
             CHECK(caps.gpuFor(d) != nullptr);
+
+#ifdef _WIN32
+        // A virtual display driver's adapter goes by the name of the GPU that
+        // renders for it; listed without a screen, it is that GPU twice (four
+        // "UHD Graphics" on the N95, a second Arc A380 beside Parsec on
+        // DualRTX), and each probe asked its encoders again.
+        for (const GpuInfo& gpu : caps.gpus) {
+            LUID luid = {};
+            luid.LowPart = static_cast<DWORD>(gpu.nativeHandle & 0xFFFFFFFFu);
+            luid.HighPart = static_cast<LONG>(gpu.nativeHandle >> 32);
+            if (!platform::isIndirectDisplayOnly(luid)) continue;
+            bool drivesOne = false;
+            for (const DisplayInfo& d : caps.displays)
+                drivesOne = drivesOne || d.gpuId == gpu.id;
+            CHECK(drivesOne);
+        }
+        // Every GPU that encodes says its driver: the log line of a session and
+        // the D3D12 route's list of excluded drivers both read it.
+        for (const GpuInfo& gpu : caps.gpus)
+            if (!gpu.encoders.empty()) CHECK(gpu.driverVersion != 0);
+#endif
     }
 
 #ifdef _WIN32

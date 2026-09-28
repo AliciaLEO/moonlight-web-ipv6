@@ -687,10 +687,12 @@ static int runStatusCommand(quint16 persistedHttpsPort)
     // the only way anyone reaches it. There is no built-in default: until one is
     // set the door is shut, and the operator has no other way to find that out.
     if (auth.value("remote_admin_enabled").toBool(false)) {
-        if (auth.value("admin_password_set").toBool(false))
+        if (auth.value("admin_password_set").toBool(false)) {
             out << "  Admin password set   (change it with:  moonlightweb "
                    "--set-admin-password)\n";
-        else
+            if (auth.value("remote_admin_internet").toBool(false))
+                out << "                 also accepted from the internet, through the link\n";
+        } else
             out << "  Admin password none set — no computer on your network can open the admin\n"
                 << "                 page. Set one with:  moonlightweb --set-admin-password\n";
     }
@@ -1344,9 +1346,10 @@ static int concurrentSessionCap(const QString& backendType)
 int main(int argc, char* argv[])
 {
     // First, while this is still the only thread: if the Linux launcher handed
-    // us CAP_SYS_ADMIN (KMS capture), keep it permitted, run without it
-    // effective, and hand it to nothing we spawn except the native worker. See
-    // common/LinuxCapabilities.h. Logged below, once the log exists.
+    // us CAP_SYS_ADMIN (KMS capture) and CAP_SYS_NICE (GPU priority), keep them
+    // permitted, run without them effective, and hand them to nothing we spawn
+    // except the native worker. See common/LinuxCapabilities.h. Logged below,
+    // once the log exists.
     const QString capabilityNote = mw::confineCapabilities();
 
     // Before QApplication: on a headless Linux host this swaps the xcb platform
@@ -3306,6 +3309,8 @@ int main(int argc, char* argv[])
             const bool portalVirtual = host->backendType == NativeHostBackend::typeName() &&
                                        appId == NativeHostBackend::virtualDisplayAppId();
             s->setPortalRestoreToken(appSettings.portalRestoreToken(portalVirtual));
+            // The admin's picture chain for a native Windows session.
+            s->setNativeVideoPipeline(appSettings.nativeVideoPipeline());
             QObject::connect(s, &StreamSession::portalGrantReceived, qApp,
                              [&appSettings, portalVirtual](const QString& token) {
                                  appSettings.setPortalRestoreToken(token, portalVirtual);
@@ -3448,6 +3453,8 @@ int main(int argc, char* argv[])
             const bool portalVirtual = host->backendType == NativeHostBackend::typeName() &&
                                        appId == NativeHostBackend::virtualDisplayAppId();
             cfg["portalRestoreToken"] = appSettings.portalRestoreToken(portalVirtual);
+            // The admin's picture chain for a native Windows session.
+            cfg["nativeVideoPipeline"] = appSettings.nativeVideoPipeline();
             cfg["clientUniqueId"] = reqClientUniqueId;
             cfg["clientKind"] = NetClassify::toString(clientKind);
             cfg["autoMode"] = true;
@@ -4735,6 +4742,9 @@ int main(int argc, char* argv[])
         const bool portalVirtual = host->backendType == NativeHostBackend::typeName() &&
                                    appId == NativeHostBackend::virtualDisplayAppId();
         cfg["portalRestoreToken"] = appSettings.portalRestoreToken(portalVirtual);
+        // The host's own setting, whoever the viewer is: the chain is the
+        // machine's, not the session's.
+        cfg["nativeVideoPipeline"] = appSettings.nativeVideoPipeline();
         // Gamepads from different sessions would all arrive as controller 0;
         // offset each player so they land on distinct virtual pads.
         cfg["gamepadOffset"] = slot - kOwnerSlots + 1;
@@ -5290,8 +5300,10 @@ int main(int argc, char* argv[])
     // own layout did with it, and neither can speak for the other.
     if (appSettings.keyboardDebug()) {
         InputMsg::setDebug(true);
+        InputMsg::setQuietProbe(&mw::native::NativeHost::secureDesktopHasInput);
         mw::native::NativeHost::setKeyboardDiagnostics(true);
-        qInfo() << "[KBD] keyboard diagnostics on — one line per printable key press";
+        qInfo() << "[KBD] keyboard diagnostics on — one line per printable key press, never on "
+                   "the secure desktop";
     }
 
     // The hairpin verdict decides between the domain and loopback, and it can

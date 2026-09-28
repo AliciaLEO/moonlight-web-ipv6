@@ -44,6 +44,11 @@
 // picture alone, no parameter set, no client could start. Same binary on a
 // 780M under Mesa 23.2: all four sets, written by the driver.
 //
+// D3D12 Video Encode is the other one: its drivers write the slices and leave
+// the HEVC parameter sets to the application, with nothing in between — see
+// HevcDialect::D3d12, whose bytes differ from Mesa's where the drivers' slices
+// say so.
+//
 // ── What they say ───────────────────────────────────────────────────────────
 //
 // The encoder's choices, nothing more: I and P only, one reference used per
@@ -252,13 +257,43 @@ inline std::vector<uint8_t> h264SliceHeader(const H264Sequence& s, const H264Sli
 
 // ── HEVC ────────────────────────────────────────────────────────────────────
 
+/// Whose slices the parameter sets describe.
+///
+/// MesaVaapi: Mesa's VA-API frontend, which re-writes every header from what
+/// it parsed (see the top of this file). The bytes the Linux hosts send; frozen
+/// by the golden tests of test_parameter_sets.cpp.
+///
+/// D3d12: a D3D12 Video Encode driver, which writes the slices and leaves the
+/// parameter sets to the application — and nothing checks that the two agree.
+/// A PPS that says cabac_init_present_flag = 0 over slices coded with it set
+/// decodes as noise, with no error from anybody. So this dialect says what a
+/// D3D12 driver's slices assume, which the API fixes for everything it does not
+/// let the caller choose: no tiles, no weighted prediction, no scaling lists,
+/// no temporal MVP, no short-term sets in the SPS (each slice header carries
+/// its own), and cabac_init, per-slice chroma QP offsets, CU-level QP deltas
+/// and deblocking control present. What the caller did choose — block sizes,
+/// AMP, SAO, long-term references — comes from the configuration the encoder
+/// was created with. Checked with ffmpeg over the Arc's slices (21/09/2026) and
+/// over the three GPUs of DualRTX (26/09/2026), once the coded size is a whole
+/// number of coding tree blocks: the three code every CTB whole, whatever size
+/// their support query accepted. Over an SPS that ends inside them — 1080
+/// lines, 1440 over CTBs of 64, 3440 columns — every picture decodes wrong
+/// from there on, and ffmpeg flags only a few (27/09/2026): its error count is
+/// no proof, the pixels are (the lab's encode probe, --dump-input).
+enum class HevcDialect
+{
+    MesaVaapi,
+    D3d12,
+};
+
 struct HevcSequence
 {
     /// The picture as shown.
     uint32_t width = 0;
     uint32_t height = 0;
     /// The picture as coded — a whole number of the blocks the encoder works
-    /// in. The difference goes in the conformance window, in chroma samples.
+    /// in (D3D12: its coding tree blocks). The difference goes in the
+    /// conformance window, in chroma samples.
     uint32_t codedWidth = 0;
     uint32_t codedHeight = 0;
     int levelIdc = 153; ///< 30 × the level number: 153 = 5.1
@@ -266,6 +301,26 @@ struct HevcSequence
     uint32_t maxReferences = 1;
     int log2MaxPocLsb = 16;
     int fps = 60;
+
+    HevcDialect dialect = HevcDialect::MesaVaapi;
+
+    // The D3D12 dialect's own: the configuration the encoder was created with.
+    // Unread by MesaVaapi, whose geometry is its sequence buffer's.
+    bool tenBit = false; ///< Main 10, 10-bit samples
+    bool hdr = false;    ///< BT.2020 + PQ in the VUI; BT.709 otherwise. Limited range.
+    int log2MinCodingBlock = 3;
+    int log2MaxCodingBlock = 6;
+    int log2MinTransformBlock = 2;
+    int log2MaxTransformBlock = 5;
+    int transformDepthInter = 2;
+    int transformDepthIntra = 2;
+    bool asymmetricMotionPartitions = false;
+    bool sampleAdaptiveOffset = false;
+    bool longTermReferences = false; ///< also turns on lists_modification_present_flag
+    bool transformSkip = false;
+    bool constrainedIntraPrediction = false;
+    bool loopFilterAcrossSlices = true;
+    uint32_t defaultActiveReferences = 1;
 };
 
 namespace detail {
@@ -285,10 +340,172 @@ inline void profileTierLevel(BitWriter& w, int levelIdc)
     w.u(8, static_cast<uint32_t>(levelIdc));
 }
 
+// ── The D3D12 dialect ──
+//
+// The writer of the first D3D12 attempt (HevcParamSets, 84524e7f^), ported bit
+// for bit: its bytes went ahead of the Arc's slices on 21/09 and of the three
+// GPUs' on 26/09, and ffmpeg decoded them all without an error. They are the
+// goldens of test_parameter_sets.cpp — change one bit, run the lab's encode
+// probe on the three GPUs again.
+
+/// profile_tier_level(1, 0): the general part only, there are no sub-layers.
+inline void d3d12ProfileTierLevel(BitWriter& w, const HevcSequence& s)
+{
+    const uint32_t profile = s.tenBit ? 2 : 1; // Main 10 : Main
+    w.u(2, 0);                                 // general_profile_space
+    w.u(1, 0);                                 // general_tier_flag: Main tier
+    w.u(5, profile);
+    // A Main stream is also a conforming Main 10 stream, and says so.
+    w.u(32, profile == 1 ? 0x60000000 : 0x20000000); // general_profile_compatibility_flag[32]
+    w.u(1, 1);                                       // general_progressive_source_flag
+    w.u(1, 0);                                       // general_interlaced_source_flag
+    w.u(1, 1);                                       // general_non_packed_constraint_flag
+    w.u(1, 1);                                       // general_frame_only_constraint_flag
+    w.u(32, 0); // general_reserved_zero_43bits + general_inbld_flag…
+    w.u(12, 0); // …44 bits in all
+    w.u(8, static_cast<uint32_t>(s.levelIdc));
+}
+
+/// One ordering triple for every sub-layer — no reordering, which is what
+/// spares the viewer's decoder a DPB of delay.
+inline void d3d12OrderingInfo(BitWriter& w, const HevcSequence& s)
+{
+    w.u(1, 0);             // *_sub_layer_ordering_info_present_flag
+    w.ue(s.maxReferences); // *_max_dec_pic_buffering_minus1
+    w.ue(0);               // *_max_num_reorder_pics
+    w.ue(0);               // *_max_latency_increase_plus1: no limit expressed
+}
+
+inline void d3d12Vui(BitWriter& w, const HevcSequence& s)
+{
+    w.u(1, 0);              // aspect_ratio_info_present_flag
+    w.u(1, 0);              // overscan_info_present_flag
+    w.u(1, 1);              // video_signal_type_present_flag
+    w.u(3, 5);              // video_format: unspecified
+    w.u(1, 0);              // video_full_range_flag: limited, as the conversion writes
+    w.u(1, 1);              // colour_description_present_flag
+    w.u(8, s.hdr ? 9 : 1);  // colour_primaries: BT.2020 : BT.709
+    w.u(8, s.hdr ? 16 : 1); // transfer_characteristics: SMPTE 2084 (PQ) : BT.709
+    w.u(8, s.hdr ? 9 : 1);  // matrix_coefficients: BT.2020 NCL : BT.709
+    w.u(1, 0);              // chroma_loc_info_present_flag
+    w.u(1, 0);              // neutral_chroma_indication_flag
+    w.u(1, 0);              // field_seq_flag
+    w.u(1, 0);              // frame_field_info_present_flag
+    w.u(1, 0);              // default_display_window_flag
+    w.u(1, 0);              // vui_timing_info_present_flag
+    w.u(1, 0);              // bitstream_restriction_flag
+}
+
+inline std::vector<uint8_t> d3d12Vps(const HevcSequence& s)
+{
+    BitWriter w;
+    w.u(4, 0);       // vps_video_parameter_set_id
+    w.u(1, 1);       // vps_base_layer_internal_flag
+    w.u(1, 1);       // vps_base_layer_available_flag
+    w.u(6, 0);       // vps_max_layers_minus1
+    w.u(3, 0);       // vps_max_sub_layers_minus1
+    w.u(1, 1);       // vps_temporal_id_nesting_flag
+    w.u(16, 0xFFFF); // vps_reserved_0xffff_16bits
+    d3d12ProfileTierLevel(w, s);
+    d3d12OrderingInfo(w, s);
+    w.u(6, 0); // vps_max_layer_id
+    w.ue(0);   // vps_num_layer_sets_minus1
+    w.u(1, 0); // vps_timing_info_present_flag
+    w.u(1, 0); // vps_extension_flag
+    return nal({0x40, 0x01}, w);
+}
+
+inline std::vector<uint8_t> d3d12Sps(const HevcSequence& s)
+{
+    BitWriter w;
+    w.u(4, 0); // sps_video_parameter_set_id
+    w.u(3, 0); // sps_max_sub_layers_minus1
+    w.u(1, 1); // sps_temporal_id_nesting_flag
+    d3d12ProfileTierLevel(w, s);
+    w.ue(0); // sps_seq_parameter_set_id
+    w.ue(1); // chroma_format_idc: 4:2:0
+    w.ue(s.codedWidth);
+    w.ue(s.codedHeight);
+    const uint32_t right = (s.codedWidth - s.width) / 2;
+    const uint32_t bottom = (s.codedHeight - s.height) / 2;
+    const bool window = right || bottom;
+    w.u(1, window ? 1 : 0); // conformance_window_flag
+    if (window) {
+        w.ue(0);
+        w.ue(right);
+        w.ue(0);
+        w.ue(bottom);
+    }
+    w.ue(s.tenBit ? 2 : 0); // bit_depth_luma_minus8
+    w.ue(s.tenBit ? 2 : 0); // bit_depth_chroma_minus8
+    w.ue(static_cast<uint32_t>(s.log2MaxPocLsb - 4));
+    d3d12OrderingInfo(w, s);
+    w.ue(static_cast<uint32_t>(s.log2MinCodingBlock - 3));
+    w.ue(static_cast<uint32_t>(s.log2MaxCodingBlock - s.log2MinCodingBlock));
+    w.ue(static_cast<uint32_t>(s.log2MinTransformBlock - 2));
+    w.ue(static_cast<uint32_t>(s.log2MaxTransformBlock - s.log2MinTransformBlock));
+    w.ue(static_cast<uint32_t>(s.transformDepthInter));
+    w.ue(static_cast<uint32_t>(s.transformDepthIntra));
+    w.u(1, 0); // scaling_list_enabled_flag
+    w.u(1, s.asymmetricMotionPartitions ? 1 : 0);
+    w.u(1, s.sampleAdaptiveOffset ? 1 : 0);
+    w.u(1, 0); // pcm_enabled_flag
+    w.ue(0);   // num_short_term_ref_pic_sets: every slice header carries its own
+    w.u(1, s.longTermReferences ? 1 : 0);
+    if (s.longTermReferences) w.ue(0); // num_long_term_ref_pics_sps: slice headers again
+    w.u(1, 0);                         // sps_temporal_mvp_enabled_flag
+    w.u(1, 0);                         // strong_intra_smoothing_enabled_flag
+    w.u(1, 1);                         // vui_parameters_present_flag
+    d3d12Vui(w, s);
+    w.u(1, 0); // sps_extension_present_flag
+    return nal({0x42, 0x01}, w);
+}
+
+inline std::vector<uint8_t> d3d12Pps(const HevcSequence& s)
+{
+    BitWriter w;
+    w.ue(0);                             // pps_pic_parameter_set_id
+    w.ue(0);                             // pps_seq_parameter_set_id
+    w.u(1, 0);                           // dependent_slice_segments_enabled_flag
+    w.u(1, 0);                           // output_flag_present_flag
+    w.u(3, 0);                           // num_extra_slice_header_bits
+    w.u(1, 0);                           // sign_data_hiding_enabled_flag
+    w.u(1, 1);                           // cabac_init_present_flag
+    w.ue(s.defaultActiveReferences - 1); // num_ref_idx_l0_default_active_minus1
+    // One in L1 too: the Arc codes its P pictures as B, with L1 = L0.
+    w.ue(0);  // num_ref_idx_l1_default_active_minus1
+    se(w, 0); // init_qp_minus26
+    w.u(1, s.constrainedIntraPrediction ? 1 : 0);
+    w.u(1, s.transformSkip ? 1 : 0);
+    w.u(1, 1); // cu_qp_delta_enabled_flag: rate control moves the QP inside a picture
+    w.ue(0);   // diff_cu_qp_delta_depth
+    se(w, 0);  // pps_cb_qp_offset
+    se(w, 0);  // pps_cr_qp_offset
+    w.u(1, 1); // pps_slice_chroma_qp_offsets_present_flag
+    w.u(1, 0); // weighted_pred_flag
+    w.u(1, 0); // weighted_bipred_flag
+    w.u(1, 0); // transquant_bypass_enabled_flag
+    w.u(1, 0); // tiles_enabled_flag
+    w.u(1, 0); // entropy_coding_sync_enabled_flag
+    w.u(1, s.loopFilterAcrossSlices ? 1 : 0);
+    w.u(1, 1);                            // deblocking_filter_control_present_flag
+    w.u(1, 0);                            //   deblocking_filter_override_enabled_flag
+    w.u(1, 0);                            //   pps_deblocking_filter_disabled_flag
+    se(w, 0);                             //   pps_beta_offset_div2
+    se(w, 0);                             //   pps_tc_offset_div2
+    w.u(1, 0);                            // pps_scaling_list_data_present_flag
+    w.u(1, s.longTermReferences ? 1 : 0); // lists_modification_present_flag
+    w.ue(0);                              // log2_parallel_merge_level_minus2
+    w.u(1, 0);                            // slice_segment_header_extension_present_flag
+    w.u(1, 0);                            // pps_extension_present_flag
+    return nal({0x44, 0x01}, w);
+}
+
 } // namespace detail
 
 inline std::vector<uint8_t> hevcVps(const HevcSequence& s)
 {
+    if (s.dialect == HevcDialect::D3d12) return detail::d3d12Vps(s);
     detail::BitWriter w;
     w.u(4, 0);       // vps_video_parameter_set_id
     w.u(1, 1);       // vps_base_layer_internal_flag
@@ -311,6 +528,7 @@ inline std::vector<uint8_t> hevcVps(const HevcSequence& s)
 
 inline std::vector<uint8_t> hevcSps(const HevcSequence& s)
 {
+    if (s.dialect == HevcDialect::D3d12) return detail::d3d12Sps(s);
     detail::BitWriter w;
     w.u(4, 0); // sps_video_parameter_set_id
     w.u(3, 0); // sps_max_sub_layers_minus1
@@ -380,8 +598,9 @@ inline std::vector<uint8_t> hevcSps(const HevcSequence& s)
     return detail::nal({0x42, 0x01}, w);
 }
 
-inline std::vector<uint8_t> hevcPps(const HevcSequence&)
+inline std::vector<uint8_t> hevcPps(const HevcSequence& s)
 {
+    if (s.dialect == HevcDialect::D3d12) return detail::d3d12Pps(s);
     detail::BitWriter w;
     w.ue(0);          // pps_pic_parameter_set_id
     w.ue(0);          // pps_seq_parameter_set_id
@@ -426,7 +645,8 @@ struct HevcSlice
     uint32_t referencePoc = 0;
 };
 
-/// The slice segment header of a picture's only slice.
+/// The slice segment header of a picture's only slice, in the MesaVaapi dialect
+/// — a D3D12 driver writes its slices itself.
 ///
 /// HEVC keeps in the decoder only the pictures the reference picture set
 /// lists: one left out is gone for good. So every picture still held is

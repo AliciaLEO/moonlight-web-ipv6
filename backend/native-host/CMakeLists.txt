@@ -38,15 +38,22 @@ if(WIN32)
     target_sources(mw-native-host PRIVATE
         src/platform/windows/WindowsProbe.cpp
         src/platform/windows/WindowsEncoderProbe.cpp
+        src/platform/windows/IndirectDisplay.cpp
         src/platform/windows/WindowsSession.cpp
         src/platform/windows/InputDesktop.cpp
         src/platform/windows/CrossGpuBridge.cpp
         src/platform/windows/StreamPriority.cpp
+        src/platform/windows/video/D3d11VideoPipeline.cpp
+        src/platform/windows/video/D3d12VideoPipeline.cpp
+        src/platform/windows/d3d12/D3d12Device.cpp
+        src/platform/windows/d3d12/DdaInterop.cpp
         src/capture/windows/DxgiDuplication.cpp
         src/capture/windows/WgcCapture.cpp
         src/capture/windows/CursorShape.cpp
         src/capture/windows/Win32Cursor.cpp
         src/convert/windows/ColorConvert.cpp
+        src/convert/windows/ConvertShaders.cpp
+        src/convert/windows/d3d12/ColorConvert12.cpp
         src/input/windows/Win32Input.cpp
         src/input/windows/VigemGamepad.cpp
         third_party/vigem-client/src/ViGEmClient.cpp
@@ -65,6 +72,8 @@ if(WIN32)
         src/encode/windows/MfCapabilities.cpp
         src/encode/windows/MfEncoder.cpp
         src/encode/windows/SoftwareEncoder.cpp
+        src/encode/windows/d3d12/VideoEncodeCaps12.cpp
+        src/encode/windows/d3d12/VideoEncode12.cpp
         src/audio/windows/WasapiLoopback.cpp
         src/audio/windows/HostMute.cpp
     )
@@ -79,9 +88,10 @@ if(WIN32)
     # avrt is MMCSS: the capture thread registers as a "Games" task so the
     # scheduler favours it over the desktop's background work (and the audio
     # thread as "Pro Audio").
-    # d3d12 is the cross-GPU copy's readback only: its COPY queue runs on the
+    # d3d12 is the cross-GPU copy's readback — its COPY queue runs on the
     # GPU's DMA engine, out of the way of a game holding the 3D engine
-    # (CrossGpuBridge).
+    # (CrossGpuBridge) — and the D3D12 video pipeline's device, queues and
+    # fences (platform/windows/d3d12).
     # ole32 is COM: WASAPI's device enumerator is a COM object.
     # runtimeobject is the Windows Runtime's ABI entry points — RoInitialize,
     # RoGetActivationFactory, the HSTRING helpers — which is how the WGC
@@ -203,6 +213,56 @@ else()
             target_link_libraries(mw-native-host PRIVATE ${MW_LINUX_GFX_LIBRARIES})
             # PUBLIC so the tests can tell whether the backend exists.
             target_compile_definitions(mw-native-host PUBLIC MW_NATIVE_LINUX_GFX=1)
+
+            # The split route's conversion (plan pipeline-video-d3d12-v2, §9-17):
+            # Vulkan on a compute queue in front of VA-API, beside a game rather
+            # than behind it. Nothing links libvulkan — the loader is opened with
+            # dlopen, and a host without Vulkan converts through GL as before; the
+            # headers are the module's own (third_party/vulkan-headers, Apache-2.0
+            # OR MIT, in LICENSE.md). The shaders are GLSL built to SPIR-V by
+            # glslangValidator (glslang-tools): a build tool, nothing of it ships.
+            # Without it the route is left out, loudly, and GL converts.
+            find_program(MW_GLSLANG_VALIDATOR glslangValidator)
+            if(MW_GLSLANG_VALIDATOR)
+                set(_mw_spirv ${CMAKE_CURRENT_BINARY_DIR}/spirv)
+                set(_mw_shaders ${CMAKE_CURRENT_SOURCE_DIR}/src/convert/linux/shaders)
+                set(_mw_spirv_headers "")
+                foreach(_mw_shader "VkScaleHSpv;vk_scale.comp;-DMW_HORIZONTAL=1"
+                                   "VkScaleVSpv;vk_scale.comp;-DMW_HORIZONTAL=0"
+                                   "VkNv12Spv;vk_nv12.comp;")
+                    list(GET _mw_shader 0 _mw_name)
+                    list(GET _mw_shader 1 _mw_source)
+                    list(LENGTH _mw_shader _mw_parts)
+                    set(_mw_define "")
+                    if(_mw_parts GREATER 2)
+                        list(GET _mw_shader 2 _mw_define)
+                    endif()
+                    add_custom_command(
+                        OUTPUT ${_mw_spirv}/${_mw_name}.h
+                        COMMAND ${CMAKE_COMMAND} -E make_directory ${_mw_spirv}
+                        COMMAND ${MW_GLSLANG_VALIDATOR} -V --target-env vulkan1.1 ${_mw_define}
+                                --vn k${_mw_name} -o ${_mw_spirv}/${_mw_name}.h
+                                ${_mw_shaders}/${_mw_source}
+                        DEPENDS ${_mw_shaders}/${_mw_source}
+                        VERBATIM)
+                    list(APPEND _mw_spirv_headers ${_mw_spirv}/${_mw_name}.h)
+                endforeach()
+                target_sources(mw-native-host PRIVATE
+                    src/platform/linux/vulkan/VulkanDevice.cpp
+                    src/convert/linux/VulkanConvert.cpp
+                    src/encode/linux/VulkanHevcEncoder.cpp
+                    src/encode/linux/VulkanHevcDecoder.cpp
+                    src/encode/linux/VulkanHevcProof.cpp
+                    ${_mw_spirv_headers})
+                target_include_directories(mw-native-host PRIVATE ${_mw_spirv})
+                target_include_directories(mw-native-host SYSTEM PRIVATE
+                    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vulkan-headers/include)
+                # PUBLIC so the session and the tests know whether the route exists.
+                target_compile_definitions(mw-native-host PUBLIC MW_NATIVE_LINUX_VULKAN=1)
+                message(STATUS "mw-native-host: Vulkan conversion ON (SPIR-V by ${MW_GLSLANG_VALIDATOR})")
+            else()
+                message(WARNING "mw-native-host: Vulkan conversion OFF — install glslang-tools to build it (the split route, GL converts meanwhile)")
+            endif()
 
             # The sound: a PipeWire capture stream on the default output's
             # monitor (libpipewire-0.3, MIT — libpulse is LGPL and off the
@@ -374,6 +434,12 @@ if(MW_BUILD_TESTS)
         tests/test_capabilities.cpp
         tests/test_capture.cpp
         tests/test_color_convert.cpp
+        tests/test_color_convert12.cpp
+        tests/test_d3d11_video_pipeline.cpp
+        tests/test_d3d12_device.cpp
+        tests/test_dda_interop.cpp
+        tests/test_video_encode_caps12.cpp
+        tests/test_video_encode12.cpp
         tests/test_win32_cursor.cpp
         tests/test_host_mute.cpp
         tests/test_evdev_keymap.cpp
@@ -383,6 +449,8 @@ if(MW_BUILD_TESTS)
         tests/test_absolute_map.cpp
         tests/test_wayland_layout.cpp
         tests/test_linux_pipeline.cpp
+        tests/test_vulkan_convert.cpp
+        tests/test_vulkan_hevc.cpp
         tests/test_linux_session.cpp
         tests/test_mac_keymap.cpp
         tests/test_mac_session.cpp
@@ -396,10 +464,17 @@ if(MW_BUILD_TESTS)
         tests/test_cadence_align.cpp
         tests/test_restart_backoff.cpp
         tests/test_rate_control.cpp
+        tests/test_qp_rate_controller.cpp
         tests/test_virtual_display.cpp
         tests/test_encode_load_cap.cpp
         tests/test_h264_vui.cpp
         tests/test_parameter_sets.cpp
+        tests/test_hevc_slice_parser.cpp
+        tests/test_hevc_dpb.cpp
+        tests/test_hevc_negotiation.cpp
+        tests/test_video_pipeline_choice.cpp
+        tests/test_d3d12_fault.cpp
+        tests/test_linux_route_choice.cpp
         tests/test_reference_slots.cpp
         tests/test_audio_pacer.cpp
         tests/test_audio_interleave.cpp
@@ -421,6 +496,7 @@ if(MW_BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/nvenc-headers
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/amf-headers
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vpl-headers
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vulkan-headers/include
     )
     # Same terms for libdrm, which lives outside the default include path: the
     # Linux pipeline test asks the kernel about the display's planes itself, so
@@ -449,16 +525,22 @@ endif()
 
 # ── Lab tools ───────────────────────────────────────────────────────────────
 # Instruments for deciding things about the engine, never shipped: off by
-# default, outside the library's licence boundary (tools/ is not scanned, and
-# nothing here links into mw-native-host). One per platform so far: a D3D11
-# shader bench on Windows, and on macOS the probe that measures the pointer
-# acceleration MacPointerAccel has to reproduce.
+# default, outside the library's licence boundary (tools/ is not scanned; the
+# D3D12 lab links mw-native-host to time the engine's own classes, never the
+# other way round). On Windows a D3D11 shader bench and the D3D12 lab, on macOS
+# the probe that measures the pointer acceleration MacPointerAccel has to
+# reproduce, on Linux the Vulkan lab, and everywhere a game-like GPU load.
 option(MW_BUILD_TOOLS "Build the native host's lab tools (scaler bench, mouse probe)" OFF)
 if(MW_BUILD_TOOLS AND WIN32)
     add_subdirectory(tools/scaler-bench)
+    add_subdirectory(tools/d3d12-lab)
 endif()
 if(MW_BUILD_TOOLS AND APPLE)
     add_subdirectory(tools/mouse-accel-probe)
+endif()
+# Linux: what the Vulkan Video chain of Phase 13 can count on, asked first.
+if(MW_BUILD_TOOLS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_subdirectory(tools/vk-lab)
 endif()
 # Every OS: a game-like load on the encoder's GPU (needs Qt's qtshadertools).
 if(MW_BUILD_TOOLS)

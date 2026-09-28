@@ -81,6 +81,15 @@ namespace mw::native::encode {
 ///    a slow one: the rate can overshoot once, not oscillate.
 ///
 /// Pure and clocked by the caller, so it can be tested without a network.
+///
+/// ── The bench's governor=off ───────────────────────────────────────────────
+///
+/// `--native-bench` has no receiver: its silence cut the target to 80 % four
+/// seconds into every pass, and a ramp= step back up never reached the
+/// encoder, a raise needing quiet reports. Started to follow the setting, the
+/// governor makes the target the setting, both ways, at once, and reports and
+/// silences move nothing: the encoder's rate control is measured against the
+/// steps it is given (plan pipeline-video-d3d12-v2, G3).
 class RateGovernor
 {
 public:
@@ -97,9 +106,11 @@ public:
     static constexpr int64_t kGoodHoldMs = 5000;
     static constexpr int64_t kProbeGraceMs = 5000;
 
-    /// @p settingKbps the viewer's ceiling. Starts there.
-    void start(int settingKbps, int64_t nowMs)
+    /// @p settingKbps the viewer's ceiling. Starts there. @p followSetting:
+    /// the bench's governor=off, above.
+    void start(int settingKbps, int64_t nowMs, bool followSetting = false)
     {
+        m_Follow = followSetting;
         m_Setting = settingKbps > 0 ? settingKbps : 20000;
         m_Target = m_Setting;
         m_QuietSinceMs = nowMs;
@@ -120,6 +131,11 @@ public:
     {
         if (settingKbps <= 0) return;
         m_Setting = settingKbps;
+        if (m_Follow) {
+            if (m_Target != m_Setting) m_Changes++;
+            m_Target = m_Setting;
+            return;
+        }
         if (m_Target > m_Setting) m_Target = m_Setting;
         if (m_GoodKbps > m_Setting) m_GoodKbps = m_Setting;
         if (m_GoodSampleKbps > m_Setting) m_GoodSampleKbps = m_Setting;
@@ -131,6 +147,7 @@ public:
     {
         m_LastReportMs = nowMs;
         m_LastRaiseFast = false;
+        if (m_Follow) return false;
         if (fb.resumed) {
             const bool restore = m_SilenceCut && m_TargetBeforeSilence > m_Target;
             m_SilenceCut = false;
@@ -181,7 +198,7 @@ public:
     /// target changed — only ever because the reports stopped coming.
     bool tick(int64_t nowMs)
     {
-        if (m_SilenceCut || nowMs - m_LastReportMs < kSilenceMs) return false;
+        if (m_Follow || m_SilenceCut || nowMs - m_LastReportMs < kSilenceMs) return false;
         m_SilenceCut = true;
         m_TargetBeforeSilence = m_Target;
         m_HoldUntilMs = nowMs + kHoldAfterCutMs;
@@ -256,6 +273,7 @@ private:
         return true;
     }
 
+    bool m_Follow = false; ///< the bench's governor=off
     int m_Setting = 20000;
     int m_Target = 20000;
     int64_t m_QuietSinceMs = 0;

@@ -66,13 +66,14 @@ EOF
 # as (`moonlightweb --status`, `--new-pin`, `--enable-internet`).
 #
 # It points at the LAUNCHER, not the binary — as do the .desktop entry and the
-# systemd unit. The KMS screen capture needs CAP_SYS_ADMIN, and the file
-# capability cannot sit on MoonlightWeb itself: glibc runs a binary that gains a
-# capability in secure mode, where the $ORIGIN rpath linuxdeploy wrote is
-# refused and the bundled Qt is never found (measured: "error while loading
-# shared libraries" on Ubuntu 22.04). moonlightweb-launch links libc only,
-# carries the capability, and execs MoonlightWeb next to it with the capability
-# in the ambient set — see moonlightweb-launch.c. postinst sets it below.
+# systemd unit. The KMS screen capture needs CAP_SYS_ADMIN (and a GPU context
+# above normal priority CAP_SYS_NICE), and a file capability cannot sit on
+# MoonlightWeb itself: glibc runs a binary that gains a capability in secure
+# mode, where the $ORIGIN rpath linuxdeploy wrote is refused and the bundled Qt
+# is never found (measured: "error while loading shared libraries" on Ubuntu
+# 22.04). moonlightweb-launch links libc only, carries the capabilities, and
+# execs MoonlightWeb next to it with them in the ambient set — see
+# moonlightweb-launch.c. postinst sets them below.
 ln -sfn "$PREFIX/bin/moonlightweb-launch" "$PKG/usr/bin/$NAME"
 
 # systemd unit for headless installs. Vendor directory, not /etc/systemd/system:
@@ -143,20 +144,21 @@ cat > "$ROOT/postinst.sh" <<'EOF'
 update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
 gtk-update-icon-cache -q /usr/share/icons/hicolor >/dev/null 2>&1 || true
 
-# The capability the screen capture needs, on the launcher (never on the
-# binary — see make-packages.sh). Neither dpkg nor rpm restores file
-# capabilities from the payload, so it is set here, first, on every install and
-# upgrade. Permitted only (+p), Sunshine's posture: the app raises it into the
-# effective set of one thread around the one ioctl that checks it. setcap lives
-# in /usr/sbin (or /sbin on an unmerged system), which a package manager's PATH
-# does not always include. Loud on failure: the symptom otherwise is a host card
-# that never appears, with the reason buried in a log.
+# The capabilities the native engine needs, on the launcher (never on the
+# binary — see make-packages.sh): CAP_SYS_ADMIN for the screen capture,
+# CAP_SYS_NICE for a GPU context above normal priority. Neither dpkg nor rpm
+# restores file capabilities from the payload, so they are set here, first, on
+# every install and upgrade. Permitted only (+p), Sunshine's posture: the app
+# raises one into the effective set of one thread around the one call that
+# checks it. setcap lives in /usr/sbin (or /sbin on an unmerged system), which a
+# package manager's PATH does not always include. Loud on failure: the symptom
+# otherwise is a host card that never appears, with the reason buried in a log.
 PATH="$PATH:/usr/sbin:/sbin"
-if ! setcap cap_sys_admin+p /opt/moonlightweb/bin/moonlightweb-launch 2>/dev/null; then
-    echo "warning: could not set cap_sys_admin on /opt/moonlightweb/bin/moonlightweb-launch" >&2
+if ! setcap cap_sys_admin,cap_sys_nice+p /opt/moonlightweb/bin/moonlightweb-launch 2>/dev/null; then
+    echo "warning: could not set cap_sys_admin,cap_sys_nice on /opt/moonlightweb/bin/moonlightweb-launch" >&2
     echo "         (is setcap installed? libcap2-bin on Debian/Ubuntu, libcap on Fedora," >&2
     echo "         libcap-progs on openSUSE). Until it is set, this machine cannot host" >&2
-    echo "         its own screen:  sudo setcap cap_sys_admin+p /opt/moonlightweb/bin/moonlightweb-launch" >&2
+    echo "         its own screen:  sudo setcap cap_sys_admin,cap_sys_nice+p /opt/moonlightweb/bin/moonlightweb-launch" >&2
 fi
 
 # Apply the uinput rule now rather than at the next boot, and load the module so
@@ -419,6 +421,11 @@ fi
 # the client library: a machine still on PulseAudio has it too, and the host
 # then streams silent with an explicit log rather than not starting.
 # libcap2-bin provides setcap for the postinst above.
+#
+# Third group, only recommended: the Vulkan loader and Mesa's Vulkan drivers
+# (the split route's conversion and the Vulkan Video chain, plan Phase 13).
+# The native host opens libvulkan.so.1 with dlopen, never links it: without
+# it, GL converts and VA-API encodes, as they always have.
 deb_depends=(
     --depends libgl1 --depends libopengl0 --depends libegl1
     --depends libfontconfig1 --depends libfreetype6
@@ -426,6 +433,7 @@ deb_depends=(
     --depends libdrm2 --depends libva2 --depends libva-drm2
     --depends libgles2 --depends libgbm1 --depends libpipewire-0.3-0
     --depends libcap2-bin
+    --deb-recommends libvulkan1 --deb-recommends mesa-vulkan-drivers
 )
 # RPM resolves soname provides, which every RPM distro generates the same way —
 # unlike package names, which differ between Fedora (libglvnd-glx) and openSUSE
@@ -441,6 +449,7 @@ rpm_depends=(
     --depends "libdrm.so.2()(64bit)" --depends "libva.so.2()(64bit)"
     --depends "libva-drm.so.2()(64bit)" --depends "libGLESv2.so.2()(64bit)"
     --depends "libgbm.so.1()(64bit)" --depends "libpipewire-0.3.so.0()(64bit)"
+    --rpm-tag "Recommends: libvulkan.so.1()(64bit)"
 )
 
 common=(

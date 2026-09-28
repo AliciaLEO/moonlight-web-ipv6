@@ -83,6 +83,10 @@ struct ResolvedTarget
     uint64_t encodeAdapterHandle = 0;
 
     std::string encodeGpuName;
+    /// The encoding GPU's maker and driver (GpuInfo::vendorId, driverVersion):
+    /// what the D3D12 route's list of excluded drivers is read against.
+    uint32_t encodeVendorId = 0;
+    uint64_t encodeDriverVersion = 0;
     EncoderApi encoder = EncoderApi::None;
     Codec codec = Codec::H264;
 

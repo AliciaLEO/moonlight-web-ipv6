@@ -23,6 +23,10 @@
 #include "Selector.h"
 #include "Session.h"
 
+#ifdef _WIN32
+#include "../platform/windows/InputDesktop.h"
+#endif
+
 #ifndef MW_NATIVE_VERSION
 #define MW_NATIVE_VERSION "0.1.0-dev"
 #endif
@@ -140,11 +144,15 @@ std::unique_ptr<Session> NativeHost::createSession(const SessionConfig& config,
     // display adapter exposes no render node); the name then says so rather
     // than dereferencing nothing.
     const std::string gpuName = selection.gpu ? selection.gpu->name : "no GPU";
+    // The driver, which a regression report needs before anything else.
+    const std::string driver =
+        selection.gpu ? driverVersionText(selection.gpu->driverVersion) : std::string();
     log::info(std::string("[native] session: display ") + std::to_string(resolved.displayId) + " " +
               std::to_string(resolved.width) + "x" + std::to_string(resolved.height) + "@" +
               std::to_string(resolved.fps) + " " + toString(selection.codec) + " via " +
-              toString(selection.encoder) + " on " + gpuName + (selection.hdr ? " (HDR)" : "") +
-              (selection.yuv444 ? " (4:4:4)" : "") +
+              toString(selection.encoder) + " on " + gpuName +
+              (driver.empty() ? std::string() : " (driver " + driver + ")") +
+              (selection.hdr ? " (HDR)" : "") + (selection.yuv444 ? " (4:4:4)" : "") +
               (selection.crossGpuCopy ? " [cross-GPU copy]" : "") +
               (selection.fallbackEncoder
                    ? (selection.cpuEncoder ? " [fallback, CPU]" : " [fallback, via the OS]")
@@ -167,6 +175,8 @@ std::unique_ptr<Session> NativeHost::createSession(const SessionConfig& config,
     // has 4:4:4, or gave it up. The backend must never re-ask the encoder.
     target.yuv444 = selection.yuv444;
     target.encodeAdapterHandle = selection.gpu ? selection.gpu->nativeHandle : 0;
+    target.encodeVendorId = selection.gpu ? selection.gpu->vendorId : 0;
+    target.encodeDriverVersion = selection.gpu ? selection.gpu->driverVersion : 0;
     // The probe already decided which route can give a picture on this machine;
     // the session obeys rather than asking again. One rule, one place.
     // A display with its own route (Linux's portal virtual display) takes it.
@@ -216,6 +226,15 @@ void NativeHost::setKeyboardDiagnostics(bool on)
 bool NativeHost::keyboardDiagnostics()
 {
     return input::keyboardDiagnostics();
+}
+
+bool NativeHost::secureDesktopHasInput()
+{
+#ifdef _WIN32
+    return platform::inputDesktopName() != "Default";
+#else
+    return false;
+#endif
 }
 
 const char* NativeHost::version()

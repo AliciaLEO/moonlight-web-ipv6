@@ -71,6 +71,7 @@ QJsonObject toJson(const Capabilities& caps)
         o["name"] = QString::fromStdString(g.name);
         o["vendorId"] = static_cast<int>(g.vendorId);
         o["deviceId"] = static_cast<int>(g.deviceId);
+        o["driverVersion"] = u64(g.driverVersion);
         o["nativeHandle"] = u64(g.nativeHandle);
         o["encoders"] = enumsToJson(g.encoders);
         o["codecs"] = enumsToJson(g.codecs);
@@ -128,6 +129,7 @@ bool fromJson(const QJsonObject& obj, Capabilities& out)
         g.name = o["name"].toString().toStdString();
         g.vendorId = static_cast<uint32_t>(o["vendorId"].toInt());
         g.deviceId = static_cast<uint32_t>(o["deviceId"].toInt());
+        g.driverVersion = u64(o["driverVersion"].toString());
         g.nativeHandle = u64(o["nativeHandle"].toString());
         g.encoders = enumsFromJson<EncoderApi>(o["encoders"].toArray());
         g.codecs = enumsFromJson<Codec>(o["codecs"].toArray());

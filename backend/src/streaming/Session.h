@@ -152,6 +152,11 @@ public:
     /// portalGrantReceived().
     void setPortalRestoreToken(const QString& token) { m_PortalRestoreToken = token; }
 
+    /// The chain a native Windows session carries its pictures on, as the
+    /// admin chose it (AppSettings::nativeVideoPipeline): "auto", "d3d11" or
+    /// "d3d12". Only the native engine acts on it; empty or unknown is auto.
+    void setNativeVideoPipeline(const QString& pipeline) { m_NativeVideoPipeline = pipeline; }
+
     /// The client's screen, from the /start request: its refresh in
     /// millihertz (0 = it did not measure one) and whether it paints on
     /// vsync (tearing off, or a browser that cannot tear). Only the native
@@ -453,6 +458,10 @@ private:
     /// See setPortalRestoreToken. Empty is the honest default: a session that
     /// does not know of a consent asks for one.
     QString m_PortalRestoreToken;
+
+    /// See setNativeVideoPipeline. Empty — a parent that predates the setting —
+    /// is auto, the engine's own table.
+    QString m_NativeVideoPipeline;
 
     /// The client's screen at /start — see setClientPresentation.
     int m_ClientRefreshMilliHz = 0;

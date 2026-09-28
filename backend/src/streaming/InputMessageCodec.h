@@ -287,6 +287,22 @@ inline bool debugEnabled()
     return debugFlag().load(std::memory_order_relaxed);
 }
 
+/// While this answers true, logKey() writes nothing, whatever the switch says.
+/// Whoever turns the diagnostics on sets it to the native host's "the secure
+/// desktop has the input" (NativeHost::secureDesktopHasInput): what is typed on
+/// a lock screen or in a UAC prompt is a PIN or a password, and never belongs
+/// in a log. Null = never quiet, for a process with no such desktop to ask.
+using QuietProbe = bool (*)();
+inline std::atomic<QuietProbe>& quietProbeSlot()
+{
+    static std::atomic<QuietProbe> probe{nullptr};
+    return probe;
+}
+inline void setQuietProbe(QuietProbe probe)
+{
+    quietProbeSlot().store(probe, std::memory_order_relaxed);
+}
+
 /// How a game will name the key carrying this US virtual key — its label on a
 /// US keyboard, which is the vocabulary key bindings are written in. Only
 /// printable keys reach the diagnostic, so the table stops there.
@@ -396,6 +412,8 @@ inline KeyDiag describeKey(const QJsonObject& msg, KeyboardMode mode, const KeyP
 inline void logKey(const QJsonObject& msg, KeyboardMode mode, const KeyPlan& plan, bool down)
 {
     if (!down || !debugEnabled()) return;
+    const QuietProbe quiet = quietProbeSlot().load(std::memory_order_relaxed);
+    if (quiet && quiet()) return;
     const KeyDiag diag = describeKey(msg, mode, plan);
     if (diag.line.isEmpty()) return;
     if (diag.warn)

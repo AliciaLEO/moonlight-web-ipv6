@@ -13,10 +13,12 @@
 #include "convert/linux/CpuConvert.h"
 #include "convert/linux/GlConvert.h"
 #include "encode/linux/VaapiEncoder.h"
+#include "platform/linux/ScopedCapability.h"
 
 #include <drm_fourcc.h>
 #include <fcntl.h>
 #include <glob.h>
+#include <linux/capability.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <va/va.h>
@@ -300,6 +302,17 @@ void run_linux_pipeline_tests()
     CHECK(gl.init(kms.renderNodePath(), frame.fourcc, frame.width, frame.height, frame.width,
                   frame.height, convert::ScaleFilter::Bilinear, error));
     if (!error.empty()) std::fprintf(stderr, "  %s\n", error.c_str());
+    // Plan §9-18: a high-priority context exactly when this process may have
+    // one. The driver's own answer proves nothing (Mesa 23.2 reads back HIGH
+    // for a context the kernel refused), so the check runs from the other
+    // side: without CAP_SYS_NICE it must not claim HIGH; with it, only a driver
+    // lacking the extension may leave it normal.
+    std::fprintf(stderr, "  GL conversion priority: %s\n", gl.priority().c_str());
+    if (!platform::ScopedCapability::permitted(CAP_SYS_NICE))
+        CHECK(!gl.highPriority());
+    else
+        CHECK(gl.highPriority() ||
+              gl.priority().find("EGL_IMG_context_priority") != std::string::npos);
     CHECK(gl.bindTarget(nv12Target, error));
     if (!error.empty()) std::fprintf(stderr, "  %s\n", error.c_str());
     CHECK(gl.convert(frame, kms.cursor(), convert::CursorDraw{}, error));

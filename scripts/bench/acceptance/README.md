@@ -80,6 +80,20 @@ the whole fleet sees seventeen host cards. Picking "the Sunshine" by position
 would just as happily pick a Wolf on another machine: the pass would run, the
 numbers would be real, and they would be about the wrong computer.
 
+**Some settings live on the host, not in the browser.** A pass's `settings`
+reach the client's localStorage and nothing else. What the host itself decides
+— the native engine's video pipeline (`native_video_pipeline`), for one — goes
+in the pass's `hostSettings`: `run.py` writes it through the host's own
+loopback API (`fleet.host_settings`, with the per-run admin key) before the
+stream starts, and writes the previous values back once the pass is over, fail
+or not. A key the host refuses fails the pass rather than letting it measure
+the wrong thing; a key the host does not list is not "restored" to anything.
+
+```json
+{"id": "pipeline-d3d12", "factor": "D3D12 pipeline",
+ "hostSettings": {"native_video_pipeline": "d3d12"}}
+```
+
 ## What the colours mean
 
 🟩 clean · 🟨 works but off the mark · 🟥 fails · ⬜ not applicable, **always with

@@ -117,6 +117,11 @@ public:
     // needs is a knob that invites being turned. Add "keyboard_debug": true by
     // hand, restart, type — the README says so. Default false.
     //
+    // Never on the secure desktop, whatever the file says: the lock screen's PIN
+    // and a UAC prompt's password are typed there, and since the SYSTEM worker
+    // reaches that desktop they would have been written down key by key
+    // (NativeHost::secureDesktopHasInput, InputMsg::setQuietProbe).
+    //
     // Read once at startup rather than per keystroke: a settings file re-read on
     // every key press would put disk I/O on the input path.
 
@@ -538,6 +543,18 @@ public:
     QString transportMode() const;
     void setTransportMode(const QString& mode);
 
+    /// The chain a native Windows session carries its pictures on, from the
+    /// capture to the encoder (plan pipeline-video-d3d12-v2, §3.3): "auto" —
+    /// the engine's table, measured GPU by GPU — "d3d11" or "d3d12". The
+    /// admin's "Advanced" choice. A D3D12 the session cannot build runs D3D11
+    /// and says why; ignored off Windows.
+    /// Default: "auto", which is also what a value the file holds that is not
+    /// one of the three reads as.
+    QString nativeVideoPipeline() const;
+    /// Stores one of the three names, in any case. False, with the file left
+    /// as it was, for anything else.
+    bool setNativeVideoPipeline(const QString& pipeline);
+
     // ── HMAC key for session tokens ──────────────────────────────────────────
 
     /// Persisted HMAC signing key. Generated once, reused across restarts.
@@ -603,6 +620,15 @@ public:
 
     /// Turn remote administration on or off.
     void setRemoteAdminEnabled(bool enabled);
+
+    /// Whether the password is also accepted from outside the LAN, through the
+    /// rendezvous tunnel only. Default: false — an operator who set a password
+    /// for the machines in the house never finds it facing the internet unless
+    /// they asked for exactly that.
+    bool remoteAdminInternet() const;
+
+    /// Open or close the internet side of the remote admin door.
+    void setRemoteAdminInternet(bool enabled);
 
     // ── Rendezvous identity (0.3.0+) ────────────────────────────────────────
     //

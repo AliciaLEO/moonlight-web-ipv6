@@ -1,0 +1,28 @@
+#version 450
+// mw-vk-lab vatarget: a known pattern written with imageStore into the two
+// planes of a VA-API surface imported into Vulkan, as the split route's
+// conversion will write them. Luma v = 3x + 5y + frame, chroma (7x + frame,
+// 11y + frame), each mod 256: every value is exact in an 8-bit UNORM.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0, r8) uniform writeonly image2D luma;
+layout(set = 0, binding = 1, rg8) uniform writeonly image2D chroma;
+layout(push_constant) uniform Push
+{
+    uint frame;
+} pc;
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 ls = imageSize(luma);
+    if (p.x < ls.x && p.y < ls.y) {
+        uint v = (uint(p.x) * 3u + uint(p.y) * 5u + pc.frame) & 255u;
+        imageStore(luma, p, vec4(float(v) / 255.0));
+    }
+    ivec2 cs = imageSize(chroma);
+    if (p.x < cs.x && p.y < cs.y) {
+        uint u = (uint(p.x) * 7u + pc.frame) & 255u;
+        uint w = (uint(p.y) * 11u + pc.frame) & 255u;
+        imageStore(chroma, p, vec4(float(u) / 255.0, float(w) / 255.0, 0.0, 0.0));
+    }
+}

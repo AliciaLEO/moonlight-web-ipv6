@@ -962,6 +962,39 @@ void AppSettings::setTransportMode(const QString& mode)
     writeAll(obj);
 }
 
+namespace {
+
+/// "auto", "d3d11" or "d3d12", lower-cased; empty for anything else.
+QString videoPipelineName(const QString& value)
+{
+    // Windows' chains and Linux's (plan Phase 13); each OS ignores the
+    // other's, which is also what happens to a settings file carried across.
+    const QString v = value.trimmed().toLower();
+    return v == QLatin1String("auto") || v == QLatin1String("d3d11") ||
+                   v == QLatin1String("d3d12") || v == QLatin1String("vaapi") ||
+                   v == QLatin1String("vulkan")
+               ? v
+               : QString();
+}
+
+} // namespace
+
+QString AppSettings::nativeVideoPipeline() const
+{
+    const QString v = videoPipelineName(readAll().value("native_video_pipeline").toString());
+    return v.isEmpty() ? QStringLiteral("auto") : v;
+}
+
+bool AppSettings::setNativeVideoPipeline(const QString& pipeline)
+{
+    const QString v = videoPipelineName(pipeline);
+    if (v.isEmpty()) return false;
+    QJsonObject obj = readAll();
+    obj["native_video_pipeline"] = v;
+    writeAll(obj);
+    return true;
+}
+
 // ── Video enhancement ───────────────────────────────────────────────────────
 
 QString AppSettings::videoEnhancement() const
@@ -1069,6 +1102,19 @@ void AppSettings::setRemoteAdminEnabled(bool enabled)
 {
     QJsonObject obj = readAll();
     obj["remote_admin_enabled"] = enabled;
+    writeAll(obj);
+}
+
+bool AppSettings::remoteAdminInternet() const
+{
+    QJsonObject obj = readAll();
+    return obj.value("remote_admin_internet").toBool(false);
+}
+
+void AppSettings::setRemoteAdminInternet(bool enabled)
+{
+    QJsonObject obj = readAll();
+    obj["remote_admin_internet"] = enabled;
     writeAll(obj);
 }
 

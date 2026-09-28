@@ -88,10 +88,11 @@ bool StreamWorkerHost::startInProcess(const QStringList& args, const QByteArray&
     m_Proc->setProgram(QCoreApplication::applicationFilePath());
     m_Proc->setArguments(args);
 #if defined(Q_OS_LINUX)
-    // KMS capture needs CAP_SYS_ADMIN. This process keeps it permitted but hands
-    // it to nothing it spawns (common/LinuxCapabilities.h) — except this one
-    // child, the only one that captures. Runs in the forked child before exec.
-    if (native) m_Proc->setChildProcessModifier([] { mw::raiseCaptureCapabilityForChild(); });
+    // KMS capture needs CAP_SYS_ADMIN, a GPU context above normal priority
+    // CAP_SYS_NICE. This process keeps both permitted but hands them to nothing
+    // it spawns (common/LinuxCapabilities.h) — except this one child, the only
+    // one that captures and converts. Runs in the forked child before exec.
+    if (native) m_Proc->setChildProcessModifier([] { mw::raiseStreamCapabilitiesForChild(); });
 #else
     Q_UNUSED(native);
 #endif

@@ -19,6 +19,7 @@
 
 #include "Capabilities.h"
 #include "EncoderTuning.h"
+#include "VideoPipeline.h"
 
 #include <cstdint>
 #include <string>
@@ -212,6 +213,14 @@ struct SessionConfig
     int fallbackWidth = 0;
     int fallbackHeight = 0;
 
+    /// The chain that carries the pictures on Windows (VideoPipeline.h). Auto,
+    /// the default, is the engine's vendor table; the admin's "Advanced"
+    /// setting can force one. A D3D12 the session cannot build — a display
+    /// captured through Windows.Graphics.Capture, a cross-GPU copy, 4:4:4, a
+    /// codec the route does not do yet — runs D3D11 and says why in
+    /// SessionInfo. Ignored off Windows.
+    VideoPipeline videoPipeline = VideoPipeline::Auto;
+
     // ── Bench-only, below this line ─────────────────────────────────────────
     //
     // Neither field is ever set by a session a browser started. They exist so
@@ -299,6 +308,21 @@ struct SessionInfo
     /// True when the frame has to cross from the display's GPU to a different
     /// GPU to be encoded (§6). Costly and rare — always worth a log line.
     bool crossGpuCopy = false;
+
+    /// The chain the pictures take on Windows — D3D11 or D3D12; Auto on the
+    /// platforms that have no such choice — the route inside it ("D3D11", or
+    /// "DIRECT conversion → D3D12 Video Encode HEVC"), and why: the setting,
+    /// the vendor table, a bench key, or what made a D3D12 session run D3D11.
+    /// For the log, the stats overlay and the bench's rows.
+    VideoPipeline videoPipeline = VideoPipeline::Auto;
+    std::string videoRoute;
+    std::string videoPipelineReason;
+    /// The D3D12 route's encoder as the overlay names it ("D3D12 VE", "NVENC
+    /// (D3D12)"), empty while D3D11 runs; and whether D3D12 was asked for — by
+    /// the setting, a bench key or the vendor table — while D3D11 runs, so the
+    /// overlay can say so in a word. The reason is the log's.
+    std::string videoEncoder;
+    bool videoPipelineRefused = false;
 
     /// True when the session captures the host's playback and delivers Opus
     /// packets. False when no audio callback was given, or when the platform

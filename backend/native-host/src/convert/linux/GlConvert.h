@@ -121,6 +121,16 @@ public:
     int outputWidth() const { return m_OutputWidth; }
     int outputHeight() const { return m_OutputHeight; }
 
+    /// Whether the context runs above normal priority on the GPU: asked for
+    /// only when this process holds CAP_SYS_NICE (see createContext), and
+    /// then true only when the context was made with it effective.
+    bool highPriority() const { return m_HighPriority; }
+    /// The same, said for the log: "high (CAP_SYS_NICE)", or normal and why.
+    const std::string& priority() const { return m_Priority; }
+
+    /// For the session's line: which API converts (VulkanConvert has its own).
+    static const char* apiName() { return "EGL"; }
+
     void stop();
 
 private:
@@ -157,6 +167,8 @@ private:
     int m_OutputWidth = 0;
     int m_OutputHeight = 0;
     uint64_t m_CursorShapeVersion = 0;
+    bool m_HighPriority = false;
+    std::string m_Priority;
     ScaleFilter m_Filter = ScaleFilter::Bilinear;
     bool m_Letterboxed = false;
     ResampleCost m_ResampleCost;

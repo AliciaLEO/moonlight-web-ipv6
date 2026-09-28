@@ -181,8 +181,9 @@ int runStreamWorker(QCoreApplication& app)
     // path reads has to be read again on this side of the fork.
     if (AppSettings().keyboardDebug()) {
         InputMsg::setDebug(true);
+        InputMsg::setQuietProbe(&mw::native::NativeHost::secureDesktopHasInput);
         mw::native::NativeHost::setKeyboardDiagnostics(true);
-        qInfo() << "[KBD] keyboard diagnostics on in the worker";
+        qInfo() << "[KBD] keyboard diagnostics on in the worker (never on the secure desktop)";
     }
 
     // ── First stdin line = session config ────────────────────────────────────
@@ -295,6 +296,7 @@ int runStreamWorker(QCoreApplication& app)
     // Absent (an older parent, or a machine that never met a portal) → empty,
     // and the user is asked. Never a failure: a dialog is the fallback.
     session->setPortalRestoreToken(cfg["portalRestoreToken"].toString());
+    session->setNativeVideoPipeline(cfg["nativeVideoPipeline"].toString());
     session->setClientPresentation(cfg["clientRefreshMilliHz"].toInt(0),
                                    cfg["clientVsync"].toBool(false));
     // Absent (an older parent, or a rate the viewer named) → no ceiling, and

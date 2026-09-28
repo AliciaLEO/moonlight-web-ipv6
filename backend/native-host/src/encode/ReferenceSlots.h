@@ -183,6 +183,12 @@ public:
         return n;
     }
 
+    /// Whether @p slot holds a frame still usable (marked, not dropped since).
+    bool holds(int slot) const
+    {
+        return slot >= 0 && slot < m_Count && m_Held[static_cast<size_t>(slot)];
+    }
+
     static uint64_t bitFor(int slot) { return slot < 0 ? 0 : (uint64_t{1} << slot); }
 
 private:

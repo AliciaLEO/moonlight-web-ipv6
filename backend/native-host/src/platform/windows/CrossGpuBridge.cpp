@@ -263,8 +263,12 @@ bool CrossGpuBridge::openDma(ID3D11Device* sourceDevice)
 
     D3D12_COMMAND_QUEUE_DESC queue = {};
     queue.Type = D3D12_COMMAND_LIST_TYPE_COPY;
-    // HIGH, not GLOBAL_REALTIME: the latter needs a privilege this process
-    // does not hold, and the DMA engine is not contended the way 3D is.
+    // HIGH, not GLOBAL_REALTIME: the DMA engine is not contended the way 3D
+    // is, and HIGH asks nothing of the token. GLOBAL_REALTIME takes the same
+    // base-priority privilege as the REALTIME scheduling class — the SYSTEM or
+    // elevated worker has it, a limited token is refused with
+    // DXGI_ERROR_ACCESS_DENIED (d3d12-lab caps, 26/09/2026). The D3D12
+    // pipeline's queues follow the class instead (StreamPriority::queuePriority).
     queue.Priority = D3D12_COMMAND_QUEUE_PRIORITY_HIGH;
     hr = m_D12->CreateCommandQueue(&queue, IID_PPV_ARGS(&m_CopyQueue));
     if (SUCCEEDED(hr))

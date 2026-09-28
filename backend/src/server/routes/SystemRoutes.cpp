@@ -34,6 +34,7 @@
 #include "backend/streambackend/NativeProbeService.h"
 #include "streaming/ConsoleSession.h"
 #include "mw/native/Capabilities.h"
+#include "mw/native/VideoPipeline.h"
 #include "Autostart.h"
 #include "DisplaySleep.h"
 #include "LatencyFlag.h"
@@ -61,6 +62,41 @@
 // as "come back": NSSM's `AppExit Default Restart` respawns on any code it hasn't
 // been told to Exit on, and only 0 is mapped to a real stop (install-service.bat).
 static constexpr int kServiceRestartExitCode = 79;
+
+// Whether the admin's picture-chain choice means anything on this machine: a
+// Windows host that offers itself, with a GPU whose encoder has a D3D12 route —
+// NVENC, AMF or oneVPL. A Snapdragon's Media Foundation encoder has none, nor
+// has a machine with no GPU encoder at all, and the admin hides the choice
+// there rather than offer a switch that changes nothing.
+static bool nativeVideoPipelineSupported()
+{
+#if defined(Q_OS_WIN)
+    if (!NativeHostBackend::isEnabled()) return false;
+    const mw::native::Capabilities caps = NativeProbeService::instance().snapshot();
+    for (const mw::native::GpuInfo& gpu : caps.gpus)
+        for (mw::native::EncoderApi api : gpu.encoders)
+            if (api == mw::native::EncoderApi::Nvenc || api == mw::native::EncoderApi::Amf ||
+                api == mw::native::EncoderApi::Vpl)
+                return true;
+#elif defined(MW_NATIVE_LINUX_VULKAN)
+    // Linux: VA-API or the Vulkan chain (plan Phase 13), wherever the engine
+    // streams off a GPU. Vulkan is taken only on its pixel proof, and refused
+    // by name otherwise — the choice never breaks a stream.
+    if (!NativeHostBackend::isEnabled()) return false;
+    return !NativeProbeService::instance().snapshot().gpus.empty();
+#endif
+    return false;
+}
+
+/// The values the admin offers, this OS's chains only.
+static QJsonArray nativeVideoPipelineOptions()
+{
+#if defined(Q_OS_WIN)
+    return {QStringLiteral("auto"), QStringLiteral("d3d11"), QStringLiteral("d3d12")};
+#else
+    return {QStringLiteral("auto"), QStringLiteral("vaapi"), QStringLiteral("vulkan")};
+#endif
+}
 
 void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthManager& authManager,
                           InternetAccessManager& internetAccess, ComputerManager& computerManager,
@@ -648,7 +684,7 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
     // As a service the answer is the console-session probe snapshot, so this
     // also reports where the desktop is and who is on it, which is the whole
     // difference between "no encoder" and "nobody is logged in yet".
-    server.router()->get("/api/native/status", [](const HttpRequest& req) {
+    server.router()->get("/api/native/status", [&appSettings](const HttpRequest& req) {
         const bool local = req.isLocal && !req.viaTunnel;
 
         // Switched off in settings.json: the honest answer is "not offered",
@@ -695,6 +731,15 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
         if (!local) return HttpResponse::json(obj); // availability only, for a remote caller
 
         obj["capture"] = QString::fromUtf8(mw::native::toString(caps.capture));
+#if defined(Q_OS_WIN) || defined(Q_OS_LINUX)
+        // The picture chain: the admin's setting here, and for each display
+        // below what Auto means for the GPU that would encode it — what a
+        // session started now would ask for, before anything its build refuses
+        // (on Linux, Vulkan also waits for its pixel proof).
+        obj["video_pipeline"] = appSettings.nativeVideoPipeline();
+#else
+        (void)appSettings;
+#endif
         QJsonArray displays;
         for (const mw::native::DisplayInfo& d : caps.displays) {
             QJsonObject o;
@@ -715,6 +760,10 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
                         break;
                     }
             if (gpu) o["gpu"] = QString::fromStdString(gpu->name);
+            // The driver, which a regression report needs before anything else.
+            if (gpu && gpu->driverVersion)
+                o["gpu_driver"] =
+                    QString::fromStdString(mw::native::driverVersionText(gpu->driverVersion));
             // What would actually encode this display. A GPU with an encoder
             // answers for itself; when no GPU in the machine has one, the
             // machine-level fallback tier does — and it must be NAMED, because
@@ -738,6 +787,22 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
                 o["encoder_hardware"] = fallback->hardware;
                 o["encoder_is_fallback"] = true;
             }
+#if defined(Q_OS_WIN) || defined(Q_OS_LINUX)
+            if (gpuEncodes) {
+                mw::native::VideoPipeline autoPipeline =
+                    mw::native::autoVideoPipeline(gpu->encoders.front());
+                // A driver the D3D12 route stays off keeps D3D11, and says why.
+                const std::string excluded =
+                    autoPipeline == mw::native::VideoPipeline::D3d12
+                        ? mw::native::d3d12DriverExcluded(gpu->vendorId, gpu->driverVersion)
+                        : std::string();
+                if (!excluded.empty()) {
+                    autoPipeline = mw::native::VideoPipeline::D3d11;
+                    o["video_pipeline_excluded"] = QString::fromStdString(excluded);
+                }
+                o["video_pipeline_auto"] = QString::fromUtf8(mw::native::toString(autoPipeline));
+            }
+#endif
             QString codecs;
             for (mw::native::Codec c : codecList)
                 codecs += (codecs.isEmpty() ? QString() : QStringLiteral(", ")) +
@@ -1145,6 +1210,11 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
         obj["transport_mode"] = transportMode;
         obj["media_track_only_h264"] =
             (transportMode == "webrtc-media-udp" || transportMode == "webrtc-media-tcp");
+        // The picture chain of a native session (admin → Advanced), whether
+        // this machine has a choice to make at all, and which.
+        obj["native_video_pipeline"] = appSettings.nativeVideoPipeline();
+        obj["native_video_pipeline_supported"] = nativeVideoPipelineSupported();
+        obj["native_video_pipeline_options"] = nativeVideoPipelineOptions();
         obj["auto_ip_detection"] = appSettings.autoIpDetection();
         obj["stream_bitrate"] = appSettings.streamBitrate();
         obj["stream_height"] = appSettings.streamHeight();
@@ -1201,6 +1271,18 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
 
         QJsonObject obj;
         bool hadChange = false;
+
+        // First, so that a bad value refuses the whole request before any of
+        // its other keys is written. Refused rather than stored: a typo saved
+        // would read back as "auto" and hide behind the default.
+        if (body.contains("native_video_pipeline")) {
+            if (!appSettings.setNativeVideoPipeline(body["native_video_pipeline"].toString()))
+                return HttpResponse::error(
+                    400, "native_video_pipeline must be auto, d3d11, d3d12, vaapi or vulkan");
+            obj["native_video_pipeline"] = appSettings.nativeVideoPipeline();
+            obj["status"] = "saved";
+            hadChange = true;
+        }
 
         if (body.contains("video_codec")) {
             VideoCodec codec = AppSettings::videoCodecFromString(body["video_codec"].toString());

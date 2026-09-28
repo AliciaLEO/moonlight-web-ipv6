@@ -199,8 +199,10 @@ bool pipeIo(HANDLE pipe, bool write, void* data, DWORD size, DWORD* done, DWORD 
 
 /// Who asked, and whether they may. Two questions, both about the caller and
 /// neither about what they sent: are they this same executable, and are they on
-/// the console session this service would put a SYSTEM process into?
-bool callerAllowed(HANDLE pipe, QString* why)
+/// the console session this service would put a SYSTEM process into? The
+/// caller's user SID comes back in @p callerSid: the worker is made theirs to
+/// look at (launchWorker).
+bool callerAllowed(HANDLE pipe, QString* why, std::wstring* callerSid)
 {
     ULONG pid = 0;
     if (!::GetNamedPipeClientProcessId(pipe, &pid)) {
@@ -221,17 +223,27 @@ bool callerAllowed(HANDLE pipe, QString* why)
     }
     HANDLE token = nullptr;
     DWORD session = 0xFFFFFFFF;
+    callerSid->clear();
     if (::OpenThreadToken(::GetCurrentThread(), TOKEN_QUERY, TRUE, &token)) {
         DWORD size = 0;
         if (!::GetTokenInformation(token, TokenSessionId, &session, sizeof(session), &size))
             session = 0xFFFFFFFF;
+        size = 0;
+        ::GetTokenInformation(token, TokenUser, nullptr, 0, &size);
+        std::vector<unsigned char> user(size);
+        LPWSTR sid = nullptr;
+        if (size && ::GetTokenInformation(token, TokenUser, user.data(), size, &size) &&
+            ::ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER*>(user.data())->User.Sid, &sid)) {
+            *callerSid = sid;
+            ::LocalFree(sid);
+        }
         ::CloseHandle(token);
     }
     ::RevertToSelf();
 
     const DWORD console = ::WTSGetActiveConsoleSessionId();
-    if (session == 0xFFFFFFFF) {
-        *why = QStringLiteral("the caller's session could not be read");
+    if (session == 0xFFFFFFFF || callerSid->empty()) {
+        *why = QStringLiteral("the caller's session or user could not be read");
         return false;
     }
     if (session != console) {
@@ -251,7 +263,18 @@ bool callerAllowed(HANDLE pipe, QString* why)
 /// LocalSystem holds. `winsta0\default` is named explicitly: a service's own
 /// default is a window station nobody sees, and a worker started there would
 /// capture nothing and inject nowhere.
-bool launchWorker(const QString& base, DWORD* pid, QString* error)
+///
+/// The process is given a DACL of its own. Left to the SYSTEM token's default,
+/// only SYSTEM and administrators could open it, and the user's server — not
+/// elevated, the way it always runs — could not read the image it checks
+/// before trusting the pipes: it saw "", refused the worker and fell back to
+/// the elevated task, which cannot reach the secure desktop. Every session of
+/// v0.3.1 did (bench 28/09/2026). The user who asked (@p callerSid) gets what
+/// they have on their elevated worker: its image and exit code
+/// (PROCESS_QUERY_LIMITED_INFORMATION), a wait on it (SYNCHRONIZE) and
+/// stopping it (PROCESS_TERMINATE). Nothing that reads or writes its memory,
+/// its threads or its token.
+bool launchWorker(const QString& base, const std::wstring& callerSid, DWORD* pid, QString* error)
 {
     auto fail = [&](const QString& why) {
         *error = why;
@@ -305,11 +328,26 @@ bool launchWorker(const QString& base, DWORD* pid, QString* error)
     const std::wstring app = ownExecutable().toStdWString();
     const std::wstring cwd = QFileInfo(ownExecutable()).absolutePath().toStdWString();
 
+    // SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE.
+    const std::wstring sddl = L"D:(A;;GA;;;SY)(A;;GRGX;;;BA)(A;;0x101001;;;" + callerSid + L")";
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    if (!::ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &sd,
+                                                                nullptr)) {
+        const DWORD sddlError = ::GetLastError();
+        if (env) ::DestroyEnvironmentBlock(env);
+        ::CloseHandle(token);
+        return fail(QStringLiteral("cannot build the worker's DACL (error %1)").arg(sddlError));
+    }
+    SECURITY_ATTRIBUTES processSecurity = {};
+    processSecurity.nLength = sizeof(processSecurity);
+    processSecurity.lpSecurityDescriptor = sd;
+
     PROCESS_INFORMATION pi = {};
     const BOOL created = ::CreateProcessAsUserW(
-        token, app.c_str(), cmd.data(), nullptr, nullptr, FALSE,
+        token, app.c_str(), cmd.data(), &processSecurity, nullptr, FALSE,
         CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW, env, cwd.c_str(), &si, &pi);
     const DWORD err = ::GetLastError();
+    ::LocalFree(sd);
     if (env) ::DestroyEnvironmentBlock(env);
     ::CloseHandle(token);
     if (!created) return fail(QStringLiteral("CreateProcessAsUser failed (error %1)").arg(err));
@@ -333,14 +371,15 @@ void serveOne(HANDLE pipe)
 
     QString answer;
     QString why;
+    std::wstring callerSid;
     DWORD pid = 0;
     if (!validBase(base)) {
         answer = QStringLiteral("err the pipe name is not one this service accepts");
         Logger::warning("[WorkerService] refused a malformed pipe name");
-    } else if (!callerAllowed(pipe, &why)) {
+    } else if (!callerAllowed(pipe, &why, &callerSid)) {
         answer = QStringLiteral("err refused");
         Logger::warning("[WorkerService] refused a request: " + why);
-    } else if (!launchWorker(base, &pid, &why)) {
+    } else if (!launchWorker(base, callerSid, &pid, &why)) {
         answer = QStringLiteral("err ") + why;
         Logger::warning("[WorkerService] could not start the worker: " + why);
     } else {

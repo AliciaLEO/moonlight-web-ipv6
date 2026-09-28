@@ -131,6 +131,10 @@ public:
         /// will be asked; whatever comes back arrives as portalGrantReceived().
         /// Ignored on every route but the Linux portal one.
         QString portalRestoreToken;
+        /// The chain a Windows session carries its pictures on, as the admin
+        /// chose it (Advanced) — see SessionConfig::videoPipeline. Auto unless
+        /// a choice was made; ignored off Windows.
+        mw::native::VideoPipeline videoPipeline = mw::native::VideoPipeline::Auto;
     };
 
     /// One encoded frame, borrowed: `data` is the encoder's own output buffer
@@ -292,8 +296,10 @@ public:
     /// the session has started.
     QString describeSession() const;
 
-    /// Just the encoder's name — "NVENC", "AMF", "oneVPL". Empty until the
-    /// session has started.
+    /// Just the encoder's name — "NVENC", "AMF", "oneVPL", or the D3D12
+    /// route's ("D3D12 VE", "NVENC (D3D12)"), with "(D3D11)" after the name
+    /// when D3D12 was asked for and did not run. Empty until the session has
+    /// started.
     ///
     /// This is what the client is told, not describeSession(): that one names
     /// the GPU, the codec and every flag, and a 60-character value pushed the

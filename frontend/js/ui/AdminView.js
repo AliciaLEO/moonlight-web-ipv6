@@ -69,6 +69,10 @@ export class AdminView {
         // so until one is set the door is advertised but opens for nobody.
         this._remoteAdminEnabled = true;
         this._adminPasswordSet = false;
+        // Whether the password is also accepted from the internet, through the
+        // rendezvous. Off by default: the LAN's door does not turn into the
+        // internet's unless the owner asks for exactly that.
+        this._remoteAdminInternet = false;
 
         // Server settings state
         this._httpsPort = 443;
@@ -139,6 +143,13 @@ export class AdminView {
         this._instanceName = '';
         this._defaultInstanceName = '';
         this._instanceNameMax = 32;
+        // The picture chain of a native session (Advanced): what is stored,
+        // whether this machine has a choice to make at all — a Windows GPU
+        // whose encoder has a D3D12 route, a Linux GPU (VA-API or Vulkan) —
+        // and this OS's values. The section is hidden where there is none.
+        this._videoPipeline = 'auto';
+        this._videoPipelineSupported = false;
+        this._videoPipelineValues = ['auto', 'd3d11', 'd3d12'];
 
         // Dirty tracking: snapshot of values at load time
         this._cleanState = {};
@@ -166,6 +177,7 @@ export class AdminView {
             return;
         }
         await this._loadState();
+        await this._loadStreamingState();
         await this._loadInternetState();
         await this._loadSessions();
         this.render();
@@ -223,6 +235,20 @@ export class AdminView {
             this._instanceNameMax = admin.instance_name_max || 32;
         } catch (err) {
             console.warn('[Admin] Failed to load server settings:', err);
+        }
+    }
+
+    async _loadStreamingState() {
+        try {
+            const settings = await BackendClient.getStreamingSettings();
+            this._videoPipeline = settings.native_video_pipeline || 'auto';
+            this._videoPipelineSupported = settings.native_video_pipeline_supported === true;
+            // An older server names no values: Windows', the only ones it had.
+            if (Array.isArray(settings.native_video_pipeline_options)) {
+                this._videoPipelineValues = settings.native_video_pipeline_options;
+            }
+        } catch (err) {
+            console.warn('[Admin] Failed to load streaming settings:', err);
         }
     }
 
@@ -297,6 +323,7 @@ export class AdminView {
             if (status.remote_admin_enabled !== undefined) {
                 this._remoteAdminEnabled = !!status.remote_admin_enabled;
                 this._adminPasswordSet = !!status.admin_password_set;
+                this._remoteAdminInternet = !!status.remote_admin_internet;
             }
             if (status.pin) {
                 this._pin = status.pin;
@@ -373,15 +400,29 @@ export class AdminView {
         );
     }
 
+    // Open or close the internet side of the same door. Closing it revokes
+    // every unlock too: the host does not record which ones the internet bought.
+    async _toggleRemoteAdminInternet(internet) {
+        await this._postRemoteAdmin(
+            { internet },
+            internet ? t('admin.remoteAdminInternetOn') : t('admin.remoteAdminInternetOff'),
+        );
+    }
+
     async _postRemoteAdmin(body, successMessage) {
         try {
             const result = await BackendClient.saveRemoteAdmin(body);
             this._remoteAdminEnabled = !!result.remote_admin_enabled;
             this._adminPasswordSet = !!result.admin_password_set;
+            this._remoteAdminInternet = !!result.remote_admin_internet;
             Toast.success(successMessage);
-            // A remote admin who just closed the LAN door closed it on itself.
+            // A remote admin who just closed a door may have closed it on
+            // itself: the LAN's, or the internet's, which revokes every unlock.
             // Reload rather than leave an admin page whose every button 403s.
-            if (!this._remoteAdminEnabled && !this._isRealHostMachine) {
+            const closedOnItself =
+                !this._remoteAdminEnabled ||
+                (body.internet === false && !this._remoteAdminInternet);
+            if (closedOnItself && !this._isRealHostMachine) {
                 setTimeout(() => window.location.reload(), 600);
                 return;
             }
@@ -754,41 +795,7 @@ export class AdminView {
                         : ''
                 }
 
-                <!-- Remote admin access (LAN password) -->
-                <div class="settings-section">
-                    <h3 class="settings-section-title">${t('admin.remoteAdmin')}</h3>
-                    <div class="settings-field u-pt-0">
-                        <label class="settings-checkbox-label">
-                            <input type="checkbox" id="chk-remote-admin"
-                                   ${this._remoteAdminEnabled ? 'checked' : ''} />
-                            <span class="settings-checkbox-text">${t('admin.remoteAdminEnable')}</span>
-                        </label>
-                        <p class="setting-desc">${t('admin.remoteAdminDesc')}</p>
-                        ${
-                            !this._remoteAdminEnabled
-                                ? ''
-                                : this._adminPasswordSet
-                                  ? `<p class="settings-hint">${t('admin.remoteAdminCustom')}</p>`
-                                  : `<div class="settings-status settings-status-pending">
-                                         ${t('admin.remoteAdminNoPassword')}
-                                     </div>`
-                        }
-                        ${
-                            this._remoteAdminEnabled
-                                ? `
-                        <input type="password" id="admin-remote-password" class="settings-input u-mt-2"
-                               autocomplete="new-password"
-                               placeholder="${this.esc(t('admin.remoteAdminPlaceholder'))}" />
-                        <div class="u-mt-2">
-                            <button class="btn btn-neutral" id="btn-set-admin-password">
-                                ${t('admin.remoteAdminChange')}
-                            </button>
-                        </div>
-                        <p class="settings-hint u-mt-2">${t('admin.remoteAdminHint')}</p>`
-                                : ''
-                        }
-                    </div>
-                </div>
+                ${this._renderRemoteAdmin()}
 
                 <!-- Internet -->
                 <div class="settings-section" id="admin-section-internet">
@@ -1078,6 +1085,7 @@ export class AdminView {
                         </div>
                     </div>
                 </div>
+                ${this._renderAdvanced()}
             </div>
         `;
 
@@ -1362,6 +1370,12 @@ export class AdminView {
         if (remoteChk) {
             remoteChk.addEventListener('change', () => this._toggleRemoteAdmin(remoteChk.checked));
         }
+        const internetAdminChk = this.container.querySelector('#chk-remote-admin-internet');
+        if (internetAdminChk) {
+            internetAdminChk.addEventListener('change', () =>
+                this._toggleRemoteAdminInternet(internetAdminChk.checked),
+            );
+        }
         const setPassBtn = this.container.querySelector('#btn-set-admin-password');
         const passInput = this.container.querySelector('#admin-remote-password');
         if (setPassBtn && passInput) {
@@ -1391,6 +1405,14 @@ export class AdminView {
         if (transportSelect) {
             transportSelect.addEventListener('change', () => {
                 this._saveInternetPrefs();
+            });
+        }
+
+        // Picture chain (Advanced): saved as soon as it changes
+        const pipelineSelect = this.container.querySelector('#select-video-pipeline');
+        if (pipelineSelect) {
+            pipelineSelect.addEventListener('change', () => {
+                this._saveVideoPipeline(pipelineSelect.value);
             });
         }
 
@@ -2093,6 +2115,118 @@ export class AdminView {
         } catch (err) {
             console.warn('[Admin] Failed to save transport prefs:', err);
             Toast.error(t('admin.transportSaveFailed'));
+        }
+    }
+
+    // --- Remote admin access: the password door, the LAN's and on request the
+    // internet's (through the rendezvous only) ---
+    _renderRemoteAdmin() {
+        return `
+                <div class="settings-section">
+                    <h3 class="settings-section-title">${t('admin.remoteAdmin')}</h3>
+                    <div class="settings-field u-pt-0">
+                        <label class="settings-checkbox-label">
+                            <input type="checkbox" id="chk-remote-admin"
+                                   ${this._remoteAdminEnabled ? 'checked' : ''} />
+                            <span class="settings-checkbox-text">${t('admin.remoteAdminEnable')}</span>
+                        </label>
+                        <p class="setting-desc">${t('admin.remoteAdminDesc')}</p>
+                        ${
+                            !this._remoteAdminEnabled
+                                ? ''
+                                : this._adminPasswordSet
+                                  ? `<p class="settings-hint">${t('admin.remoteAdminCustom')}</p>`
+                                  : `<div class="settings-status settings-status-pending">
+                                         ${t('admin.remoteAdminNoPassword')}
+                                     </div>`
+                        }
+                        ${
+                            this._remoteAdminEnabled
+                                ? `
+                        <input type="password" id="admin-remote-password" class="settings-input u-mt-2"
+                               autocomplete="new-password"
+                               placeholder="${this.esc(t('admin.remoteAdminPlaceholder'))}" />
+                        <div class="u-mt-2">
+                            <button class="btn btn-neutral" id="btn-set-admin-password">
+                                ${t('admin.remoteAdminChange')}
+                            </button>
+                        </div>
+                        <p class="settings-hint u-mt-2">${t('admin.remoteAdminHint')}</p>
+                        <label class="settings-checkbox-label u-mt-2">
+                            <input type="checkbox" id="chk-remote-admin-internet"
+                                   ${this._remoteAdminInternet ? 'checked' : ''} />
+                            <span class="settings-checkbox-text">${t('admin.remoteAdminInternet')}</span>
+                        </label>
+                        <p class="setting-desc">${t('admin.remoteAdminInternetDesc')}</p>`
+                                : ''
+                        }
+                    </div>
+                </div>`;
+    }
+
+    // --- Advanced: the picture chain of a native session ---
+
+    _videoPipelineOptions() {
+        const labels = {
+            auto: t('admin.videoPipelineAuto'),
+            d3d11: t('admin.videoPipelineD3d11'),
+            d3d12: t('admin.videoPipelineD3d12'),
+            vaapi: t('admin.videoPipelineVaapi'),
+            vulkan: t('admin.videoPipelineVulkan'),
+        };
+        // A stored value this OS does not list (a settings file carried across)
+        // is no opinion here: nothing matches it, and the select shows Auto,
+        // which is what runs.
+        return this._videoPipelineValues.map((value) => [value, labels[value] || value]);
+    }
+
+    // Only where the choice means something: the server says whether this
+    // machine has a GPU with a chain to choose, and a section with nothing to
+    // change is not shown.
+    _renderAdvanced() {
+        if (!this._videoPipelineSupported) return '';
+        return `
+                <!-- Advanced -->
+                <div class="settings-section" id="admin-section-advanced">
+                    <h3 class="settings-section-title">${t('admin.advanced')}</h3>
+                    <div class="settings-field">
+                        <label class="settings-label" for="select-video-pipeline">
+                            ${t('admin.videoPipeline')}
+                        </label>
+                        <select id="select-video-pipeline" class="settings-select">
+                            ${this._videoPipelineOptions()
+                                .map(
+                                    ([value, label]) =>
+                                        `<option value="${value}" ${value === this._videoPipeline ? 'selected' : ''}>${this.esc(label)}</option>`,
+                                )
+                                .join('')}
+                        </select>
+                        <p class="settings-hint">
+                            ${t(
+                                this._videoPipelineValues.includes('vulkan')
+                                    ? 'admin.videoPipelineHintLinux'
+                                    : 'admin.videoPipelineHint',
+                            )}
+                        </p>
+                    </div>
+                </div>
+        `;
+    }
+
+    // Saved at once, like the transport mode. It applies to the next stream: a
+    // running one keeps the chain it was built on.
+    async _saveVideoPipeline(value) {
+        try {
+            await BackendClient.saveStreamingSettings({ native_video_pipeline: value });
+            this._videoPipeline = value;
+            const option = this._videoPipelineOptions().find(([v]) => v === value);
+            Toast.success(t('admin.videoPipelineSaved', { pipeline: option ? option[1] : value }));
+        } catch (err) {
+            console.warn('[Admin] Failed to save the video pipeline:', err);
+            Toast.error(t('admin.videoPipelineSaveFailed'));
+            // The select shows what is stored, not what failed to be.
+            const select = this.container.querySelector('#select-video-pipeline');
+            if (select) select.value = this._videoPipeline;
         }
     }
 

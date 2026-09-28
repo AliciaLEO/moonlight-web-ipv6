@@ -1688,6 +1688,23 @@ d'abord, à chaque ouverture **et à chaque redémarrage** : un changement de mo
 un redémarrage de pilote est exactement le moment où le bon backend change, et
 rejouer le choix ne coûte qu'une tentative DDA ratée.
 
+**Et en plein stream (28/09/2026, plan D3D12 C8.3 bis).** Un redémarrage ne
+vient que d'une capture perdue, et WGC ne se perd pas. Un worker qui n'est pas
+SYSTEM, repassé sur WGC après un refus de la duplication (le bureau sécurisé,
+`0x80070005`), y restait donc jusqu'à la fin, en D3D11. Désormais, après un refus
+qui peut passer, la boucle cherche la duplication. `DxgiDuplication::refusalMayPass`
+tient pour passager tout refus, sauf `DXGI_ERROR_UNSUPPORTED` et l'absence
+d'`IDXGIOutput1`.
+- Toutes les demi-secondes, un regard sur le bureau d'entrée. Sans SYSTEM, le
+  bureau sécurisé ne se lit même pas : rien n'est tenté tant qu'il est là.
+- Ensuite, une duplication ouverte à côté. Tant qu'elle échoue, les essais
+  s'espacent de 1 à 30 s.
+- Dès qu'elle s'ouvre, le redémarrage ordinaire la reprend, et la chaîne D3D12
+  revient avec elle.
+
+`MW_DDA_REFUSE=[<à>+]<secondes>` simule ce refus au banc, là où il faudrait
+sinon un écran verrouillé que quelqu'un déverrouille.
+
 ⚠️ **Pas de chiffre de comparaison ici.** Deux mesures au banc sur le même écran
 se sont contredites (DDA 0,19 ms puis 2,19 ms de moyenne d'`acquire`, WGC 1,81
 puis 1,05), parce qu'un bureau immobile ne présente presque rien : avec 16 trames
@@ -2583,6 +2600,25 @@ levé la capacité par thread dans le serveur, sans qu'elle soit effective aille
 `release.yml`, plateforme `linux`, après le push) — la seule différence avec le
 banc est Qt 6.11 à la place de 6.6.3 ; et le **premier flux navigateur** depuis cet
 hôte (§19.6), qui est la prochaine étape.
+
+**Une seconde capacité, `CAP_SYS_NICE` (28/09/2026, plan D3D12 §9-9 et §9-18).**
+Sous un jeu qui sature le GPU, la conversion attend deux images du jeu : 46 ms sur
+le 780M (banc §8o.1). Un contexte GPU au-dessus de la priorité normale passe devant
+l'image suivante (23 ms en GLES), et amdgpu, i915 et xe ne le créent que pour un
+processus qui tient `CAP_SYS_NICE` — Sunshine la porte déjà (`cap_sys_admin,
+cap_sys_nice=p`). Elle suit exactement la route de l'autre : `setcap
+cap_sys_admin,cap_sys_nice+p` sur le lanceur, levée ambiante des deux, confinement
+des deux au démarrage (permitted et inheritable gardés, effective retiré, ambiant
+abaissé), rendue au seul worker natif. Le moteur la lève sur son thread le temps
+de créer le contexte (`platform/linux/ScopedCapability.h`, partagé désormais avec
+`KmsCapture`) ; la priorité est fixée à la création, rien ne la garde ensuite.
+`GlConvert` ne demande HIGH (`EGL_IMG_context_priority`) que s'il la tient :
+Mesa 23.2 relit « HIGH » pour un contexte que le noyau a refusé, la réponse du
+pilote ne prouve rien. `mw-native-tests linux_pipeline` sur le banc : « priority
+normal (no CAP_SYS_NICE…) » avec `cap_sys_admin+p`, « priority high
+(CAP_SYS_NICE) » avec les deux, 61/61 dans les deux cas. Un paquet installé avant
+ne pose que `CAP_SYS_ADMIN` : la conversion y tourne à la priorité normale, et le
+log dit pourquoi.
 
 ---
 
@@ -4865,6 +4901,12 @@ de Sunshine. Elle est réduite à ce que la fonction exige :
   **ce même exe** ;
 - le worker vérifie la même chose dans l'autre sens avant de lire un octet de
   config ;
+- le serveur vérifie aussi le worker (son image, avant de croire les tubes).
+  Il ne le peut que parce que le service donne au worker une DACL à lui :
+  SYSTEM et les administrateurs comme d'habitude, et l'utilisateur qui l'a
+  demandé avec `PROCESS_QUERY_LIMITED_INFORMATION`, `SYNCHRONIZE` et
+  `PROCESS_TERMINATE` — ce qu'il a déjà sur son worker élevé, rien qui touche
+  la mémoire, les threads ou le jeton (28/09, voir §31.7) ;
 - la DACL du tube de contrôle est `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x12019f;;;IU)`
   — la DACL par défaut d'un tube laisserait entrer toutes les sessions
   d'ouverture de la machine.
@@ -4949,10 +4991,10 @@ l'utilisateur), et le journal comme les minidumps du worker SYSTEM atterrissent
 `moonlightweb-worker-service.log`, sous l'AppData de SYSTEM — le seul endroit
 où un processus LocalSystem est certain de pouvoir écrire.
 
-Conséquence assumée : le worker SYSTEM lit `AppSettings` depuis le profil de
-SYSTEM, donc aux valeurs par défaut. Sans effet en pratique — toute la
-configuration de session arrive par stdin, et il ne reste que le bouton de
-débogage clavier.
+Le worker SYSTEM lit aussi les réglages de l'utilisateur par ce chemin (vu le
+28/09 : `keyboard_debug`, posé à la main, y est actif). Toute la configuration
+de session arrive de toute façon par stdin ; il ne reste que le bouton de
+débogage clavier, qui se tait sur le bureau sécurisé (§31.7).
 
 ### 31.7 Vérifié
 
@@ -4966,6 +5008,29 @@ déverrouillage au mot de passe tapé depuis le client ; (3) le bouton
 arrêté (`sc stop "MoonlightWeb Worker"`), qui doivent retomber sur le niveau 1 —
 stream normal, fenêtres admin toujours pilotables, bureau sécurisé noir.
 
+**Le 28/09, première vraie installation (C8.4 du plan D3D12) : le niveau 2
+n'avait jamais servi.** Le service était installé et démarré, mais chaque
+session le refusait (« pipe client is "" (pid N), not this executable ») et
+tombait sur la tâche élevée : REALTIME, mais ni duplication (`0x80070005`) ni
+`SendInput` (erreur 5) sur `Winlogon`. Verrouillé depuis le stream, l'écran du
+PIN ne prenait ni souris ni clavier. La cause : le serveur vérifie l'image du
+worker, et un processus créé avec un jeton SYSTEM hérite de la DACL par défaut
+de ce jeton, qui n'admet que SYSTEM et les administrateurs ; le serveur, non
+élevé, lisait une image vide. Toute la v0.3.1 en est là (journaux de la prod
+depuis le 26/09). Correctif `f1e8e8e3` : la DACL du worker du §31.2. **Vérifié
+par Bruno** depuis son Mac, par Internet : verrouillage, PIN tapé dans le
+stream, déverrouillage. Le journal dit « SYSTEM (launcher service) »,
+« GPU scheduling class REALTIME (token SYSTEM) », « now on the "Winlogon"
+desktop », une duplication rouverte sur `Winlogon` et la chaîne D3D12 de l'Arc
+reconstruite des deux côtés de la bascule, sans passer par WGC ni D3D11.
+
+Trouvé au même test : `keyboard_debug`, posé à la main sur ce poste, a écrit le
+PIN touche par touche dans le journal du worker. Les diagnostics clavier se
+taisent désormais sur le bureau sécurisé, quoi que dise le réglage
+(`1887b2ea` : `NativeHost::secureDesktopHasInput()`, demandé à chaque touche
+par `Win32Input` et par une sonde du codec d'entrée) ; les lignes déjà écrites
+ont été effacées et le réglage coupé sur ce poste.
+
 **Concrètement, pour l'utilisateur** : le stream ne s'arrête plus devant une
 porte. Quand Windows demande une autorisation administrateur, l'invite apparaît
 à l'écran distant et le bouton « Oui » se clique comme n'importe quel autre ;
@@ -4974,3 +5039,432 @@ de regarder un écran noir en attendant ; et le bouton Ctrl+Alt+Suppr de la barr
 de touches ouvre l'écran de sécurité, ce qu'aucune combinaison au clavier n'a
 jamais pu faire depuis un navigateur. Si le service n'est pas installé ou a été
 arrêté, rien ne casse : on retrouve exactement le comportement précédent.
+
+## 32. Pipeline vidéo D3D12, deuxième essai (ouvert le 26/09/2026)
+
+> Ébauche, complétée à chaque porte du chantier (branche `feat/d3d12-pipeline`).
+> D3D11 reste le défaut partout où le banc et Bruno n'en ont pas décidé
+> autrement : Intel passe en D3D12 le 28/09 (§32.9).
+
+### 32.1 Ce que la première tentative a appris (21/09)
+
+La v1 n'a fait tourner dans le produit qu'un **hybride** : la conversion passait
+en D3D12, sur une file COMPUTE de priorité HIGH, et l'image revenait à D3D11
+pour les encodeurs d'aujourd'hui. Aucun encodeur D3D12 n'a tourné dans le
+produit. L'hybride a perdu partout, et `84524e7f` l'a retiré :
+
+| GPU | Condition | D3D11 (total hôte moy. / p99) | Hybride |
+|---|---|---|---|
+| Arc A380 | RE9, stream réel | 19,8 / 61,4 ms | 30,5 / 90,1 ms : la file COMPUTE est préemptée par le jeu |
+| Arc A380 | banc 1080p120 | 5,4 ms | 11-13 ms : 3,5 ms de travail + 2,5 ms d'attente de file |
+| iGPU AMD | charge synthétique | 16,8 / 41 ms | 117 / 249 ms, 8 i/s : la file COMPUTE est affamée |
+| RTX 5060 Ti | RE9 | 5,2 / 13,3 ms | 6,6 / 14,3 ms, 9 % d'images en moins |
+
+Toutes ces mesures datent d'avant la classe GPU REALTIME (`ee7de92b`) et le
+worker élevé. Deux sondes, en revanche, ont gagné : sur l'Arc sous RE9, D3D12
+Video Encode encode en 2,3 ms (p99 3,6) là où oneVPL prend 7,2 ms (p99 15,4) ;
+et la lecture par la file COPY est devenue `CrossGpuBridge` (`acdcda49`).
+
+Les pièges relevés, gardés pour la v2 :
+- un timestamp pris sur une file préemptée compte la préemption ;
+- le `convert_us` de D3D11 ne mesure que la soumission CPU : le travail GPU de
+  la conversion est facturé à `encode_us` ;
+- le pilote Arc plante sur un `CopyTextureRegion` d'une texture planaire
+  **partagée** dans une liste COMPUTE ;
+- binding tier 1 : il faut des descripteurs nuls en bouche-trous ; pas d'UAV
+  sRGB ;
+- les BOOL rendus par le pilote Intel ne valent pas toujours 1 (tester `!= 0`) ;
+- D3D12 Video Encode n'écrit que les slices : un PPS faux se décode en bouillie
+  **sans erreur** ;
+- le 4:4:4 (AYUV) est refusé partout en D3D12 Video Encode ;
+- les surfaces de Desktop Duplication s'ouvrent en D3D12 par handle NT, pas
+  celles de Windows.Graphics.Capture.
+
+### 32.2 Pourquoi recommencer peut marcher
+
+1. **Plus de renvoi à D3D11** : l'encodeur est lui aussi en D3D12. Ce qui a tué
+   l'hybride, rendre l'image à D3D11 pour qu'un encodeur se resynchronise sur la
+   file 3D, disparaît.
+2. **La conversion sur la file DIRECT**, avec les mêmes pixel shaders que D3D11
+   (sortie identique à l'octet), au lieu d'une file COMPUTE que l'Arc préempte et
+   que l'iGPU AMD affame.
+3. **Des priorités de file mesurées** : sous HAGS, les files DIRECT/COMPUTE d'un
+   même créateur sont groupées et leur priorité de création est ignorée ; la file
+   HIGH de la v1 ne valait sans doute rien sur la RTX. Un `CreatorID` propre et la
+   priorité `GLOBAL_REALTIME` (le worker élevé ou SYSTEM des §30-31 tient le
+   privilège) n'ont jamais été essayés.
+4. **Sur Intel, l'encodeur est la vraie cible** : oneVPL est lent, sans
+   invalidation de référence effective, et ne peut pas monter au-dessus de son
+   débit de départ. L'Arc a le delta QP : un contrôle de débit maison devient
+   possible sans reconfigurer l'encodeur.
+5. **Le vrai jeu dès la première mesure** (RE9), jamais la charge synthétique
+   seule.
+
+### 32.3 La chaîne visée
+
+Une image, un thread, aucune file ni tampon ajouté :
+
+1. `AcquireNextFrame` sur le device D3D11 de capture ;
+2. le contexte de capture signale une fence partagée (A) ;
+3. la file de conversion D3D12 l'attend, convertit (mise à l'échelle, curseur,
+   tone map) dans l'entrée de l'encodeur, puis signale une fence (B) ;
+4. le contexte de capture attend B **sur le GPU**, puis `ReleaseFrame` : Desktop
+   Duplication ne réécrit pas la surface trop tôt, et la CPU n'attend pas ;
+5. la file d'encodage attend B, encode, puis signale C ;
+6. la CPU attend C : c'est la seule attente CPU de l'image ;
+7. le bitstream part, en-têtes compris sur une IDR.
+
+Les étapes horodatées gardent leur sens : le total hôte se compare tel quel à
+D3D11.
+
+### 32.4 Ce qui protège D3D11
+
+- Un réglage `native_video_pipeline` (`auto`, `d3d11`, `d3d12`) et un choix
+  « Avancé » dans l'admin ; `auto` suit une ligne par vendeur, qui ne bouge que
+  sur décision de Bruno : D3D11 partout au départ, Intel en D3D12 depuis le
+  28/09 (§32.9).
+- Un refus à la construction (Windows.Graphics.Capture, pont inter-GPU, 4:4:4,
+  étage logiciel, codec pas encore fait…) repasse en D3D11 pour cette
+  construction, avec la raison au journal. Un échec en cours de stream repasse en
+  D3D11 pour la session, en une image clé, sans couper le stream.
+- Le chemin D3D11 passe d'abord derrière une interface (`WindowsVideoPipeline`)
+  **sans changement de comportement**, prouvé au banc avant toute ligne D3D12
+  (porte G0).
+
+### 32.5 Les portes
+
+G0 (refactor sans régression), G1 (sondes : files, poignée de main DDA,
+encodeurs), G2 (bout en bout avec D3D12 Video Encode), G3 (contrôle de débit
+maison), G4 (NVENC et AMF en entrée D3D12). Chaque porte donne un rapport
+chiffré et une recommandation ; Bruno tranche. Les résultats seront consignés
+ici, porte par porte.
+
+**Concrètement, pour l'utilisateur** : rien ne change tant qu'un type de GPU n'a
+pas été basculé. Ensuite, sur un PC Intel, le plus répandu, l'image doit partir
+plus vite de l'hôte quand un jeu charge la carte, le débit pouvoir remonter
+au-dessus de celui du départ, et une perte réseau se réparer sans l'à-coup d'une
+image clé, ce qui se sent surtout par Internet. Sur NVIDIA, l'objectif est de ne
+rien perdre face à un chemin déjà très bon ; sur AMD, la mesure dira. Si quelque
+chose échoue, le stream repasse seul en D3D11 sans se couper, et l'overlay comme
+le journal disent quel chemin tourne et pourquoi.
+
+### 32.6 Linux : la route scindée, et la règle qui encadre Vulkan (28/09/2026)
+
+Phase 13 du plan : la même forme de chaîne sous Linux, en Vulkan. Les sondes
+(banc §8o) ont réordonné le travail. Sous un jeu qui sature le 780M, la
+conversion GL d'aujourd'hui attend deux images du jeu (46 ms) ; une file compute
+Vulkan tourne à côté du jeu (10,6 ms sans privilège, 8,0 en HIGH). Le gain tient
+à la file, pas à l'encodeur. D'où la **route scindée**, décidée le 28/09 (plan
+§9-17) : la conversion passe en Vulkan compute, l'encodeur reste le VA-API
+d'aujourd'hui.
+
+**Les deux bouts, prouvés avant d'écrire le moteur.**
+- L'entrée : le tampon KMS (DCC d'AMD en trois plans) s'importe dans Vulkan avec
+  son modificateur, sa barrière implicite attendue en `sync_file`, et se lit au
+  pixel près comme EGL le lit (§8o.2).
+- La sortie : la surface d'entrée de VA-API est linéaire sur AMD ; Vulkan écrit
+  ses deux plans en images de stockage R8 et RG8, et VA-API relit exactement ce
+  qui a été écrit (§8o.4). Ni copie, ni changement de propriétaire de la surface.
+
+**Le code.**
+- `platform/linux/vulkan/VulkanDevice` : le chargeur ouvert par `dlopen`, le
+  périphérique du GPU trouvé par son nœud de rendu (`VK_EXT_physical_device_drm`),
+  une file compute, en HIGH seulement si le processus tient `CAP_SYS_NICE` et
+  qu'une soumission le prouve — une file d'encodage en HIGH se crée sur le 780M
+  et le noyau refuse sa première soumission (§8o.3).
+- `convert/linux/VulkanConvert` : le jumeau de `GlConvert`, même interface,
+  shaders transcrits ligne à ligne (`shaders/vk_scale.comp`, `vk_nv12.comp`,
+  compilés en SPIR-V par `glslangValidator` au build). Sur le 780M, les deux
+  écrivent la même image à une valeur près au plus, en 1:1, en Lanczos-2 et en
+  bilinéaire (`test_vulkan_convert`).
+- `core/LinuxRouteChoice.h` : le choix de la chaîne, pur et testé, à chaque
+  construction. La clé de banc, puis le réglage, puis une table par vendeur ; la
+  table dit GL partout tant qu'un banc et Bruno n'ont pas bougé une ligne (AMD
+  l'a été le 28/09, §32.8). La clé `convert=vulkan` prend la route scindée.
+
+**La règle (Bruno, 28/09) : jamais Vulkan forcé.** Ce qui ne peut pas tourner
+est refusé, nommé, et la chaîne descend d'un cran — Vulkan Video → VA-API → CPU,
+Vulkan compute → GL. Une conversion Vulkan qui ne démarre pas (pas de chargeur,
+pas de Vulkan 1.3, un modificateur qu'elle n'importe pas) laisse GL convertir dès
+le départ ; une qui lâche en plein stream (périphérique perdu, tampon refusé) est
+remplacée par GL sur l'image même, avec une image clé, pour le reste de la
+session. La route, sa raison et le refus éventuel vont au journal et dans
+`SessionInfo` (overlay, banc). Pour l'encodeur Vulkan à venir, le banc a montré
+que ni le numéro du micrologiciel ni la version de Mesa ne disent « fiable »
+(§8o.3) : il ouvrira sur une preuve au pixel et, s'il l'échoue, laissera VA-API.
+
+**Concrètement, pour l'utilisateur** : rien ne change par défaut sous Linux tant
+que le banc n'a pas mesuré la route et que Bruno n'a pas basculé AMD. Ensuite, sur
+un PC Linux AMD, l'image n'attendra plus derrière le jeu pour être convertie. Et
+si la carte ou son pilote ne s'y prêtent pas, le stream reste sur le chemin
+d'aujourd'hui, sans coupure.
+
+### 32.7 Linux : la chaîne Vulkan Video, prise sur la parole du pixel (28/09/2026)
+
+C13.5 du plan : la chaîne entière en Vulkan, sur un seul périphérique. La capture
+KMS est convertie en compute directement dans l'image d'entrée de l'encodeur,
+puis encodée en HEVC par Vulkan Video. Une copie par image, le flux.
+
+**Le code.**
+- `encode/linux/VulkanHevcEncoder` : le jumeau Linux de `VideoEncode12`.
+  - Il possède son entrée : une image NV12 aux dimensions codées (des CTB
+    entiers, la leçon de C5.3) et deux vues de plan, R8 et RG8, que la
+    conversion écrit en stockage. Entre deux images, elle reste en
+    `VIDEO_ENCODE_SRC`. Les rangées et colonnes hors de l'image sont noires,
+    écrites une fois.
+  - L'encodage attend la conversion sur le GPU, par le sémaphore de la
+    dernière soumission (`VulkanDevice::afterLast`) : c'est lui qui rend
+    visibles les écritures de la file compute. La CPU n'attend que le flux.
+  - Nos en-têtes en structures StdVideo, les octets ceux du pilote
+    (`vkGetEncodedVideoSessionParametersKHR`), posés juste devant les
+    tranches : une IDR sort d'un seul tenant. Les premières tranches sont
+    relues avec ces en-têtes (la garde de `VideoEncode12`).
+  - **La profondeur de transformée complète** (CtbLog2SizeY − MinTbLog2SizeY) :
+    le micrologiciel d'AMD découpe jusque-là quoi que dise le SPS, et à 2 toutes
+    les P qui bougeaient étaient fausses sur le 780M (banc §8o.3).
+  - `HevcDpb` : quatre images gardées, une perte guérie par un delta. Le CBR du
+    pilote avec le VBV commun (`RateControl.h`), changé en vol par une commande
+    de contrôle, sans remise à zéro.
+  - La file d'encodage reste à la priorité par défaut : en HIGH, le noyau 6.8
+    refuse sa première soumission (§8o.3).
+- `encode/linux/VulkanHevcDecoder` : les yeux de la preuve. Un décodeur HEVC
+  Vulkan Video juste assez large pour les flux du moteur (I et P, ensembles de
+  références propres à la tranche, ni tuiles ni listes de quantification). Tout
+  le reste est refusé par son nom. Sur VCN 4, la sortie est distincte du DPB,
+  et RADV lit l'unité d'accès entière (lu dans Mesa, sous licence MIT).
+- `encode/linux/VulkanHevcProof` : la preuve au pixel.
+  - Une courte séquence qui bouge (les images du labo, celles qui avaient
+    attrapé la faute) passe par l'encodeur du produit, à la taille du stream.
+    En route, les images 4 et 5 sont perdues et guéries depuis la 3, et une
+    image clé est demandée.
+  - Le décodeur Vulkan du même GPU relit le tout, comparé image par image et
+    rangée de CTB par rangée de CTB.
+  - Juste : au moins 22 dB par image et 18 dB par rangée. Un flux juste en
+    donne 37 à 40, les P fausses du §8o.3 en donnaient 5.
+- `core/LinuxRouteChoice.h` : la preuve ne tourne que là où la chaîne serait
+  prise (`linuxRouteWantsVulkanVideo`). La table des vendeurs dit VA-API
+  partout, donc personne n'est obligé de prouver quoi que ce soit.
+
+**Un import par conversion.** RADV 26 envoie toute la mémoire du périphérique
+avec chaque soumission : sa liste de BO est globale. Un tampon d'affichage gardé
+importé (le cache de `VulkanConvert` en gardait jusqu'à quatre) faisait attendre
+chaque soumission, encodage compris, que le compositeur finisse l'image suivante
+du jeu : 15 ms d'encodage sous charge au lieu de 2. Le tampon n'est donc plus
+gardé d'une image à l'autre. Il est importé pour la conversion et relâché dès
+la fin de l'attente, pour 0,02 à 0,04 ms (banc §8o.6).
+
+**Le verdict, gardé.** Une preuve coûte 70 à 260 ms sur le 780M. Le verdict va
+dans le cache de l'utilisateur (`$XDG_CACHE_HOME/MoonlightWeb/vulkan-video-proofs.txt`).
+Il est rangé sous ce qui pourrait le changer : le GPU (UUID), le pilote et sa
+version, le noyau, le micrologiciel VCN (lisible par tous sous amdgpu), la
+taille, et la révision de l'encodeur du moteur. Seule une comparaison est
+gardée ; une preuve qui n'a pas pu tourner est reposée la fois suivante.
+
+**La règle de Bruno, appliquée au bout.**
+- Un pilote qui ne montre pas d'encodeur (le Mesa 23.2 d'Ubuntu 22.04) est
+  refusé par son nom, sans même ouvrir de périphérique.
+- Un pilote qui code autre chose que son SPS échoue la preuve.
+  `MW_VK_ENCODE_DEPTH=2` rejoue la faute du §8o.3 pour les tests.
+- Une chaîne qui ne démarre pas laisse VA-API encoder dès le départ.
+- Une chaîne qui lâche en plein stream, à la conversion comme à l'encodage,
+  cède la place à VA-API sur l'image même, avec une image clé, pour le reste de
+  la session.
+
+La raison est chaque fois dans le journal et dans `SessionInfo`. Testé sur le
+780M avec les deux pilotes (`test_vulkan_hevc`, `test_linux_session`).
+
+**Concrètement, pour l'utilisateur** : rien ne change par défaut. La chaîne
+Vulkan n'est prise que si on la demande (réglage, clé de banc), en attendant
+que le banc tranche par vendeur. Même demandée, elle ne sert que sur une carte
+dont le pilote a prouvé, image à l'appui, qu'il encode juste. Sinon le stream
+part sur VA-API comme aujourd'hui, et la raison est écrite dans le journal.
+
+### 32.8 Linux : la route scindée par défaut sur AMD (décision de Bruno, 28/09/2026)
+
+Plan §9-20, sur la foi du banc §8o.5. Sous un jeu qui sature le 780M, la
+conversion GL attendait le jeu : 16 images captées par seconde sur 45, et 38 ms
+de la présentation à l'image encodée. La file compute de Vulkan tournait à côté
+du jeu : 44 images, 8 ms. Au repos, elle gagnait encore 0,3 ms.
+
+**Ce qui change.** La ligne AMD de la table des vendeurs
+(`autoLinuxConversion`) passe à Vulkan compute devant VA-API. L'encodeur reste
+VA-API : la chaîne Vulkan Video reste derrière le réglage jusqu'à G5 (§9-21),
+et `auto` ne la prend jamais.
+
+**Ce qui ne change pas.**
+- Intel et NVIDIA gardent GL.
+- Le portail garde GL, même sur AMD. Seul l'import du tampon KMS a été mesuré
+  au pixel (§8o.2) ; les tampons de PipeWire attendent leur banc (C13.3).
+- `vaapi` choisi dans l'admin, ou `pipeline=vaapi` au banc, reprend la chaîne
+  d'avant, GL devant VA-API. C'est le retour arrière, sans clé de banc.
+- La clé `convert=gl|vulkan` passe devant tout, pour les bancs.
+
+**Le repli, en deux marches au besoin.** Une conversion Vulkan qui ne démarre
+pas (pas de chargeur, pas de Vulkan 1.3) laisse GL convertir dès le départ.
+Une qui lâche en plein stream (périphérique perdu, tampon refusé) cède la place
+à GL sur l'image même. Nouveau depuis cette décision : sur AMD, la chaîne
+Vulkan Video qui lâche descend d'abord sur la route scindée, qui peut refuser
+le même tampon. La session redescend alors jusqu'à GL, toujours sur la même
+image, au lieu de couper le stream (`convertPicture`). La raison est au
+journal ; `refused` dit qu'une conversion demandée n'a pas pu tourner.
+
+**Concrètement, pour l'utilisateur** : sur un PC Linux à carte AMD, rien à
+régler. Sous un jeu qui occupe tout le GPU, le stream capte toutes les images
+du jeu au lieu d'une sur trois, avec 8 ms de retard au lieu de 38. Si la carte
+ou son pilote ne s'y prêtent pas, le stream reprend l'ancien chemin sans
+coupure, et « VA-API » dans l'admin y revient à la main.
+
+### 32.9 Windows : Intel en D3D12 par défaut (décision de Bruno, 28/09/2026)
+
+Plan §9-23, sur la foi de G3 (§8n.6 à §8n.10 du banc) et du test de Bruno
+(C5.7). Sur l'Arc, par Internet depuis un Mac, le bureau passe de 12,0 à 6,0 ms
+sur l'hôte, et de 63,6 à 47,7 ms du clic au photon (médianes). Sous RE9, le jeu
+tient 30 à 35 i/s dans le stream en D3D12, contre 25 à 30 en D3D11, qui saute en
+plus des images. Sur le N95, D3D12 est plus rapide au repos (9,5 ms contre
+13,2) et égal sous une charge qui sature l'iGPU.
+
+**Ce qui change.** La ligne Intel (oneVPL) de la table des vendeurs
+(`autoVideoPipeline`) passe à D3D12 : conversion sur la file DIRECT, D3D12
+Video Encode HEVC, contrôle de débit maison. L'overlay lit « D3D12 VE
+(Intel) ».
+
+**Ce qui ne change pas.**
+- NVIDIA et AMD gardent D3D11. Sur la RTX, VE met 21 ms là où NVENC en met
+  environ 2 ; l'iGPU AMD perd 6,7 à 8,1 ms au repos (G2). Leur voie D3D12
+  passe par leurs SDK en entrée D3D12 (phase 7, G4).
+- `d3d11` choisi dans l'admin, ou `pipeline=d3d11` au banc, reprend la chaîne
+  d'avant. C'est le retour arrière, sans clé de banc.
+- Ce que la route D3D12 ne porte pas encore reste en D3D11, pour la
+  construction concernée : H.264 (un navigateur sans HEVC), AV1, 4:4:4,
+  Windows.Graphics.Capture, pont inter-GPU. Le journal dit pourquoi, et
+  l'overlay lit « oneVPL (D3D11) » : `refused` vaut aussi quand c'est la table
+  qui a demandé D3D12.
+
+**Windows 10.** Sans `ID3D12VideoDevice3`, il n'y a pas de D3D12 Video Encode.
+La première construction le découvre avant de faire la conversion, et le
+processus s'en souvient, un worker étant une session. Les constructions
+suivantes choisissent D3D11 d'emblée, au lieu de faire puis défaire une chaîne
+D3D12 à chaque reconstruction.
+
+**Concrètement, pour l'utilisateur** : sur un PC à carte ou à puce graphique
+Intel, rien à régler. L'image part plus vite de l'hôte (deux fois plus vite
+sur une Arc), et un jeu garde sa cadence dans le stream ; par Internet, le clic
+arrive à l'écran environ 16 ms plus tôt. Si le PC ne s'y prête pas (Windows 10, un navigateur
+sans HEVC), le stream prend l'ancien chemin sans coupure, et « D3D11 » dans
+l'admin y revient à la main.
+
+### 32.10 Windows : la robustesse, mise à l'épreuve (phase 8, 28/09/2026 →)
+
+Depuis §32.9, D3D12 porte les streams d'Intel par défaut. La phase 8 vérifie
+sa promesse avant la fusion de la branche, sur l'Arc et le N95.
+
+**Les pannes injectées (C8.1).** `MW_D3D12_FAULT=<panne>@N`, dans
+l'environnement du banc ou d'un worker, provoque une panne à la N-ième
+conversion de la chaîne :
+- `encode` : l'image est jetée comme une erreur du pilote ;
+- `convert` : la liste est refusée ;
+- `timeout` : la file attend une fence que personne ne signale, jusqu'à ce que
+  la chaîne abandonne ;
+- `removed` : `ID3D12Device5::RemoveDevice`, comme un TDR ;
+- `open` : la N-ième chaîne du processus ne s'ouvre pas.
+
+Même raison d'être que `MW_CAPTURE=wgc` (§17) : un chemin de secours jamais
+parcouru pourrit. Au banc de l'Arc (§8n.11 du banc), chaque panne finit en
+D3D11 sur une keyframe, la seule hors de la première, avec la panne et la
+chaîne choisie au journal. Le flux ne compte aucune erreur de décodage. Le
+trou sans image dure 0,6 s : la duplication rouverte, puis l'encodeur D3D11
+ouvert. Il dure 3,6 s pour `timeout`, dont les 3 s qui séparent un GPU perdu
+d'un GPU occupé. `open` donne D3D11 dès le départ, raison à l'appui. Le banc
+écrit la chaîne de chaque image dans son CSV, et résume la bascule.
+
+**Le retour à la duplication (C8.3 bis).** Un worker qui n'est pas SYSTEM
+passe sur WGC, donc en D3D11, quand la duplication est refusée derrière un
+écran verrouillé. Il y restait pour la fin de la session (G2). Il revient
+maintenant à DDA dès que le bureau de l'utilisateur est de retour, et à D3D12
+avec (§17.1). Au banc de l'Arc, avec `MW_DDA_REFUSE=3+4` : la duplication est
+perdue à 3 s, WGC prend le relais en D3D11 (0,7 s sans image), puis D3D12
+revient 0,4 s après la fin du refus (0,5 s sans image). Chaque bascule se fait
+sur une keyframe, sans erreur de décodage (§8n.12 du banc).
+
+**Le pilote, et les pilotes exclus (C8.3).** La sonde lit la version du
+pilote de chaque GPU. Elle utilise `IDXGIAdapter::CheckInterfaceSupport` sur
+`IDXGIDevice` : depuis WDDM 2.3, les parts D3D9, D3D11 et D3D12 d'un paquet
+de pilote partagent un même numéro. La version s'affiche à trois endroits :
+- la ligne de session du journal (« on Intel(R) Arc(TM) A380 Graphics
+  (driver 32.0.101.7088) ») ;
+- `/api/native/status` (`gpu_driver`) ;
+- le JSON de la sonde en session console.
+
+Une liste par vendeur et par plage de versions (`d3d12DriverExclusions`, dans
+`VideoPipeline.h`) tient la route D3D12 à l'écart d'un pilote fautif. Le choix
+de chaîne le refuse alors comme les autres cas, raison à l'appui, et
+`video_pipeline_auto` lit `d3d11` avec `video_pipeline_excluded`. La liste est
+vide : une ligne n'y entre qu'avec une panne que les gardes de la route
+n'attrapent pas déjà (garde d'en-têtes, délai des fences, retour en D3D11), et
+avec sa preuve.
+
+**Les scénarios (C8.2).** Le banc capture un écran virtuel rendu par l'Arc
+pendant que son mode et son HDR changent (§8n.13 du banc) :
+- quatre modes, dont un en 4:3 ;
+- le HDR activé puis coupé sous une session SDR (le bureau passe en FP16, la
+  conversion D3D12 fait le tone mapping) ;
+- le HDR coupé puis réactivé sous une session HDR (elle se reconstruit en SDR) ;
+- deux sessions à la fois sur deux écrans de l'Arc, en deux processus comme
+  deux workers.
+
+Tout reste en D3D12 : chaque redémarrage de capture reconstruit la chaîne sur
+une keyframe, et aucun flux n'a d'erreur de décodage. Le passage de la
+duplication à WGC et retour est celui de C8.3 bis. Pendant 30 min sous RE9,
+sur l'Arc : 42 053 images en D3D12, sans perte ni repli, et une mémoire plate
+(221 Mo privés, 50 Mo de VRAM, du début à la fin).
+
+**Ce que la phase 8 a trouvé : le HDR de l'UHD d'un N95.** Une session HDR en
+D3D12 y perdait le périphérique dès sa première image (`DEVICE_HUNG`). Le
+repli l'a rattrapée : D3D11, HDR compris, sans erreur. Mais le GPU se
+réinitialisait à chaque session. La cause est `ClearRenderTargetView` sur un
+plan de P010 : le pilote 32.0.101.7088 le prend mal, alors que le dessin dans
+ce même plan passe. Le convertisseur D3D12 dessine donc son noir, par un
+`PsFill` qui rend les mêmes octets partout (§8n.14 du banc). Le test
+`color_convert12_gpu` rejoue ces étapes sur chaque vrai GPU, et plus seulement
+sur WARP.
+
+**Le test de Bruno (C8.4), sur l'édition dev installée.** Écran verrouillé
+depuis le stream, puis déverrouillé en tapant le PIN dans le stream, et un
+stream HDR sur l'écran virtuel : l'overlay reste sur « D3D12 VE (Intel) ». Le
+premier essai a d'abord montré que le worker SYSTEM n'avait jamais servi, en
+v0.3.1 non plus (§31.7, `f1e8e8e3`). Une fois corrigé, la duplication se
+rouvre sur le bureau `Winlogon` et la chaîne D3D12 se reconstruit des deux
+côtés de la bascule, sans passer par WGC ni D3D11 (§8n.15 du banc).
+
+**Concrètement, pour l'utilisateur** : si la carte graphique décroche en
+plein stream (pilote qui plante ou se met à jour, GPU bloqué), l'image se fige
+une demi-seconde, trois secondes et demie au pire, puis repart d'elle-même
+par l'ancien chemin, sans rien à relancer. Un PC verrouillé se déverrouille
+depuis le stream, comme avec Parsec, ce que la v0.3.1 promettait sans le
+tenir. Et là où le worker ne tourne pas en SYSTEM (banc, `--dev`), un écran
+verrouillé ne fait plus perdre le chemin rapide jusqu'à la fin du stream.
+
+### 32.11 Le scaler matériel d'Intel, mesuré et écarté (§9-15, 28/09/2026)
+
+Sur un iGPU Intel saturé par un jeu, la conversion attend le jeu, l'encodeur
+non : il tourne sur le moteur vidéo (§8n.8 du banc). D3D12 Video Process met
+le scaler de ce moteur (SFC) à portée, et la sonde `queues` du labo l'a mesuré
+sur le N95 (§8n.16 du banc).
+
+Il ne tient pas sa promesse. Sa file attend le jeu comme la nôtre, environ
+10 ms sous charge, même en `GLOBAL_REALTIME`, et sa latence n'est pas meilleure
+que celle de nos shaders en bilinéaire (11,2 contre 10,9 ms). Au repos, il est
+plus lent (4,0 contre 2,9 ms). Il rend quelques images au jeu, mais plus dès
+que le pointeur est composé : la composition à deux flux repasse par le moteur
+3D. Il ne sait pas le HDR, ni le pointeur en inversion. Sa réduction, en
+gamma, tient entre notre bilinéaire et notre Lanczos-2.
+
+Pas de route SFC, donc : la condition posée par Bruno (« seulement si la sonde
+ne voit plus le jeu ») n'est pas remplie. La sonde reste au labo (`vp`,
+`vp-pointer`, `--picture`, `-Set vp` dans la campagne) pour un autre GPU ou un
+autre pilote.
+
+**Concrètement, pour l'utilisateur** : rien ne change. Sur un PC portable à
+puce Intel où un jeu occupe toute la carte graphique, l'image du stream reste
+préparée par le même chemin, parce que le circuit spécialisé d'Intel, mesuré,
+fait la queue derrière le jeu tout autant et n'irait pas plus vite.

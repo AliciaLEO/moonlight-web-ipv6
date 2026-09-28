@@ -53,6 +53,13 @@ struct BenchSpec
     int gpu = -1;
     /// The encoder knobs under test; default = the engine's own choices.
     mw::native::EncoderTuning tuning;
+    /// The encoded stream, written as it comes; empty = not kept.
+    QString dump;
+    /// Every this many frames, the latest one is reported lost (0 = never).
+    int loseEvery = 0;
+    /// The target alternates between bitrateKbps and this, every rampSeconds.
+    int rampKbps = 0;
+    double rampSeconds = 2.0;
 };
 
 /// What one frame cost, copied out of the callback. The bytes themselves are
@@ -71,6 +78,17 @@ struct BenchRow
     int64_t submittedUs = 0;
     int64_t convertedUs = 0;
     int64_t encodedUs = 0;
+    /// GPU time of the conversion and the encode, -1 when not measured.
+    int64_t gpuConvertUs = -1;
+    int64_t gpuEncodeUs = -1;
+    /// The target the bench had set when the frame came out (ramp=).
+    int targetKbps = 0;
+    /// The rate the encoder held for it (EncodedFrame::encoderKbps), 0 when
+    /// the platform does not say.
+    int encoderKbps = 0;
+    /// The chain that made it: a D3D12 session that failed while streaming
+    /// goes on in D3D11 (MW_D3D12_FAULT puts that on the bench).
+    mw::native::VideoPipeline pipeline = mw::native::VideoPipeline::Auto;
 };
 
 const char* const kUsage =
@@ -113,11 +131,37 @@ const char* const kUsage =
     "  irdist=<frames>  oneVPL frames between intra-refresh cycle starts (with intra=1);\n"
     "                   -1 = back to back, default = four periods\n"
     "  vbv=<frames>     VBV of exactly N frames at the stream rate, no floor\n"
+    "  governor=0|1     the link governor; 0: the encoder gets bitrate= (and ramp=) as\n"
+    "                   they are — no receiver here to report on the link\n"
     "  dpb=<frames>     NVENC decoded picture buffer (default 4, for reference invalidation)\n"
     "  fallback=1|mf|mfsw|mfcpu|cpu  pretend no GPU encodes: the fallback tier (1), Media\n"
     "                   Foundation (mf), Microsoft's software transform even where a hardware\n"
     "                   one exists (mfsw), the hardware transform fed through system memory\n"
-    "                   (mfcpu), or OpenH264 (cpu) — how they get measured beside NVENC\n";
+    "                   (mfcpu), or OpenH264 (cpu) — how they get measured beside NVENC\n"
+    "the picture chain (Windows), each defaulting to the engine's own choice:\n"
+    "  pipeline=auto|d3d11|d3d12   over the setting and the vendor table\n"
+    "  conv12=direct|compute       the D3D12 conversion's queue\n"
+    "  enc12=ve|nvenc|amf          the D3D12 route's encoder\n"
+    "  rc12=driver|qp              D3D12 Video Encode's rate control; qp = the in-house one\n"
+    "  reencode=0|1                in-house rate control: a picture far over its budget is\n"
+    "                              coded again, at the QP that fits it (1); 0 sends it as is\n"
+    "  refit=0|1                   how: at two budgets by the slope learned, then the\n"
+    "                              textbook (1, the default), or at its budget by the\n"
+    "                              textbook's slope (0)\n"
+    "  interfloor=<k>|off          in-house rate control: a new picture is never believed\n"
+    "                              to cost under 1/2^k of an intra one (off: no floor)\n"
+    "  prio12=normal|high|realtime the D3D12 queues' priority (default: the GPU class's)\n"
+    "  creator12=own|default       each queue's own CreatorID, or the runtime's shared one\n"
+    "  ddasync=gpu|none|cpu        how the capture and the D3D12 read are ordered\n"
+    "  gputiming=0|1               GPU times per frame (gpu_convert_us, gpu_encode_us)\n"
+    "  strict12=0|1                end rather than run D3D11 when D3D12 was asked for\n"
+    "  (in the environment, MW_D3D12_FAULT=open|convert|timeout|removed|encode[@N]: that fault\n"
+    "  at the Nth D3D12 open or conversion — without strict12, to watch the way back to D3D11)\n"
+    "the bench's own:\n"
+    "  dump=<path>      the encoded stream as it comes out (Annex-B, or OBUs for AV1)\n"
+    "  lose=<frames>    every N frames, report the latest one lost (reference invalidation)\n"
+    "  ramp=<kbps>[@<s>]  the target alternates between bitrate= and <kbps> every <s> s\n"
+    "                   (default 2), as the rate governor would move it\n";
 
 bool parseChoice(const QString& value, mw::native::EncoderTuning::Choice& out)
 {
@@ -219,6 +263,8 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
         ok = parseChoice(value, tuning.vplLowDelayBrc);
     else if (key == "gaming")
         ok = parseChoice(value, tuning.vplGamingScenario);
+    else if (key == "governor")
+        ok = parseChoice(value, tuning.linkGovernor);
     else if (key == "aq")
         ok = parseChoice(value, tuning.spatialAq);
     else if (key == "taq")
@@ -253,6 +299,100 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
             tuning.amfQuality = mw::native::EncoderTuning::AmfQuality::Balanced;
         else if (q == "quality")
             tuning.amfQuality = mw::native::EncoderTuning::AmfQuality::Quality;
+        else
+            ok = false;
+    } else if (key == "pipeline") {
+        ok = mw::native::parseVideoPipeline(value.toStdString(), tuning.pipeline);
+    } else if (key == "conv12") {
+        using Q = mw::native::EncoderTuning::ConvertQueue12;
+        const QString q = value.toLower();
+        if (q == "direct")
+            tuning.conv12 = Q::Direct;
+        else if (q == "compute")
+            tuning.conv12 = Q::Compute;
+        else
+            ok = false;
+    } else if (key == "enc12") {
+        using E = mw::native::EncoderTuning::Encoder12;
+        const QString e = value.toLower();
+        if (e == "ve")
+            tuning.enc12 = E::VideoEncode;
+        else if (e == "nvenc")
+            tuning.enc12 = E::Nvenc;
+        else if (e == "amf")
+            tuning.enc12 = E::Amf;
+        else
+            ok = false;
+    } else if (key == "rc12") {
+        using R = mw::native::EncoderTuning::RateControl12;
+        const QString r = value.toLower();
+        if (r == "driver")
+            tuning.rc12 = R::Driver;
+        else if (r == "qp")
+            tuning.rc12 = R::Qp;
+        else
+            ok = false;
+    } else if (key == "reencode") {
+        ok = parseChoice(value, tuning.reencode12);
+    } else if (key == "refit") {
+        ok = parseChoice(value, tuning.reencodeFit12);
+    } else if (key == "interfloor") {
+        if (value.compare("off", Qt::CaseInsensitive) == 0) {
+            tuning.interFloor12 = -1;
+        } else {
+            tuning.interFloor12 = value.toInt(&ok);
+            ok = ok && tuning.interFloor12 >= 1 && tuning.interFloor12 <= 8;
+        }
+    } else if (key == "prio12") {
+        using P = mw::native::EncoderTuning::Priority12;
+        const QString p = value.toLower();
+        if (p == "normal")
+            tuning.prio12 = P::Normal;
+        else if (p == "high")
+            tuning.prio12 = P::High;
+        else if (p == "realtime")
+            tuning.prio12 = P::GlobalRealtime;
+        else
+            ok = false;
+    } else if (key == "creator12") {
+        const QString c = value.toLower();
+        if (c == "own")
+            tuning.ownCreator12 = mw::native::EncoderTuning::Choice::On;
+        else if (c == "default")
+            tuning.ownCreator12 = mw::native::EncoderTuning::Choice::Off;
+        else
+            ok = false;
+    } else if (key == "ddasync") {
+        using S = mw::native::EncoderTuning::DdaSync;
+        const QString s = value.toLower();
+        if (s == "gpu")
+            tuning.ddaSync = S::Gpu;
+        else if (s == "none")
+            tuning.ddaSync = S::None;
+        else if (s == "cpu")
+            tuning.ddaSync = S::Cpu;
+        else
+            ok = false;
+    } else if (key == "gputiming") {
+        tuning.gpuTiming = value.toInt(&ok) != 0;
+    } else if (key == "strict12") {
+        tuning.strict12 = value.toInt(&ok) != 0;
+    } else if (key == "convert") {
+        using C = mw::native::EncoderTuning::ConvertLinux;
+        const QString c = value.toLower();
+        if (c == "gl")
+            tuning.convertLinux = C::Gl;
+        else if (c == "vulkan")
+            tuning.convertLinux = C::Vulkan;
+        else
+            ok = false;
+    } else if (key == "priovk") {
+        using P = mw::native::EncoderTuning::PriorityVk;
+        const QString p = value.toLower();
+        if (p == "normal")
+            tuning.prioVk = P::Normal;
+        else if (p == "high")
+            tuning.prioVk = P::High;
         else
             ok = false;
     } else {
@@ -296,7 +436,21 @@ bool parseSpec(const QString& text, BenchSpec& spec, QString& error)
             spec.intraRefresh = value.toInt(&ok) != 0;
         else if (key == "out")
             spec.out = value;
-        else if (key == "codec") {
+        else if (key == "dump")
+            spec.dump = value;
+        else if (key == "lose") {
+            spec.loseEvery = value.toInt(&ok);
+            ok = ok && spec.loseEvery >= 2 && spec.loseEvery <= 100000;
+        } else if (key == "ramp") {
+            // <kbps>[@<seconds>]
+            const QStringList parts = value.split('@');
+            spec.rampKbps = parts[0].toInt(&ok);
+            ok = ok && spec.rampKbps >= 100 && parts.size() <= 2;
+            if (ok && parts.size() == 2) {
+                spec.rampSeconds = parts[1].toDouble(&ok);
+                ok = ok && spec.rampSeconds >= 0.1 && spec.rampSeconds <= 600;
+            }
+        } else if (key == "codec") {
             const QString c = value.toLower();
             if (c == "hevc" || c == "h265")
                 spec.codec = mw::native::Codec::Hevc;
@@ -456,12 +610,31 @@ int runNativeBenchCommand(const QString& specText)
     rows.reserve(static_cast<size_t>(spec.seconds) * 300);
     std::atomic<bool> ended{false};
     std::string endReason;
+    // What the loop below reads and moves: the newest frame (lose=) and the
+    // target (ramp=), stamped on each row.
+    std::atomic<bool> anyFrame{false};
+    std::atomic<uint32_t> latestFrame{0};
+    std::atomic<int> targetKbps{spec.bitrateKbps};
+
+    // The stream as it comes out, for ffmpeg to check. Written from the
+    // callback once the frame's stamps are taken: it costs the next frame a
+    // copy into the OS cache and nothing that is measured.
+    QFile dumpFile(spec.dump);
+    if (!spec.dump.isEmpty() && !dumpFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        err << "native-bench: cannot write " << spec.dump << ": " << dumpFile.errorString() << "\n";
+        err.flush();
+        return 1;
+    }
 
     std::string error;
+    // Set before start(), read by the callback on the session's thread — the
+    // one that writes the session's info.
+    mw::native::Session* live = nullptr;
     std::unique_ptr<mw::native::Session> session = mw::native::NativeHost::createSession(
         config,
         [&](const mw::native::EncodedFrame& f) {
             BenchRow row;
+            if (live) row.pipeline = live->info().videoPipeline;
             row.frameNumber = f.frameNumber;
             row.keyframe = f.keyframe;
             // A re-send stamps present, captured and submitted with the same
@@ -474,8 +647,16 @@ int runNativeBenchCommand(const QString& specText)
             row.submittedUs = f.submittedUs;
             row.convertedUs = f.convertedUs;
             row.encodedUs = f.encodedUs;
+            row.gpuConvertUs = f.gpuConvertUs;
+            row.gpuEncodeUs = f.gpuEncodeUs;
+            row.targetKbps = targetKbps.load();
+            row.encoderKbps = f.encoderKbps;
+            latestFrame.store(f.frameNumber);
+            anyFrame.store(true);
             std::lock_guard<std::mutex> lock(rowsMutex);
             rows.push_back(row);
+            if (dumpFile.isOpen())
+                dumpFile.write(reinterpret_cast<const char*>(f.data), static_cast<qint64>(f.size));
         },
         nullptr, nullptr, nullptr,
         [&](const std::string& reason) {
@@ -489,6 +670,7 @@ int runNativeBenchCommand(const QString& specText)
         err.flush();
         return 1;
     }
+    live = session.get();
     if (!session->start(error)) {
         err << "native-bench: could not start the session: " << QString::fromStdString(error)
             << "\n";
@@ -500,24 +682,76 @@ int runNativeBenchCommand(const QString& specText)
     out << "native-bench: " << QString::fromStdString(info.gpuName) << " · "
         << mw::native::toString(info.encoder) << " " << mw::native::toString(info.codec)
         << (info.yuv444 ? " 4:4:4" : " 4:2:0") << (info.hdr ? " HDR (BT.2020 PQ)" : " SDR") << " · "
-        << info.width << "x" << info.height << " · fps "
-        << (info.fps > 0 ? QString::number(info.fps) : QString("display")) << " · "
+        << info.width << "x" << info.height << " · capture " << mw::native::toString(info.capture)
+        << " · fps " << (info.fps > 0 ? QString::number(info.fps) : QString("display")) << " · "
         << spec.bitrateKbps << " kbps" << (info.intraRefresh ? " · intra-refresh" : "") << " · "
         << spec.seconds << " s on " << QString::fromStdString(display->label)
         << (info.crossGpuCopy ? " · cross-GPU copy" : "")
         << (spec.tuning.isDefault() ? QString()
                                     : " · " + QString::fromStdString(spec.tuning.describe()))
         << "\n";
+    // The chain the pictures take (Windows): a D3D12 row must be one.
+    const mw::native::VideoPipeline pipeline = info.videoPipeline;
+    if (pipeline != mw::native::VideoPipeline::Auto)
+        out << "pipeline        " << mw::native::toString(pipeline) << " · "
+            << QString::fromStdString(info.videoRoute) << " · "
+            << QString::fromStdString(info.videoPipelineReason) << "\n";
     out.flush();
+    if (spec.tuning.strict12 && spec.tuning.pipeline == mw::native::VideoPipeline::D3d12 &&
+        pipeline != mw::native::VideoPipeline::D3d12) {
+        err << "native-bench: strict12: D3D12 was asked for and the session runs "
+            << mw::native::toString(pipeline)
+            << (info.videoPipelineReason.empty()
+                    ? QString()
+                    : " (" + QString::fromStdString(info.videoPipelineReason) + ")")
+            << "\n";
+        err.flush();
+        session->stop();
+        return 1;
+    }
 
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(spec.seconds);
-    while (std::chrono::steady_clock::now() < deadline && !ended.load())
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    // lose= and ramp= act between frames, so the loop wakes often for them.
+    const auto started = std::chrono::steady_clock::now();
+    const auto deadline = started + std::chrono::seconds(spec.seconds);
+    const auto rampStep = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+        std::chrono::duration<double>(spec.rampSeconds));
+    auto nextStep = started + rampStep;
+    uint32_t nextLoss = static_cast<uint32_t>(spec.loseEvery);
+    int losses = 0, steps = 0;
+    bool low = false;
+    const bool driving = spec.loseEvery > 0 || spec.rampKbps > 0;
+    while (std::chrono::steady_clock::now() < deadline && !ended.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(driving ? 2 : 50));
+        if (spec.loseEvery > 0 && anyFrame.load()) {
+            const uint32_t latest = latestFrame.load();
+            if (latest >= nextLoss) {
+                session->invalidateReference(latest);
+                ++losses;
+                nextLoss = latest + static_cast<uint32_t>(spec.loseEvery);
+            }
+        }
+        if (spec.rampKbps > 0 && std::chrono::steady_clock::now() >= nextStep) {
+            low = !low;
+            const int kbps = low ? spec.rampKbps : spec.bitrateKbps;
+            session->setTargetBitrate(kbps);
+            targetKbps.store(kbps);
+            ++steps;
+            nextStep += rampStep;
+        }
+    }
     session->stop();
+    // A D3D12 session that failed while streaming went on in D3D11: its rows
+    // after that are not D3D12 ones, and the summary says so.
+    const mw::native::SessionInfo endInfo = session->info();
     session.reset();
+    if (dumpFile.isOpen()) dumpFile.close();
     if (ended.load())
         err << "native-bench: the session ended early: " << QString::fromStdString(endReason)
             << "\n";
+    if (endInfo.videoPipeline != pipeline)
+        err << "native-bench: the session went from " << mw::native::toString(pipeline) << " to "
+            << mw::native::toString(endInfo.videoPipeline)
+            << " while running: " << QString::fromStdString(endInfo.videoPipelineReason) << "\n";
 
     // ── CSV, one row per frame ──────────────────────────────────────────────
     QString path = spec.out;
@@ -534,14 +768,17 @@ int runNativeBenchCommand(const QString& specText)
         QTextStream csv(&file);
         csv << "frame,keyframe,captured,bytes,avg_qp,t0_present_us,t1_captured_us,"
                "t1b_submitted_us,t2_converted_us,t3_encoded_us,acquire_us,convert_us,"
-               "encode_us,host_total_us\n";
+               "encode_us,host_total_us,gpu_convert_us,gpu_encode_us,target_kbps,encoder_kbps,"
+               "pipeline\n";
         for (const BenchRow& r : rows) {
             csv << r.frameNumber << ',' << (r.keyframe ? 1 : 0) << ',' << (r.captured ? 1 : 0)
                 << ',' << static_cast<qulonglong>(r.bytes) << ',' << r.avgQp << ',' << r.presentUs
                 << ',' << r.capturedUs << ',' << r.submittedUs << ',' << r.convertedUs << ','
                 << r.encodedUs << ',' << (r.capturedUs - r.presentUs) << ','
                 << (r.convertedUs - r.submittedUs) << ',' << (r.encodedUs - r.convertedUs) << ','
-                << (r.encodedUs - r.presentUs) << '\n';
+                << (r.encodedUs - r.presentUs) << ',' << r.gpuConvertUs << ',' << r.gpuEncodeUs
+                << ',' << r.targetKbps << ',' << r.encoderKbps << ','
+                << mw::native::toString(r.pipeline) << '\n';
         }
     }
     file.close();
@@ -551,7 +788,7 @@ int runNativeBenchCommand(const QString& specText)
     // would read as a 0 µs acquire. Bytes and QP over everything the encoder
     // produced, keyframes and re-sends included — that is what goes on the wire.
     mw::native::StageStats stages;
-    mw::native::LatencyHistogram bytesAll, bytesDelta, qp;
+    mw::native::LatencyHistogram bytesAll, bytesDelta, qp, gpuConvert, gpuEncode;
     int captured = 0, keyframes = 0, resends = 0;
     int64_t firstUs = 0, lastUs = 0;
     for (const BenchRow& r : rows) {
@@ -559,6 +796,8 @@ int runNativeBenchCommand(const QString& specText)
         bytesAll.add(static_cast<int64_t>(r.bytes));
         if (!r.keyframe) bytesDelta.add(static_cast<int64_t>(r.bytes));
         if (r.avgQp >= 0) qp.add(r.avgQp);
+        if (r.gpuConvertUs >= 0) gpuConvert.add(r.gpuConvertUs);
+        if (r.gpuEncodeUs >= 0) gpuEncode.add(r.gpuEncodeUs);
         if (!r.captured) {
             resends++;
             continue;
@@ -584,6 +823,17 @@ int runNativeBenchCommand(const QString& specText)
 
     out << "frames          " << rows.size() << " (" << captured << " captured, " << resends
         << " re-sent, " << keyframes << " keyframes)\n";
+    // A chain that changed while running (MW_D3D12_FAULT): after which frame,
+    // how long the viewer went without a picture, and whether the first one
+    // after it decodes on its own.
+    for (size_t i = 1; i < rows.size(); ++i) {
+        if (rows[i].pipeline == rows[i - 1].pipeline) continue;
+        out << "pipeline change " << mw::native::toString(rows[i - 1].pipeline) << " → "
+            << mw::native::toString(rows[i].pipeline) << " after frame " << rows[i - 1].frameNumber
+            << ": " << QString::number((rows[i].encodedUs - rows[i - 1].encodedUs) / 1000.0, 'f', 1)
+            << " ms without a picture, then "
+            << (rows[i].keyframe ? "a keyframe" : "NOT a keyframe") << "\n";
+    }
     if (spanS > 0)
         out << "capture rate    " << QString::number((captured - 1) / spanS, 'f', 1) << " fps over "
             << QString::number(spanS, 'f', 1) << " s\n";
@@ -592,11 +842,22 @@ int runNativeBenchCommand(const QString& specText)
     out << "convert   ms    " << st(mw::native::Stage::Convert) << "\n";
     out << "encode    ms    " << st(mw::native::Stage::Encode) << "\n";
     out << "present→encoded " << st(mw::native::Stage::Total) << "\n";
+    if (gpuConvert.count() > 0)
+        out << "gpu convert ms  " << tail(gpuConvert, 1000.0, 2) << "  (mean / p95 / p99)\n";
+    if (gpuEncode.count() > 0)
+        out << "gpu encode ms   " << tail(gpuEncode, 1000.0, 2) << "  (mean / p95 / p99)\n";
+    if (losses > 0)
+        out << "losses          " << losses << " reported, every " << spec.loseEvery << " frames\n";
+    if (steps > 0)
+        out << "ramp            " << steps << " steps between " << spec.bitrateKbps << " and "
+            << spec.rampKbps << " kbps, every " << spec.rampSeconds << " s\n";
     out << "bytes/frame KB  " << tail(bytesAll, 1024.0, 1) << "  (deltas "
         << tail(bytesDelta, 1024.0, 1) << ")\n";
     out << "avg QP          " << tail(qp, 1.0, 1) << (qp.count() == 0 ? "  (not reported)" : "")
         << "\n";
     out << "csv             " << QDir::toNativeSeparators(path) << "\n";
+    if (!spec.dump.isEmpty())
+        out << "stream          " << QDir::toNativeSeparators(spec.dump) << "\n";
     out.flush();
     return 0;
 }

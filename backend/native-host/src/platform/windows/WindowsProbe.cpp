@@ -20,6 +20,7 @@
 #include "../../encode/OpenH264Encoder.h"
 #include "../../encode/windows/MfCapabilities.h"
 #include "../../input/windows/VigemGamepad.h"
+#include "IndirectDisplay.h"
 #include "WindowsEncoderProbe.h"
 
 #include <windows.h>
@@ -326,6 +327,19 @@ std::string describe(const std::string& deviceName, const std::string& monitorNa
     return detail;
 }
 
+/// Whether any of the adapter's outputs is on the desktop — the test the
+/// display loop of enumerate() applies to each.
+bool drivesDesktop(IDXGIAdapter1* adapter)
+{
+    ComPtr<IDXGIOutput> output;
+    for (UINT j = 0;
+         adapter->EnumOutputs(j, output.ReleaseAndGetAddressOf()) != DXGI_ERROR_NOT_FOUND; ++j) {
+        DXGI_OUTPUT_DESC desc = {};
+        if (SUCCEEDED(output->GetDesc(&desc)) && desc.AttachedToDesktop) return true;
+    }
+    return false;
+}
+
 } // namespace
 
 bool hasInteractiveSession()
@@ -390,6 +404,7 @@ Unavailability enumerate(Capabilities& caps)
 
     int nextGpuId = 0;
     int nextDisplayId = 0;
+    std::string leftOut;
 
     ComPtr<IDXGIAdapter1> adapter;
     for (UINT i = 0;
@@ -401,11 +416,34 @@ Unavailability enumerate(Capabilities& caps)
         // would only offer the user a GPU that cannot do the job.
         if (adapterDesc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) continue;
 
+        // A virtual display driver's adapter goes by the name of the GPU that
+        // renders for it, and DXGI puts its screens under that GPU. Without a
+        // screen of its own it is that GPU listed twice, whose encoders every
+        // host-list refresh and every session start would probe again: a
+        // oneVPL session each on the N95, which counted four "UHD Graphics"
+        // for three such drivers (27/09/2026). One that does carry a screen
+        // stays, as it always has — capturing and encoding there reach the
+        // same GPU (WindowsEncoderProbe.h).
+        std::wstring indirectDriver;
+        if (isIndirectDisplayOnly(adapterDesc.AdapterLuid, &indirectDriver) &&
+            !drivesDesktop(adapter.Get())) {
+            leftOut +=
+                (leftOut.empty() ? "" : ", ") +
+                narrow(indirectDriver.empty() ? adapterDesc.Description : indirectDriver.c_str());
+            continue;
+        }
+
         GpuInfo gpu;
         gpu.id = nextGpuId;
         gpu.name = narrow(adapterDesc.Description);
         gpu.vendorId = adapterDesc.VendorId;
         gpu.deviceId = adapterDesc.DeviceId;
+        // The driver's version, as Device Manager shows it. Since WDDM 2.3 the
+        // D3D9, D3D11 and D3D12 parts of a driver package share one, and
+        // asking about IDXGIDevice is the documented way to read it.
+        LARGE_INTEGER umd = {};
+        if (SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &umd)))
+            gpu.driverVersion = static_cast<uint64_t>(umd.QuadPart);
         // The LUID is how the encoder re-opens this exact adapter later. Packed
         // whole so no part of the identity is lost.
         gpu.nativeHandle =
@@ -521,6 +559,8 @@ Unavailability enumerate(Capabilities& caps)
                       (gpu ? gpu->name : "unknown GPU") + (display.hdrActive ? " [HDR]" : "") +
                       (display.primary ? " [primary]" : ""));
         }
+        if (!leftOut.empty())
+            log::info("[native] left out, no screen and no GPU of their own: " + leftOut);
     }
 
     return Unavailability::None;

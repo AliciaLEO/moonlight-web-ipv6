@@ -106,10 +106,13 @@ bool DxgiDuplication::openAdapterAndOutput(ComPtr<IDXGIAdapter1>& adapter,
 bool DxgiDuplication::start(std::string& error)
 {
     stop();
+    // A refusal is taken to pass unless it is one of those that stay.
+    m_RefusalMayPass = true;
 
     LARGE_INTEGER frequency = {};
     if (!::QueryPerformanceFrequency(&frequency) || frequency.QuadPart == 0) {
         error = "no high-resolution timer on this machine";
+        m_RefusalMayPass = false;
         return false;
     }
     m_QpcFrequency = frequency.QuadPart;
@@ -163,6 +166,7 @@ bool DxgiDuplication::start(std::string& error)
         ComPtr<IDXGIOutput1> output1;
         if (FAILED(output.As(&output1))) {
             error = "this display does not support Desktop Duplication";
+            m_RefusalMayPass = false;
             return false;
         }
         hr = output1->DuplicateOutput(m_Device.Get(), m_Duplication.ReleaseAndGetAddressOf());
@@ -176,8 +180,10 @@ bool DxgiDuplication::start(std::string& error)
             error = "Desktop Duplication is not supported for this display";
         else
             error = "could not start Desktop Duplication (" + hresultToString(hr) + ")";
+        m_RefusalMayPass = hr != DXGI_ERROR_UNSUPPORTED;
         return false;
     }
+    m_RefusalMayPass = false;
 
     DXGI_OUTDUPL_DESC duplDesc = {};
     m_Duplication->GetDesc(&duplDesc);
