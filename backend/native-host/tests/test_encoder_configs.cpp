@@ -8,6 +8,7 @@
 #include "encode/ConfigFingerprint.h"
 #include "encode/windows/AmfEncoder.h"
 #include "encode/windows/NvencEncoder.h"
+#include "encode/windows/d3d12/NvencEncoder12.h"
 #include "mw/native/NativeHost.h"
 #include "platform/windows/d3d12/D3d12Device.h"
 
@@ -32,6 +33,11 @@
 // The lines this prints are the proof of an extraction that must not change a
 // setting (plan pipeline-video-d3d12-v2, C7.1 and C7.3): the same lines before
 // and after, row for row. A machine without the vendor prints nothing for it.
+//
+// The D3D12 encoders (C7.2, C7.4) open the same rows beside them — 4:4:4
+// aside, which the D3D12 chain does not take — and must hand their drivers
+// the very configuration the D3D11 ones do: the same fingerprint, or a test
+// failure.
 
 #if defined(_WIN32)
 using namespace mw::native;
@@ -164,6 +170,24 @@ std::string openD3d11(EncoderApi api, ID3D11Device* device, const Row& row, bool
     return "refused: " + error;
 }
 
+/// The same for the D3D12 encoder of @p api, on @p device.
+std::string openD3d12(EncoderApi api, const std::shared_ptr<d3d12::D3d12Device>& device,
+                      const Row& row, bool& opened)
+{
+    std::string error;
+    opened = false;
+    if (api == EncoderApi::Nvenc) {
+        auto encoder = std::make_unique<encode::NvencEncoder12>();
+        opened = encoder->init(device, row.codec, row.width, row.height, row.fps, row.kbps, row.hdr,
+                               row.intraRefresh, row.tuning, error);
+        const uint32_t fingerprint = encoder->configFingerprint();
+        encoder->stop();
+        if (opened) return encode::ConfigFingerprint::text(fingerprint);
+        return "refused: " + error;
+    }
+    return "";
+}
+
 } // namespace
 #endif
 
@@ -187,12 +211,24 @@ void run_encoder_configs_tests()
         }
         ++vendors;
         std::fprintf(stderr, "  %s — %s\n", gpu.name.c_str(), toString(api));
+        std::string why;
+        const std::shared_ptr<d3d12::D3d12Device> device12 =
+            d3d12::D3d12Device::forAdapter(gpu.nativeHandle, why);
         for (const Row& row : matrixFor(gpu, api)) {
             bool opened = false;
             const std::string d3d11 = openD3d11(api, device.Get(), row, opened);
             std::fprintf(stderr, "  %-6s %-24s %s\n", toString(api), row.name.c_str(),
                          d3d11.c_str());
             if (row.required) CHECK(opened);
+            if (!device12 || row.yuv444) continue;
+            bool opened12 = false;
+            const std::string d3d12 = openD3d12(api, device12, row, opened12);
+            if (d3d12.empty()) continue; // no D3D12 encoder of this vendor yet
+            if (d3d12 != d3d11)
+                std::fprintf(stderr, "  %-6s %-24s D3D12: %s\n", toString(api), row.name.c_str(),
+                             d3d12.c_str());
+            CHECK_EQ(opened12, opened);
+            if (opened && opened12) CHECK_EQ(d3d12, d3d11);
         }
     }
     if (vendors == 0) std::fprintf(stderr, "  skipped: no NVENC or AMF GPU here\n");

@@ -5,6 +5,7 @@
 #include "native_test_framework.h"
 
 #if defined(_WIN32)
+#include "d3d12_test_pictures.h"
 #include "encode/HevcDpb.h"
 #include "encode/HevcSliceParser.h"
 #include "encode/windows/d3d12/VideoEncode12.h"
@@ -29,137 +30,8 @@ using Microsoft::WRL::ComPtr;
 
 namespace {
 
-/// Pictures into an NV12/P010 texture from the CPU, on a DIRECT queue with a
-/// fence of its own — the encoder waits for it on the GPU, as it waits for
-/// the conversion in the product.
-struct Uploader
-{
-    ID3D12Device* device = nullptr;
-    d3d12::Queue queue;
-    ComPtr<ID3D12CommandAllocator> allocator;
-    ComPtr<ID3D12GraphicsCommandList> list;
-    ComPtr<ID3D12Resource> staging;
-    d3d12::GpuFence fence;
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT feet[2] = {};
-    UINT rows[2] = {};
-    UINT64 rowBytes[2] = {};
-
-    bool init(d3d12::D3d12Device& d, ID3D12Resource* target, std::string& error)
-    {
-        device = d.device();
-        d3d12::QueueRequest request;
-        request.type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-        if (!d.createQueue(request, queue, error) ||
-            FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                                  IID_PPV_ARGS(&allocator))) ||
-            FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(),
-                                             nullptr, IID_PPV_ARGS(&list))) ||
-            FAILED(list->Close()) || !fence.create(device, false, error))
-            return false;
-        const D3D12_RESOURCE_DESC desc = target->GetDesc();
-        UINT64 total = 0;
-        device->GetCopyableFootprints(&desc, 0, 2, 0, feet, rows, rowBytes, &total);
-        D3D12_HEAP_PROPERTIES hp = {};
-        hp.Type = D3D12_HEAP_TYPE_UPLOAD;
-        D3D12_RESOURCE_DESC rd = {};
-        rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        rd.Width = total;
-        rd.Height = 1;
-        rd.DepthOrArraySize = 1;
-        rd.MipLevels = 1;
-        rd.SampleDesc.Count = 1;
-        rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        return SUCCEEDED(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
-                                                         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                                                         IID_PPV_ARGS(&staging)));
-    }
-
-    /// A moving picture: a diagonal ramp scrolling, and a bright square
-    /// crossing it — enough motion for every P to carry something. Or a flat
-    /// grey (@p flat), which costs next to nothing.
-    uint64_t upload(ID3D12Resource* target, int frame, bool tenBit, std::string& error,
-                    bool flat = false)
-    {
-        uint8_t* p = nullptr;
-        if (FAILED(staging->Map(0, nullptr, reinterpret_cast<void**>(&p)))) return 0;
-        const int bytes = tenBit ? 2 : 1;
-        for (UINT plane = 0; plane < 2; ++plane) {
-            const UINT width = static_cast<UINT>(rowBytes[plane] / bytes);
-            for (UINT y = 0; y < rows[plane]; ++y) {
-                uint8_t* line = p + feet[plane].Offset +
-                                y * static_cast<size_t>(feet[plane].Footprint.RowPitch);
-                for (UINT x = 0; x < width; ++x) {
-                    int v;
-                    if (flat) {
-                        v = 128;
-                    } else if (plane == 0) {
-                        const bool square =
-                            (x + static_cast<UINT>(frame) * 12) % 1920 < 200 && y % 1088 < 200;
-                        v = square ? 235
-                                   : 16 + static_cast<int>(
-                                              (x + 2 * y + static_cast<UINT>(frame) * 8) % 200);
-                    } else {
-                        v = 128 + ((x + static_cast<UINT>(frame)) % 32) - 16;
-                    }
-                    if (tenBit) {
-                        const uint16_t w = static_cast<uint16_t>(v << 8);
-                        std::memcpy(line + x * 2, &w, 2);
-                    } else {
-                        line[x] = static_cast<uint8_t>(v);
-                    }
-                }
-            }
-        }
-        staging->Unmap(0, nullptr);
-        allocator->Reset();
-        list->Reset(allocator.Get(), nullptr);
-        D3D12_RESOURCE_BARRIER b = {};
-        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        b.Transition.pResource = target;
-        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        b.Transition.StateBefore = D3D12_RESOURCE_STATE_COMMON;
-        b.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
-        list->ResourceBarrier(1, &b);
-        for (UINT plane = 0; plane < 2; ++plane) {
-            D3D12_TEXTURE_COPY_LOCATION to = {}, from = {};
-            to.pResource = target;
-            to.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-            to.SubresourceIndex = plane;
-            from.pResource = staging.Get();
-            from.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-            from.PlacedFootprint = feet[plane];
-            list->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
-        }
-        std::swap(b.Transition.StateBefore, b.Transition.StateAfter);
-        list->ResourceBarrier(1, &b);
-        list->Close();
-        ID3D12CommandList* lists[] = {list.Get()};
-        queue.queue->ExecuteCommandLists(1, lists);
-        const uint64_t value = fence.signal(queue.queue.Get(), error);
-        // The staging buffer is rewritten for the next picture: wait for this
-        // copy (the encoder, not the CPU, waits for it in the product).
-        if (value) fence.wait(value, 1000, error);
-        return value;
-    }
-};
-
-ComPtr<ID3D12Resource> picture(ID3D12Device* device, int width, int height, bool tenBit)
-{
-    D3D12_HEAP_PROPERTIES hp = {};
-    hp.Type = D3D12_HEAP_TYPE_DEFAULT;
-    D3D12_RESOURCE_DESC rd = {};
-    rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    rd.Width = static_cast<UINT64>(width);
-    rd.Height = static_cast<UINT>(height);
-    rd.DepthOrArraySize = 1;
-    rd.MipLevels = 1;
-    rd.Format = tenBit ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12;
-    rd.SampleDesc.Count = 1;
-    ComPtr<ID3D12Resource> r;
-    device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON,
-                                    nullptr, IID_PPV_ARGS(&r));
-    return r;
-}
+using d3d12_test::picture;
+using d3d12_test::Uploader;
 
 /// The slices of @p out read with the encoder's parameter sets.
 std::vector<HevcSliceFields> slicesOf(const EncoderOutput& out, const VideoEncode12& encoder,

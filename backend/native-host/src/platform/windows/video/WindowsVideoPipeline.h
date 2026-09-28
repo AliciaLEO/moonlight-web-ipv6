@@ -93,6 +93,9 @@ public:
         bool hdr = false;
         bool intraRefresh = false;
         EncoderTuning tuning;
+        /// The D3D12 route's encoder, as the choice resolved it
+        /// (VideoPipelineChoice::encoder12); D3D11 reads nothing of it.
+        EncoderTuning::Encoder12 encoder12 = EncoderTuning::Encoder12::VideoEncode;
     };
 
     virtual ~WindowsVideoPipeline() = default;

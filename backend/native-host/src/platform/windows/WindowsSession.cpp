@@ -32,6 +32,7 @@
 #include "../../encode/EncodeLoadCap.h"
 #include "../../encode/RateControl.h"
 #include "../../encode/RateGovernor.h"
+#include "../../encode/windows/NvencApi.h"
 #include "../../input/windows/Win32Input.h"
 #include "InputDesktop.h"
 #include "StreamPriority.h"
@@ -949,6 +950,11 @@ private:
         // then known, and the builds after it choose D3D11 from the start.
         f.videoEncode12 =
             D3d12VideoPipeline::videoEncodeMissing(m_Target.encodeAdapterHandle).empty();
+        // NVENC's runtime takes D3D12 pictures wherever it loads (the header
+        // this is built against has the interface; an older driver refuses at
+        // load, with its reason).
+        f.nvenc12 =
+            m_Target.encoder == EncoderApi::Nvenc && encode::NvencApi::instance()->available();
         f.driverExcluded =
             d3d12DriverExcluded(m_Target.encodeVendorId, m_Target.encodeDriverVersion);
         return f;
@@ -956,14 +962,18 @@ private:
 
     /// @p kind in place, opened: the pipeline already there, or its
     /// replacement — the old one closed first, its encoder and converter
-    /// with it.
-    bool usePipeline(VideoPipeline kind, std::string& error)
+    /// with it. A D3D12 chain ending in another encoder (@p encoder12) is a
+    /// replacement too.
+    bool usePipeline(VideoPipeline kind, EncoderTuning::Encoder12 encoder12, std::string& error)
     {
         const char* wanted = kind == VideoPipeline::D3d12 ? "d3d12" : "d3d11";
-        if (m_Pipeline && std::strcmp(m_Pipeline->kind(), wanted) == 0) return true;
+        if (m_Pipeline && std::strcmp(m_Pipeline->kind(), wanted) == 0) {
+            const auto* chain = dynamic_cast<const D3d12VideoPipeline*>(m_Pipeline.get());
+            if (!chain || chain->encoder12() == encoder12) return true;
+        }
         if (m_Pipeline) m_Pipeline->close();
         if (kind == VideoPipeline::D3d12)
-            m_Pipeline = std::make_unique<D3d12VideoPipeline>(m_Config.tuning);
+            m_Pipeline = std::make_unique<D3d12VideoPipeline>(m_Config.tuning, encoder12);
         else
             m_Pipeline = std::make_unique<D3d11VideoPipeline>();
         return m_Pipeline->open(m_Target.crossGpuCopy, m_Target.encodeAdapterHandle,
@@ -990,8 +1000,8 @@ private:
         }
         if (choice.pipeline == VideoPipeline::D3d12) {
             std::string why;
-            if (usePipeline(VideoPipeline::D3d12, why) &&
-                buildOn(outputWidth, outputHeight, why, keepHeld)) {
+            if (usePipeline(VideoPipeline::D3d12, choice.encoder12, why) &&
+                buildOn(outputWidth, outputHeight, why, keepHeld, choice.encoder12)) {
                 notePipeline(choice);
                 return true;
             }
@@ -1009,7 +1019,7 @@ private:
             error = "strict12: " + choice.reason;
             return false;
         }
-        if (!usePipeline(VideoPipeline::D3d11, error) ||
+        if (!usePipeline(VideoPipeline::D3d11, EncoderTuning::Encoder12::VideoEncode, error) ||
             !buildOn(outputWidth, outputHeight, error, keepHeld))
             return false;
         notePipeline(choice);
@@ -1041,8 +1051,10 @@ private:
     }
 
     /// Both halves of the current pipeline, built at @p outputWidth ×
-    /// @p outputHeight — see buildPipeline.
-    bool buildOn(int outputWidth, int outputHeight, std::string& error, bool keepHeld)
+    /// @p outputHeight — see buildPipeline. @p encoder12: the D3D12 chain's
+    /// encoder, as the choice resolved it.
+    bool buildOn(int outputWidth, int outputHeight, std::string& error, bool keepHeld,
+                 EncoderTuning::Encoder12 encoder12 = EncoderTuning::Encoder12::VideoEncode)
     {
         // Released before the replacements are built, not after — see
         // WindowsVideoPipeline::teardown.
@@ -1115,6 +1127,7 @@ private:
         encoder.hdr = hdr;
         encoder.intraRefresh = m_Config.intraRefresh;
         encoder.tuning = m_Config.tuning;
+        encoder.encoder12 = encoder12;
         if (!m_Pipeline->buildEncoder(*m_Capture, encoder, error)) return false;
         m_EncoderKbps = encoder.bitrateKbps;
         return true;

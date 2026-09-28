@@ -113,7 +113,7 @@ void run_video_pipeline_choice_tests()
         CHECK(c.refused); // the overlay reads "oneVPL (D3D11)"
         CHECK(c.encoder.empty());
         CHECK(contains(c.reason, "auto: the vendor table for oneVPL asks for D3D12, D3D11 runs: "
-                                 "H.264 is not done by the D3D12 route yet"));
+                                 "H.264 is not done by D3D12 Video Encode yet"));
 
         // A GPU a first build found without D3D12 Video Encode (Windows 10):
         // the builds after it choose D3D11 from the start.
@@ -173,6 +173,64 @@ void run_video_pipeline_choice_tests()
         CHECK_EQ(chooseVideoPipeline(amd).encoder, std::string("AMF (D3D12)"));
     }
 
+    SECTION(
+        "VideoPipeline — the D3D12 route's encoder: NVENC on NVIDIA (G1), VE elsewhere until G4");
+    {
+        CHECK(defaultEncoder12(EncoderApi::Nvenc) == EncoderTuning::Encoder12::Nvenc);
+        for (EncoderApi api : {EncoderApi::Amf, EncoderApi::Vpl, EncoderApi::None})
+            CHECK(defaultEncoder12(api) == EncoderTuning::Encoder12::VideoEncode);
+
+        // D3D12 asked for on an RTX, no bench key: NVENC takes the picture.
+        VideoPipelineFacts rtx = forcedD3d12();
+        rtx.encoder = EncoderApi::Nvenc;
+        rtx.nvenc12 = true;
+        VideoPipelineChoice c = chooseVideoPipeline(rtx);
+        CHECK(c.pipeline == VideoPipeline::D3d12);
+        CHECK(c.encoder12 == EncoderTuning::Encoder12::Nvenc);
+        CHECK_EQ(c.route, std::string("DIRECT conversion → NVENC (D3D12) HEVC"));
+        CHECK_EQ(c.encoder, std::string("NVENC (D3D12)"));
+
+        // The vendor's SDK codes what its D3D11 path codes; VE is HEVC only.
+        rtx.codec = Codec::H264;
+        c = chooseVideoPipeline(rtx);
+        CHECK(c.pipeline == VideoPipeline::D3d12);
+        CHECK_EQ(c.route, std::string("DIRECT conversion → NVENC (D3D12) H.264"));
+        rtx.codec = Codec::Av1;
+        CHECK(chooseVideoPipeline(rtx).pipeline == VideoPipeline::D3d12);
+        rtx.codec = Codec::Hevc;
+
+        // The bench can still put VE on the RTX, for G2's comparison.
+        rtx.enc12 = EncoderTuning::Encoder12::VideoEncode;
+        c = chooseVideoPipeline(rtx);
+        CHECK(c.pipeline == VideoPipeline::D3d12);
+        CHECK(c.encoder12 == EncoderTuning::Encoder12::VideoEncode);
+        CHECK_EQ(c.encoder, std::string("D3D12 VE"));
+        rtx.codec = Codec::H264;
+        CHECK(chooseVideoPipeline(rtx).refused);
+
+        // No NVENC runtime able to take D3D12 pictures: D3D11, and why.
+        VideoPipelineFacts old = forcedD3d12();
+        old.encoder = EncoderApi::Nvenc;
+        old.nvenc12 = false;
+        c = chooseVideoPipeline(old);
+        CHECK(c.pipeline == VideoPipeline::D3d11);
+        CHECK(c.refused);
+        CHECK(contains(c.reason, "NVENC takes no D3D12 picture on this machine"));
+
+        // AMD keeps VE until G4 has been measured and Bruno has decided.
+        VideoPipelineFacts amd = forcedD3d12();
+        amd.encoder = EncoderApi::Amf;
+        c = chooseVideoPipeline(amd);
+        CHECK(c.pipeline == VideoPipeline::D3d12);
+        CHECK(c.encoder12 == EncoderTuning::Encoder12::VideoEncode);
+
+        // A D3D11 choice names no D3D12 encoder.
+        CHECK(chooseVideoPipeline(arc()).encoder12 == EncoderTuning::Encoder12::VideoEncode);
+        VideoPipelineFacts auto11 = arc();
+        auto11.encoder = EncoderApi::Nvenc;
+        CHECK(chooseVideoPipeline(auto11).pipeline == VideoPipeline::D3d11);
+    }
+
     SECTION("VideoPipeline — what rules D3D12 out for a build, each one named");
     {
         struct Case
@@ -197,12 +255,12 @@ void run_video_pipeline_choice_tests()
             {"NVENC on Intel",
              [](VideoPipelineFacts& f) { f.enc12 = EncoderTuning::Encoder12::Nvenc; },
              "enc12=nvenc on a GPU NVENC does not drive"},
-            {"NVENC12 not built",
+            {"NVENC12 unavailable",
              [](VideoPipelineFacts& f) {
                  f.encoder = EncoderApi::Nvenc;
                  f.enc12 = EncoderTuning::Encoder12::Nvenc;
              },
-             "NVENC fed D3D12 pictures is not built yet"},
+             "NVENC takes no D3D12 picture on this machine"},
             {"AMF12 not built",
              [](VideoPipelineFacts& f) {
                  f.encoder = EncoderApi::Amf;

@@ -57,11 +57,14 @@ class D3d12VideoPipeline final : public WindowsVideoPipeline
 {
 public:
     /// @p tuning: the bench's D3D12 knobs, fixed for the session (queues,
-    /// handshake, GPU timing); the defaults are the engine's own.
-    explicit D3d12VideoPipeline(const EncoderTuning& tuning);
+    /// handshake, GPU timing); the defaults are the engine's own. @p encoder12:
+    /// the encoder the chain ends in (VideoPipelineChoice), which decides what
+    /// open() asks of the device.
+    D3d12VideoPipeline(const EncoderTuning& tuning, EncoderTuning::Encoder12 encoder12);
     ~D3d12VideoPipeline() override;
 
     const char* kind() const override { return "d3d12"; }
+    EncoderTuning::Encoder12 encoder12() const { return m_Encoder12; }
 
     /// Why the GPU on @p encodeAdapterLuid has no D3D12 Video Encode, once a
     /// chain opened there has found out — Windows 10, a driver without one —
@@ -71,8 +74,9 @@ public:
     static std::string videoEncodeMissing(uint64_t encodeAdapterLuid);
 
     /// @p crossGpuCopy is refused (the bridge is D3D11's); the device is the
-    /// one on @p encodeAdapterLuid, which is then the display's. A device with
-    /// no D3D12 Video Encode is refused here, before anything is made on it.
+    /// one on @p encodeAdapterLuid, which is then the display's. A chain that
+    /// ends in D3D12 Video Encode refuses a device without it here, before
+    /// anything is made on it; the vendors' SDKs need no such thing.
     bool open(bool crossGpuCopy, uint64_t encodeAdapterLuid, const std::string& encodeGpuName,
               std::string& error) override;
     void teardown(bool keepHeld) override;
@@ -171,6 +175,7 @@ private:
     void removeDevice();
 
     EncoderTuning m_Tuning;
+    EncoderTuning::Encoder12 m_Encoder12 = EncoderTuning::Encoder12::VideoEncode;
     std::shared_ptr<d3d12::D3d12Device> m_Device;
     d3d12::Queue m_Queue;
     Microsoft::WRL::ComPtr<ID3D12CommandAllocator> m_Allocator;

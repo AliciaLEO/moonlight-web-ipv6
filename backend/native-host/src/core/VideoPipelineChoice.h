@@ -45,7 +45,7 @@ struct VideoPipelineFacts
     EncoderApi encoder = EncoderApi::None;
     Codec codec = Codec::H264;
     /// The bench's knobs that name a D3D12 route: the conversion's queue and
-    /// the encoder.
+    /// the encoder (Default: the vendor's, defaultEncoder12).
     EncoderTuning::ConvertQueue12 conv12 = EncoderTuning::ConvertQueue12::Default;
     EncoderTuning::Encoder12 enc12 = EncoderTuning::Encoder12::Default;
 
@@ -61,7 +61,8 @@ struct VideoPipelineFacts
     /// The GPU's D3D12 Video Encode takes this codec: an ID3D12VideoDevice3
     /// (none on Windows 10) and a profile for it.
     bool videoEncode12 = false;
-    /// The vendors' SDKs fed D3D12 pictures, once they are built.
+    /// The vendors' SDKs take D3D12 pictures on this machine: NVENC's runtime
+    /// is there (NvencEncoder12); AMF's, once it is built (C7.4).
     bool nvenc12 = false;
     bool amf12 = false;
     /// Why this GPU's driver is kept off the D3D12 route, "" when it is not
@@ -86,7 +87,24 @@ struct VideoPipelineChoice
     /// D3D12 was asked for — by the bench key, the setting or the table's
     /// line — and D3D11 runs.
     bool refused = false;
+    /// The D3D12 route's encoder, the bench key's or the vendor's; it means
+    /// nothing on D3D11.
+    EncoderTuning::Encoder12 encoder12 = EncoderTuning::Encoder12::VideoEncode;
 };
+
+/// The encoder the D3D12 route runs on a GPU reached through @p api, when the
+/// bench's enc12= names none: the vendor's own SDK fed D3D12 pictures where it
+/// won, D3D12 Video Encode otherwise. NVIDIA's moved with G1 (Bruno,
+/// 27/09/2026): NVENC takes a D3D12 picture at the speed of its D3D11 path,
+/// where VE ran three times slower on the RTX. AMD's waits for G4 — AMF-DX12
+/// against VE under a game — and Bruno's word; Intel has only VE.
+inline EncoderTuning::Encoder12 defaultEncoder12(EncoderApi api)
+{
+    switch (api) {
+    case EncoderApi::Nvenc: return EncoderTuning::Encoder12::Nvenc;
+    default: return EncoderTuning::Encoder12::VideoEncode;
+    }
+}
 
 namespace videopipeline_detail {
 
@@ -124,14 +142,16 @@ inline std::string refusal(const VideoPipelineFacts& f, EncoderTuning::Encoder12
         return std::string(toString(f.encoder)) + " has no D3D12 route";
     if (!f.driverExcluded.empty()) return "the D3D12 route stays off " + f.driverExcluded;
     if (f.yuv444) return "4:4:4, which no D3D12 encoder takes";
-    if (f.codec != Codec::Hevc)
-        return std::string(toString(f.codec)) + " is not done by the D3D12 route yet";
     if (encoder == E::Nvenc && f.encoder != EncoderApi::Nvenc)
         return "enc12=nvenc on a GPU NVENC does not drive";
     if (encoder == E::Amf && f.encoder != EncoderApi::Amf)
         return "enc12=amf on a GPU AMF does not drive";
-    if (encoder == E::Nvenc && !f.nvenc12) return "NVENC fed D3D12 pictures is not built yet";
+    if (encoder == E::Nvenc && !f.nvenc12) return "NVENC takes no D3D12 picture on this machine";
     if (encoder == E::Amf && !f.amf12) return "AMF fed D3D12 pictures is not built yet";
+    // The vendors' SDKs code what their D3D11 path codes; D3D12 Video Encode
+    // is HEVC until Phase 9.
+    if (encoder == E::VideoEncode && f.codec != Codec::Hevc)
+        return std::string(toString(f.codec)) + " is not done by D3D12 Video Encode yet";
     if (encoder == E::VideoEncode && !f.videoEncode12)
         return std::string("this GPU's D3D12 Video Encode does not take ") + toString(f.codec);
     return {};
@@ -165,9 +185,8 @@ inline VideoPipelineChoice chooseVideoPipeline(const VideoPipelineFacts& f)
         c.reason = why;
         return c;
     }
-    const EncoderTuning::Encoder12 encoder = f.enc12 == EncoderTuning::Encoder12::Default
-                                                 ? EncoderTuning::Encoder12::VideoEncode
-                                                 : f.enc12;
+    const EncoderTuning::Encoder12 encoder =
+        f.enc12 == EncoderTuning::Encoder12::Default ? defaultEncoder12(f.encoder) : f.enc12;
     const std::string refused = videopipeline_detail::refusal(f, encoder);
     if (!refused.empty()) {
         c.refused = true;
@@ -175,6 +194,7 @@ inline VideoPipelineChoice chooseVideoPipeline(const VideoPipelineFacts& f)
         return c;
     }
     c.pipeline = VideoPipeline::D3d12;
+    c.encoder12 = encoder;
     c.route =
         std::string(f.conv12 == EncoderTuning::ConvertQueue12::Compute ? "COMPUTE" : "DIRECT") +
         " conversion → " + videopipeline_detail::encoderName(encoder) + " " + toString(f.codec);

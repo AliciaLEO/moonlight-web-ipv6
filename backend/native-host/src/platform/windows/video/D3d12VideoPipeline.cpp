@@ -19,6 +19,7 @@
 
 #include "../../../convert/windows/ConvertShaders.h"
 #include "../../../core/Log.h"
+#include "../../../encode/windows/d3d12/NvencEncoder12.h"
 #include "../../../encode/windows/d3d12/VideoEncode12.h"
 
 #include <atomic>
@@ -85,8 +86,10 @@ constexpr uint32_t kWaitMs = d3d12::kGpuGoneMs;
 
 } // namespace
 
-D3d12VideoPipeline::D3d12VideoPipeline(const EncoderTuning& tuning)
+D3d12VideoPipeline::D3d12VideoPipeline(const EncoderTuning& tuning,
+                                       EncoderTuning::Encoder12 encoder12)
     : m_Tuning(tuning)
+    , m_Encoder12(encoder12)
     , m_Fault(faultFromEnvironment())
 {}
 
@@ -110,8 +113,11 @@ bool D3d12VideoPipeline::open(bool crossGpuCopy, uint64_t encodeAdapterLuid,
         error = "the frames cross to another GPU, over a D3D11 bridge";
         return false;
     }
-    error = videoEncodeMissing(encodeAdapterLuid);
-    if (!error.empty()) return false;
+    const bool videoEncode = m_Encoder12 == EncoderTuning::Encoder12::VideoEncode;
+    if (videoEncode) {
+        error = videoEncodeMissing(encodeAdapterLuid);
+        if (!error.empty()) return false;
+    }
     m_Conversions = 0;
     if (m_Fault) {
         log::info("[native] " + describe(m_Fault) + " in effect: " + effect(m_Fault));
@@ -123,10 +129,10 @@ bool D3d12VideoPipeline::open(bool crossGpuCopy, uint64_t encodeAdapterLuid,
     m_Device = d3d12::D3d12Device::forAdapter(encodeAdapterLuid, error);
     if (!m_Device) return false;
     ID3D12Device* device = m_Device->device();
-    // The chain ends in D3D12 Video Encode: a device without it is refused
+    // A chain that ends in D3D12 Video Encode: a device without it is refused
     // before its conversion is made, and remembered.
     Microsoft::WRL::ComPtr<ID3D12VideoDevice3> video;
-    if (FAILED(device->QueryInterface(IID_PPV_ARGS(&video)))) {
+    if (videoEncode && FAILED(device->QueryInterface(IID_PPV_ARGS(&video)))) {
         error = "no D3D12 Video Encode on " + encodeGpuName +
                 " (no ID3D12VideoDevice3: Windows 10, or a driver without it)";
         {
@@ -278,16 +284,20 @@ bool D3d12VideoPipeline::buildEncoder(const capture::IWindowsCapture& capture,
         error = "no converter to encode from";
         return false;
     }
-    if (build.tuning.enc12 == EncoderTuning::Encoder12::Nvenc ||
-        build.tuning.enc12 == EncoderTuning::Encoder12::Amf) {
-        error = "the vendors' SDKs fed D3D12 pictures are not built yet";
-        return false;
-    }
     if (build.yuv444) {
         error = "4:4:4, which no D3D12 encoder takes";
         return false;
     }
-    auto encoder = std::make_unique<encode::VideoEncode12>();
+    std::unique_ptr<encode::IVideoEncoder12> encoder;
+    switch (build.encoder12) {
+    case EncoderTuning::Encoder12::Nvenc:
+        encoder = std::make_unique<encode::NvencEncoder12>();
+        break;
+    case EncoderTuning::Encoder12::Amf:
+        error = "AMF fed D3D12 pictures is not built yet";
+        return false;
+    default: encoder = std::make_unique<encode::VideoEncode12>(); break;
+    }
     if (!encoder->init(m_Device, build.codec, m_Converter->outputWidth(),
                        m_Converter->outputHeight(), build.fps, build.bitrateKbps, build.hdr,
                        build.intraRefresh, build.tuning, error))

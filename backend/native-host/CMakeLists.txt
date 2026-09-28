@@ -75,6 +75,7 @@ if(WIN32)
         src/encode/windows/SoftwareEncoder.cpp
         src/encode/windows/d3d12/VideoEncodeCaps12.cpp
         src/encode/windows/d3d12/VideoEncode12.cpp
+        src/encode/windows/d3d12/NvencEncoder12.cpp
         src/audio/windows/WasapiLoopback.cpp
         src/audio/windows/HostMute.cpp
     )
@@ -442,6 +443,7 @@ if(MW_BUILD_TESTS)
         tests/test_video_encode_caps12.cpp
         tests/test_video_encode12.cpp
         tests/test_encoder_configs.cpp
+        tests/test_vendor_encode12.cpp
         tests/test_win32_cursor.cpp
         tests/test_host_mute.cpp
         tests/test_evdev_keymap.cpp
