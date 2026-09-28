@@ -24,20 +24,27 @@
 
 namespace mw::native {
 
-/// Which chain carries a Windows session's pictures from the capture to the
-/// encoder. D3D11 is the one every release has shipped. D3D12 opens the
+/// Which chain carries a session's pictures from the capture to the encoder.
+///
+/// Windows: D3D11 is the one every release has shipped. D3D12 opens the
 /// captured surface in D3D12 once (the capture APIs only hand it to D3D11)
 /// and converts and encodes there, on queues whose priority the engine picks.
 ///
-/// Chosen for each build of a session, never sticky: a D3D12 session that
-/// cannot be built, or that fails while streaming, goes back to D3D11 on its
-/// own and says why (SessionInfo). The other platforms have neither chain and
-/// ignore the choice.
+/// Linux (plan Phase 13): VA-API is today's encoder, fed by a GL conversion
+/// or — the split route — by a Vulkan compute one; Vulkan is the whole chain
+/// in Vulkan, Vulkan Video encoding included. A platform ignores the other's
+/// values, as it ignores Auto's table for a chain it does not have.
+///
+/// Chosen for each build of a session, never sticky: a chain that cannot be
+/// built, or that fails while streaming, goes back to the default one on its
+/// own and says why (SessionInfo). macOS has no choice and ignores it.
 enum class VideoPipeline
 {
     Auto, ///< the vendor table below: the product's default
     D3d11,
     D3d12,
+    Vaapi,  ///< Linux: VA-API encoding (today's)
+    Vulkan, ///< Linux: Vulkan Video encoding, the whole chain in Vulkan
 };
 
 inline const char* toString(VideoPipeline p)
@@ -46,12 +53,21 @@ inline const char* toString(VideoPipeline p)
     case VideoPipeline::Auto: return "auto";
     case VideoPipeline::D3d11: return "d3d11";
     case VideoPipeline::D3d12: return "d3d12";
+    case VideoPipeline::Vaapi: return "vaapi";
+    case VideoPipeline::Vulkan: return "vulkan";
     }
     return "auto";
 }
 
-/// "auto", "d3d11" or "d3d12", in any case. False, with @p out untouched, for
-/// anything else.
+/// Whether @p p names one of Windows' chains — Auto included, which is every
+/// platform's.
+inline bool isWindowsPipeline(VideoPipeline p)
+{
+    return p == VideoPipeline::Auto || p == VideoPipeline::D3d11 || p == VideoPipeline::D3d12;
+}
+
+/// "auto", "d3d11", "d3d12", "vaapi" or "vulkan", in any case. False, with @p
+/// out untouched, for anything else.
 inline bool parseVideoPipeline(const std::string& text, VideoPipeline& out)
 {
     std::string t;
@@ -63,6 +79,10 @@ inline bool parseVideoPipeline(const std::string& text, VideoPipeline& out)
         out = VideoPipeline::D3d11;
     else if (t == "d3d12")
         out = VideoPipeline::D3d12;
+    else if (t == "vaapi")
+        out = VideoPipeline::Vaapi;
+    else if (t == "vulkan")
+        out = VideoPipeline::Vulkan;
     else
         return false;
     return true;
@@ -77,6 +97,7 @@ inline VideoPipeline autoVideoPipeline(EncoderApi api)
     case EncoderApi::Nvenc: return VideoPipeline::D3d11; // G2, then G4 (NVENC on D3D12)
     case EncoderApi::Amf: return VideoPipeline::D3d11;   // G2, then G4 (AMF on D3D12)
     case EncoderApi::Vpl: return VideoPipeline::D3d11;   // G2, then G3 (in-house rate control)
+    case EncoderApi::VaApi: return VideoPipeline::Vaapi; // Linux: until G5 (Phase 13)
     default: return VideoPipeline::D3d11;                // no D3D12 route at all
     }
 }

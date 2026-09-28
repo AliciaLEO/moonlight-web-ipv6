@@ -195,4 +195,24 @@ void run_video_pipeline_choice_tests()
         f.setting = VideoPipeline::D3d11;
         CHECK(!chooseVideoPipeline(f).refused);
     }
+
+    SECTION("VideoPipeline — Linux's chains read back, and are no opinion on Windows");
+    {
+        for (VideoPipeline p : {VideoPipeline::Vaapi, VideoPipeline::Vulkan}) {
+            VideoPipeline back = VideoPipeline::Auto;
+            CHECK(parseVideoPipeline(toString(p), back));
+            CHECK(back == p);
+            CHECK(!isWindowsPipeline(p));
+        }
+        CHECK(autoVideoPipeline(EncoderApi::VaApi) == VideoPipeline::Vaapi);
+        // A bench key or a setting naming a Linux chain leaves Windows on its
+        // table, as Auto does: nothing asked of D3D12, nothing refused.
+        VideoPipelineFacts f = arc();
+        f.setting = VideoPipeline::Vulkan;
+        f.benchKey = VideoPipeline::Vaapi;
+        const VideoPipelineChoice c = chooseVideoPipeline(f);
+        CHECK(c.pipeline == VideoPipeline::D3d11);
+        CHECK(!c.refused);
+        CHECK(contains(c.reason, "vendor table"));
+    }
 }

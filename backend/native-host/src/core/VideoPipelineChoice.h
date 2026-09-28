@@ -138,10 +138,11 @@ inline VideoPipelineChoice chooseVideoPipeline(const VideoPipelineFacts& f)
 {
     VideoPipeline wanted = VideoPipeline::D3d11;
     std::string why;
-    if (f.benchKey != VideoPipeline::Auto) {
+    // Linux's chains (vaapi, vulkan) are no opinion here, as Auto is.
+    if (f.benchKey != VideoPipeline::Auto && isWindowsPipeline(f.benchKey)) {
         wanted = f.benchKey;
         why = std::string("the bench key pipeline=") + toString(f.benchKey);
-    } else if (f.setting != VideoPipeline::Auto) {
+    } else if (f.setting != VideoPipeline::Auto && isWindowsPipeline(f.setting)) {
         wanted = f.setting;
         why = std::string("the setting (") + toString(f.setting) + ")";
     } else {

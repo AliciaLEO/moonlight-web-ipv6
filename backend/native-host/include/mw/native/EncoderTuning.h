@@ -288,6 +288,30 @@ struct EncoderTuning
     /// bench row labelled D3D12 is never a D3D11 one.
     bool strict12 = false;
 
+    // ── The Linux chain (plan pipeline-video-d3d12-v2, Phase 13) ────────────
+
+    /// The conversion in front of VA-API: GL through EGL, or Vulkan on a
+    /// compute queue — the split route (§9-17). The engine's own is the
+    /// vendor table's (core/LinuxRouteChoice.h), GL until a bench has
+    /// measured a vendor and Bruno has moved its line.
+    enum class ConvertLinux
+    {
+        Default,
+        Gl,
+        Vulkan
+    };
+    ConvertLinux convertLinux = ConvertLinux::Default;
+    /// The Vulkan conversion's queue priority. The engine's own is HIGH when
+    /// the process holds CAP_SYS_NICE, normal otherwise; Normal measures the
+    /// route without it on a process that has it.
+    enum class PriorityVk
+    {
+        Default,
+        Normal,
+        High
+    };
+    PriorityVk prioVk = PriorityVk::Default;
+
     bool isDefault() const
     {
         return nvencPreset == 0 && nvencTuning == Latency::Default &&
@@ -306,7 +330,8 @@ struct EncoderTuning
                rc12 == RateControl12::Default && reencode12 == Choice::Default &&
                reencodeFit12 == Choice::Default && interFloor12 == 0 &&
                prio12 == Priority12::Default && ownCreator12 == Choice::Default &&
-               ddaSync == DdaSync::Default && !gpuTiming && !strict12;
+               ddaSync == DdaSync::Default && !gpuTiming && !strict12 &&
+               convertLinux == ConvertLinux::Default && prioVk == PriorityVk::Default;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -382,6 +407,10 @@ struct EncoderTuning
         if (ddaSync == DdaSync::Cpu) add("ddasync=cpu");
         if (gpuTiming) add("gputiming=1");
         if (strict12) add("strict12=1");
+        if (convertLinux == ConvertLinux::Gl) add("convert=gl");
+        if (convertLinux == ConvertLinux::Vulkan) add("convert=vulkan");
+        if (prioVk == PriorityVk::Normal) add("priovk=normal");
+        if (prioVk == PriorityVk::High) add("priovk=high");
         return s;
     }
 };

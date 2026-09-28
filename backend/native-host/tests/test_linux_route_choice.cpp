@@ -1,0 +1,233 @@
+/*
+ * MoonlightWeb — native capture & encoding engine.
+ * Copyright (C) 2026 Bruno Martin <brunoocto@gmail.com>
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation, either version 3 of the License, or (at your option)
+ * any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+ * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
+// The choice of a Linux session's picture chain (plan Phase 13): what decides
+// (bench key, setting, vendor table), what rules a chain out, and the rule that
+// frames all of it — whatever cannot run reliably drops to the chain below and
+// says why, it is never forced (Bruno, 28/09/2026).
+
+#include "core/LinuxRouteChoice.h"
+#include "native_test_framework.h"
+
+#include <cstdio>
+#include <string>
+
+using namespace mw::native;
+
+namespace {
+
+/// The UM790Pro: a Radeon 780M encoding HEVC through VA-API off a KMS scanout,
+/// the Vulkan conversion built in.
+LinuxRouteFacts amd()
+{
+    LinuxRouteFacts f;
+    f.encoder = EncoderApi::VaApi;
+    f.codec = Codec::Hevc;
+    f.vendorId = 0x1002;
+    f.vulkanConvertBuilt = true;
+    return f;
+}
+
+/// A Vulkan Video encoder built, and trusted on this GPU.
+LinuxRouteFacts amdWithVulkanEncoder()
+{
+    LinuxRouteFacts f = amd();
+    f.vulkanEncoderBuilt = true;
+    return f;
+}
+
+bool contains(const std::string& text, const std::string& piece)
+{
+    return text.find(piece) != std::string::npos;
+}
+
+} // namespace
+
+void run_linux_route_choice_tests()
+{
+    SECTION("LinuxRoute — the vendor table: VA-API fed by GL, until a bench and Bruno move a "
+            "line");
+    {
+        for (uint32_t vendor : {0x1002u, 0x8086u, 0x10DEu, 0u}) {
+            CHECK(autoLinuxPipeline(vendor) == VideoPipeline::Vaapi);
+            CHECK(autoLinuxConversion(vendor) == EncoderTuning::ConvertLinux::Gl);
+        }
+        const LinuxRoute r = chooseLinuxRoute(amd());
+        CHECK(r.encoder == LinuxRoute::Encoder::Vaapi);
+        CHECK(r.conversion == LinuxRoute::Conversion::Gl);
+        CHECK(r.pipeline == VideoPipeline::Vaapi);
+        CHECK_EQ(r.route, std::string("EGL → VA-API"));
+        CHECK(!r.refused);
+        CHECK(contains(r.reason, "vendor table has VA-API for AMD"));
+        CHECK(contains(r.reason, "converts with GL for AMD"));
+    }
+
+    SECTION("LinuxRoute — convert=vulkan: the split route, Vulkan compute into VA-API");
+    {
+        LinuxRouteFacts f = amd();
+        f.convertKey = EncoderTuning::ConvertLinux::Vulkan;
+        const LinuxRoute r = chooseLinuxRoute(f);
+        CHECK(r.encoder == LinuxRoute::Encoder::Vaapi);
+        CHECK(r.conversion == LinuxRoute::Conversion::Vulkan);
+        CHECK_EQ(r.route, std::string("Vulkan compute → VA-API"));
+        CHECK(!r.refused);
+        CHECK(contains(r.reason, "convert=vulkan"));
+    }
+
+    SECTION("LinuxRoute — a Vulkan conversion that cannot run leaves GL converting, and says "
+            "why");
+    {
+        LinuxRouteFacts f = amd();
+        f.convertKey = EncoderTuning::ConvertLinux::Vulkan;
+        f.vulkanConvertBuilt = false;
+        LinuxRoute r = chooseLinuxRoute(f);
+        CHECK(r.conversion == LinuxRoute::Conversion::Gl);
+        CHECK_EQ(r.route, std::string("EGL → VA-API"));
+        CHECK(r.refused);
+        CHECK(contains(r.reason, "asks for Vulkan compute, GL converts: the Vulkan conversion "
+                                 "is not built in"));
+
+        f.vulkanConvertBuilt = true;
+        f.vulkanConvertRefusal = "the Vulkan device was lost (VK_ERROR_DEVICE_LOST)";
+        r = chooseLinuxRoute(f);
+        CHECK(r.conversion == LinuxRoute::Conversion::Gl);
+        CHECK(r.refused);
+        CHECK(contains(r.reason, "VK_ERROR_DEVICE_LOST"));
+
+        // Asked by nobody, the table's GL is no refusal, whatever Vulkan's state.
+        f.convertKey = EncoderTuning::ConvertLinux::Default;
+        CHECK(!chooseLinuxRoute(f).refused);
+    }
+
+    SECTION("LinuxRoute — Vulkan Video asked for and not built: VA-API runs, said by name");
+    {
+        LinuxRouteFacts f = amd();
+        f.setting = VideoPipeline::Vulkan;
+        const LinuxRoute r = chooseLinuxRoute(f);
+        CHECK(r.encoder == LinuxRoute::Encoder::Vaapi);
+        CHECK(r.pipeline == VideoPipeline::Vaapi);
+        CHECK(r.refused);
+        CHECK(contains(r.reason, "the setting (vulkan) asks for Vulkan Video, which cannot run: "
+                                 "the Vulkan Video encoder is not built yet; VA-API runs"));
+    }
+
+    SECTION("LinuxRoute — Bruno's rule: an encoder the firmware or the driver do not make "
+            "reliable is never forced");
+    {
+        // What the 780M taught (bench §8o.3): the pixel proof is the verdict,
+        // neither the firmware's number nor Mesa's version.
+        const char* const verdicts[] = {
+            "the pixel proof at its opening failed: 4.9 dB after the first P picture",
+            "RADV exposes the encoder only through RADV_PERFTEST=video_encode here",
+            "the driver has no encode queue for HEVC",
+        };
+        for (const char* verdict : verdicts) {
+            for (bool bench : {false, true}) {
+                LinuxRouteFacts f = amdWithVulkanEncoder();
+                f.vulkanEncoderRefusal = verdict;
+                (bench ? f.benchKey : f.setting) = VideoPipeline::Vulkan;
+                const LinuxRoute r = chooseLinuxRoute(f);
+                CHECK(r.encoder == LinuxRoute::Encoder::Vaapi);
+                CHECK(r.pipeline == VideoPipeline::Vaapi);
+                CHECK(r.refused);
+                CHECK(contains(r.reason, verdict));
+                CHECK(contains(r.reason, "VA-API runs"));
+            }
+        }
+    }
+
+    SECTION("LinuxRoute — Vulkan Video, trusted: the whole chain in Vulkan");
+    {
+        LinuxRouteFacts f = amdWithVulkanEncoder();
+        f.benchKey = VideoPipeline::Vulkan;
+        LinuxRoute r = chooseLinuxRoute(f);
+        CHECK(r.encoder == LinuxRoute::Encoder::Vulkan);
+        CHECK(r.conversion == LinuxRoute::Conversion::Vulkan);
+        CHECK(r.pipeline == VideoPipeline::Vulkan);
+        CHECK_EQ(r.route, std::string("Vulkan compute → Vulkan Video"));
+        CHECK(!r.refused);
+
+        // H.264 and AV1 come later (Phase 9): VA-API carries them meanwhile.
+        f.codec = Codec::H264;
+        r = chooseLinuxRoute(f);
+        CHECK(r.encoder == LinuxRoute::Encoder::Vaapi);
+        CHECK(contains(r.reason, "H.264 is not done by the Vulkan Video encoder yet"));
+    }
+
+    SECTION("LinuxRoute — NVIDIA: no VA-API encoder, the CPU; Vulkan Video, once trusted, "
+            "is its hardware encoder");
+    {
+        LinuxRouteFacts f;
+        f.encoder = EncoderApi::Software;
+        f.codec = Codec::Hevc;
+        f.vendorId = 0x10DE;
+        LinuxRoute r = chooseLinuxRoute(f);
+        CHECK(r.encoder == LinuxRoute::Encoder::Cpu);
+        CHECK(r.conversion == LinuxRoute::Conversion::Cpu);
+        CHECK_EQ(r.route, std::string("CPU → OpenH264"));
+        CHECK(!r.refused);
+        CHECK(contains(r.reason, "no GPU encoder on this machine"));
+
+        f.vulkanEncoderBuilt = true;
+        f.setting = VideoPipeline::Vulkan;
+        r = chooseLinuxRoute(f);
+        CHECK(r.encoder == LinuxRoute::Encoder::Vulkan);
+
+        f.vulkanEncoderRefusal = "the pixel proof at its opening failed";
+        r = chooseLinuxRoute(f);
+        CHECK(r.encoder == LinuxRoute::Encoder::Cpu);
+        CHECK(r.refused);
+        CHECK(contains(r.reason, "the pixel proof at its opening failed; the CPU runs"));
+    }
+
+    SECTION("LinuxRoute — the portal's shared memory and a VA-API without parameter sets: the "
+            "CPU, whatever was asked");
+    {
+        LinuxRouteFacts f = amdWithVulkanEncoder();
+        f.sharedMemory = true;
+        f.benchKey = VideoPipeline::Vulkan;
+        f.convertKey = EncoderTuning::ConvertLinux::Vulkan;
+        LinuxRoute r = chooseLinuxRoute(f);
+        CHECK(r.encoder == LinuxRoute::Encoder::Cpu);
+        CHECK(r.refused);
+        CHECK(contains(r.reason, "shared memory"));
+
+        f = amd();
+        f.vaapiUnusable = true;
+        r = chooseLinuxRoute(f);
+        CHECK(r.encoder == LinuxRoute::Encoder::Cpu);
+        CHECK(!r.refused);
+        CHECK(contains(r.reason, "no parameter sets"));
+
+        f.benchKey = VideoPipeline::Vaapi;
+        r = chooseLinuxRoute(f);
+        CHECK(r.encoder == LinuxRoute::Encoder::Cpu);
+        CHECK(r.refused);
+        CHECK(contains(r.reason, "pipeline=vaapi asks for VA-API"));
+    }
+
+    SECTION("LinuxRoute — Windows' values are no opinion here");
+    {
+        LinuxRouteFacts f = amd();
+        f.setting = VideoPipeline::D3d12;
+        f.benchKey = VideoPipeline::D3d11;
+        const LinuxRoute r = chooseLinuxRoute(f);
+        CHECK(r.encoder == LinuxRoute::Encoder::Vaapi);
+        CHECK(!r.refused);
+        CHECK(contains(r.reason, "vendor table"));
+    }
+}

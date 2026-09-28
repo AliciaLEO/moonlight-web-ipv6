@@ -372,6 +372,24 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
         tuning.gpuTiming = value.toInt(&ok) != 0;
     } else if (key == "strict12") {
         tuning.strict12 = value.toInt(&ok) != 0;
+    } else if (key == "convert") {
+        using C = mw::native::EncoderTuning::ConvertLinux;
+        const QString c = value.toLower();
+        if (c == "gl")
+            tuning.convertLinux = C::Gl;
+        else if (c == "vulkan")
+            tuning.convertLinux = C::Vulkan;
+        else
+            ok = false;
+    } else if (key == "priovk") {
+        using P = mw::native::EncoderTuning::PriorityVk;
+        const QString p = value.toLower();
+        if (p == "normal")
+            tuning.prioVk = P::Normal;
+        else if (p == "high")
+            tuning.prioVk = P::High;
+        else
+            ok = false;
     } else {
         return false;
     }
