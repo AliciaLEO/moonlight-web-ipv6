@@ -2750,6 +2750,44 @@ qu'au §8o.5.
   son usage : avec une liste de BO globale, il pèse sur chaque soumission du
   périphérique.
 
+### 8o.7 H.264 en VA-API : Mesa 23.2 et le micrologiciel VCN 1.24 (28/09/2026)
+
+Vu en C13.4 bis : les flux H.264 de la route GL → VA-API avaient 2 à 8
+erreurs ffmpeg par passe, en priorité normale comme en HIGH.
+
+**Ce que c'est.**
+- Toujours sur des images P, jamais sur les IDR : surtout les grosses passes
+  d'affinage de l'écran fixe, parfois une petite (1 144 octets).
+- Toujours la **dernière rangée de macroblocs**, aux derniers macroblocs, avec
+  5 à 8 octets qui manquent en fin de tranche (`bytestream -5` à `-8`). La
+  panne suit la dernière rangée à 1080, 1072 et 720 : ce n'est pas l'arrondi à
+  16 de la hauteur.
+- Ce n'est pas le VBV : à 100 Mbit/s, l'IDR fait les mêmes 34 Ko et l'erreur
+  reste. HEVC est propre dans tous les cas.
+
+**La cause : la combinaison radeonsi 23.2 + micrologiciel VCN ENC 1.24.**
+
+| radeonsi (VA-API) | micrologiciel VCN | erreurs ffmpeg en H.264 |
+|---|---|---|
+| Mesa 23.2 (Ubuntu 22.04) | ENC 1.24 (posé le 28/09, §8o.3) | 2 à 8 par passe |
+| Mesa 23.2 | ENC 1.19 (celui d'Ubuntu 22.04) | **0**, trois tailles et toute la session de test |
+| Mesa 25.2.8 (préfixe, celui d'Ubuntu 24.04) | ENC 1.24 | **0** |
+
+- Retour au 1.19 par un redémarrage sous Ubuntu garanti par `BootNext`, le
+  fichier 1.24 mis de côté, puis remis en place pour le démarrage suivant
+  seulement.
+
+**Ce qu'on en retient.**
+- Un Ubuntu 22.04 d'origine (1.19) encode juste en H.264, sans rien faire.
+  La panne venait du micrologiciel posé pour le labo Vulkan.
+- Un micrologiciel plus récent que ce que le pilote connaît peut casser un
+  chemin qui marchait. Le cas reste rare chez un utilisateur (il faut poser le
+  micrologiciel à la main), mais c'est un argument de plus pour relire les
+  flux : le produit ne le fait aujourd'hui que pour Vulkan Video (§8o.6).
+- L'UM790Pro garde le 1.19 jusqu'à son prochain démarrage, puis le 1.24 avec
+  Mesa 25.2.8 (passage en Ubuntu 24.04 le 28/09 au soir), une combinaison
+  mesurée juste.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
