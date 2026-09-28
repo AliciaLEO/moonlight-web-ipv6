@@ -5306,3 +5306,32 @@ sur une Arc), et un jeu garde sa cadence dans le stream ; par Internet, le clic
 arrive à l'écran environ 16 ms plus tôt. Si le PC ne s'y prête pas (Windows 10, un navigateur
 sans HEVC), le stream prend l'ancien chemin sans coupure, et « D3D11 » dans
 l'admin y revient à la main.
+
+### 32.10 Windows : la robustesse, mise à l'épreuve (phase 8, 28/09/2026 →)
+
+Depuis §32.9, D3D12 porte les streams d'Intel par défaut. La phase 8 vérifie
+sa promesse avant la fusion de la branche, sur l'Arc et le N95.
+
+**Les pannes injectées (C8.1).** `MW_D3D12_FAULT=<panne>@N`, dans
+l'environnement du banc ou d'un worker, provoque une panne à la N-ième
+conversion de la chaîne :
+- `encode` : l'image est jetée comme une erreur du pilote ;
+- `convert` : la liste est refusée ;
+- `timeout` : la file attend une fence que personne ne signale, jusqu'à ce que
+  la chaîne abandonne ;
+- `removed` : `ID3D12Device5::RemoveDevice`, comme un TDR ;
+- `open` : la N-ième chaîne du processus ne s'ouvre pas.
+
+Même raison d'être que `MW_CAPTURE=wgc` (§17) : un chemin de secours jamais
+parcouru pourrit. Au banc de l'Arc (§8n.11 du banc), chaque panne finit en
+D3D11 sur une keyframe, la seule hors de la première, avec la panne et la
+chaîne choisie au journal. Le flux ne compte aucune erreur de décodage. Le
+trou sans image dure 0,6 s : la duplication rouverte, puis l'encodeur D3D11
+ouvert. Il dure 3,6 s pour `timeout`, dont les 3 s qui séparent un GPU perdu
+d'un GPU occupé. `open` donne D3D11 dès le départ, raison à l'appui. Le banc
+écrit la chaîne de chaque image dans son CSV, et résume la bascule.
+
+**Concrètement, pour l'utilisateur** : si la carte graphique décroche en
+plein stream (pilote qui plante ou se met à jour, GPU bloqué), l'image se fige
+une demi-seconde, trois secondes et demie au pire, puis repart d'elle-même
+par l'ancien chemin, sans rien à relancer.

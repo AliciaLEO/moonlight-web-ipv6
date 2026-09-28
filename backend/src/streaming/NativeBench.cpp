@@ -86,6 +86,9 @@ struct BenchRow
     /// The rate the encoder held for it (EncodedFrame::encoderKbps), 0 when
     /// the platform does not say.
     int encoderKbps = 0;
+    /// The chain that made it: a D3D12 session that failed while streaming
+    /// goes on in D3D11 (MW_D3D12_FAULT puts that on the bench).
+    mw::native::VideoPipeline pipeline = mw::native::VideoPipeline::Auto;
 };
 
 const char* const kUsage =
@@ -152,6 +155,8 @@ const char* const kUsage =
     "  ddasync=gpu|none|cpu        how the capture and the D3D12 read are ordered\n"
     "  gputiming=0|1               GPU times per frame (gpu_convert_us, gpu_encode_us)\n"
     "  strict12=0|1                end rather than run D3D11 when D3D12 was asked for\n"
+    "  (in the environment, MW_D3D12_FAULT=open|convert|timeout|removed|encode[@N]: that fault\n"
+    "  at the Nth D3D12 open or conversion — without strict12, to watch the way back to D3D11)\n"
     "the bench's own:\n"
     "  dump=<path>      the encoded stream as it comes out (Annex-B, or OBUs for AV1)\n"
     "  lose=<frames>    every N frames, report the latest one lost (reference invalidation)\n"
@@ -622,10 +627,14 @@ int runNativeBenchCommand(const QString& specText)
     }
 
     std::string error;
+    // Set before start(), read by the callback on the session's thread — the
+    // one that writes the session's info.
+    mw::native::Session* live = nullptr;
     std::unique_ptr<mw::native::Session> session = mw::native::NativeHost::createSession(
         config,
         [&](const mw::native::EncodedFrame& f) {
             BenchRow row;
+            if (live) row.pipeline = live->info().videoPipeline;
             row.frameNumber = f.frameNumber;
             row.keyframe = f.keyframe;
             // A re-send stamps present, captured and submitted with the same
@@ -661,6 +670,7 @@ int runNativeBenchCommand(const QString& specText)
         err.flush();
         return 1;
     }
+    live = session.get();
     if (!session->start(error)) {
         err << "native-bench: could not start the session: " << QString::fromStdString(error)
             << "\n";
@@ -760,7 +770,6 @@ int runNativeBenchCommand(const QString& specText)
                "t1b_submitted_us,t2_converted_us,t3_encoded_us,acquire_us,convert_us,"
                "encode_us,host_total_us,gpu_convert_us,gpu_encode_us,target_kbps,encoder_kbps,"
                "pipeline\n";
-        const char* const pipelineName = mw::native::toString(pipeline);
         for (const BenchRow& r : rows) {
             csv << r.frameNumber << ',' << (r.keyframe ? 1 : 0) << ',' << (r.captured ? 1 : 0)
                 << ',' << static_cast<qulonglong>(r.bytes) << ',' << r.avgQp << ',' << r.presentUs
@@ -768,7 +777,8 @@ int runNativeBenchCommand(const QString& specText)
                 << r.encodedUs << ',' << (r.capturedUs - r.presentUs) << ','
                 << (r.convertedUs - r.submittedUs) << ',' << (r.encodedUs - r.convertedUs) << ','
                 << (r.encodedUs - r.presentUs) << ',' << r.gpuConvertUs << ',' << r.gpuEncodeUs
-                << ',' << r.targetKbps << ',' << r.encoderKbps << ',' << pipelineName << '\n';
+                << ',' << r.targetKbps << ',' << r.encoderKbps << ','
+                << mw::native::toString(r.pipeline) << '\n';
         }
     }
     file.close();
@@ -813,6 +823,17 @@ int runNativeBenchCommand(const QString& specText)
 
     out << "frames          " << rows.size() << " (" << captured << " captured, " << resends
         << " re-sent, " << keyframes << " keyframes)\n";
+    // A chain that changed while running (MW_D3D12_FAULT): after which frame,
+    // how long the viewer went without a picture, and whether the first one
+    // after it decodes on its own.
+    for (size_t i = 1; i < rows.size(); ++i) {
+        if (rows[i].pipeline == rows[i - 1].pipeline) continue;
+        out << "pipeline change " << mw::native::toString(rows[i - 1].pipeline) << " → "
+            << mw::native::toString(rows[i].pipeline) << " after frame " << rows[i - 1].frameNumber
+            << ": " << QString::number((rows[i].encodedUs - rows[i - 1].encodedUs) / 1000.0, 'f', 1)
+            << " ms without a picture, then "
+            << (rows[i].keyframe ? "a keyframe" : "NOT a keyframe") << "\n";
+    }
     if (spanS > 0)
         out << "capture rate    " << QString::number((captured - 1) / spanS, 'f', 1) << " fps over "
             << QString::number(spanS, 'f', 1) << " s\n";

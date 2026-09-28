@@ -47,6 +47,7 @@ void run_hevc_slice_parser_tests();
 void run_hevc_dpb_tests();
 void run_hevc_negotiation_tests();
 void run_video_pipeline_choice_tests();
+void run_d3d12_fault_tests();
 void run_linux_route_choice_tests();
 void run_linux_session_tests();
 void run_linux_virtual_display_tests();
@@ -122,6 +123,7 @@ int main(int argc, char** argv)
     RUN(hevc_dpb);
     RUN(hevc_negotiation);
     RUN(video_pipeline_choice);
+    RUN(d3d12_fault);
     RUN(linux_route_choice);
     RUN(vpl_params);
 #ifdef MW_NATIVE_OPENH264

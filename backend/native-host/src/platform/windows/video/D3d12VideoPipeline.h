@@ -20,6 +20,7 @@
 #include "WindowsVideoPipeline.h"
 
 #include "../../../convert/windows/d3d12/ColorConvert12.h"
+#include "../../../core/D3d12Fault.h"
 #include "../../../encode/windows/d3d12/IVideoEncoder12.h"
 #include "../d3d12/D3d12Device.h"
 #include "../d3d12/DdaInterop.h"
@@ -48,6 +49,10 @@ namespace mw::native {
 /// conversion that fails is kept for that answer rather than returned: the
 /// session ends on a failed conversion, and D3D12 must never end a session
 /// D3D11 could have carried.
+///
+/// MW_D3D12_FAULT makes each of those happen on demand, at a picture chosen
+/// (D3d12Fault, plan C8.1): the way back to D3D11 is watched on the bench
+/// rather than trusted.
 class D3d12VideoPipeline final : public WindowsVideoPipeline
 {
 public:
@@ -149,6 +154,22 @@ private:
     /// The queue idle: nothing of ours still reads or writes a resource.
     void drain();
 
+    // ── MW_D3D12_FAULT (D3d12Fault) ────────────────────────────────────────
+
+    /// Counts a conversion, and says the fault armed for it: None but for
+    /// the Nth.
+    D3d12Fault::Kind nextConversion();
+    /// What a conversion's fault does once its list is recorded: Convert
+    /// fails it (false, with the reason); Timeout stalls its submission;
+    /// Removed and Encode wait for the encode that follows.
+    bool armFault(D3d12Fault::Kind fault, std::string& error);
+    /// Timeout: the conversion queue waits on a fence only the CPU signals.
+    bool stall(std::string& error);
+    /// Timeout: the queue let go, once the chain has given up on it.
+    void releaseStall();
+    /// Removed: ID3D12Device5::RemoveDevice, as a TDR would.
+    void removeDevice();
+
     EncoderTuning m_Tuning;
     std::shared_ptr<d3d12::D3d12Device> m_Device;
     d3d12::Queue m_Queue;
@@ -183,6 +204,16 @@ private:
     uint64_t m_Frames = 0;
     uint64_t m_TimedFrames = 0;
     int64_t m_GpuConvertUs = 0;
+
+    // MW_D3D12_FAULT.
+    D3d12Fault m_Fault;
+    uint64_t m_Conversions = 0;
+    bool m_StallNext = false;
+    /// The fence a stalled conversion waits for, kept until the queue is
+    /// drained.
+    Microsoft::WRL::ComPtr<ID3D12Fence> m_Stall;
+    /// Removed or Encode, for the next encode().
+    D3d12Fault::Kind m_EncodeFault = D3d12Fault::Kind::None;
 };
 
 } // namespace mw::native

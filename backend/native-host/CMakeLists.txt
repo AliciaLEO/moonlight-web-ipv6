@@ -473,6 +473,7 @@ if(MW_BUILD_TESTS)
         tests/test_hevc_dpb.cpp
         tests/test_hevc_negotiation.cpp
         tests/test_video_pipeline_choice.cpp
+        tests/test_d3d12_fault.cpp
         tests/test_linux_route_choice.cpp
         tests/test_reference_slots.cpp
         tests/test_audio_pacer.cpp

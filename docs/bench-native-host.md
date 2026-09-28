@@ -2338,6 +2338,62 @@ l'échelle.)
 **Décision (Bruno, 28/09) : `refit=1` par défaut** (`0d09df8d`). `refit=0`
 reste la clé de banc de l'« avant ».
 
+### 8n.11 C8.1 : les pannes injectées, sur l'Arc (28/09/2026)
+
+Depuis §9-23, D3D12 est le chemin par défaut d'Intel. Sa promesse : rien de
+ce qu'il rate ne coupe un stream, la session repart en D3D11 sur une
+keyframe et dit pourquoi. Ces chemins-là, aucun banc ne les prenait de
+lui-même.
+
+**Montage.**
+- `MW_D3D12_FAULT=<panne>@N` dans l'environnement (C8.1) : la panne à la
+  N-ième conversion de la chaîne, ou à la N-ième ouverture pour `open`.
+  - `encode` : l'image est codée, puis jetée comme une erreur du pilote.
+  - `convert` : la conversion n'est pas enregistrée, comme une liste
+    refusée.
+  - `timeout` : la conversion attend une fence que personne ne signale ;
+    l'encodage dépasse le délai (3 s), puis la file est relâchée, comme un
+    GPU coincé derrière un jeu.
+  - `removed` : `ID3D12Device5::RemoveDevice` avant l'encodage, comme un
+    TDR ou une mise à jour du pilote.
+  - `open` : la chaîne ne s'ouvre pas.
+- `--native-bench` sans clé de chaîne (donc D3D12 par la table, §9-23), sur
+  l'écran de l'Arc qui fait défiler du texte : HEVC 1440p60, 20 Mb/s, 10 s,
+  jeton limité, panne à la conversion 180 (vers 3 s).
+- Le CSV porte désormais la chaîne de chaque image (colonne `pipeline`). Le
+  résumé dit la bascule : après quelle image, combien de temps sans image,
+  et si la première image d'après est une keyframe.
+- Chaque flux est relu par ffmpeg (erreurs de décodage), et ffprobe compte
+  les images décodées.
+
+| panne | trou sans image | images D3D12 / D3D11 | keyframes (images) | erreurs de décodage |
+|---|---|---|---|---|
+| `encode@180` | 618 ms | 178 / 384 | 0, 178 | 0 |
+| `convert@180` | 618 ms | 179 / 388 | 0, 179 | 0 |
+| `timeout@180` | 3 592 ms | 178 / 210 | 0, 178 | 0 |
+| `removed@180` | 640 ms | 178 / 383 | 0, 178 | 0 |
+| `open@1` | — (D3D11 dès le départ) | 0 / 541 | 0 | 0 |
+| `encode@180`, `intra=1` | 603 ms | 179 / 386 | 0, 179 | 0 |
+| `removed@180`, `intra=1` | 623 ms | 179 / 382 | 0, 179 | 0 |
+
+- Chaque fois, D3D11 reprend sur une keyframe, la seule en dehors de la
+  première. Le journal dit la panne, puis « D3D12 lost (…) — back to D3D11
+  for the rest of the session », puis la chaîne choisie et pourquoi.
+  - `removed` : « the encode list was refused (0x80070057) (the device is
+    gone: the D3D12 device was removed (0x887A0005)) ».
+  - `open@1` : « D3D11 runs: the D3D12 build failed (fault injected …) ».
+- Le trou de 0,6 s correspond à la duplication rouverte, puis à oneVPL ouvert
+  en D3D11, jusqu'à la première image complète. Celui de `timeout` ajoute les
+  3 s d'attente, le délai qui sépare un GPU perdu d'un GPU occupé (§3.1 du
+  plan).
+- Flux sans erreur de décodage, toutes les images décodées. ffmpeg ne relève
+  que des DTS non croissants au changement d'encodeur : le nouvel encodeur
+  reprend son POC à 0 à son IDR, et un flux brut n'a pas d'autre horloge.
+  Le navigateur, lui, reconfigure son décodeur sur des paramètres changés à
+  une keyframe (`VideoDecodeWorker.js`), comme après un changement de mode.
+- `removed` n'a rien bloqué côté D3D11 : la duplication, qui attendait la
+  fence B du périphérique retiré, a été rouverte sans attente.
+
 ## 8o. Linux : la chaîne Vulkan (28/09/2026 →)
 
 Phase 13 du plan D3D12 : la même forme de chaîne sous Linux, en Vulkan Video

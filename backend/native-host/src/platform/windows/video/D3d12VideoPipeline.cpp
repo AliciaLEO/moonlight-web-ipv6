@@ -21,6 +21,7 @@
 #include "../../../core/Log.h"
 #include "../../../encode/windows/d3d12/VideoEncode12.h"
 
+#include <atomic>
 #include <cstdio>
 #include <map>
 #include <mutex>
@@ -32,6 +33,25 @@ namespace {
 /// The adapters found without D3D12 Video Encode, and why (videoEncodeMissing).
 std::mutex g_NoVideoEncodeLock;
 std::map<uint64_t, std::string> g_NoVideoEncode;
+
+/// The chains opened so far under MW_D3D12_FAULT=open@N: the Nth fails.
+std::atomic<uint64_t> g_FaultedOpens{0};
+
+/// MW_D3D12_FAULT, read when a chain is made (D3d12Fault).
+D3d12Fault faultFromEnvironment()
+{
+    char value[32] = {};
+    const DWORD n = ::GetEnvironmentVariableA("MW_D3D12_FAULT", value, sizeof(value));
+    if (n == 0 || n >= sizeof(value)) return {};
+    D3d12Fault fault;
+    if (!parseD3d12Fault(value, fault)) {
+        log::warning(std::string("[native] MW_D3D12_FAULT=") + value +
+                     " is not a fault (open, convert, timeout, removed or encode, then @N) — "
+                     "ignored");
+        return {};
+    }
+    return fault;
+}
 
 /// The size the converter starts at: whole blocks of 16. The encoder settles
 /// on whole coding tree blocks (32 or 64, HevcEncodeNegotiation.h), and the
@@ -67,6 +87,7 @@ constexpr uint32_t kWaitMs = d3d12::kGpuGoneMs;
 
 D3d12VideoPipeline::D3d12VideoPipeline(const EncoderTuning& tuning)
     : m_Tuning(tuning)
+    , m_Fault(faultFromEnvironment())
 {}
 
 D3d12VideoPipeline::~D3d12VideoPipeline()
@@ -91,6 +112,14 @@ bool D3d12VideoPipeline::open(bool crossGpuCopy, uint64_t encodeAdapterLuid,
     }
     error = videoEncodeMissing(encodeAdapterLuid);
     if (!error.empty()) return false;
+    m_Conversions = 0;
+    if (m_Fault) {
+        log::info("[native] " + describe(m_Fault) + " in effect: " + effect(m_Fault));
+        if (m_Fault.kind == D3d12Fault::Kind::Open && ++g_FaultedOpens == m_Fault.at) {
+            error = "fault injected (" + describe(m_Fault) + ")";
+            return false;
+        }
+    }
     m_Device = d3d12::D3d12Device::forAdapter(encodeAdapterLuid, error);
     if (!m_Device) return false;
     ID3D12Device* device = m_Device->device();
@@ -154,8 +183,12 @@ void D3d12VideoPipeline::drain()
 void D3d12VideoPipeline::teardown(bool keepHeld)
 {
     // Nothing of ours may still read the surfaces, the held copy or the
-    // encoder's input when they go.
+    // encoder's input when they go — a stall injected on the queue included.
+    releaseStall();
     drain();
+    m_Stall.Reset();
+    m_StallNext = false;
+    m_EncodeFault = D3d12Fault::Kind::None;
     if (m_TimerSlot >= 0) {
         d3d12::QueueTimer::Sample unused;
         m_Timer.read(m_TimerSlot, unused);
@@ -292,6 +325,67 @@ void D3d12VideoPipeline::lose(const std::string& reason)
         m_Timer.cancel(m_TimerSlot);
         m_TimerSlot = -1;
     }
+    // An injected stall lasts as long as the chain's patience, like a GPU
+    // stuck behind a game that gets through once it can.
+    releaseStall();
+}
+
+D3d12Fault::Kind D3d12VideoPipeline::nextConversion()
+{
+    ++m_Conversions;
+    if (m_Fault.kind == D3d12Fault::Kind::Open || m_Conversions != m_Fault.at)
+        return D3d12Fault::Kind::None;
+    return m_Fault.kind;
+}
+
+bool D3d12VideoPipeline::armFault(D3d12Fault::Kind fault, std::string& error)
+{
+    switch (fault) {
+    case D3d12Fault::Kind::Convert:
+        error = "fault injected (" + describe(m_Fault) + ")";
+        return false;
+    case D3d12Fault::Kind::Timeout: m_StallNext = true; break;
+    case D3d12Fault::Kind::Removed:
+    case D3d12Fault::Kind::Encode: m_EncodeFault = fault; break;
+    default: break;
+    }
+    return true;
+}
+
+bool D3d12VideoPipeline::stall(std::string& error)
+{
+    m_StallNext = false;
+    HRESULT h = m_Device->device()->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_Stall));
+    if (SUCCEEDED(h)) h = m_Queue.queue->Wait(m_Stall.Get(), 1);
+    if (FAILED(h)) {
+        error = "the injected stall was refused (" + d3d12::hresultText(h) + ")";
+        m_Stall.Reset();
+        return false;
+    }
+    log::info("[native] " + describe(m_Fault) + ": conversion " + std::to_string(m_Conversions) +
+              " stalled on the GPU");
+    return true;
+}
+
+void D3d12VideoPipeline::releaseStall()
+{
+    if (!m_Stall || m_Stall->GetCompletedValue() >= 1) return;
+    // From the CPU: the queue goes on with what it holds.
+    m_Stall->Signal(1);
+    log::info("[native] " + describe(m_Fault) + ": the stalled conversion let go");
+}
+
+void D3d12VideoPipeline::removeDevice()
+{
+    Microsoft::WRL::ComPtr<ID3D12Device5> device5;
+    if (FAILED(m_Device->device()->QueryInterface(IID_PPV_ARGS(&device5)))) {
+        log::warning("[native] " + describe(m_Fault) +
+                     ": no ID3D12Device5 to remove (Windows 10 before 1809) — nothing done");
+        return;
+    }
+    log::info("[native] " + describe(m_Fault) + ": the D3D12 device removed before the picture " +
+              "of conversion " + std::to_string(m_Conversions) + " is encoded");
+    device5->RemoveDevice();
 }
 
 ID3D12GraphicsCommandList* D3d12VideoPipeline::beginList(std::string& error)
@@ -321,6 +415,7 @@ bool D3d12VideoPipeline::submit(uint64_t acquired, bool signalCapture, std::stri
         return false;
     }
     if (acquired && !m_Interop.conversionWaits(m_Queue.queue.Get(), acquired, error)) return false;
+    if (m_StallNext && !stall(error)) return false;
     ID3D12CommandList* lists[] = {m_List.Get()};
     m_Queue.queue->ExecuteCommandLists(1, lists);
     if (signalCapture) {
@@ -338,6 +433,7 @@ bool D3d12VideoPipeline::convert(capture::IWindowsCapture& capture, ID3D11Textur
     (void)error;
     m_ReleaseAfter = 0;
     if (!m_Lost.empty()) return true;
+    const D3d12Fault::Kind fault = nextConversion();
     std::string why;
     ID3D12Resource* surface = m_Interop.open(captured, why);
     if (!surface) {
@@ -362,7 +458,7 @@ bool D3d12VideoPipeline::convert(capture::IWindowsCapture& capture, ID3D11Textur
     // the same list: read before fence B, like the conversion.
     if (retain && !m_Converter->recordCopy(list, surface, why))
         log::warning("[native] could not keep a desktop copy: " + why);
-    if (!m_Converter->recordConvert(list, surface, cursor, draw, why)) {
+    if (!m_Converter->recordConvert(list, surface, cursor, draw, why) || !armFault(fault, why)) {
         m_List->Close();
         lose("conversion: " + why);
         return true;
@@ -393,6 +489,7 @@ bool D3d12VideoPipeline::convertHeld(capture::IWindowsCapture& capture,
         lose("no desktop held to convert again");
         return true;
     }
+    const D3d12Fault::Kind fault = nextConversion();
     std::string why;
     ID3D12GraphicsCommandList* list = beginList(why);
     if (!list) {
@@ -400,7 +497,8 @@ bool D3d12VideoPipeline::convertHeld(capture::IWindowsCapture& capture,
         return true;
     }
     if (m_Timing) m_TimerSlot = m_Timer.begin(list);
-    if (!m_Converter->recordConvert(list, m_Converter->held(), cursor, draw, why)) {
+    if (!m_Converter->recordConvert(list, m_Converter->held(), cursor, draw, why) ||
+        !armFault(fault, why)) {
         m_List->Close();
         lose("conversion: " + why);
         return true;
@@ -427,13 +525,14 @@ bool D3d12VideoPipeline::convertBlank(const convert::CursorDraw& draw, std::stri
     (void)draw;
     (void)error;
     if (!m_Lost.empty()) return true;
+    const D3d12Fault::Kind fault = nextConversion();
     std::string why;
     ID3D12GraphicsCommandList* list = beginList(why);
     if (!list) {
         lose(why);
         return true;
     }
-    if (!m_Converter->recordClearBlack(list, why)) {
+    if (!m_Converter->recordClearBlack(list, why) || !armFault(fault, why)) {
         m_List->Close();
         lose("black picture: " + why);
         return true;
@@ -455,10 +554,25 @@ WindowsVideoPipeline::EncodeResult D3d12VideoPipeline::encode(bool forceKeyframe
         error = "the D3D12 chain is not built";
         return EncodeResult::Lost;
     }
+    const D3d12Fault::Kind fault = m_EncodeFault;
+    m_EncodeFault = D3d12Fault::Kind::None;
+    if (fault == D3d12Fault::Kind::Removed) removeDevice();
     if (!m_Encoder->encode(m_Converter->output(), m_Converted.fence(), m_ConvertedValue,
                            forceKeyframe, frameNumber, out, error)) {
         std::string reason;
         if (m_Device->removed(reason)) error += " (the device is gone: " + reason + ")";
+        lose(error);
+        return EncodeResult::Lost;
+    }
+    // A picture the GPU coded after all is not taken from a device that is
+    // gone; one the fault flags is thrown away, as a driver's error would be.
+    std::string gone;
+    if ((fault == D3d12Fault::Kind::Removed && m_Device->removed(gone)) ||
+        fault == D3d12Fault::Kind::Encode) {
+        m_Encoder->releaseOutput();
+        error = fault == D3d12Fault::Kind::Encode
+                    ? "fault injected (" + describe(m_Fault) + ")"
+                    : "the picture came back from a device that is gone (" + gone + ")";
         lose(error);
         return EncodeResult::Lost;
     }
