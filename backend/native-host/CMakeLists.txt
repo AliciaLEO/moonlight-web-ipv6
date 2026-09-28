@@ -59,6 +59,7 @@ if(WIN32)
         third_party/vigem-client/src/ViGEmClient.cpp
         src/encode/windows/NvencApi.cpp
         src/encode/windows/NvencCapabilities.cpp
+        src/encode/windows/NvencConfig.cpp
         src/encode/windows/NvencEncoder.cpp
         src/encode/windows/AmfApi.cpp
         src/encode/windows/AmfCapabilities.cpp

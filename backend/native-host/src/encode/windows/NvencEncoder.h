@@ -19,6 +19,7 @@
 
 #include "IVideoEncoder.h"
 #include "NvencApi.h"
+#include "NvencConfig.h"
 
 #include <cstdint>
 #include <string>
@@ -86,10 +87,10 @@ public:
     /// live from what the client reports). Applied from the next frame.
     bool setBitrate(int bitrateKbps, std::string& error) override;
 
-    bool intraRefreshEnabled() const override { return m_IntraRefresh; }
+    bool intraRefreshEnabled() const override { return m_Plan.intraRefresh; }
     int intraRefreshHorizonFrames() const override
     {
-        return m_IntraRefresh ? m_IntraRefreshHorizon : 0;
+        return m_Plan.intraRefresh ? m_Plan.intraRefreshHorizon : 0;
     }
 
     /// The configuration handed to the driver at init (ConfigFingerprint).
@@ -103,6 +104,10 @@ private:
 
     NV_ENC_INITIALIZE_PARAMS m_InitParams = {};
     NV_ENC_CONFIG m_Config = {};
+    /// What the configuration settled (NvencConfig): the input format the
+    /// profile agrees with, the wave, the DPB, and the VBV rule setBitrate()
+    /// sizes the buffer by again.
+    NvencPlan m_Plan;
 
     /// The registered input surface, and the texture it was registered for.
     /// Registration is per texture, and ColorConvert reuses one output texture
@@ -113,18 +118,8 @@ private:
     NV_ENC_OUTPUT_PTR m_Bitstream = nullptr;
     bool m_OutputLocked = false;
 
-    Codec m_Codec = Codec::H264;
-    /// The input format registered with NVENC, and the profile the stream is
-    /// encoded at. Kept together because they must agree.
-    NV_ENC_BUFFER_FORMAT m_BufferFormat = NV_ENC_BUFFER_FORMAT_NV12;
-    bool m_Hdr = false;
     int m_Width = 0;
     int m_Height = 0;
-    bool m_IntraRefresh = false;
-    int m_IntraRefreshHorizon = 0;
-    /// The bench's VBV override, kept so setBitrate() resizes the buffer by the
-    /// same rule init() used. 0 is the engine's own rule.
-    int m_VbvFrames = 0;
     /// Whether the driver claims reference invalidation for this codec.
     bool m_RefInvalidation = false;
     int m_Invalidations = 0;
