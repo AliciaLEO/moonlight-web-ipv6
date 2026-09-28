@@ -87,18 +87,44 @@ int formatFromSession(const mw::native::SessionInfo& info)
     return info.yuv444 ? kVideoFormatH264High444 : kVideoFormatH264;
 }
 
+/// The GPU's maker in one word, for the encoders whose name does not say it:
+/// D3D12 VE and Vulkan Video run on anyone's silicon, and "D3D12 VE" alone
+/// left the overlay's reader guessing which card was encoding (Bruno, 28/09).
+/// Read off the adapter's name, which every driver fills with its maker's.
+QString vendorWord(const std::string& gpuName)
+{
+    const QString name = QString::fromStdString(gpuName);
+    if (name.contains(QLatin1String("NVIDIA"), Qt::CaseInsensitive))
+        return QStringLiteral("NVIDIA");
+    if (name.contains(QLatin1String("AMD"), Qt::CaseInsensitive) ||
+        name.contains(QLatin1String("Radeon"), Qt::CaseInsensitive))
+        return QStringLiteral("AMD");
+    if (name.contains(QLatin1String("Intel"), Qt::CaseInsensitive)) return QStringLiteral("Intel");
+    return {};
+}
+
+/// @p name followed by the maker in brackets, when there is one to name.
+QString withVendor(const QString& name, const mw::native::SessionInfo& info)
+{
+    const QString vendor = vendorWord(info.gpuName);
+    return vendor.isEmpty() ? name : name + QStringLiteral(" (") + vendor + QLatin1Char(')');
+}
+
 /// The encoder as the overlay names it: the D3D12 route's own ("D3D12 VE",
 /// "NVENC (D3D12)") while that chain runs, "Vulkan Video" while Linux's does,
 /// the Selector's ("NVENC", "AMF", "oneVPL", "VA-API") otherwise — followed
 /// by "(D3D11)" when D3D12 was asked for and D3D11 runs, so whoever picked
-/// D3D12 in the admin sees at a glance that it did not take. On Linux the
-/// encoder's name already says which chain runs. Why is the log's to say.
+/// D3D12 in the admin sees at a glance that it did not take. The two names
+/// that fit any vendor carry the GPU's maker: "D3D12 VE (Intel)". On Linux
+/// the encoder's name already says which chain runs. Why is the log's to say.
 QString encoderLabel(const mw::native::SessionInfo& info)
 {
-    if (info.videoPipeline == mw::native::VideoPipeline::D3d12 && !info.videoEncoder.empty())
-        return QString::fromStdString(info.videoEncoder);
+    if (info.videoPipeline == mw::native::VideoPipeline::D3d12 && !info.videoEncoder.empty()) {
+        const QString name = QString::fromStdString(info.videoEncoder);
+        return name == QLatin1String("D3D12 VE") ? withVendor(name, info) : name;
+    }
     if (info.videoPipeline == mw::native::VideoPipeline::Vulkan)
-        return QStringLiteral("Vulkan Video");
+        return withVendor(QStringLiteral("Vulkan Video"), info);
     QString name = QString::fromUtf8(mw::native::toString(info.encoder));
     if (info.videoPipelineRefused && info.videoPipeline == mw::native::VideoPipeline::D3d11)
         name += QStringLiteral(" (D3D11)");
