@@ -171,6 +171,19 @@ session le dit en warning au démarrage : sur ce chemin, toutes les promesses
 zéro-copie de ce document sont hors jeu. Avant cette date la session refusait
 de démarrer.
 
+**Depuis le 21/09/2026, la relecture passe par le moteur de copie**
+(`acdcda49`). Un `CopyResource` D3D11 part dans la file 3D du GPU source, où
+il attend derrière l'image d'un jeu. Sous Resident Evil Requiem sur l'Arc,
+la relecture d'une image 1440p y prenait 15 ms en moyenne et 64 au p99, pour
+1,6 ms de copie. Le pont ouvre désormais la surface capturée en D3D12 par son
+handle NT, et la relit sur une file COPY de ce GPU. Cette file tourne sur le
+moteur DMA, que le jeu n'utilise pas : 1,6 ms en moyenne, 2,3 au p99, sous la
+même charge, avec des pixels identiques. Si une étape est refusée (surface sans
+handle partagé, GPU sans D3D12), la relecture reprend le chemin D3D11, et le
+journal le dit une fois. `MW_BRIDGE_DMA=off` force le chemin D3D11, pour
+l'avant/après. La chaîne D3D12 (§32) ne prend pas ce pont : une session qui
+copie entre GPU reste en D3D11.
+
 ---
 
 ## 6. ⚠️ Ce que le banc a corrigé
@@ -1138,22 +1151,27 @@ libre de redevance)**. D'où la préférence AV1 quand les deux bouts suivent.
 
 ## 13. État
 
+Tableau remis à jour le 29/09/2026, à la clôture du plan D3D12 (§32.19).
+
 | Livré et mesuré | Reste |
 |---|---|
-| Module isolé + garde de licence | HDR (P010 + PQ) |
-| **Audio** : WASAPI loopback → cadenceur 5 ms → libopus, thread « Pro Audio » (04/09/2026 ; le son reste audible sur l'hôte, à couper en v0.3.0) | |
+| Module isolé + garde de licence | |
+| **Audio** : WASAPI loopback → cadenceur 5 ms → libopus, thread « Pro Audio » (04/09/2026) | |
 | `IMediaEngine`, relais découplés | |
-| Sonde displays/GPU + association | WGC en repli |
-| Capture DXGI (0,06 ms) | Lanceur de session console (service Windows) |
-| Conversion NV12 + AYUV 4:4:4 | UI (grille d'écrans, ligne GPU/encodeur) |
-| NVENC (3,46 ms), AMF (3,70 ms), oneVPL (écrit, non exécuté) | Retrait de Sunshine de l'installeur |
-| Intra-refresh sur les trois encodeurs + ride-out client | Linux, macOS |
-| Curseur composé, plancher sur écran immobile choisi par le client (§9.1) | Benchmarks : NVENC et AMF (iGPU) mesurés le 04/09/2026 (`docs/bench-native-host.md`) ; RX 7600 et Intel attendent leur GPU ; l'application du réglage attend l'A/B |
-| Copie inter-GPU (§5, 04/09/2026) : un écran dont le GPU n'encode pas streame quand même | |
-| Six étapes mesurées par frame, p95/p99 dans les stats et le log (§4, point 4) | |
+| Sonde displays/GPU + association ; WGC en repli, et retour à DDA dès que le bureau de l'utilisateur revient (§32.10) | |
+| Capture DXGI (0,06 ms) ; worker SYSTEM pour le bureau sécurisé (§31) | L'invite UAC cliquable et `C+A+Suppr`, à voir sur un poste où l'UAC s'affiche |
+| Conversion NV12 + AYUV 4:4:4 ; HDR (P010 + BT.2020 PQ) | |
+| NVENC (3,46 ms), AMF (3,70 ms), oneVPL (mesuré sur l'Arc et le N95) | |
+| **Chaîne D3D12** (§32) : conversion D3D12, D3D12 Video Encode en HEVC, H.264 et AV1, contrôle de débit maison ; **par défaut sur Intel** (§32.9) ; NVENC et AMF en entrée D3D12 derrière le réglage (§32.12) | NVIDIA et AMD restent en D3D11, plus rapides chez eux ; deux clés de banc à trancher (`pipelined=1`, `keep12=1`, §32.17-§32.18) |
+| Intra-refresh sur les trois encodeurs + ride-out client (sauf plateformes Apple) | |
+| Curseur composé, plancher sur écran immobile choisi par le client (§9.1) | |
+| Copie inter-GPU (§5) : un écran dont le GPU n'encode pas streame quand même ; la relecture passe par la file COPY depuis le 21/09 | |
+| Six étapes mesurées par frame, p95/p99 dans les stats et le log (§4, point 4) ; temps GPU de la conversion et de l'encodeur au banc (`gputiming=1`) | |
 | Clavier/souris (`SendInput`), manette (ViGEm) + rumble | |
-| Installeur : ViGEmBus en silencieux | |
-| Banc de shaders de réduction `mw-scaler-bench` + passe Lanczos-2 séparable en lumière linéaire dans `ColorConvert`/`GlConvert`, letterbox, `MW_SCALER` (§28, 17/09/2026) | L'A/B sur un vrai flux par encodeur (`MW_SCALER`), le visuel client 1:1 |
+| Installeur : ViGEmBus en silencieux ; plus de Sunshine | |
+| Banc de shaders de réduction `mw-scaler-bench` + passe Lanczos-2 séparable en lumière linéaire dans `ColorConvert`/`GlConvert`, letterbox, `MW_SCALER` (§28, 17/09/2026) ; ce qu'elle coûte, GPU par GPU (§8n.25 du banc) | L'A/B sur un vrai flux par encodeur (`MW_SCALER`), le visuel client 1:1 |
+| **Linux** : KMS ou portail → GL → VA-API ; route scindée Vulkan compute → VA-API par défaut sur AMD (§32.8) ; chaîne Vulkan Video derrière le réglage, prise sur la preuve au pixel (§32.7) ; OpenH264 en repli | G5 : Counter-Strike 2 et l'endurance sous un jeu ; NVIDIA et Intel sous Linux, quand leurs cartes seront sur le banc |
+| **macOS** : ScreenCaptureKit → VideoToolbox | |
 
 **Le chemin est complet côté serveur**, et jouable : le host natif apparaît sans
 pairing, un clic sur un écran construit un `NativeMediaEngine` qui alimente le
@@ -1214,6 +1232,23 @@ construction, disqualifié avant toute mesure. La variable d'environnement
 `MW_NATIVE_TUNING` accepte les mêmes clés sur une **vraie session** (log
 « MW_NATIVE_TUNING in effect »), pour l'A/B à l'œil que le banc ne peut pas
 faire. Campagne du 04/09/2026 et recommandation : `docs/bench-native-host.md`.
+
+**Depuis le 27/09/2026, la chaîne d'image elle-même** (plan D3D12, §32) :
+- Sous Windows : `pipeline=auto|d3d11|d3d12`, `conv12=direct|compute`,
+  `enc12=ve|nvenc|amf`, `rc12=driver|qp`, `reencode=0|1`, `refit=0|1`,
+  `interfloor=<k>|off`, `prio12=normal|high|realtime`,
+  `creator12=own|default`, `ddasync=gpu|none|cpu`, `gputiming=0|1`,
+  `strict12=0|1`, `pipelined=0|1` (§32.17) et `keep12=0|1` (§32.18).
+- Sous Linux : `pipeline=auto|vaapi|vulkan`, `convert=gl|vulkan`,
+  `priovk=normal|high`.
+- Les clés du banc lui-même : `dump=<fichier>` (le flux tel qu'il sort),
+  `lose=<N>` (une perte signalée toutes les N images) et
+  `ramp=<kbps>[@<s>]` (le débit alterne, comme le gouverneur le ferait).
+- En variables d'environnement : `MW_D3D12_FAULT` (une panne injectée,
+  §32.10) et `MW_DDA_REFUSE` (un refus de la duplication).
+
+Sur une clé inconnue, `--native-bench` imprime la liste de toutes les clés,
+avec leur sens.
 
 Par frame, une ligne CSV : numéro, keyframe, capturée ou ré-émise, octets,
 **QP moyen** (`frameAvgQP` côté NVENC, `StatisticsFeedbackAvgQP` côté AMF — un
@@ -5767,3 +5802,34 @@ décode par blocs indépendants.
 résolution ou le retour d'un écran verrouillé rendra l'image environ 0,2 s
 plus vite sur un PC Intel. Le reste de la phase outille les bancs, et dit
 pourquoi deux idées (ROI, envoi par tranches) attendront.
+
+### 32.19 Clôture du plan : la chaîne par GPU (29/09/2026)
+
+Le plan `pipeline-video-d3d12-v2` s'achève sur une chaîne par type de GPU,
+chacune choisie au banc puis acceptée par Bruno. `Auto` prend la chaîne de la
+table ; le réglage `native_video_pipeline` (Avancé, dans l'admin) en force une
+autre. Un refus ou une panne ramène toujours à la chaîne d'avant, sans couper
+le stream.
+
+| GPU | `Auto` aujourd'hui | Pourquoi | Ce que le réglage offre en plus |
+|---|---|---|---|
+| Intel (Arc, iGPU Xe) | **D3D12** : conversion D3D12, D3D12 Video Encode en HEVC, contrôle de débit maison | Sous un jeu, l'hôte deux fois plus court sur l'Arc (G2) ; le débit tenu (G3) ; le clic → photon de Bruno (C5.7) | H.264 et AV1 par D3D12 Video Encode (en `Auto`, ils restent sur oneVPL) |
+| NVIDIA | D3D11 (NVENC) | NVENC y encode en 2 ms. VE en prend 5 à 8, et NVENC en entrée D3D12 ne fait pas mieux (G2, G4) | NVENC en entrée D3D12 |
+| AMD | D3D11 (AMF) | VE ajoute 7 à 8 ms, et AMF en entrée D3D12 ne fait pas mieux (G2, G4) | D3D12 Video Encode |
+| AMD sous Linux | **Vulkan compute → VA-API** (route scindée) | Sous un jeu, 8 ms au lieu de 15 à 38 par GL (§8o.5, §8o.8) | La chaîne Vulkan Video, prise sur la preuve au pixel (`vulkan`), ou GL (`vaapi`) |
+| Intel et NVIDIA sous Linux | GL → VA-API ; OpenH264 sur NVIDIA | Pas encore de carte au banc | La chaîne Vulkan Video, écrite d'après la spécification et les capacités lues |
+
+**Restent à Bruno** (plan, §9) :
+- l'image jetée au calage du lien, nommée à l'encodeur (§9-25) ;
+- `pipelined=1`, recommandé non (§9-26, §32.17) ;
+- `keep12=1` par défaut, recommandé oui (§9-27, §32.18) ;
+- G5 sous Counter-Strike 2, et la file d'encodage HIGH sous le noyau 7.0 ;
+- les tests manuels : le pompage de G3, l'invite UAC et `C+A+Suppr` ;
+- la séance du 780M sous Windows (C10.2), qui demande un redémarrage.
+
+**Concrètement, pour l'utilisateur** : sur un PC Intel, le stream part plus
+vite et reste net sous un jeu, avec un débit qui suit la connexion. Sur
+NVIDIA et AMD sous Windows, rien ne change : leur chemin était déjà le
+meilleur, et le banc l'a vérifié. Sous Linux avec un GPU AMD, l'image reste
+fluide quand un jeu sature le GPU. Partout, l'admin montre la chaîne qui
+tourne, et permet d'en choisir une autre.

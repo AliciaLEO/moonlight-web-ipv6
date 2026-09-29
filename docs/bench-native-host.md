@@ -3748,6 +3748,12 @@ Clés d'encodeur : `preset=1..7`, `tuning=ull|ll`, `multipass=off|quarter|full`,
 `aq=0|1`, `taq=0|1`, `preanalysis=0|1`, `quality=speed|balanced|quality`,
 `tu=1..7`, `vbv=<frames>`, `lowlatency=0|1`, `gpu=<id>`, et pour Intel
 `lowpower=0|1`, `mbbrc=0|1`, `extbrc=0|1`, `lowdelaybrc=0|1`, `gaming=0|1`,
-`winbrc=<frames>`. Le contenu est affaire d'opérateur : ici
+`winbrc=<frames>`. La chaîne d'image (plan D3D12) a les siennes, listées au
+§14 du design : `pipeline=`, `conv12=`, `enc12=`, `rc12=`, `reencode=`,
+`refit=`, `prio12=`, `ddasync=`, `gputiming=`, `strict12=`, `pipelined=`,
+`keep12=` sous Windows, `pipeline=vaapi|vulkan`, `convert=`, `priovk=` sous
+Linux, et `dump=`, `lose=`, `ramp=` pour le banc lui-même. Les A/B du plan
+passent par `scripts/bench/ab-native-bench.ps1`, en classe REALTIME par un
+exécuteur élevé (§8n.2). Le contenu est affaire d'opérateur : ici
 un Chrome dédié en kiosque sur l'écran capturé (`--user-data-dir` séparé,
 `--kiosk --window-position=<x>,<y>`), relancé avant chaque passe pour le clip.
