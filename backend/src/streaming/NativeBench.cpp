@@ -173,6 +173,13 @@ const char* const kUsage =
     "  ddasync=gpu|none|cpu        how the capture and the D3D12 read are ordered\n"
     "  gputiming=0|1               GPU times per frame (gpu_convert_us, gpu_encode_us)\n"
     "  strict12=0|1                end rather than run D3D11 when D3D12 was asked for\n"
+    "  cadence=client|host|host-ceiling|host-guarded\n"
+    "                              whose rate the stream runs at: the client's (the\n"
+    "                              default), or the host display's — every present\n"
+    "                              (host), held to the display's refresh (host-ceiling),\n"
+    "                              or skipped while the client's decode queue is over a\n"
+    "                              frame (host-guarded); the client's ceilings are logged,\n"
+    "                              not applied\n"
     "  (in the environment, MW_D3D12_FAULT=open|convert|timeout|removed|encode[@N]: that fault\n"
     "  at the Nth D3D12 open or conversion — without strict12, to watch the way back to D3D11)\n"
     "the picture chain (Linux), each defaulting to the engine's own choice:\n"
@@ -416,6 +423,19 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
         ok = parseChoice(value, tuning.pipelined);
     } else if (key == "keep12") {
         ok = parseChoice(value, tuning.keep12);
+    } else if (key == "cadence") {
+        using C = mw::native::EncoderTuning::Cadence;
+        const QString c = value.toLower();
+        if (c == "client")
+            tuning.cadence = C::Default;
+        else if (c == "host")
+            tuning.cadence = C::Host;
+        else if (c == "host-ceiling")
+            tuning.cadence = C::HostCeiling;
+        else if (c == "host-guarded")
+            tuning.cadence = C::HostGuarded;
+        else
+            ok = false;
     } else if (key == "convert") {
         using C = mw::native::EncoderTuning::ConvertLinux;
         const QString c = value.toLower();

@@ -312,6 +312,28 @@ struct EncoderTuning
     /// change came 717 → 546 ms sooner on the Arc; keep12=0 makes it again.
     Choice keep12 = Choice::Default;
 
+    // ── The stream's cadence (plan framerate-hote, design §33) ─────────────
+
+    /// Whose rate the stream runs at. The engine's own is the client's: the
+    /// setting, under the ceiling "Auto" states and the one a slow decoder
+    /// asks for, aligned on a client that paints on vsync (CadenceAlign.h),
+    /// the gate keeping the first present of each interval (FrameCadence).
+    /// The others run at the rate of the host's display, and receive the
+    /// client's ceilings without applying them (CadenceChoice.h). Windows only.
+    enum class Cadence
+    {
+        Default,
+        /// No gate: every present the capture delivers is encoded.
+        Host,
+        /// The ceiling gate at the display's own rate: a source presenting
+        /// faster than the display refreshes is held to it.
+        HostCeiling,
+        /// Host, and a present is skipped while the client says its decode
+        /// queue holds more than a frame (DecodeCredit.h).
+        HostGuarded
+    };
+    Cadence cadence = Cadence::Default;
+
     // ── The Linux chain (plan pipeline-video-d3d12-v2, Phase 13) ────────────
 
     /// The conversion in front of VA-API: GL through EGL, or Vulkan on a
@@ -363,8 +385,8 @@ struct EncoderTuning
                prio12 == Priority12::Default && ownCreator12 == Choice::Default &&
                ddaSync == DdaSync::Default && !gpuTiming && !strict12 &&
                pipelined == Choice::Default && keep12 == Choice::Default &&
-               convertLinux == ConvertLinux::Default && prioVk == PriorityVk::Default &&
-               portalDmabuf == Choice::Default;
+               cadence == Cadence::Default && convertLinux == ConvertLinux::Default &&
+               prioVk == PriorityVk::Default && portalDmabuf == Choice::Default;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -444,6 +466,9 @@ struct EncoderTuning
         if (strict12) add("strict12=1");
         if (pipelined != Choice::Default) add(std::string("pipelined=") + choice(pipelined));
         if (keep12 != Choice::Default) add(std::string("keep12=") + choice(keep12));
+        if (cadence == Cadence::Host) add("cadence=host");
+        if (cadence == Cadence::HostCeiling) add("cadence=host-ceiling");
+        if (cadence == Cadence::HostGuarded) add("cadence=host-guarded");
         if (convertLinux == ConvertLinux::Gl) add("convert=gl");
         if (convertLinux == ConvertLinux::Vulkan) add("convert=vulkan");
         if (prioVk == PriorityVk::Normal) add("priovk=normal");

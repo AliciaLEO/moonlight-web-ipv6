@@ -67,6 +67,7 @@ void run_stage_stats_tests();
 void run_frame_cadence_tests();
 void run_resample_cost_tests();
 void run_cadence_align_tests();
+void run_cadence_choice_tests();
 void run_restart_backoff_tests();
 void run_rate_control_tests();
 void run_qp_rate_controller_tests();
@@ -145,6 +146,7 @@ int main(int argc, char** argv)
     RUN(frame_cadence);
     RUN(resample_cost);
     RUN(cadence_align);
+    RUN(cadence_choice);
     RUN(restart_backoff);
     RUN(rate_control);
     RUN(qp_rate_controller);

@@ -1,0 +1,195 @@
+/*
+ * MoonlightWeb — native capture & encoding engine.
+ * Copyright (C) 2026 Bruno Martin <brunoocto@gmail.com>
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation, either version 3 of the License, or (at your option)
+ * any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+ * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
+#include "core/CadenceChoice.h"
+#include "native_test_framework.h"
+
+#include <string>
+
+using mw::native::CadenceChoice;
+using mw::native::CadenceInputs;
+using mw::native::EncoderTuning;
+using mw::native::FrameCadence;
+
+namespace {
+
+CadenceInputs inputs(int settingFps, int displayMilliHz, int clientMilliHz, bool clientVsync)
+{
+    CadenceInputs in;
+    in.settingFps = settingFps;
+    in.displayMilliHz = displayMilliHz;
+    in.clientMilliHz = clientMilliHz;
+    in.clientVsync = clientVsync;
+    return in;
+}
+
+/// Presents at @p presentHz for one second; how many the gate lets through.
+int admittedInOneSecond(FrameCadence gate, int presentHz)
+{
+    int admitted = 0;
+    for (int i = 0; i < presentHz; ++i)
+        if (gate.admit(static_cast<int64_t>(i) * 1000000 / presentHz)) admitted++;
+    return admitted;
+}
+
+bool contains(const std::string& s, const char* part)
+{
+    return s.find(part) != std::string::npos;
+}
+
+} // namespace
+
+void run_cadence_choice_tests()
+{
+    using Mode = EncoderTuning::Cadence;
+
+    // Without the key, the choice and its line are exactly what they were
+    // before they moved out of WindowsSession — word for word, since the
+    // bench's parsers read these lines.
+    SECTION("CadenceChoice — no key: a client that tears gets the setting");
+    {
+        const CadenceChoice c = mw::native::chooseCadence(inputs(60, 165000, 60000, false));
+        CHECK_EQ(c.fps, 60);
+        CHECK(c.gate.enabled());
+        CHECK(!c.gate.isCeiling());
+        CHECK_EQ(c.line, std::string("[native] cadence: 60 fps stream on a 165 Hz display — the "
+                                     "first present of each interval is encoded, at once; client "
+                                     "at 60 Hz, tearing — nothing to align on"));
+    }
+
+    SECTION("CadenceChoice — no key: a vsync client gets a divisor of its refresh");
+    {
+        const CadenceChoice c = mw::native::chooseCadence(inputs(60, 165000, 144000, true));
+        CHECK_EQ(c.fps, 72);
+        CHECK(c.gate.enabled());
+        CHECK_EQ(c.gate.intervalUs(), 2 * 1000000000LL / 144000);
+        CHECK_EQ(c.line,
+                 std::string("[native] cadence: 72 fps stream for a 144 Hz client presenting on "
+                             "vsync (60 set, every 2nd refresh) on a 165 Hz display — the first "
+                             "present of each interval is encoded, at once"));
+    }
+
+    SECTION("CadenceChoice — no key: Auto's ceiling keeps a 144 Hz client at 120");
+    {
+        CadenceInputs in = inputs(120, 165000, 144000, true);
+        in.maxFps = 120;
+        const CadenceChoice c = mw::native::chooseCadence(in);
+        CHECK_EQ(c.fps, 120);
+        CHECK_EQ(c.line, std::string("[native] cadence: 120 fps stream on a 165 Hz display — the "
+                                     "first present of each interval is encoded, at once; client "
+                                     "at 144 Hz, no divisor within a fifth of the setting"));
+    }
+
+    SECTION("CadenceChoice — no key: the decoder's cap lowers the rate");
+    {
+        CadenceInputs in = inputs(120, 120000, 120000, false);
+        in.clientCapFps = 90;
+        const CadenceChoice c = mw::native::chooseCadence(in);
+        CHECK_EQ(c.fps, 90);
+        CHECK_EQ(c.line, std::string("[native] cadence: 90 fps stream on a 120 Hz display — the "
+                                     "first present of each interval is encoded, at once; client "
+                                     "at 120 Hz, tearing — nothing to align on (no more than 90 "
+                                     "fps: what its decoder keeps up with)"));
+    }
+
+    SECTION("CadenceChoice — no key: at the display's own rate the gate is a ceiling");
+    {
+        const CadenceChoice c = mw::native::chooseCadence(inputs(60, 60000, 0, false));
+        CHECK_EQ(c.fps, 60);
+        CHECK(c.gate.isCeiling());
+        CHECK_EQ(c.line, std::string("[native] cadence: 60 fps stream on a 60 Hz display — every "
+                                     "refresh is encoded, presents beyond it no faster than the "
+                                     "stream"));
+    }
+
+    SECTION("CadenceChoice — cadence=host: every present, the client's ceilings unapplied");
+    {
+        CadenceInputs in = inputs(60, 240000, 60000, true);
+        in.maxFps = 60;
+        in.clientCapFps = 45;
+        in.mode = Mode::Host;
+        const CadenceChoice c = mw::native::chooseCadence(in);
+        CHECK_EQ(c.fps, 240);
+        CHECK(!c.gate.enabled());
+        CHECK_EQ(admittedInOneSecond(c.gate, 240), 240);
+        CHECK_EQ(c.line,
+                 std::string("[native] cadence: the host's rate (cadence=host) — 240 fps stream "
+                             "on a 240 Hz display — every present is encoded; client at 60 Hz, on "
+                             "vsync (not applied: 60 set, no more than 60 chosen for this client, "
+                             "no more than 45 asked by its decoder)"));
+    }
+
+    SECTION("CadenceChoice — cadence=host: a display faster, equal or slower than the client");
+    {
+        CadenceInputs in = inputs(60, 500000, 120000, false);
+        in.mode = Mode::Host;
+        CHECK_EQ(mw::native::chooseCadence(in).fps, 500);
+        in.displayMilliHz = 120000;
+        CHECK_EQ(mw::native::chooseCadence(in).fps, 120);
+        in.displayMilliHz = 59940;
+        const CadenceChoice slower = mw::native::chooseCadence(in);
+        CHECK_EQ(slower.fps, 60);
+        CHECK(!slower.gate.enabled());
+        // The setting names no rate the host ignored when it equals it.
+        CHECK(!contains(slower.line, "set"));
+        CHECK(contains(slower.line, "client at 120 Hz, tearing"));
+        // A display whose rate is unknown: the setting, still no gate.
+        in.displayMilliHz = 0;
+        const CadenceChoice unknown = mw::native::chooseCadence(in);
+        CHECK_EQ(unknown.fps, 60);
+        CHECK(!unknown.gate.enabled());
+    }
+
+    SECTION("CadenceChoice — cadence=host-ceiling: every refresh, a runaway source held");
+    {
+        CadenceInputs in = inputs(60, 165000, 60000, false);
+        in.mode = Mode::HostCeiling;
+        const CadenceChoice c = mw::native::chooseCadence(in);
+        CHECK_EQ(c.fps, 165);
+        CHECK(c.gate.isCeiling());
+        CHECK_EQ(admittedInOneSecond(c.gate, 165), 165);
+        // 400 presents a second held near the display's rate (+ a fiftieth).
+        const int runaway = admittedInOneSecond(c.gate, 400);
+        CHECK(runaway >= 165 && runaway <= 172);
+        CHECK(contains(c.line, "(cadence=host-ceiling) — 165 fps stream on a 165 Hz display — "
+                               "every refresh is encoded"));
+    }
+
+    SECTION("CadenceChoice — cadence=host-guarded: no gate, the credit named");
+    {
+        CadenceInputs in = inputs(60, 240000, 60000, false);
+        in.mode = Mode::HostGuarded;
+        const CadenceChoice c = mw::native::chooseCadence(in);
+        CHECK_EQ(c.fps, 240);
+        CHECK(!c.gate.enabled());
+        CHECK(contains(c.line, "(cadence=host-guarded)"));
+        CHECK(contains(c.line, "skipped while the client's decode queue holds more than a frame"));
+    }
+
+    SECTION("CadenceChoice — the key in the tuning's description");
+    {
+        EncoderTuning t;
+        CHECK(t.isDefault());
+        t.cadence = Mode::Host;
+        CHECK(!t.isDefault());
+        CHECK_EQ(t.describe(), std::string("cadence=host"));
+        t.cadence = Mode::HostCeiling;
+        CHECK_EQ(t.describe(), std::string("cadence=host-ceiling"));
+        t.cadence = Mode::HostGuarded;
+        CHECK_EQ(t.describe(), std::string("cadence=host-guarded"));
+    }
+}
