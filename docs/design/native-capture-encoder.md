@@ -6553,3 +6553,45 @@ activé sans écran ; seul le démarrage suivant de l'instance l'éteint
 pendant une série de bascules de l'écran virtuel (21:41), et n'est pas revenu
 au rebranchement. Les séries sur l'écran virtuel se font quand Bruno n'est pas
 devant ses écrans.
+
+### 33.7 La nuit du 29 au 30/09 : Arc et RTX, client mw-mac
+
+Client mw-mac (M1, Chrome, 120 Hz, tearing, Wi-Fi), écran virtuel du produit à
+la taille du client (~1790×1160), `scroll.html`, signal du crédit `delay`.
+Arc : 4 passes par case (D3D12 Video Encode). RTX : 2 passes par case (NVENC,
+D3D11 ; l'écran virtuel rendu par la RTX). Âge affiché médian, en ms, moyenne
+des passes (entre parenthèses : avant la capture) :
+
+| Hôte, écran virtuel | Auto (120 i/s) | host | host-guarded |
+|---|---|---|---|
+| Arc, 120 Hz | 52,2 (16,3) | 51,1 | 53,3 |
+| Arc, 240 Hz | 41,2 (5,9) | 35,4 | **35,1** |
+| Arc, 500 Hz | 43,6 (2,5) | 188 | 51,0 |
+| RTX, 120 Hz | 36,1 (7,6) | 42,9 ³ | 34,7 |
+| RTX, 240 Hz | 34,9 (7,8) | 33,8 | **32,2** |
+| RTX, 500 Hz | 34,8 (3,8) | 182 | 115 ⁴ |
+
+³ Une passe où la page était lente (11,9 ms avant la capture) : bruit de la
+page, pas de la cadence (à 120 Hz, host et Auto encodent la même chose).
+⁴ Le crédit n'a pas tenu la file du Mac sous 450 présentations/s de la RTX
+(129 images dessinées par seconde, p99 d'une seconde).
+
+Lecture :
+- **240 Hz est le bon point**, pas 500. À 500 Hz l'hôte convertit chaque
+  présentation (450 par seconde) même quand il n'en encode que 120 : la
+  capture vieillit (Arc 30,8 → 36,5 ms, RTX 22,9 → 26,6 ms), ce qui mange le
+  gain d'attente avant la capture.
+- **Par rapport à aujourd'hui** (écran virtuel à la fréquence du client,
+  120 Hz, Auto) : l'Arc passe de 52,2 à 35,1 ms (−17 ms), la RTX de 36,1 à
+  32,2 ms (−4 ms). Le gros du gain sur l'Arc vient de l'attente avant la
+  capture (16,3 → 5,9 ms, écran virtuel à 240 Hz) : la page s'y rend plus
+  lentement que sur la RTX.
+- **La cadence de l'hôte ajoute 1 à 6 ms** à 240 Hz sur ce client, qui décode
+  240 i/s ; `host-guarded` fait aussi bien que `host` en ne retenant presque
+  rien (7 à 18 présentations par seconde).
+- **À 500 Hz, ni host ni host-guarded ne tiennent** sur le Mac. Un écran
+  virtuel à 500 Hz sous une cadence de l'hôte n'est pas un candidat.
+- Mesure : 54 passes sur 56 le premier coup ; deux échecs de l'écran virtuel à
+  500 Hz sur la RTX, puis toutes les fréquences, une fois que le XML
+  étranger avait accumulé un second mode à 500 Hz. Le banc repart désormais
+  d'un XML propre à chaque passe (`local_matrix.py`).

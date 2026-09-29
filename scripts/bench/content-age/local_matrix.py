@@ -105,6 +105,9 @@ def main():
                     help="a client on another machine (pass.py --client-port)")
     ap.add_argument("--client-url", default="")
     ap.add_argument("--local-storage", action="append", default=[], metavar="KEY=VALUE")
+    ap.add_argument("--vdd-gpu", default="",
+                    help="the GPU that renders the virtual display (the XML's <friendlyname>), "
+                         "e.g. \"NVIDIA GeForce RTX 5060 Ti\"; put back at the end")
     a = ap.parse_args()
     client = (["--client-port", str(a.client_port), "--client-url", a.client_url]
               if a.client_port else [])
@@ -113,6 +116,20 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     scratch = os.path.join(OUT, "vdd_settings.saved.xml")
     shutil.copyfile(VDD_XML, scratch)
+    if a.vdd_gpu:
+        import re
+        with open(VDD_XML, encoding="utf-8") as f:
+            xml = f.read()
+        xml2 = re.sub(r"<friendlyname>[^<]*</friendlyname>",
+                      "<friendlyname>%s</friendlyname>" % a.vdd_gpu, xml, count=1)
+        with open(VDD_XML, "w", encoding="utf-8", newline="") as f:
+            f.write(xml2)
+        print("virtual display rendered by", a.vdd_gpu, flush=True)
+    # Each pass starts from this file: the product adds the mode it asks for,
+    # and a list grown pass after pass has stopped the display from appearing
+    # at all (29-30/09: a second size at 500 Hz, then every rate).
+    with open(VDD_XML, "rb") as f:
+        prepared = f.read()
     baseline = monitors()
     print("screens before:\n" + baseline, flush=True)
     try:
@@ -122,6 +139,8 @@ def main():
                     tag = "%s-v%d-%s-r%d" % (a.prefix, rate, cadence, rep)
                     print("==", tag, flush=True)
                     kill_dev()
+                    with open(VDD_XML, "wb") as f:
+                        f.write(prepared)
                     since = time.time()
                     launch_dev(rate, cadence, os.path.join(OUT, tag + ".server.log"))
                     r = subprocess.run([sys.executable, os.path.join(HERE, "pass.py"), "--tag", tag,
