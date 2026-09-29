@@ -104,7 +104,12 @@ def run(args):
     print(page.eval("mwContentAge ? mwContentAge.start({every: %d}) : 'no mwContentAge'"
                     % args.every))
     time.sleep(args.secs)
-    check = clock_check(page) if args.client.split(":")[0] in ("localhost", "127.0.0.1") else None
+    # A tunnelled client answers on localhost too: only the caller knows it is
+    # on this machine, sharing its counter.
+    local = getattr(args, "local", None)
+    if local is None:
+        local = args.client.split(":")[0] in ("localhost", "127.0.0.1")
+    check = clock_check(page) if local else None
     summary = page.eval("JSON.stringify(mwContentAge.stop())")
     if not summary or summary == "null":
         raise SystemExit("the probe returned nothing — was it running?")
@@ -142,15 +147,15 @@ def clock_check(page):
 
 def line(d):
     c = d.get("clock") or {}
-    cap = d.get("capture") or {}
-    pre = d.get("beforeCapture") or {}
-    return ("%-28s ages %5d  content median %6s p90 %6s p99 %6s  capture %6s  before %6s ms  "
-            "invalid %s  rtt %.2f ms  drift %.0f ppm%s" % (
-                d.get("tag", "?"), d.get("ages", 0), d.get("medianMs"), d.get("p90Ms"),
-                d.get("p99Ms"), cap.get("medianMs"), pre.get("medianMs"),
+    med = lambda k: (d.get(k) or {}).get("medianMs")
+    p99 = lambda k: (d.get(k) or {}).get("p99Ms")
+    return ("%-26s shown %6s (p99 %6s) at refresh %6s  drawn %6s  capture %6s  before %6s ms  "
+            "%s draws/s on %s Hz  invalid %s  rtt %.2f ms%s" % (
+                d.get("tag", "?"), med("shown"), p99("shown"), med("atRefresh"), d.get("medianMs"),
+                med("capture"), med("beforeCapture"), d.get("drawsPerSecond"), d.get("refreshHz"),
                 ",".join("%s=%s" % kv for kv in (d.get("invalid") or {}).items() if kv[1]) or "0",
-                c.get("rttMinMs") or 0, c.get("driftPpm") or 0,
-                "" if d.get("clockErrorMs") is None else "  clock %+.2f ms" % d["clockErrorMs"]))
+                c.get("rttMinMs") or 0,
+                "" if d.get("clockErrorMs") is None else "  clock %+.2f" % d["clockErrorMs"]))
 
 
 def summary(args):
@@ -171,6 +176,8 @@ def main():
     r.add_argument("--secs", type=float, default=30)
     r.add_argument("--every", type=int, default=1)
     r.add_argument("--tag", required=True)
+    r.add_argument("--remote", dest="local", action="store_false", default=None,
+                   help="a client on another machine, even through a tunnel: no clock check")
     s = sub.add_parser("summary")
     s.add_argument("files", nargs="+")
     args = ap.parse_args()

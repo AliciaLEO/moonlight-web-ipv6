@@ -60,6 +60,20 @@
  * is on screen then; on one presenting on vsync, the compositor adds up to
  * one refresh of the client that the age does not see. A frame decoded but
  * never drawn (drop-to-latest) is not an age: it is counted as `undrawn`.
+ *
+ * ── Drawn, and shown ─────────────────────────────────────────────────────────
+ *
+ * The age at the draw says how fresh each frame was when it arrived. What the
+ * viewer looks at is the frame on screen at any moment, which keeps ageing
+ * until the next one replaces it: 16.7 ms more at 60 frames a second, 2 ms at
+ * 500. So the summary also gives the age of what is SHOWN:
+ *   - `shown`, over time — every half millisecond from the first draw to the
+ *     last, the frame drawn last and how old it is by then (what a canvas that
+ *     tears puts on screen);
+ *   - `atRefresh`, at each of this client's refreshes (requestAnimationFrame) —
+ *     what a canvas presenting on vsync shows, give or take the compositor.
+ * Both need every frame read (`every: 1`): a moment whose frame was not read
+ * is left out.
  */
 
 /** Blocks across the frame's width: a block is 1/BAND_BLOCKS of it. */
@@ -312,6 +326,30 @@ export class ClockEstimator {
     }
 }
 
+/**
+ * The age of what is on screen at each of @p times (sorted): the last frame
+ * drawn by then, aged by the time since its draw. @p draws: [drawn at, frame
+ * timestamp], sorted; @p ageOf: frame timestamp → its age at the draw. A time
+ * before the first draw, or whose frame's age is unknown, is left out.
+ */
+export function shownAges(draws, ageOf, times) {
+    const out = [];
+    let i = -1;
+    for (const t of times) {
+        while (i + 1 < draws.length && draws[i + 1][0] <= t) i++;
+        if (i < 0) continue;
+        const age = ageOf.get(draws[i][1]);
+        if (age === undefined) continue;
+        out.push(age + (t - draws[i][0]));
+    }
+    return out;
+}
+
+/** @p n events from @p first to @p last (ms), per second; null without a span. */
+function rate(n, first, last) {
+    return n > 1 && last > first ? Math.round(((n - 1) * 10000) / (last - first)) / 10 : null;
+}
+
 /** Percentile @p p (0..1) of a sorted array. */
 function percentile(sorted, p) {
     if (!sorted.length) return null;
@@ -384,8 +422,23 @@ export class ContentAgeProbe {
             before: [],
             samples: [],
             invalid: { size: 0, block: 0, check: 0, copy: 0, clock: 0, undrawn: 0 },
+            /** Every draw, read or not: [drawn at, frame timestamp]. */
+            draws: [],
+            /** Frame timestamp → its content age at the draw. */
+            ageOf: new Map(),
+            /** This client's refreshes (requestAnimationFrame stamps). */
+            ticks: [],
         };
         this._pingTimer = setInterval(() => this._sendPing(this._seq++, performance.now()), 100);
+        if (typeof requestAnimationFrame === 'function') {
+            const run = this._run;
+            const tick = (t) => {
+                if (this._run !== run) return;
+                run.ticks.push(t);
+                requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+        }
         this.attach(this._renderer());
         return 'content-age probe running: page scripts/bench/content/scroll.html?band=time';
     }
@@ -458,6 +511,7 @@ export class ContentAgeProbe {
     onDrawn(ts, nowMs) {
         const run = this._run;
         if (!run) return;
+        run.draws.push([nowMs, ts]);
         const entry = run.pending.get(ts);
         if (!entry || entry.drawnMs !== null) return;
         entry.drawnMs = nowMs;
@@ -492,6 +546,7 @@ export class ContentAgeProbe {
         const nowUs = this._clock.toHostUs(e.drawnMs);
         const contentMs = (nowUs - unwrapBand(e.value, nowUs)) / 1000;
         run.content.push(contentMs);
+        run.ageOf.set(ts, contentMs);
         let captureMs = null;
         if (e.backendTs > 0) {
             captureMs = nowUs / 1000 - unwrap32(e.backendTs, Math.floor(nowUs / 1000));
@@ -521,6 +576,11 @@ export class ContentAgeProbe {
         const r = this._renderer();
         if (r && r.afterDraw === this._onDraw) r.afterDraw = null;
         const content = describe(run.content);
+        const draws = run.draws;
+        const grid = [];
+        if (draws.length > 1)
+            for (let t = draws[0][0]; t <= draws[draws.length - 1][0]; t += 0.5) grid.push(t);
+        const ticks = run.ticks.filter((t) => draws.length && t >= draws[0][0]);
         const summary = {
             seconds: Math.round((performance.now() - run.startedMs) / 10) / 100,
             decoded: run.decoded,
@@ -528,6 +588,14 @@ export class ContentAgeProbe {
             ages: content.n,
             invalid: run.invalid,
             ...content,
+            shown: describe(shownAges(draws, run.ageOf, grid)),
+            atRefresh: describe(shownAges(draws, run.ageOf, ticks)),
+            refreshHz: rate(run.ticks.length, run.ticks[0], run.ticks[run.ticks.length - 1]),
+            drawsPerSecond: rate(
+                draws.length,
+                draws.length && draws[0][0],
+                draws.length && draws[draws.length - 1][0],
+            ),
             capture: describe(run.capture),
             beforeCapture: describe(run.before),
             clock: this._clock.summary,

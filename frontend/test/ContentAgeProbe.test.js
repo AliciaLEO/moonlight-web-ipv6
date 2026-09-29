@@ -24,6 +24,7 @@ import {
     ClockEstimator,
     ContentAgeProbe,
     lumaOf,
+    shownAges,
 } from '../js/stream/ContentAgeProbe.js';
 
 /** Deterministic noise. */
@@ -385,6 +386,8 @@ describe('ContentAgeProbe — the age of what was drawn', () => {
         expect(s.beforeCapture.medianMs).toBeLessThan(10.6);
         expect(results).toEqual([s]);
         expect(s.samples.length).toBe(20);
+        // Drawn all at one instant here: shown, each is as old as when drawn.
+        expect(s.drawsPerSecond).toBeNull();
     });
 
     it('reads one frame in `every`, counts a band it cannot read, and ages nothing without a clock', async () => {
@@ -433,5 +436,39 @@ describe('ContentAgeProbe — the age of what was drawn', () => {
         expect(l[0]).toBeCloseTo(0.299 * 255, 3);
         expect(l[1]).toBeCloseTo(255, 3);
         expect(lumaOf('P010', bgra, [{ offset: 0, stride: 8 }], 2, 1)).toBeNull();
+    });
+});
+
+describe('ContentAgeProbe — the age of what is shown', () => {
+    it('ages the frame on screen until the next one replaces it', () => {
+        // Three frames drawn 10 ms apart, each 5 ms old when drawn.
+        const draws = [
+            [0, 1],
+            [10, 2],
+            [20, 3],
+        ];
+        const ageOf = new Map([
+            [1, 5],
+            [2, 5],
+            [3, 5],
+        ]);
+        const grid = [];
+        for (let t = 0; t <= 20; t += 0.5) grid.push(t);
+        const shown = shownAges(draws, ageOf, grid);
+        expect(shown[0]).toBe(5);
+        expect(shown[19]).toBe(14.5); // 9.5 ms after the first draw
+        expect(shown[20]).toBe(5); // the second one, just drawn
+        const mean = shown.reduce((a, b) => a + b, 0) / shown.length;
+        expect(mean).toBeGreaterThan(9.5);
+        expect(mean).toBeLessThan(10.5);
+    });
+
+    it('leaves out a moment before the first draw, or whose frame was not read', () => {
+        const draws = [
+            [10, 1],
+            [20, 2],
+        ];
+        const ageOf = new Map([[2, 3]]);
+        expect(shownAges(draws, ageOf, [5, 15, 25])).toEqual([8]);
     });
 });
