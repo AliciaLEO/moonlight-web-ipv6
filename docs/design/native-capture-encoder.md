@@ -862,6 +862,33 @@ comme toujours. Pour tout autre moteur, le comportement d'avant est intact
 (demande de keyframe sauf ride-out), garanti par le drapeau `nameEvictions`.
 Ceci vaut pour NVENC comme pour AMF depuis que ce dernier a l'invalidation.
 
+**Le même geste au calage du lien, derrière un interrupteur (29/09/2026, §9-25
+du plan D3D12).** Il restait une image jetée sans nom : celle que le relais
+écarte quand le lien ne se vide plus (`SendBacklog`, « Dropped delta frame (link
+not draining) »). Elle part **avant** d'avoir reçu un id de fil, donc le client
+ne voit aucun trou.
+- En ride-out, le delta suivant prédit de cette image. VideoToolbox refuse ce
+  delta orphelin (d'où `50b2b574` : Apple ne demande plus le ride-out).
+  Windows le rapièce jusqu'au passage de la vague d'intra-refresh.
+- Sans ride-out, le relais jette tout jusqu'à une keyframe demandée au
+  dégorgement.
+
+Avec `namedrops=1` (`MW_NATIVE_TUNING`, clé lue par le relais par
+`NativeMediaEngine::nameLinkDrops`), un moteur qui répare par invalidation
+reçoit le numéro de l'image jetée à l'instant. Le delta suivant prédit d'une
+image que le client a déjà : ni keyframe, ni vague à attendre. Un calage plus
+long que la portée des références finit en keyframe, que la session demande
+d'elle-même.
+
+En envoi direct, le relais tourne sur le fil de capture. L'invalidation
+précède donc l'encodage de l'image suivante, et aucun delta déjà codé ne
+prédit de l'image jetée. Avec `pipelined=1`, une image peut déjà être codée
+quand la remise arrive : ce cas n'est pas couvert. Le compteur
+`sctpDeltaNamed` de la ligne « Drop counters » compte ces images nommées.
+
+Le défaut reste « off » jusqu'au banc sur un lien bridé : chaque encodeur,
+clients Windows et Mac.
+
 ### 9.11 La cadence s'aligne sur le rafraîchissement du client (04/09/2026)
 
 Un client qui peint sur son vsync — *tearing* coupé, ou un navigateur qui ne
@@ -1162,7 +1189,7 @@ Tableau remis à jour le 29/09/2026, à la clôture du plan D3D12 (§32.19).
 | Capture DXGI (0,06 ms) ; worker SYSTEM pour le bureau sécurisé (§31) | L'invite UAC cliquable (aucun poste du banc ne l'affiche) ; `C+A+Suppr` sans effet tant que `SoftwareSASGeneration` n'est pas posée (§31.7) |
 | Conversion NV12 + AYUV 4:4:4 ; HDR (P010 + BT.2020 PQ) | |
 | NVENC (3,46 ms), AMF (3,70 ms), oneVPL (mesuré sur l'Arc et le N95) | |
-| **Chaîne D3D12** (§32) : conversion D3D12, D3D12 Video Encode en HEVC, H.264 et AV1, contrôle de débit maison ; **par défaut sur Intel** (§32.9) ; NVENC et AMF en entrée D3D12 derrière le réglage (§32.12) | NVIDIA et AMD restent en D3D11, plus rapides chez eux ; deux clés de banc à trancher (`pipelined=1`, `keep12=1`, §32.17-§32.18) |
+| **Chaîne D3D12** (§32) : conversion D3D12, D3D12 Video Encode en HEVC, H.264 et AV1, contrôle de débit maison ; **par défaut sur Intel** (§32.9) ; NVENC et AMF en entrée D3D12 derrière le réglage (§32.12) ; l'encodeur gardé à travers un redémarrage de capture (§32.18, par défaut depuis le 29/09) | NVIDIA et AMD restent en D3D11, plus rapides chez eux ; `pipelined=1` reste une clé de banc, en test à haute fréquence (§32.17, §32.20) |
 | Intra-refresh sur les trois encodeurs + ride-out client (sauf plateformes Apple) | |
 | Curseur composé, plancher sur écran immobile choisi par le client (§9.1) | |
 | Copie inter-GPU (§5) : un écran dont le GPU n'encode pas streame quand même ; la relecture passe par la file COPY depuis le 21/09 | |
@@ -1238,9 +1265,12 @@ faire. Campagne du 04/09/2026 et recommandation : `docs/bench-native-host.md`.
   `enc12=ve|nvenc|amf`, `rc12=driver|qp`, `reencode=0|1`, `refit=0|1`,
   `interfloor=<k>|off`, `prio12=normal|high|realtime`,
   `creator12=own|default`, `ddasync=gpu|none|cpu`, `gputiming=0|1`,
-  `strict12=0|1`, `pipelined=0|1` (§32.17) et `keep12=0|1` (§32.18).
+  `strict12=0|1`, `pipelined=0|1` (§32.17) et `keep12=0|1` (§32.18, 1 par
+  défaut depuis le 29/09).
 - Sous Linux : `pipeline=auto|vaapi|vulkan`, `convert=gl|vulkan`,
   `priovk=normal|high`.
+- Sur une vraie session seulement (`MW_NATIVE_TUNING`) : `namedrops=0|1`,
+  l'image jetée au calage du lien nommée à l'encodeur (§9.10.2, §32.20).
 - Les clés du banc lui-même : `dump=<fichier>` (le flux tel qu'il sort),
   `lose=<N>` (une perte signalée toutes les N images) et
   `ramp=<kbps>[@<s>]` (le débit alterne, comme le gouverneur le ferait).
@@ -5777,9 +5807,10 @@ démontage, et le reprend si le flux (codec, taille, cadence, HDR,
 intra-refresh) n'a pas changé. Sur l'écran virtuel rendu par l'Arc, le trou
 avant l'image clé d'un redémarrage passe de 717 à 546 ms en médiane, sur
 12 redémarrages par bras, sans aucune erreur de décodage (banc §8n.24).
-**Recommandation : l'activer par défaut** (§9-27 du plan). Le flux ne change
-pas, il repart toujours sur une image clé, et il gagne 0,2 s par redémarrage
-sur la chaîne par défaut d'Intel.
+**Par défaut depuis le 29/09** (§9-27 du plan, accepté par Bruno ; `keep12=0`
+le refait). Le flux ne change pas, il repart toujours sur une image clé, et il
+gagne 0,2 s par redémarrage sur la chaîne par défaut d'Intel. Un encodeur
+qu'une panne laisse derrière elle n'est jamais gardé.
 
 **ROI par carte de QP (C11.3, étude).** La sonde du 29/09 refait le constat
 du 26/09 sur les pilotes du jour :
@@ -5816,9 +5847,9 @@ coupée aux frontières), et d'une réparation par invalidation plus complexe.
 **Pas fait.** À rouvrir dans le plan « ultra-low latency », si son codec
 décode par blocs indépendants.
 
-**Concrètement, pour l'utilisateur** : si Bruno l'accepte, un changement de
-résolution ou le retour d'un écran verrouillé rendra l'image environ 0,2 s
-plus vite sur un PC Intel. Le reste de la phase outille les bancs, et dit
+**Concrètement, pour l'utilisateur** : un changement de résolution ou le
+retour d'un écran verrouillé rend l'image environ 0,2 s plus vite sur un PC
+Intel (par défaut depuis le 29/09). Le reste de la phase outille les bancs, et dit
 pourquoi deux idées (ROI, envoi par tranches) attendront.
 
 ### 32.19 Clôture du plan : la chaîne par GPU (29/09/2026)
@@ -5837,12 +5868,15 @@ le stream.
 | AMD sous Linux | **Vulkan compute → VA-API** (route scindée) | Sous un jeu, 8 ms au lieu de 15 à 38 par GL (§8o.5, §8o.8) | La chaîne Vulkan Video, prise sur la preuve au pixel (`vulkan`), ou GL (`vaapi`) |
 | Intel et NVIDIA sous Linux | GL → VA-API ; OpenH264 sur NVIDIA | Pas encore de carte au banc | La chaîne Vulkan Video, écrite d'après la spécification et les capacités lues |
 
-**Restent à Bruno** (plan, §9) :
-- l'image jetée au calage du lien, nommée à l'encodeur (§9-25) ;
-- `pipelined=1`, recommandé non (§9-26, §32.17) ;
-- `keep12=1` par défaut, recommandé oui (§9-27, §32.18) ;
-- G5 sous Counter-Strike 2, et la file d'encodage HIGH sous le noyau 7.0 ;
-- les tests manuels : le pompage de G3, l'invite UAC et `C+A+Suppr` ;
+**Restaient à Bruno** (plan, §9), et ses réponses du 29/09 (§32.20) :
+- l'image jetée au calage du lien, nommée à l'encodeur (§9-25) : oui, derrière
+  un interrupteur d'abord (`namedrops`) ;
+- `pipelined=1` (§9-26, §32.17) : pas tranché, testé à haute fréquence ;
+- `keep12=1` par défaut (§9-27, §32.18) : fait ;
+- G5 sous Counter-Strike 2 ; la file d'encodage HIGH sous le noyau 7.0 reste
+  refusée (banc §8o.10) ;
+- les tests manuels : le pompage de G3 et l'invite UAC ; `C+A+Suppr` (§9-28) :
+  tester `SoftwareSASGeneration`, puis l'installeur ;
 - la séance du 780M sous Windows (C10.2), qui demande un redémarrage.
 
 **Concrètement, pour l'utilisateur** : sur un PC Intel, le stream part plus
@@ -5851,3 +5885,44 @@ NVIDIA et AMD sous Windows, rien ne change : leur chemin était déjà le
 meilleur, et le banc l'a vérifié. Sous Linux avec un GPU AMD, l'image reste
 fluide quand un jeu sature le GPU. Partout, l'admin montre la chaîne qui
 tourne, et permet d'en choisir une autre.
+
+### 32.20 Les réponses du 29/09 : keep12, l'image jetée nommée, deux images en vol à 244 Hz
+
+**`keep12` par défaut** (§9-27, accepté). Le démontage d'une capture met
+D3D12 Video Encode de côté, sauf avec `keep12=0`, ou quand une panne l'a
+laissé derrière elle. Vérifié sans clé sur l'écran virtuel de l'Arc (banc
+§8n.26) : l'encodeur est gardé à 6 reconstructions sur 7, avec 471 ms de trou
+médian avant l'image clé, et 0 erreur de décodage.
+
+**L'image jetée au calage du lien, nommée à l'encodeur** (§9-25, accepté
+derrière un interrupteur). La clé `namedrops=1`, lue par le relais, est
+décrite au §9.10.2. Elle reste « off » jusqu'au banc sur un lien bridé.
+
+**Deux images en vol à haute fréquence** (§9-26, pas tranché). Bruno a demandé
+deux vérifications : un gros GPU à très haute fréquence y gagne-t-il, et
+l'encodeur d'Intel partage-t-il l'unité de calcul de la conversion ? Banc
+§8n.26 :
+- **L'encodeur d'Intel ne touche pas aux shaders** : moteur 3D à 0 % en
+  encodage seul sur le N95. Aucune priorité de file ne peut donc départager la
+  conversion et l'encodage : ils tournent sur deux moteurs.
+- Ce qui ralentit le N95 à 120 Hz, c'est la mémoire. Elle est à un canal,
+  commune avec le CPU, et un encodage y dure ~40 % de plus quand la conversion
+  tourne en même temps.
+- **À 244 Hz, l'Arc y gagne** 2 à 4,5 % d'images, avec un hôte presque
+  inchangé : il a sa propre mémoire.
+- **La RTX n'en a pas besoin** : NVENC en D3D11, sa chaîne par défaut, suit
+  240 i/s jusqu'en 1440p avec 1,6 à 2,8 ms d'hôte. Seul le 4K à 244 Hz le met
+  en limite (226 i/s, 4,24 ms par image pour 4,1 d'intervalle). Il faudrait
+  alors écrire les deux images en vol pour NVENC, qui n'enregistre qu'une
+  entrée.
+
+La décision revient à Bruno, avec ces chiffres. Un défaut « partout » ne
+toucherait aujourd'hui qu'Intel, la seule chaîne D3D12 par défaut :
+- gain sur l'Arc à haute fréquence ;
+- gain sur le N95 à 60 Hz ;
+- perte sur le N95 à 120 Hz, quand l'iGPU sature.
+
+**Concrètement, pour l'utilisateur** : un changement de résolution rend
+l'image ~0,2 s plus vite sur un PC Intel. Le reste ne change rien tant que
+Bruno n'a pas tranché : l'image jetée nommée attend son banc, et deux images
+en vol restent une clé de banc.

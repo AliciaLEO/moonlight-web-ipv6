@@ -3186,6 +3186,93 @@ variantes ne fait passer un GPU de l'autre côté du garde, et la meilleure
 perdrait sur Intel, la chaîne par défaut. La sonde reste au labo pour le jour
 où un GPU tombera près du seuil.
 
+### 8n.26 Deux images en vol à 244 Hz, et les moteurs du N95 (29/09/2026)
+
+Bruno a demandé deux vérifications avant de trancher `pipelined=1` (§9-26 du
+plan) :
+- un gros GPU à très haute fréquence y gagne-t-il ?
+- sur Intel, l'encodeur partage-t-il l'unité de calcul de la conversion ? Si
+  oui, une priorité pourrait les départager.
+
+**Montage.**
+- L'écran virtuel de Bruno (VDD by MTT), rendu tour à tour par la RTX puis par
+  l'Arc, en 1920×1080, 2560×1440 et 3840×2160 à 244 Hz.
+- La page de défilement dessus, et le flux à la taille de l'écran, donc sans
+  rééchantillonnage.
+- HEVC à 240 i/s, 20 Mbit/s, classe HIGH. A/B alterné `ab-native-bench.ps1`,
+  4 tours par bras. Binaire figé `bench-out\d3d12v2\c26-bin`.
+- Script `c26-hf.ps1` ; sorties `bench-out\d3d12v2\c26`.
+- Trois bras :
+  - `ve12` : D3D12 Video Encode, une image à la fois ;
+  - `pipe12` : le même en `pipelined=1` ;
+  - la chaîne D3D11 du fabricant en référence : NVENC pour la RTX, oneVPL
+    pour l'Arc.
+
+**RTX 5060 Ti** (i/s ; hôte, moyenne / p99 ; étape d'encodage) :
+
+| mode | `ve12` | `pipe12` | NVENC D3D11 (défaut) |
+|---|---|---|---|
+| 1080p244 | 205,9 · 6,88 / 9,23 ms · 4,61 ms | 217,1 · 6,60 / 8,97 · 6,34 | **239,3 · 1,59 / 1,94 · 1,41** |
+| 1440p244 | 123,8 · 10,09 / 13,21 · 7,75 | 128,5 · 9,92 / 12,90 · 9,65 | **237,5 · 2,84 / 3,52 · 2,64** |
+| 2160p244 | 57,8 · 19,4 / 23,6 · 16,9 | 59,6 · 18,8 / 21,7 · 18,5 | **226,4 · 6,26 / 8,69 · 4,24** |
+
+- Sur la route D3D12, deux images en vol font gagner 3 à 5 % d'images, et un
+  peu d'hôte. L'encodeur VE de la RTX est trop lent pour 244 Hz dès le 1080p,
+  en vol ou non.
+- La chaîne par défaut de NVIDIA, NVENC en D3D11, suit 240 i/s jusqu'en 1440p
+  avec 1,6 à 2,8 ms d'hôte. Elle n'a rien à gagner.
+- **Seul le 4K à 244 Hz met NVENC en limite** : 4,24 ms par image pour un
+  intervalle de 4,1 ms, d'où 226 i/s. Là, deux images en vol pourraient
+  combler l'écart (~6 %). Il faudrait d'abord les écrire pour NVENC, qui
+  n'enregistre qu'une entrée.
+
+**Arc A380** (mêmes colonnes ; oneVPL D3D11 en référence, l'ancienne route
+d'Intel) :
+
+| mode | `ve12` (défaut d'Intel) | `pipe12` | oneVPL D3D11 |
+|---|---|---|---|
+| 1080p244 | 233,6 · 3,71 / 6,79 ms · 3,14 ms | **238,5** · 3,83 / 7,19 · 3,60 | 237,0 · 3,37 / 5,22 · 3,02 |
+| 1440p244 | 220,9 · 4,66 / 9,61 · 3,85 | **230,8** · 4,73 / 9,93 · 4,47 | 220,1 · 5,55 / 9,64 · 4,18 |
+
+- L'Arc, qui a sa propre mémoire, gagne 2 à 4,5 % d'images en deux images en
+  vol à 244 Hz. L'hôte bouge à peine : +0,1 ms en moyenne, +0,3 à +0,4 ms au
+  p99.
+- C'est l'inverse du N95 à 120 Hz (§8n.23), dont la mémoire est partagée.
+
+**Les moteurs du N95** (sonde `mw-d3d12-lab encode`, les huit images NV12 du
+labo codées en boucle ; compteurs Windows « GPU Engine » du processus, lus par
+WMI) :
+
+| cas | moteur 3D | moteur vidéo (« Video Decode ») | images |
+|---|---|---|---|
+| encodage seul, 1080p60 | **0 %** | 26 % | 1 128 en 20 s |
+| conversion + encodage, 1080p60 | 18 % | 36 % | 1 171 |
+| encodage seul, 1080p120 | **0 %** | 60 % | 2 210 |
+| conversion 1440p → 1080p + encodage, 120 i/s demandées | 79 % | 15 % | 1 052 |
+
+- **L'encodeur d'Intel ne touche pas aux shaders.** En encodage seul, le moteur
+  3D reste à 0 %. Tout passe par le moteur vidéo, que Windows appelle « Video
+  Decode » sur Intel : le même bloc code et décode.
+- Il n'y a donc pas d'unité partagée qu'une priorité pourrait départager.
+  Conversion et encodage tournent sur deux moteurs distincts, et une priorité
+  de file ne départage que le travail d'un même moteur.
+- Ce qu'ils partagent, c'est la mémoire, à un seul canal, commune avec le CPU
+  (le N95 y est lié, §8n.25). Quand la conversion tourne, le même encodage
+  à 60 i/s occupe le moteur vidéo 36 % du temps au lieu de 26 %, soit ~40 %
+  plus long par image.
+- En 1440p → 1080p, la conversion sature le moteur 3D à elle seule (79 %).
+  C'est la perte du N95 à 120 Hz du §8n.23 : deux images en vol ne créent pas
+  de capacité, elles font attendre l'encodeur derrière la mémoire.
+
+**keep12 par défaut, vérifié.** Même scénario que le §8n.24, sur l'écran
+virtuel rendu par l'Arc : quatre changements de mode, puis HDR allumé et
+éteint. Le binaire du jour, sans aucune clé :
+- le journal dit « D3D12 Video Encode kept across 6 rebuild(s) (keep12) » ;
+- l'encodeur est refait une fois, quand la largeur du flux passe de 1668 à 1440 ;
+- trous avant l'image clé : 371 à 660 ms, médiane 471 ms (546 avec `keep12=1`
+  cette nuit, 717 sans) ;
+- 0 erreur de décodage, D3D12 de bout en bout (`c11\keep\c927-default`).
+
 ## 8o. Linux : la chaîne Vulkan (28/09/2026 →)
 
 Phase 13 du plan D3D12 : la même forme de chaîne sous Linux, en Vulkan Video
@@ -3754,6 +3841,54 @@ au plafond thermique, sans repli, sans image fausse ni fuite. Pour G5, il ne
 manque que le vrai jeu (Counter-Strike 2) et la file d'encodage HIGH sous le
 noyau 7.0.
 
+### 8o.10 Le noyau 7.0, et la pile AMD de la 22.04 retirée (29/09/2026)
+
+Deux gestes acceptés par Bruno le 29/09 au matin, sur l'UM790Pro.
+
+**La pile AMD de la 22.04 retirée.** Seize paquets de repo.radeon.com
+restaient de la 22.04 :
+- amdgpu 6.0.2 : sa libdrm, mise de côté le 28/09, avait éteint la TV ;
+- AMF 1.4.33 ;
+- l'OpenCL de ROCm 6.0.2.
+
+Le produit n'en utilise rien sous Linux : VA-API et Vulkan passent par Mesa.
+La simulation n'emportait rien d'autre : ni Mesa, ni GNOME, ni la libdrm du
+système, ni linux-firmware. Les paquets ont été purgés avec leurs dépôts,
+leurs entrées ld.so et leur ICD OpenCL. Aucun module DKMS n'était installé.
+
+**Le noyau HWE 7.0** (`linux-generic-hwe-24.04`, 7.0.0-34).
+- Installé sans erreur. Tous les micrologiciels Phoenix qu'il demande sont
+  présents.
+- Le 6.8 reste en secours dans le menu GRUB.
+- Au redémarrage, forcé sous Ubuntu par BootNext, SSH est revenu en 35 s.
+- La session GNOME, la prod, Wolf et Sunshine sont revenus comme avant.
+- Les `REG_WAIT timeout` du 6.8 ont disparu de dmesg.
+- ⚠️ amdgpu y devient `card0` (c'était `card1`). Les scripts qui lisent la
+  température par `card1` sont à corriger.
+
+**Fumée du produit** (8 s par route, HEVC 1080p60 à 20 Mbit/s, écran animé) :
+
+| route | images | erreurs ffmpeg | hôte, moyenne / p99 |
+|---|---|---|---|
+| GL → VA-API | 479 | 0 | 8,02 / 10,78 ms |
+| route scindée (Vulkan compute → VA-API) | 479 | 0 | 8,78 / 10,49 ms |
+| Vulkan Video (preuve au pixel : 141 ms, 39,8 dB) | 480 | 0 | 6,48 / 7,87 ms |
+| sans clé (la route scindée, par la table) | 482 | 0 | 8,71 / 10,49 ms |
+
+**La file d'encodage en HIGH, toujours refusée.**
+- `mw-vk-lab encode --priority high`, en root, Mesa 26.2.3 : la première
+  soumission est rejetée (« The CS has been rejected (-22) », puis
+  `VK_ERROR_DEVICE_LOST`), sans un mot dans dmesg. Même rejet en REALTIME.
+- À la priorité par défaut, la même mesure passe : 2,46 ms de la soumission au
+  flux, preuve au pixel à 40,1 dB.
+- Ce n'est ni un privilège (root est refusé), ni Mesa (même rejet sous 25.2.8
+  et 26.2.3 en 6.8, et sous 26.2.3 en 7.0). Le noyau refuse en silence toute
+  priorité au-dessus de NORMAL sur la file d'encodage du VCN 4.0.2.
+
+**Ce qu'on en retient.** Le produit fait déjà le bon choix : l'encodage à la
+priorité par défaut, la conversion en HIGH. Pour G5, il ne manque plus que
+Counter-Strike 2.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
@@ -3788,7 +3923,8 @@ Clés d'encodeur : `preset=1..7`, `tuning=ull|ll`, `multipass=off|quarter|full`,
 §14 du design : `pipeline=`, `conv12=`, `enc12=`, `rc12=`, `reencode=`,
 `refit=`, `prio12=`, `ddasync=`, `gputiming=`, `strict12=`, `pipelined=`,
 `keep12=` sous Windows, `pipeline=vaapi|vulkan`, `convert=`, `priovk=` sous
-Linux, et `dump=`, `lose=`, `ramp=` pour le banc lui-même. Les A/B du plan
+Linux, et `dump=`, `lose=`, `ramp=` pour le banc lui-même. `namedrops=` ne sert
+que sur une vraie session (`MW_NATIVE_TUNING`, §9) : c'est le relais qui la lit. Les A/B du plan
 passent par `scripts/bench/ab-native-bench.ps1`, en classe REALTIME par un
 exécuteur élevé (§8n.2). Le contenu est affaire d'opérateur : ici
 un Chrome dédié en kiosque sur l'écran capturé (`--user-data-dir` séparé,
