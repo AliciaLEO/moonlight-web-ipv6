@@ -23,6 +23,7 @@
 #include "../../core/CadenceAlign.h"
 #include "../../core/CadenceChoice.h"
 #include "../../core/CursorPositionGate.h"
+#include "../../core/DecodeCredit.h"
 #include "../../core/FrameCadence.h"
 #include "../../core/Log.h"
 #include "../../core/Probe.h"
@@ -623,6 +624,8 @@ public:
         // gate between two frames.
         m_ClientRefreshDirty.store(true);
     }
+
+    void setClientDecodeQueue(int depth) override { m_DecodeCredit.note(depth, steadyNowUs()); }
 
 private:
     /// Take the receiver's latest report, if one arrived since the last call.
@@ -1856,8 +1859,24 @@ private:
                                : std::string("back to ") + std::to_string(baseKbps) + " kbps"));
             }
         };
+        // cadence=host-guarded (design §33): a picture the gate admitted is
+        // held back while the client says its decode queue is full, and the
+        // one held — always the freshest, the converter keeps nothing older —
+        // goes out the moment the credit is back, not at the next present.
+        const bool guarded = m_Config.tuning.cadence == EncoderTuning::Cadence::HostGuarded;
+        bool creditHeld = false;
+        FrameStamps creditHeldStamps;
+        auto withheld = [&](const FrameStamps& stamps) -> bool {
+            if (!guarded || !m_DecodeCredit.missing(steadyNowUs())) return false;
+            m_CreditSkips++;
+            creditHeld = true;
+            creditHeldStamps = stamps;
+            return true;
+        };
         auto emitPicture = [&](const FrameStamps& stamps) -> bool {
             if (!m_Cadence.admit(stamps.convertedUs)) return true;
+            if (withheld(stamps)) return true;
+            creditHeld = false;
             if (!emit(frameNumber, stamps, error)) return false;
             noteReal();
             countPicture();
@@ -1868,6 +1887,8 @@ private:
         // once it went out (absorbDelivered), the refinement window starts now.
         auto emitPictureLater = [&](const FrameStamps& stamps) {
             if (!m_Cadence.admit(stamps.convertedUs)) return;
+            if (withheld(stamps)) return;
+            creditHeld = false;
             emitLater(frameNumber, stamps);
             noteReal();
         };
@@ -1973,7 +1994,9 @@ private:
             const int idleTimeoutMs = static_cast<int>(idleIntervalUs / 1000) < kAcquireTimeoutMs
                                           ? static_cast<int>(idleIntervalUs / 1000)
                                           : kAcquireTimeoutMs;
-            const int timeoutMs = refineSoon ? refineTimeoutMs : idleTimeoutMs;
+            // A picture held for the decode credit is looked at every
+            // millisecond: it goes the moment the credit is back.
+            const int timeoutMs = creditHeld ? 1 : refineSoon ? refineTimeoutMs : idleTimeoutMs;
 
             // Between frames, so the encoder is not holding anything.
             //
@@ -2053,6 +2076,18 @@ private:
             reportCursor();
             reportCursorPosition();
             recentrePointerIfAway();
+
+            if (status == capture::AcquireStatus::Timeout && creditHeld &&
+                !m_DecodeCredit.missing(steadyNowUs())) {
+                // The client's decoder caught up and nothing newer came: the
+                // picture held for it goes now.
+                creditHeld = false;
+                m_CreditFlushes++;
+                if (!emit(frameNumber, creditHeldStamps, error)) return;
+                noteReal();
+                countPicture();
+                continue;
+            }
 
             if (status == capture::AcquireStatus::Timeout) {
                 // Nothing moved on the desktop — but the pointer we draw onto it
@@ -2963,6 +2998,18 @@ private:
                       waited + " % of the time waiting in the acquire");
         }
 
+        // cadence=host-guarded: what the client's decode queue held back.
+        if (m_Config.tuning.cadence == EncoderTuning::Cadence::HostGuarded && seconds > 0) {
+            const auto perSecond = [seconds](int64_t n) {
+                return std::to_string(static_cast<int>(static_cast<double>(n) / seconds + 0.5));
+            };
+            log::info("[native] decode credit: " + std::to_string(m_CreditSkips) +
+                      " presents held back (" + perSecond(m_CreditSkips) + "/s), " +
+                      std::to_string(m_CreditFlushes) +
+                      " sent when the credit came back, nothing newer having come; " +
+                      std::to_string(m_DecodeCredit.signals()) + " words from the client");
+        }
+
         // The pipeline's own figures: what the cross-GPU bridge cost, when
         // there was one.
         if (m_Pipeline) m_Pipeline->logEndOfSession();
@@ -3004,6 +3051,12 @@ private:
     /// Frames per second the client asked not to exceed, 0 for none — see
     /// setClientFpsCap.
     std::atomic<int> m_ClientFpsCap{0};
+    /// The client's decode queue, read under cadence=host-guarded — see
+    /// setClientDecodeQueue. Presents it held back, and the held pictures
+    /// sent when it came back with nothing newer, for the log.
+    DecodeCredit m_DecodeCredit;
+    int64_t m_CreditSkips = 0;
+    int64_t m_CreditFlushes = 0;
     /// Presents the display delivered (AcquireStatus::Ok), for the log.
     int64_t m_PresentsSeen = 0;
     int64_t m_AcquireWaitUs = 0;

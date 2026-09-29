@@ -481,6 +481,7 @@ if(MW_BUILD_TESTS)
         tests/test_resample_cost.cpp
         tests/test_cadence_align.cpp
         tests/test_cadence_choice.cpp
+        tests/test_decode_credit.cpp
         tests/test_restart_backoff.cpp
         tests/test_rate_control.cpp
         tests/test_qp_rate_controller.cpp

@@ -296,6 +296,10 @@ public:
     /// lifts it): forwarded to Session::setClientFpsCap. Safe from any thread.
     void setClientFpsCap(int fps);
 
+    /// Where the client's decode queue stands (a `decodequeue` message):
+    /// forwarded to Session::setClientDecodeQueue. Safe from any thread.
+    void setClientDecodeQueue(int depth);
+
     /// The viewer moved its bitrate (a `clientbitrate` message): the
     /// estimate following the frame the host really streams. The session's
     /// ceiling from the next frame — see mw::native::Session::

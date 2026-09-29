@@ -660,6 +660,11 @@ void NativeMediaEngine::setClientFpsCap(int fps)
     if (m_Session) m_Session->setClientFpsCap(fps);
 }
 
+void NativeMediaEngine::setClientDecodeQueue(int depth)
+{
+    if (m_Session) m_Session->setClientDecodeQueue(depth);
+}
+
 void NativeMediaEngine::setClientBitrate(int kbps)
 {
     // The same bounds as the setting itself (AppSettings::setStreamBitrate).

@@ -1382,6 +1382,18 @@ void DataChannelRelay::onInputMessage(const std::string& message)
         return;
     }
 
+    if (type == "decodequeue") {
+        // Frames waiting at the client's decoder, said when a second one
+        // does and when it is back to one. A host streaming at its own
+        // display's rate skips presents on it rather than let them queue
+        // there (cadence=host-guarded). See Session::setClientDecodeQueue.
+        //
+        // Native host only: a GameStream host sends what it captures.
+        if (auto* native = qobject_cast<NativeMediaEngine*>(m_Shim))
+            native->setClientDecodeQueue(msg["depth"].toInt(0));
+        return;
+    }
+
     if (type == "clientbitrate") {
         // The viewer's automatic bitrate follows the frame the host really
         // streams (its own display's size under Auto, a mode change): the

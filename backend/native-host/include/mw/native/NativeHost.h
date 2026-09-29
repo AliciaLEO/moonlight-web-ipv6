@@ -361,6 +361,14 @@ public:
     /// encoder's per-frame budget follows. Safe from any thread.
     virtual void setClientFpsCap(int fps) = 0;
 
+    /// How many frames wait at the client's decoder input, said the moment a
+    /// second one does and again when it is back to one (a `decodequeue`
+    /// message, frontend DecodeQueueSignal.js). Read only under the bench's
+    /// cadence=host-guarded, which skips presents while it is full (design
+    /// §33); every other cadence, and every platform but Windows, ignores it.
+    /// Safe from any thread.
+    virtual void setClientDecodeQueue(int /*depth*/) {}
+
     /// Where to hear that the viewer's input stopped reaching the host, or
     /// started again — see InputGate. Delivered on the thread that injects,
     /// i.e. the caller's own sendInput() thread, at most once per change.
