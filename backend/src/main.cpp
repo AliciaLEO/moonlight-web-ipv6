@@ -146,10 +146,23 @@ static QHash<int, quint64> g_SlotLaunchGeneration;
 static void loadEnvFile()
 {
     // Look for .env next to the executable first (production / installed build),
-    // then at the project root (Qt Creator dev build).
-    QString path = QCoreApplication::applicationDirPath() + "/.env";
+    // then at the project root — but only for a binary still inside that tree
+    // (build/, build-dev/). PROJECT_ROOT is where the binary was COMPILED: an
+    // installed package built on a machine that keeps its sources read that
+    // tree's .env and took its MW_DOMAIN, so a DEV edition held its line on
+    // production instead of staging (UM790Pro, 29/09/2026).
+    const QString appDir = QCoreApplication::applicationDirPath();
+    QString path = appDir + "/.env";
     if (!QFile::exists(path)) {
-        path = QStringLiteral(PROJECT_ROOT) + ".env";
+        const QString root = QDir::cleanPath(QStringLiteral(PROJECT_ROOT));
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+        const Qt::CaseSensitivity cs = Qt::CaseInsensitive;
+#else
+        const Qt::CaseSensitivity cs = Qt::CaseSensitive;
+#endif
+        const QString dir = QDir::cleanPath(appDir);
+        if (dir.compare(root, cs) != 0 && !dir.startsWith(root + QLatin1Char('/'), cs)) return;
+        path = root + QStringLiteral("/.env");
     }
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return;
