@@ -1159,7 +1159,7 @@ Tableau remis à jour le 29/09/2026, à la clôture du plan D3D12 (§32.19).
 | **Audio** : WASAPI loopback → cadenceur 5 ms → libopus, thread « Pro Audio » (04/09/2026) | |
 | `IMediaEngine`, relais découplés | |
 | Sonde displays/GPU + association ; WGC en repli, et retour à DDA dès que le bureau de l'utilisateur revient (§32.10) | |
-| Capture DXGI (0,06 ms) ; worker SYSTEM pour le bureau sécurisé (§31) | L'invite UAC cliquable et `C+A+Suppr`, à voir sur un poste où l'UAC s'affiche |
+| Capture DXGI (0,06 ms) ; worker SYSTEM pour le bureau sécurisé (§31) | L'invite UAC cliquable (aucun poste du banc ne l'affiche) ; `C+A+Suppr` sans effet tant que `SoftwareSASGeneration` n'est pas posée (§31.7) |
 | Conversion NV12 + AYUV 4:4:4 ; HDR (P010 + BT.2020 PQ) | |
 | NVENC (3,46 ms), AMF (3,70 ms), oneVPL (mesuré sur l'Arc et le N95) | |
 | **Chaîne D3D12** (§32) : conversion D3D12, D3D12 Video Encode en HEVC, H.264 et AV1, contrôle de débit maison ; **par défaut sur Intel** (§32.9) ; NVENC et AMF en entrée D3D12 derrière le réglage (§32.12) | NVIDIA et AMD restent en D3D11, plus rapides chez eux ; deux clés de banc à trancher (`pipelined=1`, `keep12=1`, §32.17-§32.18) |
@@ -5081,6 +5081,24 @@ taisent désormais sur le bureau sécurisé, quoi que dise le réglage
 (`1887b2ea` : `NativeHost::secureDesktopHasInput()`, demandé à chaque touche
 par `Win32Input` et par une sonde du codec d'entrée) ; les lignes déjà écrites
 ont été effacées et le réglage coupé sur ce poste.
+
+**Le 29/09, `C+A+Suppr` essayé de bout en bout : il n'ouvre rien.** Un Chrome
+de l'UM790Pro, en mode tactile émulé (la barre n'existe que sur un appareil
+tactile), streame l'écran principal de DualRTX par l'édition dev installée
+(`0.3.1-f1e8e8e3-dev`, worker SYSTEM).
+- Toute la chaîne répond : le journal du worker dit « input: Ctrl+Alt+Suppr
+  sent », `SendSAS(FALSE)` est appelé par le processus SYSTEM, sans erreur.
+- Mais l'écran de sécurité ne vient pas : la duplication n'est pas perdue, et
+  l'image reste le bureau.
+- La cause probable est la stratégie « générer une séquence d'attention
+  sécurisée par logiciel » (`SoftwareSASGeneration`, dans
+  `HKLM\…\Policies\System`), absente sur ce poste. Sans elle, Windows ignore
+  `SendSAS`, même venant d'un service.
+
+Le produit ne touche pas à cette stratégie (§31.4). La poser à « services »
+(1), dans l'installeur ou au moment de l'appel, est une décision de Bruno. Tant
+qu'elle n'est pas posée, le bouton est sans effet. Le verrouillage (Win+L) et le
+déverrouillage, eux, marchent (vérifié le 28/09).
 
 **Concrètement, pour l'utilisateur** : le stream ne s'arrête plus devant une
 porte. Quand Windows demande une autorisation administrateur, l'invite apparaît
