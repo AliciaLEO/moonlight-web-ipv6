@@ -1204,6 +1204,18 @@ int stageMode(Context& ctx)
             ctx.result.stage = QStringLiteral("done");
             return finish(ctx);
         }
+        // Nothing came of the device the driver stage just switched on: it
+        // goes back off, as it was before this activation. Left on, it stays
+        // enabled with no display behind it until the server's next start
+        // turns it off (seen on the bench, 29/09/2026: a 500 Hz mode the
+        // driver would not bring up, then the next launch refused as well).
+        DisplayNodes nodes;
+        if (auto ours = nodes.valid() ? nodes.ours() : std::nullopt; ours && nodeIsEnabled(*ours)) {
+            QString disableError;
+            if (!setEnabled(nodes.set, *ours, false, &disableError))
+                Logger::warning(
+                    QStringLiteral("[vdisplay-apply] the device stays on: %1").arg(disableError));
+        }
         return failAt(ctx, stage, QStringLiteral("the virtual display did not appear"));
     }
     ctx.result.display = target->gdiName;
