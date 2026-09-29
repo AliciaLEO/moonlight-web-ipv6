@@ -3526,6 +3526,13 @@ donne à une carte NVIDIA, prend le défaut de NVENC en D3D11
 puisqu'une carte AMD passe en D3D12 Video Encode, et seule une clé de banc le
 fait tourner.
 
+Vérifié le jour même sur l'édition dev qui porte ce défaut
+(`0.3.1-8bf1ff36-dev`), par cinq courts streams depuis le Chrome du N95
+(`c925d\tools\nd-check3.txt`). La ligne « streaming » porte
+`[link drops named]` sur NVENC en entrée D3D12 sans clé, comme sur NVENC en
+D3D11. Elle ne la porte pas sur D3D12 Video Encode de la RTX, sur AMF en entrée
+D3D12, ni avec `namedrops=0`.
+
 ## 8o. Linux : la chaîne Vulkan (28/09/2026 →)
 
 Phase 13 du plan D3D12 : la même forme de chaîne sous Linux, en Vulkan Video
