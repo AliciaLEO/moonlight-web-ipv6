@@ -789,7 +789,8 @@ void MediaTrackRelay::onInputMessage(const std::string& message)
     } else if (type == "secureattention") {
         // Ctrl+Alt+Suppr: the one combination a browser can never deliver — the
         // OS running the viewer eats it first — so it arrives as a message of
-        // its own, from a button. Whether it reaches the host's secure desktop
+        // its own, from the touch keyboard bar (Ctrl and Alt down, then Del).
+        // Whether it reaches the host's secure desktop
         // depends on the host (IMediaEngine::sendSecureAttention).
         m_Shim->sendSecureAttention();
     } else if (type == "textinput") {

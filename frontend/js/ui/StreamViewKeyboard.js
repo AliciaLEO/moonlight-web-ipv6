@@ -315,7 +315,7 @@ export class StreamViewKeyboard {
         // [label, kind, id]. kind: 'mod' | 'key'.
         // [label, kind, id] — `id` is a virtual-key code for 'key' entries and a
         // modifier name for 'mod' entries, so the tuple is deliberately mixed.
-        /** @type {Array<[string, 'key', number] | [string, 'mod', string] | [string, 'sas', number]>} */
+        /** @type {Array<[string, 'key', number] | [string, 'mod', string]>} */
         const items = [
             ['Win', 'key', 0x5b], // momentary tap → Start menu (single press)
             ['Esc', 'key', 0x1b],
@@ -323,12 +323,7 @@ export class StreamViewKeyboard {
             ['Shift', 'mod', 'shift'],
             ['Ctrl', 'mod', 'ctrl'],
             ['Alt', 'mod', 'alt'],
-            ['Del', 'key', 0x2e],
-            // Not the three keys: the viewer's own OS swallows that combination
-            // before the page ever sees it, and even forwarded it would be
-            // refused — Windows reserves it in the kernel. It goes as a message
-            // of its own, which the host turns into a real SAS when it can.
-            ['C+A+Suppr', 'sas', 0],
+            ['Del', 'key', 0x2e], // with Ctrl and Alt down: Ctrl+Alt+Suppr, see below
             ['←', 'key', 0x25],
             ['↑', 'key', 0x26],
             ['↓', 'key', 0x28],
@@ -387,6 +382,20 @@ export class StreamViewKeyboard {
                     e.preventDefault();
                     e.stopPropagation();
                     if (btn._held) return;
+                    // Del with Ctrl and Alt down is Ctrl+Alt+Suppr, which no
+                    // injected key can forge: Windows reserves it in the
+                    // kernel, and the viewer's own OS swallows the physical one
+                    // before the page sees it. It goes as a message of its own,
+                    // which the host turns into a real SAS when it can. Every
+                    // modifier is let go first, locked ones included: the host
+                    // is about to switch to the secure desktop, where anything
+                    // still held would stay held with nobody to release it.
+                    if (id === 0x2e && this._heldMods.ctrl && this._heldMods.alt) {
+                        this._releaseAllMods();
+                        this.webrtc.send({ type: 'secureattention' });
+                        this._refocusCapture();
+                        return;
+                    }
                     btn._held = true;
                     this._sendKeyEvent({ type: 'keydown', ...flags() });
                     // The key stays in the held set throughout, so the repeat is a
@@ -408,17 +417,6 @@ export class StreamViewKeyboard {
                 btn.addEventListener('pointerup', release);
                 btn.addEventListener('pointercancel', release);
                 btn.addEventListener('lostpointercapture', release);
-            } else if (kind === 'sas') {
-                btn.addEventListener('pointerdown', (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    // Latched modifiers first: the host is about to switch to
-                    // the secure desktop, where anything still held would stay
-                    // held with nobody to release it.
-                    this._releaseLatchedMods();
-                    this.webrtc.send({ type: 'secureattention' });
-                    this._refocusCapture();
-                });
             } else {
                 btn.addEventListener('pointerdown', (e) => {
                     e.preventDefault();
@@ -638,25 +636,34 @@ export class StreamViewKeyboard {
         if (!this._kbToolbar) return;
         this._kbToolbar.classList.remove('visible');
         // Release stuck modifiers so the host doesn't keep them held.
-        if (this._heldMods) {
-            for (const name of Object.keys(this._heldMods)) {
-                if (!this._heldMods[name]) continue;
-                this._heldMods[name] = false;
-                if (this._lockedMods) this._lockedMods[name] = false;
-                this._sendKeyEvent({
-                    type: 'keyup',
-                    keyCode: StreamViewKeyboard.MOD_VK[name],
-                    code: '',
-                    key: '',
-                    ctrlKey: false,
-                    shiftKey: false,
-                    altKey: false,
-                    metaKey: false,
-                });
-            }
-            this._kbToolbar
-                .querySelectorAll('.stream-kbd-key.active, .stream-kbd-key.locked')
-                .forEach((b) => b.classList.remove('active', 'locked'));
+        this._releaseAllMods();
+    }
+
+    /**
+     * Release every toolbar modifier, latched or locked, and clear the
+     * highlights.
+     *
+     * @this {StreamViewInstance}
+     */
+    _releaseAllMods() {
+        if (!this._heldMods || !this._kbToolbar) return;
+        for (const name of Object.keys(this._heldMods)) {
+            if (!this._heldMods[name]) continue;
+            this._heldMods[name] = false;
+            if (this._lockedMods) this._lockedMods[name] = false;
+            this._sendKeyEvent({
+                type: 'keyup',
+                keyCode: StreamViewKeyboard.MOD_VK[name],
+                code: '',
+                key: '',
+                ctrlKey: false,
+                shiftKey: false,
+                altKey: false,
+                metaKey: false,
+            });
         }
+        this._kbToolbar
+            .querySelectorAll('.stream-kbd-key.active, .stream-kbd-key.locked')
+            .forEach((b) => b.classList.remove('active', 'locked'));
     }
 }

@@ -5036,8 +5036,8 @@ répond faux hors SYSTEM, donc le moteur se comporte exactement comme avant.
 
 Ce n'est pas une combinaison de touches : Windows la réserve dans le noyau et
 aucune entrée injectée ne la fabrique. Elle passe par `SendSAS` (`sas.dll`),
-réservé à SYSTEM. Chaîne complète : bouton `C+A+Suppr` de la barre d'outils
-tactile → message `secureattention` → les trois relais →
+réservé à SYSTEM. Chaîne complète : Ctrl et Alt verrouillés puis `Del`, sur la
+barre de touches tactile → message `secureattention` → les trois relais →
 `IMediaEngine::sendSecureAttention()`. Côté natif, un
 `InputEvent::Type::SecureAttention` qui finit sur le thread suiveur — donc sur
 le bureau qui vient d'apparaître. Côté GameStream, `MoonlightShim` envoie les
@@ -5045,9 +5045,13 @@ trois touches réelles : sur un hôte dont le propre service sait lever le burea
 sécurisé, c'est ce qu'il faut ; ailleurs ce sont trois touches ordinaires, ce
 qui reste plus utile qu'un refus.
 
-Le bouton n'existe pas seulement pour le tactile : le système d'exploitation du
-spectateur avale la combinaison avant que la page ne la voie, sur toutes les
-plateformes. Un bouton est le **seul** chemin.
+La barre de touches est le **seul** chemin : le système d'exploitation du
+spectateur avale la combinaison physique avant que la page ne la voie, sur
+toutes les plateformes. Jusqu'au 29/09/2026, une touche `C+A+Suppr` dédiée la
+portait. Bruno l'a fait retirer : le geste sert trop rarement pour une touche à
+lui, et Ctrl, Alt puis `Del` est celui du clavier. La barre reconnaît ce `Del`
+et envoie le message à la place des trois touches, qu'aucun Windows
+n'accepterait.
 
 ### 31.5 La dégradation
 
@@ -5204,8 +5208,8 @@ touches doit donc envoyer la position AZERTY (le « m » est `Semicolon`) : avec
 porte. Quand Windows demande une autorisation administrateur, l'invite apparaît
 à l'écran distant et le bouton « Oui » se clique comme n'importe quel autre ;
 si la machine se verrouille, on tape son mot de passe depuis le client au lieu
-de regarder un écran noir en attendant ; et le bouton Ctrl+Alt+Suppr de la barre
-de touches ouvre l'écran de sécurité, ce qu'aucune combinaison au clavier n'a
+de regarder un écran noir en attendant ; et Ctrl, Alt puis `Del` sur la barre de
+touches ouvrent l'écran de sécurité, ce qu'aucune combinaison au clavier n'a
 jamais pu faire depuis un navigateur. Si le service n'est pas installé ou a été
 arrêté, rien ne casse : on retrouve exactement le comportement précédent.
 
