@@ -6325,3 +6325,78 @@ d'ici là.
 Linux avec une carte AMD et un Mesa récent, un bureau presque immobile peut
 consommer presque tout le débit réglé. Ce n'est gênant que sur une connexion
 limitée, et c'est à régler.
+
+## 33. Framerate « Hôte » : le stream à la cadence de l'écran de l'hôte (ouvert le 29/09/2026)
+
+Plan `framerate-hote.md` : l'essai « cadence de l'hôte » du POC Ultra, sorti en
+petit plan à part. Tout vit derrière des clés de banc ; aucun défaut ne change
+avant la décision de Bruno.
+
+### 33.1 Ce que coûte la cadence du client
+
+Le stream va aujourd'hui à la fréquence du **client**. « Auto » vaut celle de
+son écran, plafonnée à 120 (`util/RefreshRate.js`), et le navigateur l'envoie
+comme plafond (`stream_fps_max`). L'hôte y pose sa porte (§9.6, `FrameCadence`) :
+il n'encode que la première présentation de chaque intervalle du stream. Un
+changement tombé dans une présentation écartée attend la suivante admise.
+L'écran virtuel du produit tourne lui aussi à la fréquence du stream.
+
+Le modèle de l'attente entre un changement à l'écran et sa capture :
+- hôte à 165 Hz, client à 60 : ~8,3 ms en moyenne (au pire ~17) aujourd'hui,
+  ~3 ms (au pire ~6) si chaque présentation part ;
+- écran virtuel à 60 Hz : 8,3 ms en moyenne ; à 240 Hz, 2,1 ms, même pour un
+  jeu à 60 i/s, dont chaque image attend la composition suivante ;
+- à 500 Hz (le maximum du pilote), ~1 ms (au pire 2).
+
+Desktop Duplication ne livre que les présentations qui changent : un écran
+virtuel à 500 Hz sous un jeu à 60 i/s coûte 60 encodages par seconde, pas 500.
+C'est l'équivalent d'un VRR côté hôte.
+
+L'E2E par image ne voit pas ce gain : il part de l'instant de capture. Le
+critère est l'**âge du contenu** montré au client : l'instant où la page a
+dessiné ce que le client affiche, lu sur l'image elle-même (§33.3).
+
+### 33.2 Les clés
+
+- `MW_NATIVE_TUNING=cadence=host` : encodeur dimensionné pour la fréquence de
+  l'écran capturé, **aucune porte**. Chaque présentation que DDA livre est
+  convertie, encodée et remise à l'envoi. Ni alignement sur le client, ni
+  `stream_fps_max`, ni `clientfpscap` : reçus et journalisés, pas appliqués.
+- `cadence=host-ceiling` : la porte d'aujourd'hui posée sur la fréquence de
+  l'écran de l'hôte (`FrameCadence::ceiling`) : une source qui présente plus
+  vite que l'écran ne rafraîchit est tenue à sa fréquence.
+- `cadence=host-guarded` : `host` plus un **crédit de décodage**. Le client
+  dit quand sa file de décodage dépasse une image, et l'hôte saute des
+  présentations tant qu'elle n'est pas revenue. Sauter une présentation ne
+  coûte rien à l'hôte ; le client, lui, ne peut jeter une image P qu'en payant
+  une image clé. Le gouverneur de débit de décodage (`DecodeRateGovernor.js`)
+  réagit en trois secondes ; le crédit, en un aller-retour.
+- `MW_VDD_REFRESH=<Hz>` : la fréquence de l'écran virtuel du produit, jusqu'à
+  500 Hz (le maximum du pilote), pour la clé seulement. `kRateMax` (240) ne
+  change pas.
+
+Sur un encodeur débordé, la règle reste « la plus fraîche, jamais de file ».
+
+### 33.3 La mesure : l'âge du contenu
+
+La bande `?band=1` de `scripts/bench/content/scroll.html` porte le numéro de
+chaque image de la page. La page garde la table « numéro → instant du rAF »,
+calée sur l'horloge du backend par CDP. Le client relit le numéro sur l'image
+qu'il vient de dessiner (`probePixels`) et en déduit l'âge de ce qu'il montre,
+avec son horloge estimée contre celle de l'hôte par le ping/pong.
+
+### 33.4 La porte
+
+Le verdict se donne par couple hôte × client et par mode de peinture du
+client (tearing ou vsync). Une cadence est recommandée pour un couple si :
+- l'âge du contenu médian baisse d'au moins 2 ms (ou 20 %), avec un p99 pas pire ;
+- le clic → drapeau n'est pas pire ;
+- les images répétées et sautées par minute ne montent pas ;
+- les i/s du jeu restent à −3 % près ;
+- le client suit sans demander de plafond ni descendre l'échelle de qualité.
+
+Pour `host-guarded`, les sauts du crédit sont permis (c'est son rôle) et
+rapportés ; une file de décodage qui tient, ou une descente de l'échelle,
+invalide la passe. La recommandation au produit vise `host-guarded`, à la
+fréquence d'écran virtuel la plus haute qui garde les i/s du jeu à −3 % près.
+Bruno tranche.
