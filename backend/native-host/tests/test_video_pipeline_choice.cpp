@@ -346,6 +346,16 @@ void run_video_pipeline_choice_tests()
                                        "fault seen on the bench"));
     }
 
+    SECTION("VideoPipeline — two pictures in flight by default on an Intel GPU of its own memory");
+    {
+        CHECK(pipelinedByDefault(0x8086, false));  // the Arc
+        CHECK(!pipelinedByDefault(0x8086, true));  // an iGPU: the N95, UHD, Xe
+        CHECK(!pipelinedByDefault(0x10DE, false)); // NVIDIA streams through NVENC
+        CHECK(!pipelinedByDefault(0x1002, false));
+        CHECK(!pipelinedByDefault(0x1002, true));
+        CHECK(!pipelinedByDefault(0, false)); // a GPU nobody named
+    }
+
     SECTION("VideoPipeline — a refusal only matters when D3D12 was asked for");
     {
         VideoPipelineFacts f = arc();

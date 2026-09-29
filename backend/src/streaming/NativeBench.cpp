@@ -144,8 +144,9 @@ const char* const kUsage =
     "  pipeline=auto|d3d11|d3d12   over the setting and the vendor table\n"
     "  pipelined=0|1               D3D12 Video Encode on a thread of its own, the next\n"
     "                              picture converted meanwhile (two in flight at most,\n"
-    "                              a waiting one dropped for a newer one)\n"
-    "  keep12=0|1                  a capture restart keeps the D3D12 Video Encode encoder\n"
+    "                              a waiting one dropped for a newer one); default 1 on\n"
+    "                              an Intel GPU with memory of its own, 0 elsewhere\n"
+    "  keep12=0|1                 a capture restart keeps the D3D12 Video Encode encoder\n"
     "                              when the stream it codes is the same (default 1)\n"
     "  conv12=direct|compute       the D3D12 conversion's queue\n"
     "  enc12=ve|nvenc|amf          the D3D12 route's encoder\n"
@@ -395,7 +396,7 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
     } else if (key == "strict12") {
         tuning.strict12 = value.toInt(&ok) != 0;
     } else if (key == "pipelined") {
-        tuning.pipelined = value.toInt(&ok) != 0;
+        ok = parseChoice(value, tuning.pipelined);
     } else if (key == "keep12") {
         ok = parseChoice(value, tuning.keep12);
     } else if (key == "convert") {

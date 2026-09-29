@@ -19,6 +19,7 @@
 
 #include "../../../convert/windows/ConvertShaders.h"
 #include "../../../core/Log.h"
+#include "../../../core/VideoPipelineChoice.h"
 #include "../../../encode/windows/d3d12/AmfEncoder12.h"
 #include "../../../encode/windows/d3d12/NvencEncoder12.h"
 #include "../../../encode/windows/d3d12/VideoEncode12.h"
@@ -176,9 +177,10 @@ bool D3d12VideoPipeline::open(bool crossGpuCopy, uint64_t encodeAdapterLuid,
         else
             log::warning("[native] D3D12 conversion: no GPU timing (" + why + ")");
     }
-    log::info("[native] D3D12 chain on " + encodeGpuName + ": conversion on the " +
-              m_Queue.description + ", capture handshake by " + syncName(m_Sync) +
-              (m_Timing ? ", GPU-timed" : ""));
+    log::info("[native] D3D12 chain on " + encodeGpuName +
+              (m_Device->unifiedMemory() ? " (the CPU's memory)" : " (memory of its own)") +
+              ": conversion on the " + m_Queue.description + ", capture handshake by " +
+              syncName(m_Sync) + (m_Timing ? ", GPU-timed" : ""));
     return true;
 }
 
@@ -269,16 +271,23 @@ bool D3d12VideoPipeline::buildConverter(const capture::IWindowsCapture& capture,
     m_SourceWidth = capture.width();
     m_SourceHeight = capture.height();
     // Two pictures in flight where the encoder takes pictures from any
-    // texture: D3D12 Video Encode's. Said once, at the first build.
+    // texture: D3D12 Video Encode's — asked by the bench's key, or by default
+    // on an Intel GPU with memory of its own (§9-26). Said once, at the first
+    // build.
     const bool wasPipelined = m_Pipelined;
-    m_Pipelined = m_Tuning.pipelined && m_Encoder12 == EncoderTuning::Encoder12::VideoEncode;
-    if (m_Tuning.pipelined && !m_Pipelined && !m_SaidNotPipelined) {
+    const bool asked = m_Tuning.pipelined == EncoderTuning::Choice::On;
+    const bool byDefault = m_Tuning.pipelined == EncoderTuning::Choice::Default &&
+                           pipelinedByDefault(m_Device->vendorId(), m_Device->unifiedMemory());
+    m_Pipelined = (asked || byDefault) && m_Encoder12 == EncoderTuning::Encoder12::VideoEncode;
+    if (asked && !m_Pipelined && !m_SaidNotPipelined) {
         m_SaidNotPipelined = true;
         log::info("[native] pipelined=1 is for D3D12 Video Encode only — this chain encodes one "
                   "picture at a time");
     } else if (m_Pipelined && !wasPipelined) {
-        log::info("[native] D3D12 chain pipelined: two outputs, the encode on a thread of its "
-                  "own, at most two pictures in flight");
+        log::info(std::string("[native] D3D12 chain pipelined (") +
+                  (asked ? "pipelined=1" : "an Intel GPU with memory of its own") +
+                  "): two outputs, the encode on a thread of its own, at most two pictures in "
+                  "flight");
     }
 
     // The encoder settles its coded size once it is built, after this; the

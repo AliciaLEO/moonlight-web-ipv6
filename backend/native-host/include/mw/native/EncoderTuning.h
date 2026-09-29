@@ -298,9 +298,10 @@ struct EncoderTuning
     /// Two pictures in flight (plan Phase 10): D3D12 Video Encode codes a
     /// picture on a thread of its own while the capture converts the next
     /// into a second output; a converted picture still waiting when a newer
-    /// one is ready is dropped, never queued. Off, the engine's own: one
-    /// picture at a time, the capture thread waiting for each bitstream.
-    bool pipelined = false;
+    /// one is ready is dropped, never queued. The engine's own since
+    /// 29/09/2026 (§9-26): on an Intel GPU with memory of its own, one
+    /// picture at a time elsewhere (pipelinedByDefault, VideoPipelineChoice.h).
+    Choice pipelined = Choice::Default;
     /// A capture restart (a mode change, a locked screen, a new desktop)
     /// keeps the D3D12 Video Encode encoder when the stream it codes is the
     /// same — codec, size, rate, HDR — rather than making it again (plan
@@ -353,9 +354,9 @@ struct EncoderTuning
                rc12 == RateControl12::Default && reencode12 == Choice::Default &&
                reencodeFit12 == Choice::Default && interFloor12 == 0 &&
                prio12 == Priority12::Default && ownCreator12 == Choice::Default &&
-               ddaSync == DdaSync::Default && !gpuTiming && !strict12 && !pipelined &&
-               keep12 == Choice::Default && convertLinux == ConvertLinux::Default &&
-               prioVk == PriorityVk::Default;
+               ddaSync == DdaSync::Default && !gpuTiming && !strict12 &&
+               pipelined == Choice::Default && keep12 == Choice::Default &&
+               convertLinux == ConvertLinux::Default && prioVk == PriorityVk::Default;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -433,7 +434,7 @@ struct EncoderTuning
         if (ddaSync == DdaSync::Cpu) add("ddasync=cpu");
         if (gpuTiming) add("gputiming=1");
         if (strict12) add("strict12=1");
-        if (pipelined) add("pipelined=1");
+        if (pipelined != Choice::Default) add(std::string("pipelined=") + choice(pipelined));
         if (keep12 != Choice::Default) add(std::string("keep12=") + choice(keep12));
         if (convertLinux == ConvertLinux::Gl) add("convert=gl");
         if (convertLinux == ConvertLinux::Vulkan) add("convert=vulkan");

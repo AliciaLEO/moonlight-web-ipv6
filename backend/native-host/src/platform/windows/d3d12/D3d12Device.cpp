@@ -203,6 +203,7 @@ bool D3d12Device::open(IDXGIAdapter1* adapter, std::string& error)
     if (SUCCEEDED(adapter->GetDesc1(&desc))) {
         m_Luid = luidValue(desc.AdapterLuid);
         m_Name = narrow(desc.Description);
+        m_VendorId = desc.VendorId;
     }
 
     m_Debug = debugLayerOnce();
@@ -213,6 +214,10 @@ bool D3d12Device::open(IDXGIAdapter1* adapter, std::string& error)
                 hresultText(hr) + ")";
         return false;
     }
+    D3D12_FEATURE_DATA_ARCHITECTURE architecture = {};
+    if (SUCCEEDED(m_Device->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE, &architecture,
+                                                sizeof(architecture))))
+        m_UnifiedMemory = architecture.UMA != FALSE;
     if (m_Debug && SUCCEEDED(m_Device.As(&m_InfoQueue))) {
         // Stored, not broken on: the layer reports, the log carries it, and a
         // stream keeps going — a debugger break would freeze a worker nobody

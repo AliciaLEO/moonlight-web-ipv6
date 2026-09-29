@@ -106,6 +106,18 @@ inline EncoderTuning::Encoder12 defaultEncoder12(EncoderApi api)
     }
 }
 
+/// Whether D3D12 Video Encode takes two pictures in flight (EncoderTuning::
+/// pipelined, design §32.17) when the bench's key says nothing: on an Intel
+/// GPU with memory of its own, not on one that shares the CPU's (Bruno,
+/// 29/09/2026, §9-26). The Arc takes 2 to 4.5 % more pictures at 244 Hz and
+/// loses nothing measurable elsewhere; on an iGPU the conversion slows the
+/// encoder through the memory they share (the N95 at 120 Hz: +52 ms at the
+/// p99). NVIDIA and AMD stream through their own SDKs, one picture at a time.
+inline bool pipelinedByDefault(uint32_t vendorId, bool unifiedMemory)
+{
+    return vendorId == 0x8086 && !unifiedMemory;
+}
+
 namespace videopipeline_detail {
 
 inline const char* encoderName(EncoderTuning::Encoder12 e)

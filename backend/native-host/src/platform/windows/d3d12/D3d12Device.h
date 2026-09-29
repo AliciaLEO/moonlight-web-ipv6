@@ -126,6 +126,11 @@ public:
     uint64_t luid() const { return m_Luid; }
     const std::string& name() const { return m_Name; }
     bool debugLayer() const { return m_Debug; }
+    /// The adapter's PCI vendor id.
+    uint32_t vendorId() const { return m_VendorId; }
+    /// Whether the GPU works in the CPU's memory (an iGPU; WARP), as D3D12
+    /// says it (D3D12_FEATURE_ARCHITECTURE, UMA).
+    bool unifiedMemory() const { return m_UnifiedMemory; }
 
     /// A queue by @p request; see QueueRequest and Queue. The priority steps
     /// down GLOBAL_REALTIME → HIGH → NORMAL until one is accepted, and the
@@ -149,6 +154,8 @@ private:
     uint64_t m_Luid = 0;
     std::string m_Name;
     bool m_Debug = false;
+    uint32_t m_VendorId = 0;
+    bool m_UnifiedMemory = false;
 };
 
 /// How long the chain's CPU waits on its own GPU work before it calls the GPU

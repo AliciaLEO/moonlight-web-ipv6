@@ -44,6 +44,9 @@ void run_d3d12_device_tests()
     }
     CHECK(device->device() != nullptr);
     CHECK(!device->name().empty());
+    // WARP works in the CPU's memory, like an iGPU: never pipelined by default.
+    CHECK(device->unifiedMemory());
+    CHECK_EQ(device->vendorId(), 0x1414u);
 
     // One device per adapter: by the adapter and by its LUID alike.
     {
