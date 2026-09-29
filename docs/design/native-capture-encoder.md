@@ -886,8 +886,8 @@ prédit de l'image jetée. Avec `pipelined=1`, une image peut déjà être codé
 quand la remise arrive : ce cas n'est pas couvert. Le compteur
 `sctpDeltaNamed` de la ligne « Drop counters » compte ces images nommées.
 
-Le défaut reste « off » jusqu'au banc sur un lien bridé : chaque encodeur,
-clients Windows et Mac.
+Le défaut reste « off » jusqu'à la décision de Bruno, sur les bancs
+ci-dessous.
 
 **Le banc Linux, fait le 29/09** (banc §8n.27 : Chrome de l'UM790Pro, coupures
 et bridages par `netem`, un détecteur de dégâts lu sur le canvas du stream) :
@@ -898,6 +898,14 @@ et bridages par `netem`, un détecteur de dégâts lu sur le canvas du stream) :
   référence longue, un encodage ne se termine jamais, et la session finit
   10 s plus tard. Trois passes sur trois, jamais vu en production, pas
   reproduit hors ligne. `namedrops` ne doit donc jamais valoir pour oneVPL.
+
+**Les bancs Windows et Mac, faits le 29/09** (banc §8n.28, le lien bridé côté
+hôte par WinDivert) :
+- Chrome sous Windows (N95) confirme Linux : NVENC perd 85 % de ses images
+  abîmées, AMF 46 %, D3D12 VE ne bouge pas, et les gels non plus.
+- Sur le Mac, `namedrops` est neutre. VideoToolbox n'affiche pas d'image fausse,
+  et l'image clé évitée coûte peu en LAN : sur NVENC, deux fois moins d'images
+  clés demandées, pour les mêmes gels.
 
 ### 9.11 La cadence s'aligne sur le rafraîchissement du client (04/09/2026)
 
@@ -5995,7 +6003,8 @@ médian avant l'image clé, et 0 erreur de décodage.
 
 **L'image jetée au calage du lien, nommée à l'encodeur** (§9-25, accepté
 derrière un interrupteur). La clé `namedrops=1`, lue par le relais, est
-décrite au §9.10.2. Elle reste « off » jusqu'au banc sur un lien bridé.
+décrite au §9.10.2. Elle reste « off » : les bancs sur lien bridé sont faits
+(banc §8n.27 et §8n.28), la décision revient à Bruno.
 
 **Deux images en vol à haute fréquence** (§9-26, pas tranché). Bruno a demandé
 deux vérifications : un gros GPU à très haute fréquence y gagne-t-il, et

@@ -3375,6 +3375,92 @@ SYSTEM. Il le lisait dans son propre AppData, celui de `systemprofile`, et les
 deux bras auraient été identiques. Corrigé par `29d5f8e7` : le serveur le lit et
 le passe au worker.
 
+### 8n.28 L'image jetée nommée : clients Windows et Mac (§9-25, 29/09/2026)
+
+La suite du §8n.27, sur les deux autres clients choisis par Bruno.
+
+**Montage.**
+- **Hôte** : le même qu'au §8n.27 (édition dev `0.3.1-81c55309-dev`, bras posé
+  dans le `native_tuning`, chaîne nommée dans les deux bras). oneVPL est laissé
+  de côté : il se bloque avec `namedrops`.
+- **Clients** :
+  - Windows : le Chrome 154 du N95 (Wi-Fi, décodage matériel de l'UHD
+    Graphics). Il fait le pari du ride-out, comme le client Linux.
+  - Mac : le Chrome 154 du Mac M1 (Wi-Fi, VideoToolbox). Il ne le fait pas
+    (`50b2b574`) : sans `namedrops`, l'hôte bloque tous les deltas après un
+    delta jeté, jusqu'à une image clé demandée au dégorgement.
+  - Le Mac est resté verrouillé, capot fermé. Son Chrome y rythme quand même
+    ses images à 120 Hz, et le détecteur lit le canvas, pas l'écran.
+- **Lien** : bridé **côté hôte**, puisque ni Windows ni macOS n'ont `netem`. Un
+  petit brideur posé sur DualRTX (`mwshaper.py`, sur le pilote WinDivert 2.2.2,
+  élevé) refait les coupures et les bridages du §8n.27. Il agit sur l'UDP des
+  ports média (48550-48573), pour les seules adresses du client et du routeur.
+- Chaque Chrome est piloté depuis DualRTX par son port DevTools, relayé par
+  `ssh -L`. Événements et relevés sont datés par la seule horloge de DualRTX.
+- Mêmes passes, même détecteur, bras alternés, 2 tours : 12 passes par client.
+- Sorties : `bench-out\d3d12v2\c925w` (N95) et `c925m` (Mac). Outils dans
+  `c925w\tools`.
+
+**Relevé en montant le banc.**
+- **Le premier chemin ICE passe en épingle par le routeur** (paire
+  `prflx 82.67.150.202:48550` → `prflx 192.168.1.254`), avant de basculer sur le
+  chemin direct. L'adresse du routeur est donc bridée aussi. Le brideur compte à
+  part tout paquet d'une autre adresse : 0 dans toutes les passes.
+- **Le démarrage du stream abîme des images sur le N95** : toutes, pendant ~4 s,
+  dans la passe d'essai. Le compte ne commence donc qu'après 3 s sans dégât.
+  Ensuite, 0 image abîmée au calme dans les 24 passes.
+- **Sur le Wi-Fi du N95, le contrôle de débit de l'hôte descend à ~4 Mbit/s dès
+  le démarrage** (« link: delay rising »), puis oscille entre 4 et 16 Mbit/s.
+  Sous Linux (Ethernet) comme sur le Mac, il reste entre 15 et 20. Sur le N95,
+  un bridage à 4 Mbit/s fait donc peu caler le lien : les dégâts y viennent
+  surtout des coupures.
+
+**Windows (N95)** (sommes des 2 tours ; `c925w\summary.txt` et `events.txt`) :
+
+| Encodeur | Images abîmées, off → on | Gel total, off → on | Deltas jetés (nommés) | Deltas bloqués en attente d'une image clé |
+|---|---|---|---|---|
+| RTX, NVENC D3D11 | 687 → **100** (−85 %) | 15,0 → 15,0 s | 522 → 441 (441) | 98 → 111 |
+| iGPU AMD, AMF D3D11 | 96 → **52** (−46 %) | 12,7 → 14,2 s | 380 → 120 (120) | 125 → 399 |
+| Arc, D3D12 VE | 39 → 37 | 13,8 → 15,6 s | 25 → 171 (171) | 680 → 563 |
+
+- Sur la RTX, les coupures de 0,3 et 0,5 s laissaient 144 et 322 images abîmées
+  sans `namedrops`, 19 et 54 avec.
+- AMF abîme bien moins ici que sous Linux (96 images contre 2 246) : ses dégâts
+  y venaient des bridages, qui ne font plus caler le lien.
+- Les gels ne bougent pas au-delà du bruit : deux passes du même bras
+  s'écartent jusqu'à 1,9 s.
+
+**Mac** (sommes des 2 tours ; `c925m\summary.txt` et `events.txt`) :
+
+| Encodeur | Gel total, off → on | Deltas jetés (nommés) | Deltas bloqués en attente d'une image clé | Images clés demandées par le relais |
+|---|---|---|---|---|
+| RTX, NVENC D3D11 | 16,3 → 15,7 s | 37 → 1 066 (1 066) | 1 217 → **73** | 46 → **22** |
+| iGPU AMD, AMF D3D11 | 20,9 → 21,8 s | 33 → 220 (220) | 1 094 → 914 | 41 → 31 |
+| Arc, D3D12 VE | 23,4 → 24,1 s | 29 → 259 (259) | 1 124 → 911 | 37 → 33 |
+
+- **Aucune image abîmée**, dans aucun bras (0 à 4 par passe) : VideoToolbox
+  n'affiche pas une image fausse, il s'arrête.
+- **Les gels ne changent pas** : de −3 à +4 %, moins que l'écart entre deux
+  passes du même bras (jusqu'à 1,9 s).
+- Sur NVENC, `namedrops` remplace l'attente d'une image clé par des images
+  nommées : 1 217 deltas bloqués → 73, 46 images clés → 22. L'écran ne le voit
+  pas. En LAN à 20 Mbit/s, une image clé passe en quelques dizaines de ms, et le
+  gel suit la coupure elle-même, puis la reprise de SCTP.
+- AMF et D3D12 VE bloquent encore beaucoup de deltas avec `namedrops` (914 et
+  911) : ils refusent certaines invalidations (3 par passe), et la session
+  demande alors une image clé.
+- Les erreurs du décodeur (4 à 5 par passe) suivent chaque coupure d'au moins
+  0,5 s, à l'identique dans les deux bras : `namedrops` n'y est pour rien.
+
+**Ce qu'on en retient**, avec le §8n.27 :
+- Sur les clients qui font le pari du ride-out (Chrome sous Linux et Windows),
+  `namedrops` retire l'essentiel des images abîmées sur NVENC (−85 à −93 %) et
+  AMF (−46 à −96 %), sans changer les gels.
+- D3D12 VE n'y gagne presque rien : il attendait déjà des images clés.
+- Sur un client Apple, il est neutre : il n'y a pas d'image abîmée à retirer, et
+  l'image clé qu'il évite coûte peu en LAN.
+- oneVPL se bloque avec lui (§8n.27) : jamais pour oneVPL.
+
 ## 8o. Linux : la chaîne Vulkan (28/09/2026 →)
 
 Phase 13 du plan D3D12 : la même forme de chaîne sous Linux, en Vulkan Video
