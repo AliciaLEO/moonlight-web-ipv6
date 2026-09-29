@@ -5928,9 +5928,11 @@ le stream.
 - `keep12=1` par défaut (§9-27, §32.18) : fait ;
 - G5 sous Counter-Strike 2 ; la file d'encodage HIGH sous le noyau 7.0 reste
   refusée (banc §8o.10) ;
-- les tests manuels : le pompage de G3 et l'invite UAC ; `C+A+Suppr` (§9-28) :
-  fait, par le service lanceur et la stratégie de l'installeur (§31.7), reste
-  le geste de Bruno depuis un vrai tactile et un poste verrouillé ;
+- les tests manuels : le pompage de G3, **fait** (Bruno, 29/09, en 5G :
+  aucun pompage sur du texte ni sous RE9, à 10 et 5 Mb/s ; banc §8n.22) ;
+  l'invite UAC ; `C+A+Suppr` (§9-28) : fait, par le service lanceur et la
+  stratégie de l'installeur (§31.7), reste le geste de Bruno depuis un vrai
+  tactile et un poste verrouillé ;
 - la séance du 780M sous Windows (C10.2) : sans objet, la décision sur
   `pipelined` ne touche pas AMD.
 

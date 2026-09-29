@@ -3018,7 +3018,14 @@ bout médiane / p90, `host_total`, file du lien médiane / max).
 **Critères G3, sur le vrai stream.**
 - Débit : suit le gouverneur, à la baisse (4 s) comme à la hausse.
 - Latence pas pire qu'en D3D11 : tenu, et de loin côté hôte.
-- Pas de pompage visible : reste le test de Bruno.
+- Pas de pompage visible : **tenu**. Test de Bruno le 29/09, depuis son
+  téléphone, en 5G, par le rendez-vous de l'édition dev. L'écran de l'Arc,
+  donc D3D12 Video Encode avec notre contrôle de débit, a été regardé à 10
+  puis 5 Mb/s fixes, sur deux contenus :
+  - la page de texte qui défile ;
+  - RE9 (la copie propre, réglages légers), une rue sous la pluie.
+
+  Aucun pompage vu : la netteté ne « respire » pas. G3 est tenue en entier.
 
 **Pièges du montage**, pour qui le refait.
 - Un profil Chrome neuf, sous une session ouverte automatiquement, attend le
