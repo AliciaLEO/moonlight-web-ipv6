@@ -1637,6 +1637,21 @@ void DataChannelRelay::sendFragmented(const QByteArray& data, bool isKeyframe,
             m_BackpressureDropCount++;
             m_Freezes.note(backlogNowMs - m_Backlog.ageMs(backlogNowMs), backlogNowMs);
 
+            // The engine that heals by reference invalidation can be told
+            // which frame never left (namedrops, plan §9-25). No wire id was
+            // spent on it, so the client sees no hole; the next delta predicts
+            // from a frame the client has, and neither a keyframe nor the
+            // refresh wave is waited for. The same gesture as the sender's
+            // evictions (design §9.10.2): a stall longer than the encoder's
+            // references reach ends in the keyframe the session asks for.
+            auto* native = qobject_cast<NativeMediaEngine*>(m_Shim);
+            const bool named = native && frameNumber >= 0 && native->nameLinkDrops() &&
+                               native->referenceInvalidation();
+            if (named) {
+                native->invalidateReference(static_cast<uint32_t>(frameNumber));
+                m_NamedDeltaDropCount++;
+            }
+
             // Set sticky awaiting state. The keyframe is asked for when the
             // buffer drains (requestIdrOnDrain): asked for now, it would come
             // back a frame later into the same backed-up buffer and be dropped
@@ -1649,8 +1664,9 @@ void DataChannelRelay::sendFragmented(const QByteArray& data, bool isKeyframe,
             // largest frame the encoder can make. MediaTrackRelay documents
             // where that leads — "every stall became an IDR storm […] the
             // stream collapsed outright". Riding out drops one delta and lets
-            // the refresh wave repair the picture instead.
-            if (!ridingOutLoss()) {
+            // the refresh wave repair the picture instead. A named drop needs
+            // neither.
+            if (!named && !ridingOutLoss()) {
                 m_AwaitingIdr = true;
                 if (!m_IdrWaitsForDrain) {
                     m_IdrWaitsForDrain = true;
@@ -1662,7 +1678,8 @@ void DataChannelRelay::sendFragmented(const QByteArray& data, bool isKeyframe,
                 qInfo() << "[DataChannelRelay] Dropped delta frame (link not draining)"
                         << "bufferedAmount=" << bufAmt
                         << "backlogMs=" << m_Backlog.ageMs(backlogNowMs)
-                        << "totalDropped=" << m_DeltaDroppedCount;
+                        << "totalDropped=" << m_DeltaDroppedCount
+                        << (named ? "named to the encoder" : "");
             }
             return;
         }
@@ -1858,6 +1875,7 @@ void DataChannelRelay::onStatsTimerTick()
             // pinned just above the watermark read like a healthy one.
             qInfo() << "[DataChannelRelay] Drop counters — worker:" << workerDrops
                     << "senderQueue:" << senderDrops << "sctpDelta:" << m_DeltaDroppedCount
+                    << "sctpDeltaNamed:" << m_NamedDeltaDropCount
                     << "sctpKeyframe:" << m_KeyframeBackpressureWarnings
                     << "gatedDelta:" << m_AwaitingIdrDropCount
                     << "pendingVideoFrames:" << (m_Shim ? m_Shim->pendingVideoFrames() : 0)
@@ -2002,6 +2020,7 @@ void DataChannelRelay::stop()
 
         // Reset backpressure counters and IDR state for next session
         m_DeltaDroppedCount = 0;
+        m_NamedDeltaDropCount = 0;
         m_KeyframeBackpressureWarnings = 0;
         m_BackpressureDropCount = 0;
         m_AwaitingIdrDropCount = 0;

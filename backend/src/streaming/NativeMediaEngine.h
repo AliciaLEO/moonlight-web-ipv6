@@ -267,6 +267,11 @@ public:
     /// False until a session started, false on encoders without it.
     bool referenceInvalidation() const;
 
+    /// Whether the delta the relay drops when the link stops draining is
+    /// named to invalidateReference too (EncoderTuning::nameLinkDrops, plan
+    /// §9-25) — on top of referenceInvalidation(), which the relay also asks.
+    bool nameLinkDrops() const { return m_NameLinkDrops.load(std::memory_order_acquire); }
+
     /// The relay's sender dropped a frame because the link had not taken the
     /// previous ones. Counted here, from the relay's thread, and carried by the
     /// next reportLink(): to the governor an eviction is loss the host caused
@@ -434,4 +439,7 @@ private:
 
     /// Sender evictions since the last link report — see noteEviction().
     std::atomic<int> m_Evictions{0};
+
+    /// The session's EncoderTuning::nameLinkDrops, for the relay's thread.
+    std::atomic<bool> m_NameLinkDrops{false};
 };

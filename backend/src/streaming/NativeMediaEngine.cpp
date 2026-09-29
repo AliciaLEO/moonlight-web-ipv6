@@ -240,6 +240,8 @@ void NativeMediaEngine::startCapture(const StartParams& params)
         else
             qWarning().noquote() << "[NativeMediaEngine] MW_NATIVE_TUNING ignored:" << parseError;
     }
+    m_NameLinkDrops.store(config.tuning.nameLinkDrops == mw::native::EncoderTuning::Choice::On,
+                          std::memory_order_release);
 
     std::string error;
     m_Session = mw::native::NativeHost::createSession(

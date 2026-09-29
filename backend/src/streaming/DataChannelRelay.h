@@ -356,6 +356,8 @@ private:
 
     // Backpressure counters (diagnostic logging)
     int m_DeltaDroppedCount = 0; // Delta frames dropped due to full SCTP buffer
+    // Of those, the ones named to the encoder (namedrops, plan §9-25).
+    int m_NamedDeltaDropCount = 0;
     // Deltas dropped by the awaiting-IDR gate. This is the BULK of a stall:
     // one delta hits a full buffer, the gate closes, and every frame after it
     // is discarded here — at 60 fps, ~60 per second — while m_DeltaDroppedCount

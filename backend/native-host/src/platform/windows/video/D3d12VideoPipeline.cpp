@@ -212,6 +212,8 @@ void D3d12VideoPipeline::teardown(bool keepHeld)
             output = Output{};
         }
     }
+    // An encoder a failure left behind is never kept.
+    const bool healthy = m_Lost.empty() && m_EncodeLost.empty();
     m_Latest = 0;
     m_Target = 0;
     m_PendingKbps = 0;
@@ -219,10 +221,10 @@ void D3d12VideoPipeline::teardown(bool keepHeld)
     m_KeptHeld.Reset();
     if (keepHeld && m_Converter) m_KeptHeld = m_Converter->takeHeld();
     // Released before the replacements are built, as on D3D11: an encoder
-    // holds a hardware session. keep12=1 sets D3D12 Video Encode's aside
-    // instead: buildEncoder takes it back for the same stream, or releases it
-    // before it makes another.
-    if (m_Encoder && m_Tuning.keep12 == EncoderTuning::Choice::On &&
+    // holds a hardware session. D3D12 Video Encode's is set aside instead
+    // (keep12, unless keep12=0): buildEncoder takes it back for the same
+    // stream, or releases it before it makes another.
+    if (m_Encoder && healthy && m_Tuning.keep12 != EncoderTuning::Choice::Off &&
         m_Encoder12 == EncoderTuning::Encoder12::VideoEncode) {
         if (m_Parked) m_Parked->stop();
         m_Parked = std::move(m_Encoder);
@@ -338,13 +340,13 @@ bool D3d12VideoPipeline::buildEncoder(const capture::IWindowsCapture& capture,
     shape.hdr = build.hdr;
     shape.intraRefresh = build.intraRefresh;
     std::unique_ptr<encode::IVideoEncoder12> encoder;
-    // keep12=1: the encoder the teardown set aside, if the stream is the same.
+    // keep12: the encoder the teardown set aside, if the stream is the same.
     // Its next picture is the keyframe the session asks for after a restart.
     if (m_Parked) {
         if (m_ParkedShape == shape) {
             encoder = std::move(m_Parked);
             ++m_KeptEncoders;
-            log::info("[native] D3D12 Video Encode kept across the rebuild (keep12=1)");
+            log::info("[native] D3D12 Video Encode kept across the rebuild (keep12)");
         } else {
             m_Parked->stop();
             m_Parked.reset();
@@ -1003,7 +1005,7 @@ void D3d12VideoPipeline::logEndOfSession() const
 {
     if (m_KeptEncoders > 0)
         log::info("[native] D3D12 Video Encode kept across " + std::to_string(m_KeptEncoders) +
-                  " rebuild(s) (keep12=1)");
+                  " rebuild(s) (keep12)");
     if (m_Jobs > 0 || m_Dropped > 0)
         log::info("[native] D3D12 chain pipelined: " + std::to_string(m_Jobs) +
                   " pictures encoded on the encode thread, " + std::to_string(m_Overlapped) +

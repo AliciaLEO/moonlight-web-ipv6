@@ -133,6 +133,8 @@ const char* const kUsage =
     "  vbv=<frames>     VBV of exactly N frames at the stream rate, no floor\n"
     "  governor=0|1     the link governor; 0: the encoder gets bitrate= (and ramp=) as\n"
     "                   they are — no receiver here to report on the link\n"
+    "  namedrops=0|1    a real session's (MW_NATIVE_TUNING): the delta the relay drops on a\n"
+    "                   stalled link is named to the encoder rather than healed by a keyframe\n"
     "  dpb=<frames>     NVENC decoded picture buffer (default 4, for reference invalidation)\n"
     "  fallback=1|mf|mfsw|mfcpu|cpu  pretend no GPU encodes: the fallback tier (1), Media\n"
     "                   Foundation (mf), Microsoft's software transform even where a hardware\n"
@@ -144,7 +146,7 @@ const char* const kUsage =
     "                              picture converted meanwhile (two in flight at most,\n"
     "                              a waiting one dropped for a newer one)\n"
     "  keep12=0|1                  a capture restart keeps the D3D12 Video Encode encoder\n"
-    "                              when the stream it codes is the same (default 0)\n"
+    "                              when the stream it codes is the same (default 1)\n"
     "  conv12=direct|compute       the D3D12 conversion's queue\n"
     "  enc12=ve|nvenc|amf          the D3D12 route's encoder\n"
     "  rc12=driver|qp              D3D12 Video Encode's rate control; qp = the in-house one\n"
@@ -278,6 +280,8 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
         ok = parseChoice(value, tuning.vplGamingScenario);
     else if (key == "governor")
         ok = parseChoice(value, tuning.linkGovernor);
+    else if (key == "namedrops")
+        ok = parseChoice(value, tuning.nameLinkDrops);
     else if (key == "aq")
         ok = parseChoice(value, tuning.spatialAq);
     else if (key == "taq")

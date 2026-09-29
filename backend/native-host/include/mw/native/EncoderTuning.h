@@ -179,6 +179,14 @@ struct EncoderTuning
     /// never pass a step back up. Every other value is the engine's own: on.
     Choice linkGovernor = Choice::Default;
 
+    /// The delta the relay drops when the link stops draining (SendBacklog),
+    /// named to the encoder like the sender's evictions (design §9.10.2): the
+    /// next delta predicts from a frame the client has, where the stream
+    /// otherwise waits for a keyframe or the refresh wave (plan §9-25). Off,
+    /// the engine's own until the bench on a throttled link says otherwise.
+    /// A real session's (MW_NATIVE_TUNING): the relay reads it.
+    Choice nameLinkDrops = Choice::Default;
+
     /// The VBV, in frames at the stream's own rate — exactly, with no floor.
     /// 0 is the engine's rule: one frame, never less than a sixtieth of a
     /// second's worth (RateControl.h says why). 1 and 2 are the two bounds the
@@ -296,8 +304,9 @@ struct EncoderTuning
     /// A capture restart (a mode change, a locked screen, a new desktop)
     /// keeps the D3D12 Video Encode encoder when the stream it codes is the
     /// same — codec, size, rate, HDR — rather than making it again (plan
-    /// C11.4): the stream starts over on a keyframe either way. Off, the
-    /// engine's own until the bench says what it saves.
+    /// C11.4): the stream starts over on a keyframe either way. On, the
+    /// engine's own since 29/09/2026 (§9-27): the keyframe after a mode
+    /// change came 717 → 546 ms sooner on the Arc; keep12=0 makes it again.
     Choice keep12 = Choice::Default;
 
     // ── The Linux chain (plan pipeline-video-d3d12-v2, Phase 13) ────────────
@@ -337,8 +346,9 @@ struct EncoderTuning
                vplExtBrc == Choice::Default && vplLowDelayBrc == Choice::Default &&
                vplGamingScenario == Choice::Default && vplWinBrcFrames == 0 &&
                vplRateControl == VplRateControl::Default && vplIntraRefreshQpDelta == 0 &&
-               vplIntraRefreshDist == 0 && linkGovernor == Choice::Default && vbvFrames == 0 &&
-               dpbFrames == 0 && fallback == Fallback::None && pipeline == VideoPipeline::Auto &&
+               vplIntraRefreshDist == 0 && linkGovernor == Choice::Default &&
+               nameLinkDrops == Choice::Default && vbvFrames == 0 && dpbFrames == 0 &&
+               fallback == Fallback::None && pipeline == VideoPipeline::Auto &&
                conv12 == ConvertQueue12::Default && enc12 == Encoder12::Default &&
                rc12 == RateControl12::Default && reencode12 == Choice::Default &&
                reencodeFit12 == Choice::Default && interFloor12 == 0 &&
@@ -392,6 +402,8 @@ struct EncoderTuning
         if (vplIntraRefreshQpDelta != 0) add("irqp=" + std::to_string(vplIntraRefreshQpDelta));
         if (vplIntraRefreshDist != 0) add("irdist=" + std::to_string(vplIntraRefreshDist));
         if (linkGovernor != Choice::Default) add(std::string("governor=") + choice(linkGovernor));
+        if (nameLinkDrops != Choice::Default)
+            add(std::string("namedrops=") + choice(nameLinkDrops));
         if (vbvFrames > 0) add("vbv=" + std::to_string(vbvFrames) + "f");
         if (dpbFrames > 0) add("dpb=" + std::to_string(dpbFrames));
         if (fallback == Fallback::Tier) add("fallback=1");

@@ -298,7 +298,7 @@ private:
     uint64_t m_Jobs = 0;
     bool m_SaidNotPipelined = false;
 
-    /// What an encoder was built to code: keep12=1 takes a set-aside encoder
+    /// What an encoder was built to code: keep12 takes a set-aside encoder
     /// back only for the same (plan C11.4).
     struct EncoderShape
     {
@@ -317,7 +317,7 @@ private:
         }
     };
     EncoderShape m_EncoderShape;
-    /// keep12=1: the encoder a teardown set aside, and what it codes.
+    /// keep12: the encoder a teardown set aside, and what it codes.
     std::unique_ptr<encode::IVideoEncoder12> m_Parked;
     EncoderShape m_ParkedShape;
     uint64_t m_KeptEncoders = 0;
