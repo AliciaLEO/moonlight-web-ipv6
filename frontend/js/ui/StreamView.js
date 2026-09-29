@@ -1509,7 +1509,10 @@ export class StreamView {
         try {
             this._queueSignalMode = localStorage.getItem('mw_decodequeue') || '';
         } catch (e) {}
-        this._decodeDelay = new DecodeDelay();
+        // 'delay30': the usual decode looked for over 30 s rather than 2 — a
+        // decoder that stays saturated makes a short window's minimum its
+        // queue, and the credit then stops holding it back.
+        this._decodeDelay = new DecodeDelay(this._queueSignalMode === 'delay30' ? 30000 : 2000);
         // Last config applied to the decoder, re-applied after a queue flush.
         this._activeDecoderCfg = null;
         // Last EncodedVideoChunk timestamp (µs) — enforces monotonicity.
@@ -3423,7 +3426,7 @@ export class StreamView {
         let depth = this.decoder.decodeQueueSize;
         if (this._queueSignalMode === 'pending') {
             depth = this._chunkSubmitTimes.size;
-        } else if (this._queueSignalMode === 'delay') {
+        } else if (this._queueSignalMode === 'delay' || this._queueSignalMode === 'delay30') {
             // The oldest frame still in the decoder: the map keeps decode()
             // order and loses each entry at its output. One gone for longer
             // than any decode takes was dropped by the decoder, not queued.

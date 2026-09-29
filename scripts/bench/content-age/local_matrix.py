@@ -58,12 +58,23 @@ def launch_dev(rate, cadence, log):
     time.sleep(8)
 
 
+def names(listing):
+    return {line.split()[0] for line in listing.splitlines() if line.strip()}
+
+
 def wait_released(baseline, timeout=150):
     """The virtual display goes 4 s after the host sees the page gone — which
-    takes it up to a minute. Wait for the screens to be as they were."""
+    takes it up to a minute. Wait for it to be gone: no screen that was not
+    there before. A screen of the baseline missing afterwards is said, not
+    waited for — DualRTX's RTX screen has left the desktop on a switch."""
     t0 = time.time()
     while time.time() - t0 < timeout:
-        if monitors() == baseline:
+        now = monitors()
+        if names(now) <= names(baseline):
+            missing = names(baseline) - names(now)
+            if missing:
+                print("   !! screen(s) gone from the desktop: %s" % " ".join(sorted(missing)),
+                      flush=True)
             return True
         time.sleep(5)
     return False

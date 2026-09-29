@@ -6522,8 +6522,26 @@ Lecture provisoire :
   présentations par seconde pour rien.
 - `delay` (`DecodeDelay`) compte le retard de la plus ancienne image dans le
   décodeur au-delà du décodage habituel, en intervalles du flux : indifférent
-  à la profondeur propre du décodeur. Premier chiffre bon sur le Mac ; reste à
-  le mesurer sur l'iGPU AMD, et à le répéter.
+  à la profondeur propre du décodeur.
+
+Série du 29/09 à 22:30-23:15 (deux passes par case sur le Mac, les trois
+cadences intercalées ; une ou deux sur l'iGPU AMD) :
+
+| Client, écran virtuel | Auto | host | guarded `delay` | guarded `pending` | guarded `delay30` |
+|---|---|---|---|---|---|
+| Mac M1, 240 Hz | 46,5 | 40,3 | **38,6** | — | — |
+| Mac M1, 500 Hz | 39,0 | 147 | 45,9 | — | — |
+| iGPU AMD local, 240 Hz | — | — | 89,2 | **59,6** | 68,2 |
+| iGPU AMD local, 500 Hz | — | — | 93,5 | **49,4** | 95,7 |
+
+- Sur le Mac, `delay` ne coûte rien quand il suit (20 présentations retenues
+  par seconde à 240 Hz) et tient la file quand il décroche.
+- Sur l'iGPU AMD, un signal en temps s'y trompe, même sur 30 s
+  (`delay30`) : ce décodeur (D3D11 de Chrome) semble ne rendre une image qu'à
+  l'arrivée de la suivante, si bien que retenir allonge le décodage qu'on
+  mesure. Un compte (`pending`) ne s'y trompe pas.
+- Aucun signal ne gagne partout. Prochain essai : « `pending` ≥ 3 ou
+  `delay` ≥ 2 ».
 
 **Un défaut vu en passant, antérieur à ce plan** : quand l'activation de
 l'écran virtuel échoue (« the virtual display did not appear »), le nœud reste
