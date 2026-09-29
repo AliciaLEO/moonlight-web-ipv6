@@ -56,14 +56,18 @@ def main():
         return 2
     inputs = [raw[k * picture:k * picture + cw * ch].reshape(ch, cw)[:h, :w].astype(np.float64)
               for k in range(count)]
+    # yuv420p and its Y plane, not gray: converting to gray, ffmpeg 6.1 stretches
+    # the luma of a stream whose VUI says limited range to full range — a false
+    # 24 dB on the Linux VA-API streams (29/09/2026).
     decoded = subprocess.run(['ffmpeg', '-v', 'error', '-threads', '1', '-i', dump, '-f',
-                              'rawvideo', '-pix_fmt', 'gray', '-'], capture_output=True)
+                              'rawvideo', '-pix_fmt', 'yuv420p', '-'], capture_output=True)
     errors = [l for l in decoded.stderr.decode(errors='replace').splitlines() if l.strip()]
-    frames = np.frombuffer(decoded.stdout, dtype=np.uint8)
-    if frames.size % (w * h):
+    planes = np.frombuffer(decoded.stdout, dtype=np.uint8)
+    per = w * h * 3 // 2
+    if planes.size % per:
         print(f'the decoded pictures are not {w}x{h}')
         return 2
-    frames = frames.reshape(-1, h, w)
+    frames = planes.reshape(-1, per)[:, :w * h].reshape(-1, h, w)
 
     whole, worst, rows = [], [], []
     for n, f in enumerate(frames):
