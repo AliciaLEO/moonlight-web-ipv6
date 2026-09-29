@@ -3407,6 +3407,12 @@ du labo), HEVC 1080p60, RADV 26.2.3 :
   repli automatique sur VA-API (plan, C13.5 et §9-19).
 - L'encodeur Vulkan du produit écrira la profondeur complète. Une priorité de
   file d'encodage ne compte que si une soumission passe : on redescend sinon.
+- Revu le 28/09 au soir, le micrologiciel 1.19 d'origine remis en place pour
+  le H.264 du §8o.7 : RADV 26.2.3 passe aussi la preuve au pixel, en
+  profondeur complète, quand `RADV_PERFTEST=video_encode` force l'encodeur.
+  Le seuil de 1.22 est un choix de Mesa (la suite de conformance), pas une
+  limite du bloc. Le produit ne force rien : sans l'encodeur exposé, il prend
+  VA-API.
 
 ### 8o.4 La surface de l'encodeur VA-API, écrite en compute (28/09/2026)
 
