@@ -182,9 +182,10 @@ struct EncoderTuning
     /// The delta the relay drops when the link stops draining (SendBacklog),
     /// named to the encoder like the sender's evictions (design §9.10.2): the
     /// next delta predicts from a frame the client has, where the stream
-    /// otherwise waits for a keyframe or the refresh wave (plan §9-25). Off,
-    /// the engine's own until the bench on a throttled link says otherwise.
-    /// A real session's (MW_NATIVE_TUNING): the relay reads it.
+    /// otherwise waits for a keyframe or the refresh wave (plan §9-25). The
+    /// engine's own is nameLinkDropsByDefault, below: on for NVENC and AMF
+    /// through D3D11 since 29/09/2026, off elsewhere. A real session's
+    /// (MW_NATIVE_TUNING): the relay reads it.
     Choice nameLinkDrops = Choice::Default;
 
     /// The VBV, in frames at the stream's own rate — exactly, with no floor.
@@ -443,5 +444,19 @@ struct EncoderTuning
         return s;
     }
 };
+
+/// EncoderTuning::nameLinkDrops when the key says nothing, for a session that
+/// streams through @p pipeline with @p encoder: on for NVENC and AMF through
+/// D3D11, off everywhere else (Bruno, 29/09/2026, plan §9-25). On a link that
+/// stalled, the pictures a Chrome client showed damaged fell by 85 to 93 % on
+/// NVENC and by 46 to 96 % on AMF, for the same freezes (bench §8n.27 and
+/// §8n.28). Never oneVPL: it hung under it, three passes out of three. D3D12
+/// Video Encode gained nothing measurable, and the D3D12 route's NVENC and
+/// AMF, encoders of their own, were not measured.
+inline bool nameLinkDropsByDefault(VideoPipeline pipeline, EncoderApi encoder)
+{
+    return pipeline == VideoPipeline::D3d11 &&
+           (encoder == EncoderApi::Nvenc || encoder == EncoderApi::Amf);
+}
 
 } // namespace mw::native

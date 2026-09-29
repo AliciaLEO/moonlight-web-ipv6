@@ -252,8 +252,7 @@ void NativeMediaEngine::startCapture(const StartParams& params)
             qWarning().noquote() << "[NativeMediaEngine]" << tuningSource
                                  << "ignored:" << parseError;
     }
-    m_NameLinkDrops.store(config.tuning.nameLinkDrops == mw::native::EncoderTuning::Choice::On,
-                          std::memory_order_release);
+    m_NameLinkDropsKey.store(config.tuning.nameLinkDrops, std::memory_order_release);
 
     std::string error;
     m_Session = mw::native::NativeHost::createSession(
@@ -677,6 +676,18 @@ bool NativeMediaEngine::referenceInvalidation() const
            m_Session->info().referenceInvalidation;
 }
 
+bool NativeMediaEngine::nameLinkDrops() const
+{
+    using Choice = mw::native::EncoderTuning::Choice;
+    const Choice key = m_NameLinkDropsKey.load(std::memory_order_acquire);
+    if (key != Choice::Default) return key == Choice::On;
+    // Read off what runs, not what was asked: a D3D12 chain that fell back to
+    // D3D11 mid-session says so in the same SessionInfo.
+    if (!m_Session || !m_Connected.load(std::memory_order_acquire)) return false;
+    const mw::native::SessionInfo& info = m_Session->info();
+    return mw::native::nameLinkDropsByDefault(info.videoPipeline, info.encoder);
+}
+
 void NativeMediaEngine::reportLink(const mw::native::LinkFeedback& feedback)
 {
     mw::native::LinkFeedback fb = feedback;
@@ -712,6 +723,8 @@ QString NativeMediaEngine::describeSession() const
     if (info.yuv444) text += QStringLiteral(" 4:4:4");
     if (info.hdr) text += QStringLiteral(" HDR");
     if (info.intraRefresh) text += QStringLiteral(" intra-refresh");
+    if (info.referenceInvalidation && nameLinkDrops())
+        text += QStringLiteral(" [link drops named]");
     if (info.crossGpuCopy) text += QStringLiteral(" [cross-GPU copy]");
     if (info.hostMuted) text += QStringLiteral(" [host muted]");
     return text;

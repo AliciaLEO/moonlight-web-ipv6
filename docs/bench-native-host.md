@@ -3461,6 +3461,20 @@ La suite du §8n.27, sur les deux autres clients choisis par Bruno.
   l'image clé qu'il évite coûte peu en LAN.
 - oneVPL se bloque avec lui (§8n.27) : jamais pour oneVPL.
 
+**Décision de Bruno (29/09)** : `namedrops` par défaut pour NVENC et AMF en
+D3D11, les deux encodeurs où le banc montre un gain (design §9.10.2). D3D12
+Video Encode et oneVPL restent sans, comme NVENC et AMF en entrée D3D12, que ce
+banc n'a pas mesurés.
+
+Vérifié le jour même sur l'édition dev qui porte le défaut, par de courts
+streams depuis le Chrome du N95. La ligne « streaming » du worker porte
+`[link drops named]` sur NVENC et AMF en D3D11. Elle ne la porte pas sur
+oneVPL, sur D3D12 VE, ni sur NVENC en entrée D3D12, le réglage de cette
+édition. `namedrops=0` l'éteint sur NVENC comme sur AMF, et `namedrops=1`
+l'allume sur NVENC en entrée D3D12. L'écran physique de la RTX ayant quitté le
+bureau à 12:33, NVENC a streamé l'écran virtuel, rendu par la RTX le temps du
+contrôle.
+
 ## 8o. Linux : la chaîne Vulkan (28/09/2026 →)
 
 Phase 13 du plan D3D12 : la même forme de chaîne sous Linux, en Vulkan Video
