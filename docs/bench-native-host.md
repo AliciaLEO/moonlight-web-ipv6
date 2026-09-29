@@ -4463,6 +4463,54 @@ celui des en-têtes de tranche) :
 Windows. Le prix est celui d'un balayage : quelques Mbit/s sur un écran fixe
 s'ils sont dos à dos, d'où l'écart de quatre périodes, qui vaut ici aussi.
 
+### 8o.15 L'écran fixe : la carte de QP écartée (C13.11), et le CBR de VA-API qui ne se pose plus (29/09/2026)
+
+**C13.11, la question.** Une carte de QP (`VK_KHR_video_encode_quantization_map` ;
+sur RADV, des deltas seulement, par cases de 64 px en HEVC) affinerait-elle plus
+vite l'écran fixe de la chaîne Vulkan Video ?
+
+**Le banc.** `scroll.html?pause=2` : 2 s de défilement, 2 s d'arrêt, en boucle.
+HEVC 1080p60, 20 Mbit/s tenus (`governor=0`), 24 s, capture KMS, le bourrage
+retiré (§8o.13). Le journal donne chaque rafale de raffinement ; le QP est
+celui des en-têtes de tranche.
+- **Vulkan Video** : la chaîne est déjà à QP 18 quand la page s'arrête. Ses
+  rafales coûtent **0 Ko** sur 5 passes (« 45 Ko + 0 Ko », « 26 Ko + 0 Ko ») :
+  il ne reste rien à affiner.
+- **La route scindée** (VA-API) affine en 2 à 23 Ko par rafale, et converge
+  aussi.
+- Le « 610 Ko en 5 passes » mesuré avant le correctif n'était que du
+  bourrage (§8o.13).
+
+**Verdict : mesuré, écarté.** Une carte de QP ne peut rien gagner là où
+l'encodeur n'a plus rien à affiner.
+
+**Vu en passant : le CBR de VA-API ne se pose plus sur un bureau presque
+immobile.** La page fixe avec un carré qui tourne (`still.html?anim=1`), les
+mêmes réglages, deux tours :
+
+| route | sans intra-refresh | avec |
+|---|---|---|
+| Vulkan Video | 0,79-0,81 Mbit/s | 1,51-1,54 Mbit/s (balayages espacés) |
+| Vulkan compute → VA-API (**le défaut sur AMD**) | 14,3-14,4 Mbit/s | 19,9-20,0 Mbit/s |
+| GL → VA-API (`vaapi` dans l'admin) | 14,3-14,6 Mbit/s | 20,0 Mbit/s |
+
+- VA-API reste bas 4 s (7 à 13 Ko par image), puis prend 32 à 33 Ko par image
+  jusqu'au bout, pour un carré de 48 px. Ce sont de vraies données : de
+  l'entropie CABAC, ni bourrage ni `cabac_zero_words`.
+- Avec sa vague d'intra-refresh, continue, il prend tout le budget.
+- Le 22/09, sous Mesa 23.2, la même page retombait sous 1 Ko par image après
+  3,5 s (le commentaire du contrôle de débit de `VaapiEncoder.cpp`). Entre les
+  deux mesures ont changé Mesa (26.2.3), le micrologiciel VCN (1.24) et le
+  noyau (7.0).
+- **À trancher par Bruno**, la route par défaut étant touchée : en chercher la
+  cause (le contrôle de débit du pilote, ou nos références), essayer un
+  plancher de QP pour VA-API, ou passer AMD à la chaîne Vulkan Video, qui
+  reste à 0,8 Mbit/s sur la même page.
+- Sorties : `bench-out\vk-lab\c13-2026-09-29`. Les bancs d'après le correctif
+  du bourrage (§8o.13 à §8o.15 : `irbench`, `stillir`, `stillbench`,
+  `stillsplit`) sont dans `c13-after-filler-2026-09-29.tgz`. Ceux d'avant, dans
+  `c13-benches-2026-09-29.tgz`.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session

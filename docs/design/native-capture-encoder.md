@@ -6296,3 +6296,32 @@ n'en avait pas (§19). Sa vague est continue, sans l'écart de quatre périodes.
 chaîne Vulkan Video, le mode qui traverse les pertes marche comme sous
 Windows. Une image abîmée se répare d'elle-même, sans le gel de l'image clé
 attendue.
+
+### 32.25 Linux : l'écran fixe — la carte de QP écartée (C13.11), et VA-API sous Mesa 26 (29/09/2026)
+
+Plan C13.11, « Go » de Bruno le 29/09 ; banc §8o.15.
+
+**La carte de QP, mesurée et écartée.** L'idée : une carte de deltas de QP
+(`VK_KHR_video_encode_quantization_map`, cases de 64 px sur RADV) pour affiner
+plus vite l'écran fixe de la chaîne Vulkan Video. Le bourrage retiré (§32.23),
+le banc montre qu'il n'y a rien à affiner : la chaîne est déjà à QP 18 quand
+l'image s'arrête, et ses rafales de raffinement ne coûtent plus rien. Le
+« raffinement » de 610 Ko vu avant n'était que du bourrage. Pas de code.
+
+**VA-API ne se pose plus sur un bureau presque immobile.** Sur une page de
+texte où seul un carré de 48 px tourne, VA-API prend 32 Ko par image après 4 s,
+jusqu'au bout. Le débit est de 14,3 Mbit/s sur 20 par la route par défaut
+(Vulkan compute → VA-API) comme par GL, et de 20 avec sa vague d'intra-refresh.
+La chaîne Vulkan Video reste à 0,8 Mbit/s sur la même page. Sous Mesa 23.2, le
+22/09, VA-API y retombait sous 1 Ko par image. Ce sont de vraies données, pas
+du bourrage.
+
+**Ouvert, à Bruno** : la route par défaut sur AMD est touchée. En chercher la
+cause (le contrôle de débit du pilote, ou nos références), un plancher de QP
+pour VA-API, ou la chaîne Vulkan Video par défaut sur AMD. Rien n'est changé
+d'ici là.
+
+**Concrètement, pour l'utilisateur** : rien ne change pour l'instant. Sous
+Linux avec une carte AMD et un Mesa récent, un bureau presque immobile peut
+consommer presque tout le débit réglé. Ce n'est gênant que sur une connexion
+limitée, et c'est à régler.
