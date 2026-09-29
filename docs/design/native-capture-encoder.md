@@ -1186,7 +1186,7 @@ Tableau remis à jour le 29/09/2026, à la clôture du plan D3D12 (§32.19).
 | **Audio** : WASAPI loopback → cadenceur 5 ms → libopus, thread « Pro Audio » (04/09/2026) | |
 | `IMediaEngine`, relais découplés | |
 | Sonde displays/GPU + association ; WGC en repli, et retour à DDA dès que le bureau de l'utilisateur revient (§32.10) | |
-| Capture DXGI (0,06 ms) ; worker SYSTEM pour le bureau sécurisé (§31) ; `C+A+Suppr` appuyé par le service lanceur, sous la stratégie que l'installeur pose ; un stream qui démarre sur l'écran de sécurité ; l'invite UAC cliquée depuis le client (§31.7) | Le déverrouillage d'un poste verrouillé avant le stream, par Bruno |
+| Capture DXGI (0,06 ms) ; worker SYSTEM pour le bureau sécurisé (§31) ; Ctrl+Alt+Suppr appuyé par le service lanceur, sous la stratégie que l'installeur pose ; un stream qui démarre sur l'écran de sécurité ; l'invite UAC cliquée depuis le client ; les gestes de Bruno depuis son iPhone, poste verrouillé compris (§31.7) | |
 | Conversion NV12 + AYUV 4:4:4 ; HDR (P010 + BT.2020 PQ) | |
 | NVENC (3,46 ms), AMF (3,70 ms), oneVPL (mesuré sur l'Arc et le N95) | |
 | **Chaîne D3D12** (§32) : conversion D3D12, D3D12 Video Encode en HEVC, H.264 et AV1, contrôle de débit maison ; **par défaut sur Intel** (§32.9) ; NVENC et AMF en entrée D3D12 derrière le réglage (§32.12) ; l'encodeur gardé à travers un redémarrage de capture (§32.18) et deux images en vol sur un GPU Intel à mémoire propre (§32.20), par défaut depuis le 29/09 | NVIDIA et AMD restent en D3D11, plus rapides chez eux |
@@ -5182,9 +5182,17 @@ propriétaire. Le Chrome de l'UM790Pro, en tactile émulé, pilote le stream :
   opens from a thread on the "Winlogon" desktop »), prend l'Échap, puis revient
   au bureau.
 
-Captures : `bench-out\d3d12v2\sas`. Restent à Bruno : le même geste depuis un
-vrai écran tactile, et le déverrouillage d'un poste verrouillé avant le début du
-stream.
+Captures : `bench-out\d3d12v2\sas`.
+
+**Les gestes de Bruno, faits le 29/09 vers 09:15** depuis son iPhone en 5G, sur
+l'édition dev `0.3.1-81c55309-dev`, qui n'a plus de touche dédiée (§31.4) :
+- **Ctrl, Alt puis `Del`** sur la barre de touches : « Ctrl+Alt+Suppr sent »,
+  l'écran de sécurité s'ouvre dans le stream. Bruno y choisit Verrouiller.
+- **Deux streams relancés sur le poste verrouillé**, l'un sur l'Arc, l'autre
+  sur la RTX, démarrent sur l'écran de verrouillage (« the capture opens from a
+  thread on the "Winlogon" desktop »).
+- Son code, tapé au clavier de l'iPhone, rend le bureau (« now on the "Default"
+  desktop », 09:15:30).
 
 **L'invite UAC, vérifiée le même jour sur DualRTX**, avec la même édition et le
 même client, qui streame cette fois l'écran principal (la RTX). Aucun poste du
@@ -5953,9 +5961,10 @@ le stream.
 - les tests manuels : le pompage de G3, **fait** (Bruno, 29/09, en 5G :
   aucun pompage sur du texte ni sous RE9, à 10 et 5 Mb/s ; banc §8n.22) ;
   l'invite UAC, **faite** (29/09, cliquée depuis le client, Bruno ayant remis
-  l'UAC par défaut le temps du test ; §31.7) ; `C+A+Suppr` (§9-28) : fait,
-  par le service lanceur et la stratégie de l'installeur (§31.7), reste le
-  geste de Bruno depuis un vrai tactile et un poste verrouillé ;
+  l'UAC par défaut le temps du test ; §31.7) ; Ctrl+Alt+Suppr (§9-28) : fait,
+  par le service lanceur et la stratégie de l'installeur (§31.7), et les
+  gestes de Bruno depuis son iPhone, **faits** (29/09 : Ctrl, Alt puis `Del`,
+  puis un stream relancé sur le poste verrouillé et son code) ;
 - la séance du 780M sous Windows (C10.2) : sans objet, la décision sur
   `pipelined` ne touche pas AMD.
 
