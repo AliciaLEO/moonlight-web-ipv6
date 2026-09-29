@@ -17,6 +17,7 @@
 
 #include "PortalCapture.h"
 
+#include "../../audio/linux/PipeWireLibrary.h"
 #include "../../core/Log.h"
 
 #include <drm_fourcc.h>
@@ -325,6 +326,12 @@ void PortalCapture::setVirtualMonitor(int width, int height, int fps)
 
 bool PortalCapture::start(std::string& error)
 {
+    // Before the handshake: without the library the stream the portal grants
+    // could not be read, and the user would have answered its dialog for nothing.
+    if (!audio::pipeWireAvailable()) {
+        error = audio::kPipeWireMissing;
+        return false;
+    }
     ensurePipeWire();
 
     const bool virtualMonitor = d->virtualWidth > 0 && d->virtualHeight > 0;

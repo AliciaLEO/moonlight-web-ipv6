@@ -416,10 +416,13 @@ fi
 # and audio — libdrm, libva (+ its DRM backend), GLESv2, GBM and the PipeWire
 # client library. Deliberately NOT bundled (release.yml excludes them from the
 # AppDir: their driver and module paths are compiled in, so a copy from the
-# build host would find nothing on another distro). NEEDED entries of the
-# executable, so the process does not start without them. libpipewire is only
-# the client library: a machine still on PulseAudio has it too, and the host
-# then streams silent with an explicit log rather than not starting.
+# build host would find nothing on another distro). libdrm, EGL, GLESv2 and
+# GBM are NEEDED entries of the executable; libva, libva-drm and libpipewire are
+# not since 29/09/2026 — they are opened on first use, so the AppImage starts
+# without them — but a package is installed to work, so it still pulls all of
+# them: without libva the host encodes on the CPU, without libpipewire it has
+# no sound. libpipewire is only the client library: a machine still on
+# PulseAudio has it too, and the host then streams silent with an explicit log.
 # libcap2-bin provides setcap for the postinst above.
 #
 # Third group, only recommended: the Vulkan loader and Mesa's Vulkan drivers

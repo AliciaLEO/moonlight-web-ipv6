@@ -18,6 +18,7 @@
 #include "HostMute.h"
 
 #include "../../core/Log.h"
+#include "PipeWireLibrary.h"
 
 #include <pipewire/extensions/metadata.h>
 #include <pipewire/pipewire.h>
@@ -334,6 +335,10 @@ struct HostMute::Impl
 
     bool connect(std::string& error)
     {
+        if (!pipeWireAvailable()) {
+            error = kPipeWireMissing;
+            return false;
+        }
         initLibrary();
         loop = pw_thread_loop_new("mw-host-mute", nullptr);
         if (!loop) {

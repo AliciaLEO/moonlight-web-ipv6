@@ -19,6 +19,7 @@
 
 #include "../../core/Log.h"
 #include "../AudioInterleave.h"
+#include "PipeWireLibrary.h"
 
 #include <pipewire/pipewire.h>
 #include <spa/param/audio/format-utils.h>
@@ -286,6 +287,10 @@ bool PipeWireCapture::start(std::string& error)
     if (d->loop) return true;
     if (!d->onSamples) {
         error = "no sample callback";
+        return false;
+    }
+    if (!pipeWireAvailable()) {
+        error = std::string("PipeWire: ") + kPipeWireMissing;
         return false;
     }
     initLibrary();

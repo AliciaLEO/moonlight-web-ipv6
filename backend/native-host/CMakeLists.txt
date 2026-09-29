@@ -212,9 +212,17 @@ else()
                 src/capture/linux/KmsCapture.cpp
                 src/convert/linux/GlConvert.cpp
                 src/convert/linux/CpuConvert.cpp
-                src/encode/linux/VaapiEncoder.cpp)
+                src/encode/linux/VaapiEncoder.cpp
+                src/platform/linux/VaapiLibrary.cpp)
             target_include_directories(mw-native-host SYSTEM PRIVATE ${MW_LINUX_GFX_INCLUDE_DIRS})
-            target_link_libraries(mw-native-host PRIVATE ${MW_LINUX_GFX_LIBRARIES})
+            # libva and libva-drm are compiled against but NOT linked: they are
+            # opened on first use (src/platform/linux/LazyLibrary.h), so a
+            # machine without them still starts the program — it only loses the
+            # hardware encoder. Linked, they were NEEDED entries that stopped the
+            # whole binary before main(). release.yml asserts they stay out.
+            set(_mw_gfx_link ${MW_LINUX_GFX_LIBRARIES})
+            list(FILTER _mw_gfx_link EXCLUDE REGEX "^va(-drm)?$")
+            target_link_libraries(mw-native-host PRIVATE ${_mw_gfx_link})
             # PUBLIC so the tests can tell whether the backend exists.
             target_compile_definitions(mw-native-host PUBLIC MW_NATIVE_LINUX_GFX=1)
 
@@ -280,9 +288,13 @@ else()
                 # graph, so it lives or dies with the tap (src/audio/linux/
                 # HostMute.h has the measurement that shaped it).
                 target_sources(mw-native-host PRIVATE src/audio/linux/PipeWireCapture.cpp
-                                                      src/audio/linux/HostMute.cpp)
+                                                      src/audio/linux/HostMute.cpp
+                                                      src/audio/linux/PipeWireLibrary.cpp)
                 target_include_directories(mw-native-host SYSTEM PRIVATE ${MW_LINUX_AUDIO_INCLUDE_DIRS})
-                target_link_libraries(mw-native-host PRIVATE ${MW_LINUX_AUDIO_LIBRARIES})
+                # Headers only, like libva above: libpipewire is opened on first
+                # use (PipeWireLibrary.cpp), never linked. Linked, it was the
+                # NEEDED entry the AppImage catalog's test machine did not have
+                # (29/09/2026), and the program would not start at all.
                 target_compile_options(mw-native-host PRIVATE ${MW_LINUX_AUDIO_CFLAGS_OTHER})
                 # PUBLIC so the session test knows whether to expect audio.
                 target_compile_definitions(mw-native-host PUBLIC MW_NATIVE_LINUX_AUDIO=1)
