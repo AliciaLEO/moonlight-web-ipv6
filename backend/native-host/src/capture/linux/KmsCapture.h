@@ -109,6 +109,11 @@ public:
     /// EDID over the wire, and this is asked every second.
     static std::string modeSignature(const std::string& cardPath);
 
+    /// The render node of the GPU behind @p cardPath — what a route that reads
+    /// no scanout (the portal) converts and encodes on. Empty when the card
+    /// cannot be opened or names none. No capability needed.
+    static std::string renderNodeFor(const std::string& cardPath);
+
     KmsCapture(std::string cardPath, uint32_t connectorId);
     ~KmsCapture();
 

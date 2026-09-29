@@ -286,6 +286,7 @@ bool VulkanDevice::identify(const std::string& renderNode, DeviceIdentity& out, 
                      has(extensions, VK_KHR_VIDEO_ENCODE_H265_EXTENSION_NAME);
     id.decodesHevc = has(extensions, VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME) &&
                      has(extensions, VK_KHR_VIDEO_DECODE_H265_EXTENSION_NAME);
+    id.importsHostMemory = has(extensions, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
     out = id;
     return true;
 }
@@ -341,11 +342,20 @@ std::unique_ptr<VulkanDevice> VulkanDevice::open(const std::string& renderNode,
     {
         VkPhysicalDeviceIDProperties id = {};
         id.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+        // What a host pointer must be aligned to, where the driver imports
+        // one (C13.10): asked only then, a structure of an extension the
+        // device lacks being invalid in the chain.
+        VkPhysicalDeviceExternalMemoryHostPropertiesEXT host = {};
+        host.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT;
+        device->m_HostMemory = has(extensions, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
+        if (device->m_HostMemory) id.pNext = &host;
         VkPhysicalDeviceProperties2 p2 = {};
         p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
         p2.pNext = &id;
         loader.vkGetPhysicalDeviceProperties2(device->m_Physical, &p2);
         std::memcpy(device->m_DeviceUuid, id.deviceUUID, VK_UUID_SIZE);
+        if (device->m_HostMemory && host.minImportedHostPointerAlignment > 0)
+            device->m_HostAlignment = host.minImportedHostPointerAlignment;
     }
 
     // The queue: compute without graphics where the GPU has one — the queue
@@ -487,6 +497,7 @@ bool VulkanDevice::create(bool high, std::string& error)
                                        VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME};
     const std::vector<std::string> extensions = extensionsOf(loader, m_Physical);
     if (m_SyncFile) enable.push_back(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
+    if (m_HostMemory) enable.push_back(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
     if (high) {
         enable.push_back(has(extensions, "VK_KHR_global_priority") ? "VK_KHR_global_priority"
                                                                    : "VK_EXT_global_priority");

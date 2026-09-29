@@ -466,6 +466,55 @@ bool GlConvert::createContext(const std::string& renderNode, std::string& error)
     return true;
 }
 
+bool GlConvert::importableModifiers(const std::string& renderNode, uint32_t fourcc,
+                                    std::vector<uint64_t>& modifiers, std::string& error)
+{
+    modifiers.clear();
+    const auto query = reinterpret_cast<PFNEGLQUERYDMABUFMODIFIERSEXTPROC>(
+        eglGetProcAddress("eglQueryDmaBufModifiersEXT"));
+    if (!loadEntryPoints() || !query) {
+        error = "EGL cannot list the DMA-BUF modifiers it imports";
+        return false;
+    }
+    // A display of its own, no context: nothing is drawn, and the one the
+    // conversion makes later belongs to the thread that converts.
+    const int fd = ::open(renderNode.c_str(), O_RDWR | O_CLOEXEC);
+    if (fd < 0) {
+        error = "cannot open the render node " + renderNode;
+        return false;
+    }
+    gbm_device* gbm = gbm_create_device(fd);
+    EGLDisplay display =
+        gbm ? pGetPlatformDisplay(EGL_PLATFORM_GBM_KHR, gbm, nullptr) : EGL_NO_DISPLAY;
+    EGLint major = 0, minor = 0;
+    const bool up = display != EGL_NO_DISPLAY && eglInitialize(display, &major, &minor);
+    const char* extensions = up ? eglQueryString(display, EGL_EXTENSIONS) : nullptr;
+    EGLint count = 0;
+    bool listed = extensions &&
+                  std::strstr(extensions, "EGL_EXT_image_dma_buf_import_modifiers") != nullptr &&
+                  query(display, static_cast<EGLint>(fourcc), 0, nullptr, nullptr, &count);
+    if (listed && count > 0) {
+        std::vector<EGLuint64KHR> all(static_cast<size_t>(count));
+        std::vector<EGLBoolean> externalOnly(static_cast<size_t>(count));
+        listed = query(display, static_cast<EGLint>(fourcc), count, all.data(), externalOnly.data(),
+                       &count);
+        // External-only means sampled through samplerExternalOES, which the
+        // conversion's shaders do not use: such a buffer would import and then
+        // fail to bind.
+        for (EGLint i = 0; listed && i < count; ++i)
+            if (!externalOnly[static_cast<size_t>(i)])
+                modifiers.push_back(all[static_cast<size_t>(i)]);
+    }
+    if (up) eglTerminate(display);
+    if (gbm) gbm_device_destroy(gbm);
+    ::close(fd);
+    if (!listed) {
+        error = "EGL on " + renderNode + " lists no DMA-BUF modifiers";
+        return false;
+    }
+    return true;
+}
+
 bool GlConvert::createShaders(std::string& error)
 {
     const GLuint vs = compile(GL_VERTEX_SHADER, kVertex, error);

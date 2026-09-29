@@ -26,6 +26,8 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 // The screen as the compositor hands it over, through the ScreenCast portal's
 // PipeWire stream — the capture route for an AppImage, which can hold no
@@ -51,6 +53,9 @@
 //  - Some compositors give DMA-BUF (the fast path, importable by EGL) and some
 //    give shared memory. Both are carried; `dmabuf()` says which, because the
 //    GPU pipeline needs the first and only the CPU pipeline can use the second.
+//    A compositor hands a DMA-BUF only to a client that names the modifiers it
+//    can import (PipeWire's DMA-BUF negotiation): GNOME gave shared memory to
+//    this route until it did (offerDmabuf, 29/09/2026).
 //  - The pointer comes as METADATA beside the picture (that is what the
 //    handshake asks for), so it is reported like KMS reports its cursor plane
 //    and the client keeps drawing its own.
@@ -76,6 +81,22 @@ public:
     /// side asks for in the PipeWire format, which is how the compositor sizes
     /// it. Set before start().
     void setVirtualMonitor(int width, int height, int fps);
+
+    /// What a GPU can import, offered to the compositor for DMA-BUF: its
+    /// render node, and per DRM fourcc the modifiers (GlConvert::
+    /// importableModifiers). Offered before shared memory, which stays the
+    /// fallback: a compositor that takes none of them hands that over.
+    struct DmabufOffer
+    {
+        std::string renderNode;
+        std::vector<std::pair<uint32_t, std::vector<uint64_t>>> modifiers;
+    };
+    /// Set before start(). Without an offer the portal is asked for shared
+    /// memory only, as this route always did.
+    void offerDmabuf(DmabufOffer offer);
+    /// The render node of the GPU that converts and encodes, DMA-BUF or not:
+    /// the Vulkan conversion reads shared memory too (C13.10), on that GPU.
+    void setRenderNode(std::string renderNode);
 
     /// Ask the portal, connect to the node it names, and wait for the first
     /// negotiated format. ⚠️ Raises the portal's dialog unless a restore token
@@ -103,9 +124,11 @@ public:
     /// True when buffers arrive as DMA-BUF and the GPU pipeline can import
     /// them; false when they are shared memory and only the CPU pair can.
     /// Not on the interface: it is the one thing the session must ask THIS
-    /// route, to know which pipeline pair can take its frames.
+    /// route, to know which pipeline pair can take its frames. Known when
+    /// start() returns: it waits for the first buffer.
     bool dmabuf() const;
-    /// Empty: the portal names no render node. The GPU pipeline picks one.
+    /// The GPU the session named (setRenderNode), else the offer's when the
+    /// buffers are DMA-BUF; empty when neither says one.
     std::string renderNodePath() const override;
     DesktopRect desktopRect() const override;
     const CursorState& cursor() const override;

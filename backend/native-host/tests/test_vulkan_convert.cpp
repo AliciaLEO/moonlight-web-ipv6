@@ -6,9 +6,13 @@
 
 #if defined(MW_NATIVE_LINUX_GFX) && defined(MW_NATIVE_LINUX_VULKAN)
 #include "capture/linux/KmsCapture.h"
+#if defined(MW_NATIVE_LINUX_PORTAL)
+#include "capture/linux/PortalCapture.h"
+#endif
 #include "convert/linux/GlConvert.h"
 #include "convert/linux/VulkanConvert.h"
 
+#include <drm_fourcc.h>
 #include <fcntl.h>
 #include <glob.h>
 #include <unistd.h>
@@ -35,6 +39,11 @@
 //
 // Real display, real GPU, and CAP_SYS_ADMIN for the scanout, as the Linux
 // pipeline test: skipped, and said, where any of them is missing.
+//
+// Then the same comparison on the portal's buffers (C13.3 bis): not the
+// scanout but the compositor's own copies, handed over by PipeWire as DMA-BUF
+// once the GPU's modifiers are offered — the route an AppImage takes. It needs
+// a consent: MW_PORTAL_RESTORE_TOKEN, a grant from an earlier run.
 
 #if defined(MW_NATIVE_LINUX_GFX) && defined(MW_NATIVE_LINUX_VULKAN)
 namespace {
@@ -145,58 +154,12 @@ double msSince(std::chrono::steady_clock::time_point start)
         .count();
 }
 
-} // namespace
-#endif
-
-void run_vulkan_convert_tests()
+/// @p frame through GlConvert and through VulkanConvert on @p renderNode,
+/// each into a VA-API surface of its own, read back and compared: 1:1, then
+/// scaled down Lanczos-2 and bilinear, the pointer drawn on both.
+void compareConversions(VADisplay display, const std::string& renderNode,
+                        const capture::KmsFrame& frame, const capture::CursorState& cursor)
 {
-    SECTION("Linux — the Vulkan conversion writes what the GL one writes");
-
-#if !defined(MW_NATIVE_LINUX_GFX) || !defined(MW_NATIVE_LINUX_VULKAN)
-    std::fprintf(stderr, "  skipped: the Vulkan conversion is not built\n");
-#else
-    glob_t cards = {};
-    glob("/dev/dri/card*", 0, nullptr, &cards);
-    capture::KmsOutput output;
-    for (size_t i = 0; i < cards.gl_pathc && !output.active; ++i) {
-        std::string error;
-        for (const capture::KmsOutput& out :
-             capture::KmsCapture::listOutputs(cards.gl_pathv[i], error))
-            if (out.active && !output.active) output = out;
-    }
-    globfree(&cards);
-    if (!output.active) {
-        std::fprintf(stderr, "  skipped: no display is being scanned out\n");
-        return;
-    }
-    std::string why;
-    if (!capture::KmsCapture::canReadFramebuffers(output.cardPath, why)) {
-        std::fprintf(stderr, "  skipped: %s\n", why.c_str());
-        return;
-    }
-    capture::KmsCapture kms(output.cardPath, output.connectorId);
-    std::string error;
-    capture::KmsFrame frame;
-    if (!kms.start(error) || kms.acquire(100, frame) != capture::AcquireStatus::Ok) {
-        std::fprintf(stderr, "  skipped: no frame (%s)\n", error.c_str());
-        return;
-    }
-    std::fprintf(stderr, "  frame %dx%d fourcc %.4s modifier 0x%llx, %d plane(s)\n", frame.width,
-                 frame.height, reinterpret_cast<const char*>(&frame.fourcc),
-                 static_cast<unsigned long long>(frame.modifier), frame.planeCount);
-
-    const int render = ::open(kms.renderNodePath().c_str(), O_RDWR | O_CLOEXEC);
-    VADisplay display = render >= 0 ? vaGetDisplayDRM(render) : nullptr;
-    int vaMajor = 0, vaMinor = 0;
-    if (!display || vaInitialize(display, &vaMajor, &vaMinor) != VA_STATUS_SUCCESS) {
-        std::fprintf(stderr, "  skipped: no VA-API on %s\n", kms.renderNodePath().c_str());
-        if (render >= 0) ::close(render);
-        return;
-    }
-
-    // The pointer drawn on both, where there is one: the same state, fed to
-    // both converters.
-    const capture::CursorState& cursor = kms.cursor();
     struct Geometry
     {
         const char* what;
@@ -209,6 +172,7 @@ void run_vulkan_convert_tests()
         {"Lanczos-2 to 1280x720", 1280, 720, convert::ScaleFilter::Lanczos2},
         {"bilinear to 1280x720", 1280, 720, convert::ScaleFilter::Bilinear},
     };
+    std::string error;
     for (const Geometry& g : geometries) {
         Surface glSurface, vkSurface;
         if (!makeSurface(display, g.width, g.height, glSurface) ||
@@ -221,8 +185,8 @@ void run_vulkan_convert_tests()
         }
 
         convert::GlConvert gl;
-        CHECK(gl.init(kms.renderNodePath(), frame.fourcc, frame.width, frame.height, g.width,
-                      g.height, g.filter, error));
+        CHECK(gl.init(renderNode, frame.fourcc, frame.width, frame.height, g.width, g.height,
+                      g.filter, error));
         CHECK(gl.bindTarget(glSurface.target, error));
         // Twice as well, so the time is the steady one: the first pays for
         // the context's first draw.
@@ -235,17 +199,17 @@ void run_vulkan_convert_tests()
 
         convert::VulkanConvert vk;
         error.clear();
-        if (!vk.init(kms.renderNodePath(), frame.fourcc, frame.width, frame.height, g.width,
-                     g.height, g.filter, error)) {
+        if (!vk.init(renderNode, frame.fourcc, frame.width, frame.height, g.width, g.height,
+                     g.filter, error)) {
             std::fprintf(stderr, "  skipped: no Vulkan conversion here (%s)\n", error.c_str());
             gl.stop();
             freeSurface(display, glSurface);
             freeSurface(display, vkSurface);
-            break;
+            return;
         }
         CHECK(vk.bindTarget(vkSurface.target, error));
-        // Twice: the second finds the scanout in its cache and the planes back
-        // from VA-API, the path every frame after the first takes.
+        // Twice: the second finds the planes back from VA-API, the path every
+        // frame after the first takes.
         CHECK(vk.convert(frame, cursor, convert::CursorDraw{}, error));
         t0 = std::chrono::steady_clock::now();
         CHECK(vk.convert(frame, cursor, convert::CursorDraw{}, error));
@@ -253,12 +217,13 @@ void run_vulkan_convert_tests()
         if (!error.empty()) std::fprintf(stderr, "  Vulkan: %s\n", error.c_str());
         CHECK(!vk.lost());
 
-        // The frame is the display's own buffer, still scanned out: a
+        // A scanout frame is the display's own buffer, still scanned out: a
         // compositor drawing into it between the two conversions leaves them
         // comparing two pictures (1 run in 4 with a page scrolling, Mesa
         // 26.2.3, 29/09/2026). GL once more after Vulkan brackets it: the
         // comparison stands when GL wrote the same both times, and is made
-        // again, up to three times, when it did not.
+        // again, up to three times, when it did not. A portal buffer is held
+        // for us until released, and holds still the first time.
         std::vector<uint8_t> glY, glUv, vkY, vkUv;
         bool held = false;
         for (int attempt = 0; attempt < 3 && !held; ++attempt) {
@@ -305,11 +270,13 @@ void run_vulkan_convert_tests()
         // regions tens of values apart. Where they differ by one is where the
         // two writes round a tie their own way — GL's render target and
         // imageStore — which the chroma meets more often: 1.5 % of luma and
-        // 8 % of chroma samples on the 780M (28/09/2026), never two.
+        // 8 % of chroma samples on the 780M (28/09/2026), never two. A 10-bit
+        // scanout (XR30, GNOME 46 since the 24.04) meets more ties: 15 % of
+        // chroma samples in the bilinear pass (29/09/2026), still never two.
         CHECK(luma.max <= 1);
         CHECK(chroma.max <= 1);
         CHECK(luma.mean < 0.05);
-        CHECK(chroma.mean < 0.15);
+        CHECK(chroma.mean < 0.25);
         // Real pixels in the legal range, not two identical black surfaces.
         CHECK(maxLuma > minLuma);
         CHECK(minLuma >= 16);
@@ -320,6 +287,60 @@ void run_vulkan_convert_tests()
         freeSurface(display, glSurface);
         freeSurface(display, vkSurface);
     }
+}
+
+/// The card with a display scanned out, and that display — "" when none is.
+capture::KmsOutput activeOutput()
+{
+    glob_t cards = {};
+    glob("/dev/dri/card*", 0, nullptr, &cards);
+    capture::KmsOutput output;
+    for (size_t i = 0; i < cards.gl_pathc && !output.active; ++i) {
+        std::string error;
+        for (const capture::KmsOutput& out :
+             capture::KmsCapture::listOutputs(cards.gl_pathv[i], error))
+            if (out.active && !output.active) output = out;
+    }
+    globfree(&cards);
+    return output;
+}
+
+void scanoutTests()
+{
+    const capture::KmsOutput output = activeOutput();
+    if (!output.active) {
+        std::fprintf(stderr, "  skipped: no display is being scanned out\n");
+        return;
+    }
+    std::string why;
+    if (!capture::KmsCapture::canReadFramebuffers(output.cardPath, why)) {
+        std::fprintf(stderr, "  skipped: %s\n", why.c_str());
+        return;
+    }
+    capture::KmsCapture kms(output.cardPath, output.connectorId);
+    std::string error;
+    capture::KmsFrame frame;
+    if (!kms.start(error) || kms.acquire(100, frame) != capture::AcquireStatus::Ok) {
+        std::fprintf(stderr, "  skipped: no frame (%s)\n", error.c_str());
+        return;
+    }
+    std::fprintf(stderr, "  frame %dx%d fourcc %.4s modifier 0x%llx, %d plane(s)\n", frame.width,
+                 frame.height, reinterpret_cast<const char*>(&frame.fourcc),
+                 static_cast<unsigned long long>(frame.modifier), frame.planeCount);
+
+    const int render = ::open(kms.renderNodePath().c_str(), O_RDWR | O_CLOEXEC);
+    VADisplay display = render >= 0 ? vaGetDisplayDRM(render) : nullptr;
+    int vaMajor = 0, vaMinor = 0;
+    if (!display || vaInitialize(display, &vaMajor, &vaMinor) != VA_STATUS_SUCCESS) {
+        std::fprintf(stderr, "  skipped: no VA-API on %s\n", kms.renderNodePath().c_str());
+        if (render >= 0) ::close(render);
+        return;
+    }
+
+    // The pointer drawn on both, where there is one: the same state, fed to
+    // both converters.
+    const capture::CursorState& cursor = kms.cursor();
+    compareConversions(display, kms.renderNodePath(), frame, cursor);
 
     SECTION("Linux — a Vulkan conversion that cannot read a frame gives up, and says so");
     {
@@ -351,5 +372,102 @@ void run_vulkan_convert_tests()
     kms.stop();
     vaTerminate(display);
     ::close(render);
+}
+
+#if defined(MW_NATIVE_LINUX_PORTAL)
+void portalTests()
+{
+    const char* token = std::getenv("MW_PORTAL_RESTORE_TOKEN");
+    if (!token || !*token) {
+        std::fprintf(stderr, "  skipped: the portal would raise a consent dialog — set "
+                             "MW_PORTAL_RESTORE_TOKEN to a grant from an earlier run\n");
+        return;
+    }
+    // What the session offers (LinuxSession::dmabufOffer): EGL's modifiers on
+    // the render node of the card that scans a display out.
+    const capture::KmsOutput output = activeOutput();
+    const std::string node =
+        output.active ? capture::KmsCapture::renderNodeFor(output.cardPath) : std::string();
+    if (node.empty()) {
+        std::fprintf(stderr, "  skipped: no display is being scanned out\n");
+        return;
+    }
+    capture::PortalCapture::DmabufOffer offer;
+    offer.renderNode = node;
+    std::string error;
+    for (const uint32_t fourcc :
+         {DRM_FORMAT_XRGB8888, DRM_FORMAT_ARGB8888, DRM_FORMAT_XBGR8888, DRM_FORMAT_ABGR8888}) {
+        std::vector<uint64_t> modifiers;
+        CHECK(convert::GlConvert::importableModifiers(node, fourcc, modifiers, error));
+        std::fprintf(stderr, "  EGL imports %.4s with %zu modifier(s)\n",
+                     reinterpret_cast<const char*>(&fourcc), modifiers.size());
+        if (!modifiers.empty()) offer.modifiers.emplace_back(fourcc, std::move(modifiers));
+    }
+
+    capture::PortalCapture portal;
+    portal.setRestoreToken(token);
+    portal.offerDmabuf(offer);
+    if (!portal.start(error)) {
+        std::fprintf(stderr, "  skipped: the portal did not start (%s)\n", error.c_str());
+        return;
+    }
+    if (!portal.dmabuf()) {
+        // The product still streams (the CPU pair reads shared memory): this
+        // compositor took none of the offer. Said, not failed.
+        std::fprintf(stderr, "  skipped: the compositor gave shared memory despite the offer\n");
+        portal.stop();
+        return;
+    }
+    CHECK_EQ(portal.renderNodePath(), node);
+    capture::KmsFrame frame;
+    capture::AcquireStatus status = capture::AcquireStatus::Timeout;
+    for (int i = 0; i < 20 && status != capture::AcquireStatus::Ok; ++i)
+        status = portal.acquire(100, frame);
+    if (status != capture::AcquireStatus::Ok) {
+        std::fprintf(stderr, "  skipped: no frame from the portal in 2 s\n");
+        portal.stop();
+        return;
+    }
+    std::fprintf(stderr, "  portal frame %dx%d fourcc %.4s modifier 0x%llx, %d plane(s)\n",
+                 frame.width, frame.height, reinterpret_cast<const char*>(&frame.fourcc),
+                 static_cast<unsigned long long>(frame.modifier), frame.planeCount);
+    CHECK(frame.planeCount >= 1);
+    CHECK(frame.fds[0] >= 0);
+
+    const int render = ::open(node.c_str(), O_RDWR | O_CLOEXEC);
+    VADisplay display = render >= 0 ? vaGetDisplayDRM(render) : nullptr;
+    int vaMajor = 0, vaMinor = 0;
+    if (!display || vaInitialize(display, &vaMajor, &vaMinor) != VA_STATUS_SUCCESS) {
+        std::fprintf(stderr, "  skipped: no VA-API on %s\n", node.c_str());
+        if (render >= 0) ::close(render);
+        portal.stop();
+        return;
+    }
+    compareConversions(display, node, frame, portal.cursor());
+    portal.release();
+    portal.stop();
+    vaTerminate(display);
+    ::close(render);
+}
+#endif
+
+} // namespace
+#endif
+
+void run_vulkan_convert_tests()
+{
+    SECTION("Linux — the Vulkan conversion writes what the GL one writes");
+
+#if !defined(MW_NATIVE_LINUX_GFX) || !defined(MW_NATIVE_LINUX_VULKAN)
+    std::fprintf(stderr, "  skipped: the Vulkan conversion is not built\n");
+#else
+    scanoutTests();
+
+    SECTION("Linux — the portal's DMA-BUF: the Vulkan conversion writes what the GL one writes");
+#if defined(MW_NATIVE_LINUX_PORTAL)
+    portalTests();
+#else
+    std::fprintf(stderr, "  skipped: the portal route is not built\n");
+#endif
 #endif
 }

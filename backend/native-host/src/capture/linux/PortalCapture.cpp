@@ -28,8 +28,15 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <cstring>
 #include <mutex>
+
+// PipeWire 0.3.40's name, for a header older than that — the value is the
+// protocol's.
+#ifndef SPA_POD_PROP_FLAG_DONT_FIXATE
+#define SPA_POD_PROP_FLAG_DONT_FIXATE (1u << 4)
+#endif
 
 namespace mw::native::capture {
 namespace {
@@ -108,6 +115,13 @@ struct PortalCapture::Impl
     KmsFrame frame{};
     bool frameFresh = false;
     bool isDmabuf = false;
+    /// A buffer has arrived since start(): what dmabuf() says is the
+    /// buffers' own word from then on, not the format's.
+    bool sawBuffer = false;
+    /// The GPU's modifiers, offered to the compositor before shared memory.
+    PortalCapture::DmabufOffer offer;
+    /// The GPU the session converts and encodes on.
+    std::string renderNode;
 
     CursorState cursor;
     bool cursorFresh = false;
@@ -149,19 +163,27 @@ struct PortalCapture::Impl
 
         spa_video_info_raw info{};
         if (spa_format_video_raw_parse(param, &info) < 0) return;
+        // A modifier in the format: the compositor took one of the offer's,
+        // and hands DMA-BUF (offerDmabuf). None: shared memory.
+        const bool modifier = (info.flags & SPA_VIDEO_FLAG_MODIFIER) != 0;
 
         {
             std::lock_guard<std::mutex> lock(self->mutex);
             self->format = info;
             self->haveFormat = true;
+            if (!self->sawBuffer) self->isDmabuf = modifier;
         }
         self->ready.notify_all();
+        char modifierText[40] = "shared memory";
+        if (modifier)
+            std::snprintf(modifierText, sizeof(modifierText), "DMA-BUF, modifier 0x%llx",
+                          static_cast<unsigned long long>(info.modifier));
         log::info("[native] portal stream: " + std::to_string(info.size.width) + "x" +
                   std::to_string(info.size.height) + " " + formatName(info.format) + " at " +
                   std::to_string(info.max_framerate.denom > 0
                                      ? info.max_framerate.num / info.max_framerate.denom
                                      : 0) +
-                  " fps max");
+                  " fps max, " + modifierText);
 
         // Ask for the metadata we want alongside the pixels. The cursor one is
         // what keeps the pointer OUT of the picture — the handshake asked for
@@ -169,17 +191,24 @@ struct PortalCapture::Impl
         uint8_t storage[1024];
         spa_pod_builder builder{};
         spa_pod_builder_init(&builder, storage, sizeof(storage));
-        const spa_pod* params[2];
-        params[0] = static_cast<const spa_pod*>(spa_pod_builder_add_object(
+        const spa_pod* params[3];
+        uint32_t count = 0;
+        params[count++] = static_cast<const spa_pod*>(spa_pod_builder_add_object(
             &builder, SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta, SPA_PARAM_META_type,
             SPA_POD_Id(SPA_META_Header), SPA_PARAM_META_size,
             SPA_POD_Int(static_cast<int>(sizeof(spa_meta_header)))));
-        params[1] = static_cast<const spa_pod*>(spa_pod_builder_add_object(
+        params[count++] = static_cast<const spa_pod*>(spa_pod_builder_add_object(
             &builder, SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta, SPA_PARAM_META_type,
             SPA_POD_Id(SPA_META_Cursor), SPA_PARAM_META_size,
             SPA_POD_CHOICE_RANGE_Int(cursorMetaSize(64, 64), cursorMetaSize(1, 1),
                                      cursorMetaSize(256, 256))));
-        pw_stream_update_params(self->stream, params, 2);
+        // DMA-BUF asked for by name once a modifier is agreed. Shared memory
+        // keeps what it always had: no buffer parameter, the compositor's own.
+        if (modifier)
+            params[count++] = static_cast<const spa_pod*>(spa_pod_builder_add_object(
+                &builder, SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers,
+                SPA_PARAM_BUFFERS_dataType, SPA_POD_Int(1 << SPA_DATA_DmaBuf)));
+        pw_stream_update_params(self->stream, params, count);
     }
 
     /// Read the cursor metadata a buffer carries, if any.
@@ -282,6 +311,7 @@ struct PortalCapture::Impl
             f.pitches[i] = static_cast<uint32_t>(buf->datas[i].chunk->stride);
         }
         self->isDmabuf = buf->datas[0].type == SPA_DATA_DmaBuf;
+        self->sawBuffer = true;
         if (!self->isDmabuf && buf->datas[0].data) {
             f.mapped =
                 static_cast<const uint8_t*>(buf->datas[0].data) + buf->datas[0].chunk->offset;
@@ -322,6 +352,16 @@ void PortalCapture::setVirtualMonitor(int width, int height, int fps)
     d->virtualWidth = width;
     d->virtualHeight = height;
     d->virtualFps = fps > 0 ? fps : 60;
+}
+
+void PortalCapture::offerDmabuf(DmabufOffer offer)
+{
+    d->offer = std::move(offer);
+}
+
+void PortalCapture::setRenderNode(std::string renderNode)
+{
+    d->renderNode = std::move(renderNode);
 }
 
 bool PortalCapture::start(std::string& error)
@@ -385,13 +425,16 @@ bool PortalCapture::start(std::string& error)
     }
     pw_stream_add_listener(d->stream, &d->listener, &d->events, d.get());
 
-    // What we accept. No modifiers are named: asking for a specific tiling is
-    // how a negotiation fails on a compositor that would happily have given
-    // shared memory, and this route exists for the machines that have no GPU
-    // path anyway. The compositor picks; param_changed says what it picked.
-    uint8_t storage[2048];
+    // What we accept. DMA-BUF first, one format per entry of the offer with
+    // its modifiers marked "do not fixate": the compositor picks the one it
+    // can allocate with (PipeWire's DMA-BUF negotiation). Then shared memory,
+    // no modifier named — what a compositor that takes none of them settles
+    // on, and all this route asked for until 29/09/2026: it exists for the
+    // machines that may have no GPU path at all. The compositor picks;
+    // param_changed says what it picked.
+    std::vector<uint8_t> storage(16384);
     spa_pod_builder builder{};
-    spa_pod_builder_init(&builder, storage, sizeof(storage));
+    spa_pod_builder_init(&builder, storage.data(), static_cast<uint32_t>(storage.size()));
     spa_rectangle sizeDefault = SPA_RECTANGLE(1920, 1080);
     spa_rectangle sizeMin = SPA_RECTANGLE(1, 1);
     spa_rectangle sizeMax = SPA_RECTANGLE(8192, 8192);
@@ -408,8 +451,39 @@ bool PortalCapture::start(std::string& error)
         sizeDefault = sizeMin = sizeMax = SPA_RECTANGLE(w, h);
         rateDefault = rateMax = SPA_FRACTION(fps, 1);
     }
-    const spa_pod* params[1];
-    params[0] = static_cast<const spa_pod*>(spa_pod_builder_add_object(
+    std::vector<const spa_pod*> params;
+    if (!d->offer.renderNode.empty()) {
+        static const uint32_t kFormats[] = {SPA_VIDEO_FORMAT_BGRx, SPA_VIDEO_FORMAT_RGBx,
+                                            SPA_VIDEO_FORMAT_BGRA, SPA_VIDEO_FORMAT_RGBA};
+        for (uint32_t spaFormat : kFormats) {
+            const std::vector<uint64_t>* modifiers = nullptr;
+            for (const auto& entry : d->offer.modifiers)
+                if (entry.first == drmFourcc(spaFormat) && !entry.second.empty())
+                    modifiers = &entry.second;
+            if (!modifiers) continue;
+            spa_pod_frame object{};
+            spa_pod_frame choice{};
+            spa_pod_builder_push_object(&builder, &object, SPA_TYPE_OBJECT_Format,
+                                        SPA_PARAM_EnumFormat);
+            spa_pod_builder_add(&builder, SPA_FORMAT_mediaType, SPA_POD_Id(SPA_MEDIA_TYPE_video),
+                                SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
+                                SPA_FORMAT_VIDEO_format, SPA_POD_Id(spaFormat), 0);
+            spa_pod_builder_prop(&builder, SPA_FORMAT_VIDEO_modifier,
+                                 SPA_POD_PROP_FLAG_MANDATORY | SPA_POD_PROP_FLAG_DONT_FIXATE);
+            spa_pod_builder_push_choice(&builder, &choice, SPA_CHOICE_Enum, 0);
+            // An enum choice: its default first, then every value it allows.
+            spa_pod_builder_long(&builder, static_cast<int64_t>(modifiers->front()));
+            for (uint64_t modifier : *modifiers)
+                spa_pod_builder_long(&builder, static_cast<int64_t>(modifier));
+            spa_pod_builder_pop(&builder, &choice);
+            spa_pod_builder_add(&builder, SPA_FORMAT_VIDEO_size,
+                                SPA_POD_CHOICE_RANGE_Rectangle(&sizeDefault, &sizeMin, &sizeMax),
+                                SPA_FORMAT_VIDEO_framerate,
+                                SPA_POD_CHOICE_RANGE_Fraction(&rateDefault, &rateMin, &rateMax), 0);
+            params.push_back(static_cast<const spa_pod*>(spa_pod_builder_pop(&builder, &object)));
+        }
+    }
+    params.push_back(static_cast<const spa_pod*>(spa_pod_builder_add_object(
         &builder, SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat, SPA_FORMAT_mediaType,
         SPA_POD_Id(SPA_MEDIA_TYPE_video), SPA_FORMAT_mediaSubtype,
         SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw), SPA_FORMAT_VIDEO_format,
@@ -417,12 +491,12 @@ bool PortalCapture::start(std::string& error)
                                SPA_VIDEO_FORMAT_RGBx, SPA_VIDEO_FORMAT_BGRA, SPA_VIDEO_FORMAT_RGBA),
         SPA_FORMAT_VIDEO_size, SPA_POD_CHOICE_RANGE_Rectangle(&sizeDefault, &sizeMin, &sizeMax),
         SPA_FORMAT_VIDEO_framerate,
-        SPA_POD_CHOICE_RANGE_Fraction(&rateDefault, &rateMin, &rateMax)));
+        SPA_POD_CHOICE_RANGE_Fraction(&rateDefault, &rateMin, &rateMax))));
 
     const int res = pw_stream_connect(
         d->stream, PW_DIRECTION_INPUT, d->granted.nodeId,
         static_cast<pw_stream_flags>(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS),
-        params, 1);
+        params.data(), static_cast<uint32_t>(params.size()));
     pw_thread_loop_unlock(d->loop);
     if (res < 0) {
         error = std::string("cannot connect to the portal's node: ") + spa_strerror(res);
@@ -442,6 +516,11 @@ bool PortalCapture::start(std::string& error)
         error = "the portal's stream never negotiated a format";
         return false;
     }
+    // The first buffer says what really comes: the session picks its pair on
+    // dmabuf(), and a pair built for DMA-BUF cannot read shared memory. A
+    // still screen sends one too — the compositor paints the stream's first
+    // picture when it starts. Without one in time, the format's word stands.
+    d->ready.wait_for(lock, std::chrono::seconds(1), [this] { return d->sawBuffer || d->failed; });
     return true;
 }
 
@@ -515,6 +594,7 @@ void PortalCapture::stop()
     }
     d->portal.stop();
     d->haveFormat = false;
+    d->sawBuffer = false;
 }
 
 int PortalCapture::width() const
@@ -546,7 +626,8 @@ bool PortalCapture::dmabuf() const
 
 std::string PortalCapture::renderNodePath() const
 {
-    return {};
+    if (!d->renderNode.empty()) return d->renderNode;
+    return d->isDmabuf ? d->offer.renderNode : std::string();
 }
 
 DesktopRect PortalCapture::desktopRect() const

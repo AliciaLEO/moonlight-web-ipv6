@@ -59,16 +59,14 @@ bool contains(const std::string& text, const std::string& piece)
 
 void run_linux_route_choice_tests()
 {
-    SECTION("LinuxRoute — the vendor table: VA-API everywhere; on AMD fed by Vulkan compute off "
-            "the scanout (§9-20), by GL elsewhere");
+    SECTION("LinuxRoute — the vendor table: VA-API everywhere; on AMD fed by Vulkan compute "
+            "(§9-20), by GL elsewhere");
     {
         for (uint32_t vendor : {0x1002u, 0x8086u, 0x10DEu, 0u})
             CHECK(autoLinuxPipeline(vendor) == VideoPipeline::Vaapi);
-        CHECK(autoLinuxConversion(0x1002, false) == EncoderTuning::ConvertLinux::Vulkan);
-        CHECK(autoLinuxConversion(0x1002, true) == EncoderTuning::ConvertLinux::Gl);
+        CHECK(autoLinuxConversion(0x1002) == EncoderTuning::ConvertLinux::Vulkan);
         for (uint32_t vendor : {0x8086u, 0x10DEu, 0u})
-            for (bool portal : {false, true})
-                CHECK(autoLinuxConversion(vendor, portal) == EncoderTuning::ConvertLinux::Gl);
+            CHECK(autoLinuxConversion(vendor) == EncoderTuning::ConvertLinux::Gl);
 
         LinuxRoute r = chooseLinuxRoute(amd());
         CHECK(r.encoder == LinuxRoute::Encoder::Vaapi);
@@ -117,20 +115,20 @@ void run_linux_route_choice_tests()
         }
     }
 
-    SECTION("LinuxRoute — AMD through the portal: GL, until the portal's buffers are imported on "
-            "a bench (C13.3)");
+    SECTION("LinuxRoute — AMD through the portal's DMA-BUF: the split route too, since its bench "
+            "(C13.3 bis)");
     {
         LinuxRouteFacts f = amd();
         f.portal = true;
         LinuxRoute r = chooseLinuxRoute(f);
-        CHECK(r.conversion == LinuxRoute::Conversion::Gl);
-        CHECK_EQ(r.route, std::string("EGL → VA-API"));
-        CHECK(!r.refused);
-        CHECK(contains(r.reason, "converts with GL for AMD on the portal"));
-        // The bench key still measures it there.
-        f.convertKey = EncoderTuning::ConvertLinux::Vulkan;
-        r = chooseLinuxRoute(f);
         CHECK(r.conversion == LinuxRoute::Conversion::Vulkan);
+        CHECK_EQ(r.route, std::string("Vulkan compute → VA-API"));
+        CHECK(!r.refused);
+        CHECK(contains(r.reason, "converts with Vulkan compute for AMD on the portal"));
+        // The bench key still measures GL there.
+        f.convertKey = EncoderTuning::ConvertLinux::Gl;
+        r = chooseLinuxRoute(f);
+        CHECK(r.conversion == LinuxRoute::Conversion::Gl);
         CHECK(!r.refused);
     }
 
@@ -361,21 +359,71 @@ void run_linux_route_choice_tests()
         CHECK(contains(r.reason, "the pixel proof at its opening failed; the CPU runs"));
     }
 
-    SECTION("LinuxRoute — the portal's shared memory and a VA-API without parameter sets: the "
-            "CPU, whatever was asked");
+    SECTION("LinuxRoute — the portal's shared memory: Vulkan compute where the table or the key "
+            "asks for it (C13.10), the CPU where GL would convert");
     {
-        LinuxRouteFacts f = amdWithVulkanEncoder();
+        // AMD: the table's Vulkan conversion reads it, into VA-API.
+        LinuxRouteFacts f = amd();
+        f.portal = true;
+        f.sharedMemory = true;
+        LinuxRoute r = chooseLinuxRoute(f);
+        CHECK(r.encoder == LinuxRoute::Encoder::Vaapi);
+        CHECK(r.conversion == LinuxRoute::Conversion::Vulkan);
+        CHECK_EQ(r.route, std::string("Vulkan compute → VA-API"));
+        CHECK(!r.refused);
+
+        // The Vulkan Video chain as well, asked for and trusted: it converts
+        // in Vulkan.
+        f = amdWithVulkanEncoder();
+        f.portal = true;
         f.sharedMemory = true;
         f.benchKey = VideoPipeline::Vulkan;
-        f.convertKey = EncoderTuning::ConvertLinux::Vulkan;
-        LinuxRoute r = chooseLinuxRoute(f);
+        r = chooseLinuxRoute(f);
+        CHECK(r.encoder == LinuxRoute::Encoder::Vulkan);
+
+        // A Vulkan conversion that cannot run: GL cannot read shared memory,
+        // so the CPU runs — never GL.
+        f = amd();
+        f.portal = true;
+        f.sharedMemory = true;
+        f.vulkanConvertRefusal =
+            "the Vulkan conversion gave up while streaming (VK_ERROR_DEVICE_LOST)";
+        r = chooseLinuxRoute(f);
         CHECK(r.encoder == LinuxRoute::Encoder::Cpu);
         CHECK(r.refused);
-        CHECK(contains(r.reason, "shared memory"));
+        CHECK(contains(r.reason, "shared memory, which GL cannot read"));
+        CHECK(contains(r.reason, "VK_ERROR_DEVICE_LOST"));
 
+        // Intel: the table converts with GL — the CPU, as this route always
+        // went, and no refusal; the bench key measures Vulkan there.
         f = amd();
-        f.vaapiUnusable = true;
+        f.vendorId = 0x8086;
+        f.portal = true;
+        f.sharedMemory = true;
         r = chooseLinuxRoute(f);
+        CHECK(r.encoder == LinuxRoute::Encoder::Cpu);
+        CHECK(!r.refused);
+        CHECK(contains(r.reason, "shared memory, which GL cannot read"));
+        f.convertKey = EncoderTuning::ConvertLinux::Vulkan;
+        r = chooseLinuxRoute(f);
+        CHECK(r.conversion == LinuxRoute::Conversion::Vulkan);
+
+        // VA-API by name converts with GL: the CPU here, and said as a refusal.
+        f = amd();
+        f.portal = true;
+        f.sharedMemory = true;
+        f.setting = VideoPipeline::Vaapi;
+        r = chooseLinuxRoute(f);
+        CHECK(r.encoder == LinuxRoute::Encoder::Cpu);
+        CHECK(r.refused);
+        CHECK(contains(r.reason, "VA-API by name converts with GL"));
+    }
+
+    SECTION("LinuxRoute — a VA-API without parameter sets: the CPU, whatever was asked");
+    {
+        LinuxRouteFacts f = amd();
+        f.vaapiUnusable = true;
+        LinuxRoute r = chooseLinuxRoute(f);
         CHECK(r.encoder == LinuxRoute::Encoder::Cpu);
         CHECK(!r.refused);
         CHECK(contains(r.reason, "no parameter sets"));

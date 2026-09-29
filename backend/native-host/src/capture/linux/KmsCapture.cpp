@@ -192,6 +192,17 @@ std::string KmsCapture::modeSignature(const std::string& cardPath)
     return signature;
 }
 
+std::string KmsCapture::renderNodeFor(const std::string& cardPath)
+{
+    const int card = ::open(cardPath.c_str(), O_RDWR | O_CLOEXEC);
+    if (card < 0) return {};
+    char* render = drmGetRenderDeviceNameFromFd(card);
+    std::string node = render ? render : "";
+    if (render) ::free(render);
+    ::close(card);
+    return node;
+}
+
 std::vector<KmsOutput> KmsCapture::listOutputs(const std::string& cardPath, std::string& error)
 {
     std::vector<KmsOutput> outputs;

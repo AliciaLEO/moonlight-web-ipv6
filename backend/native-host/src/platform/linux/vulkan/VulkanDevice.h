@@ -126,7 +126,9 @@ constexpr uint64_t kGpuGoneMs = 3000;
     X(vkGetMemoryFdPropertiesKHR)
 
 // An extension's, null where the device lacks it.
-#define MW_VULKAN_OPTIONAL_DEVICE_FUNCTIONS(X) X(vkImportSemaphoreFdKHR)
+#define MW_VULKAN_OPTIONAL_DEVICE_FUNCTIONS(X)                                                     \
+    X(vkImportSemaphoreFdKHR)                                                                      \
+    X(vkGetMemoryHostPointerPropertiesEXT)
 
 // VK_KHR_video_queue and its encode and decode halves: the Vulkan Video
 // encoder (C13.5), and the decoder its pixel proof reads it back with. Loaded
@@ -183,6 +185,9 @@ struct DeviceIdentity
     /// The driver shows a Vulkan Video HEVC encoder, and a decoder.
     bool encodesHevc = false;
     bool decodesHevc = false;
+    /// VK_EXT_external_memory_host: the conversion can read memory a
+    /// process mapped — the portal's shared memory (C13.10).
+    bool importsHostMemory = false;
 };
 
 /// The Vulkan device of the GPU behind one DRM render node, with the one
@@ -246,6 +251,16 @@ public:
     /// and a driver that imports SYNC_FD into a binary semaphore.
     bool importsSyncFile() const { return m_SyncFile; }
 
+    /// VK_EXT_external_memory_host, enabled where the driver has it (C13.10):
+    /// memory another process shares with this one — the portal's — imported
+    /// as it is mapped, from an address and a size aligned to
+    /// hostPointerAlignment().
+    bool importsHostMemory() const
+    {
+        return m_HostMemory && m_Fn.vkGetMemoryHostPointerPropertiesEXT;
+    }
+    VkDeviceSize hostPointerAlignment() const { return m_HostAlignment; }
+
     /// Nanoseconds per timestamp tick, and whether the queue has timestamps.
     float timestampPeriod() const { return m_TimestampPeriod; }
     bool timestamps() const { return m_Timestamps; }
@@ -300,6 +315,8 @@ private:
     bool m_PriorityExtension = false;
     bool m_High = false;
     bool m_SyncFile = false;
+    bool m_HostMemory = false;
+    VkDeviceSize m_HostAlignment = 4096;
     bool m_Timestamps = false;
     float m_TimestampPeriod = 1.0f;
     VkSemaphore m_Timeline = VK_NULL_HANDLE;

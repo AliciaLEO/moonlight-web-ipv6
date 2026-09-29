@@ -69,7 +69,8 @@ struct LinuxRouteFacts
 
     /// The pictures come through the portal (PipeWire), not off the scanout.
     bool portal = false;
-    /// The portal hands shared memory, not a DMA-BUF: only the CPU reads it.
+    /// The portal hands shared memory, not a DMA-BUF: GL cannot read it, the
+    /// Vulkan conversion (C13.10) and the CPU can.
     bool sharedMemory = false;
     /// VA-API encodes but writes no parameter sets (VaapiEncoder::
     /// kNoParameterSets), learned by an earlier build of this session.
@@ -137,15 +138,15 @@ inline VideoPipeline autoLinuxPipeline(uint32_t vendorId)
 /// 28/09/2026 (plan §9-20), on the bench's word (§8o.5): under a game that
 /// fills the 780M, GL waited behind it and caught 16 of its 45 pictures a
 /// second, 38 ms from present to encoded; the compute queue ran beside it,
-/// 44 pictures in 8 ms, and 0.3 ms less at rest. Off the scanout only, the
-/// one import a bench has measured: the portal's buffers (@p portal) keep GL
-/// until theirs is (C13.3). GL for the others, until a bench has measured a
-/// vendor and Bruno has moved its line.
-inline EncoderTuning::ConvertLinux autoLinuxConversion(uint32_t vendorId, bool portal)
+/// 44 pictures in 8 ms, and 0.3 ms less at rest. Off the scanout first, and
+/// on the portal's DMA-BUF too since its own bench (§8o.11, C13.3 bis,
+/// 29/09/2026): under the same load the conversion there halves, on buffers
+/// the compositor has to copy first. GL for the others, until a bench has
+/// measured a vendor and Bruno has moved its line.
+inline EncoderTuning::ConvertLinux autoLinuxConversion(uint32_t vendorId)
 {
     switch (vendorId) {
-    case 0x1002: // AMD: §9-20
-        return portal ? EncoderTuning::ConvertLinux::Gl : EncoderTuning::ConvertLinux::Vulkan;
+    case 0x1002: return EncoderTuning::ConvertLinux::Vulkan; // AMD: §9-20, C13.3 bis
     case 0x8086: return EncoderTuning::ConvertLinux::Gl;
     default: return EncoderTuning::ConvertLinux::Gl;
     }
@@ -174,7 +175,6 @@ inline std::string vulkanEncoderRefusal(const LinuxRouteFacts& f)
 {
     if (!f.vulkanEncoderBuilt) return "the Vulkan Video encoder is not built in";
     if (!f.vulkanEncoderRefusal.empty()) return f.vulkanEncoderRefusal;
-    if (f.sharedMemory) return "the portal gives shared memory, which only the CPU reads";
     if (f.codec != Codec::Hevc)
         return std::string(toString(f.codec)) + " is not done by the Vulkan Video encoder yet";
     // The chain converts in Vulkan too: what refused the conversion refuses it.
@@ -259,12 +259,10 @@ inline LinuxRoute chooseLinuxRoute(const LinuxRouteFacts& f)
     }
 
     // VA-API, or the CPU when there is none to be had.
-    const bool vaapi = f.encoder == EncoderApi::VaApi && !f.sharedMemory && !f.vaapiUnusable;
+    const bool vaapi = f.encoder == EncoderApi::VaApi && !f.vaapiUnusable;
     if (!vaapi) {
-        std::string cpu = f.sharedMemory
-                              ? "the portal gives shared memory, which only the CPU reads"
-                          : f.vaapiUnusable ? "VA-API writes no parameter sets on this driver"
-                                            : "no GPU encoder on this machine";
+        std::string cpu = f.vaapiUnusable ? "VA-API writes no parameter sets on this driver"
+                                          : "no GPU encoder on this machine";
         if (!refusedBecause.empty())
             return cpuRoute(refusedBecause + "; the CPU runs: " + cpu, true);
         // Refused only when someone asked for VA-API by name; the table's
@@ -293,11 +291,27 @@ inline LinuxRoute chooseLinuxRoute(const LinuxRouteFacts& f)
         conversion = EncoderTuning::ConvertLinux::Gl;
         convertWhy = "VA-API by name converts with GL, as it always has";
     } else {
-        conversion = autoLinuxConversion(f.vendorId, f.portal);
+        conversion = autoLinuxConversion(f.vendorId);
         convertWhy = std::string("the vendor table converts with ") +
                      (conversion == EncoderTuning::ConvertLinux::Vulkan ? "Vulkan compute" : "GL") +
                      " for " + vendorName(f.vendorId) + (f.portal ? " on the portal" : "");
         asker = std::string("the vendor table for ") + vendorName(f.vendorId);
+    }
+    // ⚠️ The portal's shared memory: GL cannot read it. The Vulkan conversion
+    // can (C13.10), where the table or the key asks for it and it runs; the
+    // CPU pair otherwise, as this route always went.
+    if (f.sharedMemory) {
+        const bool vulkan = conversion == EncoderTuning::ConvertLinux::Vulkan;
+        const std::string no = vulkan ? vulkanConvertRefusal(f) : std::string();
+        if (!vulkan || !no.empty()) {
+            const std::string shm =
+                "the portal gives shared memory, which GL cannot read" +
+                (vulkan ? "; " + asker + " asks for Vulkan compute, which cannot run: " + no
+                        : "; " + convertWhy) +
+                "; the CPU runs";
+            const bool refused = !refusedBecause.empty() || vulkan || asked;
+            return cpuRoute(refusedBecause.empty() ? shm : refusedBecause + "; " + shm, refused);
+        }
     }
     if (conversion == EncoderTuning::ConvertLinux::Vulkan) {
         const std::string no = vulkanConvertRefusal(f);

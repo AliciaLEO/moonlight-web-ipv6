@@ -315,9 +315,9 @@ struct EncoderTuning
 
     /// The conversion in front of VA-API: GL through EGL, or Vulkan on a
     /// compute queue — the split route (§9-17). The engine's own is the
-    /// vendor table's (core/LinuxRouteChoice.h): Vulkan compute on AMD off
-    /// the scanout since §9-20, GL elsewhere and whenever VA-API is asked for
-    /// by name.
+    /// vendor table's (core/LinuxRouteChoice.h): Vulkan compute on AMD since
+    /// §9-20 (the portal's buffers too since C13.3 bis), GL elsewhere and
+    /// whenever VA-API is asked for by name.
     enum class ConvertLinux
     {
         Default,
@@ -335,6 +335,11 @@ struct EncoderTuning
         High
     };
     PriorityVk prioVk = PriorityVk::Default;
+    /// DMA-BUF asked of the ScreenCast portal (PortalCapture::offerDmabuf,
+    /// C13.3 bis). Off asks for shared memory only, what a compositor without
+    /// DMA-BUF hands over — measured on one that has it (C13.10). The engine's
+    /// own is on.
+    Choice portalDmabuf = Choice::Default;
 
     bool isDefault() const
     {
@@ -357,7 +362,8 @@ struct EncoderTuning
                prio12 == Priority12::Default && ownCreator12 == Choice::Default &&
                ddaSync == DdaSync::Default && !gpuTiming && !strict12 &&
                pipelined == Choice::Default && keep12 == Choice::Default &&
-               convertLinux == ConvertLinux::Default && prioVk == PriorityVk::Default;
+               convertLinux == ConvertLinux::Default && prioVk == PriorityVk::Default &&
+               portalDmabuf == Choice::Default;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -441,6 +447,8 @@ struct EncoderTuning
         if (convertLinux == ConvertLinux::Vulkan) add("convert=vulkan");
         if (prioVk == PriorityVk::Normal) add("priovk=normal");
         if (prioVk == PriorityVk::High) add("priovk=high");
+        if (portalDmabuf != Choice::Default)
+            add(std::string("portaldmabuf=") + choice(portalDmabuf));
         return s;
     }
 };

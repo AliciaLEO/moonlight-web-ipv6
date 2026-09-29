@@ -2401,6 +2401,14 @@ Selector ait choisi, et la session bascule sur la paire CPU en le disant — don
 rapporte l'encodeur **réel**, pas celui choisi, pour que le client ne se voie pas
 promettre un codec qu'il ne recevra pas.
 
+**Corrigé le 29/09/2026 (C13.3 bis, §32.21)** : GNOME donnait de la mémoire
+partagée parce que ce moteur ne lui demandait rien d'autre. Un compositeur ne
+donne un DMA-BUF qu'à un client qui annonce les modificateurs qu'il importe. La
+session les annonce maintenant (`PortalCapture::offerDmabuf`), et GNOME 46
+donne un DMA-BUF : la paire GPU tourne par le portail comme par le scanout. La
+mémoire partagée reste le repli d'un compositeur qui n'en prend aucun, et la
+conversion Vulkan sait la lire (§32.22).
+
 #### 19.15.1 ⚠️ Le codec doit suivre la paire (08/09/2026)
 
 Trouvé au **premier vrai flux navigateur** par le portail, et c'est le genre de
@@ -5540,6 +5548,8 @@ et `auto` ne la prend jamais.
 - Intel et NVIDIA gardent GL.
 - Le portail garde GL, même sur AMD. Seul l'import du tampon KMS a été mesuré
   au pixel (§8o.2) ; les tampons de PipeWire attendent leur banc (C13.3).
+  **Levé le 29/09 (§32.21)** : le portail en DMA-BUF a eu son banc (§8o.11),
+  et la route scindée y gagne aussi.
 - `vaapi` choisi dans l'admin, ou `pipeline=vaapi` au banc, reprend la chaîne
   d'avant, GL devant VA-API. C'est le retour arrière, sans clé de banc.
 - La clé `convert=gl|vulkan` passe devant tout, pour les bancs.
@@ -6011,7 +6021,7 @@ le stream.
 | Intel (Arc, iGPU Xe) | **D3D12** : conversion D3D12, D3D12 Video Encode en HEVC, contrôle de débit maison | Sous un jeu, l'hôte deux fois plus court sur l'Arc (G2) ; le débit tenu (G3) ; le clic → photon de Bruno (C5.7) | H.264 et AV1 par D3D12 Video Encode (en `Auto`, ils restent sur oneVPL) |
 | NVIDIA | D3D11 (NVENC) | NVENC y encode en 2 ms. VE en prend 5 à 8, et NVENC en entrée D3D12 ne fait pas mieux (G2, G4) | NVENC en entrée D3D12 |
 | AMD | D3D11 (AMF) | VE ajoute 7 à 8 ms, et AMF en entrée D3D12 ne fait pas mieux (G2, G4) | D3D12 Video Encode |
-| AMD sous Linux | **Vulkan compute → VA-API** (route scindée) | Sous un jeu, 8 ms au lieu de 15 à 38 par GL (§8o.5, §8o.8) | La chaîne Vulkan Video, prise sur la preuve au pixel (`vulkan`), ou GL (`vaapi`) |
+| AMD sous Linux | **Vulkan compute → VA-API** (route scindée), par le scanout comme par le portail (§32.21) | Sous un jeu, 8 ms au lieu de 15 à 38 par GL (§8o.5, §8o.8) ; par le portail, 16 ms au lieu de 31 (§8o.11) | La chaîne Vulkan Video, prise sur la preuve au pixel (`vulkan`), ou GL (`vaapi`) |
 | Intel et NVIDIA sous Linux | GL → VA-API ; OpenH264 sur NVIDIA | Pas encore de carte au banc | La chaîne Vulkan Video, écrite d'après la spécification et les capacités lues |
 
 **Restaient à Bruno** (plan, §9), et ses réponses du 29/09 (§32.20) :
@@ -6092,3 +6102,92 @@ gain à haute fréquence, rien de mesurable ailleurs.
 résolution rend l'image ~0,2 s plus vite. Sur une carte Intel Arc à très haute
 fréquence (240 Hz), le stream tient quelques pour cent d'images de plus.
 L'image jetée nommée attend son banc.
+
+### 32.21 Linux : le portail en DMA-BUF, et la route scindée dessus (C13.3 bis, 29/09/2026)
+
+Plan C13.3 bis, « Go » de Bruno le 29/09 ; banc §8o.11.
+
+**Ce que le portail donnait.** De la mémoire partagée, toujours. Un compositeur
+ne donne un DMA-BUF qu'à un client qui annonce, format par format, les
+modificateurs qu'il sait importer : c'est la négociation DMA-BUF de PipeWire.
+`PortalCapture` n'annonçait rien, et GNOME 42 puis 46 choisissaient la mémoire
+partagée. La session encodait donc sur le CPU (§19.15).
+
+**Ce qui change.**
+- **L'offre.** La session demande à EGL, sur le render node de la carte, les
+  modificateurs qu'il importe pour les quatre formats d'un écran
+  (`GlConvert::importableModifiers`, sans ceux qu'EGL ne lit qu'en texture
+  externe). GL prend la relève de toutes les autres conversions : sa liste est
+  celle qu'un tampon doit tenir. `PortalCapture::offerDmabuf` les annonce avant
+  la mémoire partagée, marqués « à ne pas fixer » : le compositeur choisit
+  celui qu'il sait allouer. GNOME 46 fixe `0x200000010401b04` sur le 780M.
+- **Le GPU nommé.** La paire GPU recevait un render node vide sur cette route.
+  Le portail le reçoit de la session (`setRenderNode`).
+- **`dmabuf()` juste.** Il se lisait sur le premier tampon, arrivé après la
+  fin de `start()` : la session choisissait sa paire sur une réponse encore
+  fausse. `start()` attend maintenant ce premier tampon (une seconde au plus ;
+  un écran fixe en envoie un au démarrage).
+- **Le repli.** Si GL lui-même refuse un DMA-BUF du portail, aucune marche
+  Vulkan ne restant à descendre, la session rouvre le portail sans offre, sur
+  l'accord déjà donné (`leaveDmabuf`) : pas de dialogue, et le stream continue
+  en mémoire partagée.
+- **La table.** La ligne AMD (`autoLinuxConversion`) vaut pour le portail :
+  Vulkan compute devant VA-API. Au banc, la conversion y passe de 0,84 à 0,65 ms
+  au repos, et de 30,7 à 15,8 ms sous un jeu qui sature le 780M, avec 40 i/s
+  captées au lieu de 28.
+
+**Ce qui ne change pas.** Une capture par le scanout (le paquet, avec son
+lanceur) ne passe pas par le portail. `vaapi` dans l'admin reprend GL devant
+VA-API, portail compris. Le banc garde `convert=gl`, et `portaldmabuf=0`
+demande la mémoire partagée seule.
+
+**Concrètement, pour l'utilisateur** : avec l'AppImage sous GNOME, le stream
+n'encode plus sur le processeur. Il passe par le GPU, en HEVC si le navigateur
+le prend, et reste fluide sous un jeu (40 images par seconde captées au lieu de
+28 sur un 780M saturé). Le premier stream demande toujours une fois
+l'autorisation de partager l'écran ; les suivants, non.
+
+### 32.22 Linux : la mémoire partagée du portail, par la conversion Vulkan (C13.10, 29/09/2026)
+
+Plan C13.10, « Go » de Bruno le 29/09 ; banc §8o.12.
+
+**Pourquoi.** Un compositeur qui ne donne pas de DMA-BUF donne de la mémoire
+partagée. GL ne sait pas la lire : la session encodait sur le CPU, en H.264
+seulement, et un cœur y passait.
+
+**Ce que la conversion Vulkan fait d'une image en mémoire partagée**
+(`KmsFrame::mapped`).
+- Elle tente d'importer la mémoire là où elle est mappée
+  (`VK_EXT_external_memory_host`, activé où le pilote l'a) : le GPU la
+  copierait sans que le CPU touche un pixel.
+- **amdgpu refuse** : le noyau n'importe que de la mémoire anonyme, et celle
+  de PipeWire est un memfd. Le refus est retenu pour la session, et dit une
+  fois au journal.
+- Le repli : le CPU copie l'image dans un tampon visible du GPU, gardé d'une
+  image à l'autre. Le GPU la copie ensuite dans une image, puis la convertit
+  comme un DMA-BUF. Pas de barrière implicite ici : le compositeur a fini
+  d'écrire avant de rendre le tampon.
+
+**Qui la prend** (`LinuxRouteChoice.h`).
+- La mémoire partagée passe par la conversion Vulkan là où la table convertit
+  déjà en Vulkan (AMD) ou quand la clé `convert=vulkan` la demande. Elle mène
+  à VA-API, ou à la chaîne Vulkan Video si celle-ci est prise.
+- GL ne la lisant pas, tout ce qui mènerait à GL mène au CPU : la table
+  d'Intel et de NVIDIA, VA-API choisi par son nom dans l'admin, une conversion
+  Vulkan refusée. Le CPU reste la dernière marche, jamais GL.
+
+**Au banc** (780M, §8o.12) : 5 % d'un cœur au lieu de 71, la même latence, du
+HEVC au lieu du seul H.264, pour 8 % d'images en moins (le GPU est partagé
+avec la copie du compositeur).
+
+⚠️ **GNOME 46 n'enregistre aucune image d'une fenêtre en plein écran en
+mémoire partagée** : 0 image en 10 s, avec l'ancienne paire CPU comme avec la
+nouvelle (vu avec Chrome en kiosque). En DMA-BUF, le plein écran passe. Avant
+C13.3 bis, une AppImage sous GNOME 46 ne streamait donc rien d'une fenêtre en
+plein écran, un jeu y compris selon toute vraisemblance : l'offre DMA-BUF
+(§32.21) le corrige aussi.
+
+**Concrètement, pour l'utilisateur** : sur un bureau Linux dont le
+compositeur ne donne que de la mémoire partagée, l'AppImage n'occupe plus un
+cœur du processeur à encoder. Sur une carte AMD, l'image passe par le GPU, en
+HEVC si le navigateur le prend.

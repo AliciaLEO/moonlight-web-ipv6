@@ -173,7 +173,9 @@ void run_linux_session_tests()
         // ⚠️ The portal route reports what it ENDED UP with, which is not what
         // the Selector chose: a compositor that hands over shared memory rather
         // than a DMA-BUF makes the GPU pair impossible, and the session falls to
-        // the CPU one. Measured on the bench, GNOME 42 does exactly that.
+        // the CPU one. GNOME 42 did exactly that on the bench, until the
+        // session offered the GPU's modifiers (29/09/2026): GNOME 46 then
+        // hands DMA-BUF, and the GPU pair runs.
         CHECK_EQ(static_cast<int>(info.capture), static_cast<int>(CaptureApi::PipeWire));
         // OpenH264 writes its own reference list, so a lost frame costs a
         // keyframe here — and SessionInfo says so rather than promising a

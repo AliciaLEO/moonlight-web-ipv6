@@ -50,6 +50,7 @@
 #include "../../audio/linux/PipeWireCapture.h"
 #endif
 
+#include <drm_fourcc.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <xf86drm.h>
@@ -871,6 +872,15 @@ private:
             if (m_Target.portalVirtual)
                 portal->setVirtualMonitor(m_Config.width, m_Config.height, m_Config.fps);
             portal->setRestoreToken(m_PortalToken);
+            // The GPU the pair converts and encodes on, whatever the buffers:
+            // the Vulkan conversion reads shared memory too (C13.10).
+            portal->setRenderNode(capture::KmsCapture::renderNodeFor(m_CardPath));
+            // DMA-BUF where this GPU imports what the compositor can make: the
+            // GPU pair then reads the portal's buffers in place, as it reads
+            // the scanout. Not after one it could not read (leaveDmabuf), nor
+            // when the bench asks for shared memory (portaldmabuf=0).
+            if (!m_PortalShmOnly && m_Config.tuning.portalDmabuf != EncoderTuning::Choice::Off)
+                portal->offerDmabuf(dmabufOffer());
             if (!portal->start(error)) return false;
             // A grant only comes back from a start that raised the dialog.
             // Handing it up is what spares the user every later one — the
@@ -889,6 +899,64 @@ private:
 #endif
         m_Capture = std::make_unique<capture::KmsCapture>(m_CardPath, m_ConnectorId);
         return m_Capture->start(error);
+    }
+
+#if defined(MW_NATIVE_LINUX_PORTAL)
+    /// What EGL on this card's render node imports, offered to the portal
+    /// for DMA-BUF (C13.3 bis): GL takes over from every other conversion,
+    /// so its list is the one a buffer must fit. Asked once a session — the
+    /// answer is the driver's, not the stream's. Empty, and the portal asked
+    /// for shared memory as before, when EGL lists nothing.
+    capture::PortalCapture::DmabufOffer dmabufOffer()
+    {
+        if (m_DmabufOfferAsked) return m_DmabufOffer;
+        m_DmabufOfferAsked = true;
+        const std::string node = capture::KmsCapture::renderNodeFor(m_CardPath);
+        if (node.empty()) {
+            log::info("[native] no render node behind " + m_CardPath +
+                      " — the portal is asked for shared memory");
+            return m_DmabufOffer;
+        }
+        capture::PortalCapture::DmabufOffer offer;
+        std::string counts;
+        for (const uint32_t fourcc :
+             {DRM_FORMAT_XRGB8888, DRM_FORMAT_ARGB8888, DRM_FORMAT_XBGR8888, DRM_FORMAT_ABGR8888}) {
+            std::vector<uint64_t> modifiers;
+            std::string why;
+            if (!convert::GlConvert::importableModifiers(node, fourcc, modifiers, why)) {
+                log::info("[native] " + why + " — the portal is asked for shared memory");
+                return m_DmabufOffer;
+            }
+            if (modifiers.empty()) continue;
+            counts += (counts.empty() ? "" : ", ") + std::to_string(modifiers.size());
+            offer.modifiers.emplace_back(fourcc, std::move(modifiers));
+        }
+        if (offer.modifiers.empty()) {
+            log::info("[native] EGL on " + node +
+                      " imports none of the portal's formats — it is asked for shared memory");
+            return m_DmabufOffer;
+        }
+        offer.renderNode = node;
+        log::info("[native] the portal is offered DMA-BUF on " + node + " (" + counts +
+                  " modifiers for XR24, AR24, XB24, AB24), then shared memory");
+        m_DmabufOffer = std::move(offer);
+        return m_DmabufOffer;
+    }
+#endif
+
+    /// The portal's DMA-BUF could not be converted, where no Vulkan step down
+    /// was left: GL itself refused it. Shared memory from here — the portal
+    /// reopened without the offer, on the grant (nobody at the host is asked
+    /// again), and the CPU pair reads it. False, nothing done, on any other
+    /// route or failure: the session ends on those as it always did.
+    bool leaveDmabuf(const std::string& error)
+    {
+        if (m_Target.capture != CaptureApi::PipeWire || !m_PortalDmabuf || m_PortalShmOnly)
+            return false;
+        m_PortalShmOnly = true;
+        log::warning("[native] the portal's DMA-BUF could not be converted (" + error +
+                     ") — reopening it for shared memory, encoded on the CPU");
+        return true;
     }
 
     /// The two rectangles an absolute pointer needs: the display being captured,
@@ -1021,15 +1089,15 @@ private:
         m_Pipeline.reset();
         // ⚠️ The portal may hand over SHARED MEMORY rather than a DMA-BUF —
         // which compositor and which driver decides, not us. EGL cannot import
-        // that, so the GPU pair is impossible whatever the Selector chose on
-        // paper, and the CPU pair is the only one that can read those pixels.
-        // Deciding here rather than at selection time because the answer is not
-        // known until the stream has negotiated.
+        // that: the Vulkan conversion can (C13.10), where the vendor table or
+        // the bench asks for it, and the CPU pair otherwise
+        // (LinuxRouteChoice.h). Deciding here rather than at selection time
+        // because the answer is not known until the stream has negotiated.
         const bool sharedMemory = m_Target.capture == CaptureApi::PipeWire && !m_PortalDmabuf;
         if (sharedMemory && m_Target.encoder != EncoderApi::Software && !m_LoggedSharedMemory) {
             m_LoggedSharedMemory = true;
-            log::info("[native] the portal gives shared memory, not DMA-BUF — encoding on the CPU, "
-                      "which is the only route that can read it");
+            log::info("[native] the portal gives shared memory, not DMA-BUF — GL cannot read it: "
+                      "the Vulkan conversion or the CPU pair does");
         }
         // The chain, chosen again for every build (LinuxRouteChoice.h): what
         // failed before is a refusal the choice now carries, so each pass
@@ -1537,6 +1605,12 @@ private:
             static const capture::CursorState kNoPointer;
             if (!convertPicture(frame, m_CompositeCursor.load() ? m_Capture->cursor() : kNoPointer,
                                 error)) {
+                // The portal reopened for shared memory at the next turn.
+                if (leaveDmabuf(error)) {
+                    haveFrame = false;
+                    reopenPortal = true;
+                    return true;
+                }
                 finish("colour conversion failed: " + error);
                 return false;
             }
@@ -1798,6 +1872,11 @@ private:
             const bool composite = m_CompositeCursor.load();
             m_CursorDirty.store(false);
             if (!convertPicture(frame, composite ? m_Capture->cursor() : kNoCursor, error)) {
+                if (leaveDmabuf(error)) {
+                    haveFrame = false;
+                    reopenPortal = true;
+                    continue;
+                }
                 finish("colour conversion failed: " + error);
                 return;
             }
@@ -2137,6 +2216,14 @@ private:
     /// shared memory (only the CPU pair can read it). Meaningless on the KMS
     /// route, which is always DMA-BUF.
     bool m_PortalDmabuf = false;
+    /// A portal DMA-BUF that GL could not convert (leaveDmabuf): the portal is
+    /// asked for shared memory only, for the rest of the session.
+    bool m_PortalShmOnly = false;
+#if defined(MW_NATIVE_LINUX_PORTAL)
+    /// The DMA-BUF offered to the portal (dmabufOffer), asked once.
+    capture::PortalCapture::DmabufOffer m_DmabufOffer;
+    bool m_DmabufOfferAsked = false;
+#endif
     /// The portal grant to replay on the next open — the session's own, then
     /// whatever the portal handed back. See openCapture.
     std::string m_PortalToken;

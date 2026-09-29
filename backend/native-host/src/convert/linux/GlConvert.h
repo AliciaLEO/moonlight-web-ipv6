@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 // Turns a scanout DMA-BUF into the NV12 surface the encoder owns, on the GPU,
 // without touching system memory. The Linux counterpart of ColorConvert.
@@ -130,6 +131,13 @@ public:
 
     /// For the session's line: which API converts (VulkanConvert has its own).
     static const char* apiName() { return "EGL"; }
+
+    /// The DRM format modifiers EGL on @p renderNode imports a @p fourcc
+    /// buffer with, external-only ones left out: what the portal offers the
+    /// compositor for DMA-BUF (PortalCapture::offerDmabuf). GL takes over from
+    /// every other conversion, so its list is the one to ask for.
+    static bool importableModifiers(const std::string& renderNode, uint32_t fourcc,
+                                    std::vector<uint64_t>& modifiers, std::string& error);
 
     void stop();
 

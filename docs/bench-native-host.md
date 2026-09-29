@@ -4228,6 +4228,121 @@ leurs entrées ld.so et leur ICD OpenCL. Aucun module DKMS n'était installé.
 priorité par défaut, la conversion en HIGH. Pour G5, il ne manque plus que
 Counter-Strike 2.
 
+### 8o.11 Le portail en DMA-BUF, et la route scindée dessus (C13.3 bis, 29/09/2026)
+
+**La question.** La capture par le portail est celle d'une AppImage, qui n'a
+pas le droit de lire le scanout. Elle gardait GL devant VA-API, même sur AMD :
+les tampons de PipeWire n'avaient pas eu leur banc (design §32.8).
+
+**Ce qu'on a trouvé d'abord : le portail ne donnait jamais de DMA-BUF.**
+- Un compositeur ne donne un DMA-BUF qu'à un client qui annonce les
+  modificateurs qu'il sait importer (la négociation DMA-BUF de PipeWire).
+  `PortalCapture` n'en annonçait aucun.
+- GNOME 42, puis 46, donnaient donc de la mémoire partagée. La session
+  encodait sur le CPU : OpenH264, H.264 seulement.
+- Sur cette route, la paire GPU recevait en plus un render node vide.
+
+**Le correctif.**
+- `PortalCapture` annonce d'abord, format par format, les modificateurs
+  qu'EGL importe sur le GPU de la session (`GlConvert::importableModifiers`).
+  Ils sont marqués « à ne pas fixer » : le compositeur choisit celui qu'il sait
+  allouer. La mémoire partagée reste proposée derrière, pour un compositeur qui
+  n'en prend aucun.
+- La paire GPU reçoit le render node de la carte.
+- Si GL lui-même refuse un DMA-BUF du portail, la session rouvre le portail en
+  mémoire partagée, sur l'accord déjà donné : pas de nouveau dialogue, et le
+  stream continue.
+
+**Montage.**
+- UM790Pro, GNOME 46 Wayland, Mesa 26.2.3, noyau 7.0.
+- L'app sans capacité de fichier, ce qui la fait passer par le portail. Avec
+  une capacité, glibc cache l'environnement (`secure_getenv`), et sd-bus ne
+  trouve pas le bus de session.
+- L'accord donné le 15/09 sous GNOME 42 vaut toujours sous GNOME 46 : aucun
+  dialogue, donc pas de clic de consentement à faire.
+- `--native-bench` HEVC 1080p60 à 20 Mbit/s, 20 s par passe, deux tours.
+  - Au repos : la page qui défile dans Chrome (en Wayland : sous GNOME 46,
+    Xwayland exige une autorisation qu'une session SSH n'a pas).
+  - Sous charge : `mw-gpu-load` 248 (43 i/s), refroidi à 47 °C avant chaque
+    passe. Un premier essai, refroidi à 58 °C seulement, a perdu deux passes
+    à la garde thermique de la charge.
+- Sorties et scripts : `bench-out\vk-lab\c13-2026-09-29` (`portalbench`).
+
+**La négociation.** GNOME 46 prend l'offre : d'abord `0x0` (linéaire, le
+défaut de la liste), puis il fixe `0x200000010401b04`, en un plan.
+
+**Au pixel** (`test_vulkan_convert`, partie portail). GL et Vulkan écrivent la
+même chose à une valeur près, en 1:1 comme réduit : 0 échantillon à plus de 1,
+moyenne 0,004 en luma et 0,04 en chroma.
+
+**Les temps.**
+
+| route | repos : conversion moy. / p99 | charge : conversion moy. / p99 | images captées sous la charge |
+|---|---|---|---|
+| GL → VA-API | 0,84 / 1,35 ms | 30,7 / 43,2 ms | 28 i/s |
+| Vulkan compute → VA-API | 0,65 / 1,08 ms | **15,8 / 24,5 ms** | **40 i/s** |
+| Vulkan compute → Vulkan Video | 0,65 / 1,10 ms | 17,4 / 25,0 ms | 39 i/s |
+
+- Par le portail, la conversion attend d'abord la copie du compositeur dans le
+  tampon de la capture (sa barrière implicite). Sous la charge, cela fait 12 ms
+  de plus qu'en KMS (§8o.6 : 3,4 ms pour la route scindée).
+- La colonne « présentation → encodé » manque exprès : l'horodatage du portail
+  n'est pas sur l'horloge du moteur.
+- L'encodeur VA-API ne bouge pas (4,0 à 4,6 ms).
+
+**Ce qu'on en retient.** Sur le 780M, par le portail aussi, la route scindée
+gagne au repos, divise par deux la conversion sous un jeu, et capte 40 % d'images
+en plus. L'exception du portail est levée (« Go » de Bruno pour C13.3 bis, le
+29/09) : la ligne AMD de la table vaut pour le scanout comme pour le portail.
+
+### 8o.12 Le portail en mémoire partagée, par la conversion Vulkan (C13.10, 29/09/2026)
+
+**La question.** Un compositeur qui ne donne pas de DMA-BUF donne de la
+mémoire partagée, que GL ne sait pas lire. La session encodait alors sur le
+CPU (OpenH264, H.264 seulement). La conversion Vulkan peut-elle la lire, et
+que gagne-t-on à encoder sur le GPU ?
+
+**Ce que la conversion fait.**
+- D'abord, importer la mémoire là où elle est mappée
+  (`VK_EXT_external_memory_host`), pour que le GPU la copie sans que le CPU
+  touche un pixel.
+- **amdgpu le refuse** (`VK_ERROR_INVALID_EXTERNAL_HANDLE`). Le noyau
+  n'importe que de la mémoire anonyme, et celle de PipeWire est un memfd.
+- Le repli, retenu pour la session : le CPU copie l'image dans un tampon
+  visible du GPU (8 Mo en 1080p), puis le GPU la copie dans une image et la
+  convertit comme un DMA-BUF. L'encodage reste celui du GPU.
+
+**Montage.**
+- UM790Pro, GNOME 46, l'app sans capacité (le portail), `portaldmabuf=0`
+  pour que GNOME donne de la mémoire partagée.
+- La page qui défile dans un Chrome **maximisé** : en mémoire partagée,
+  GNOME 46 n'enregistre aucune image d'une fenêtre en plein écran (0 image en
+  10 s, avec l'ancienne paire CPU comme avec la nouvelle ; en DMA-BUF, 414).
+- `--native-bench` 1080p60 à 20 Mbit/s, 20 s, deux tours. Le temps CPU du
+  processus par le `time` de bash.
+- Sorties et scripts : `bench-out\vk-lab\c13-2026-09-29` (`shmbench`).
+
+| route | CPU de l'hôte | conversion moy. / p99 | encodage | images captées |
+|---|---|---|---|---|
+| CPU → OpenH264 (H.264), jusqu'ici | 71 % d'un cœur | 1,90 / 2,56 ms | 3,9 ms | 40 i/s |
+| Vulkan (copie CPU) → VA-API, H.264 | **5 %** | 1,20 / 1,56 ms | 4,1 ms | 37 i/s |
+| Vulkan (copie CPU) → VA-API, HEVC | **5 %** | 1,16 / 1,65 ms | 3,9 ms | 37 i/s |
+
+- Le CPU tombe de 71 à 5 % d'un cœur, pour la même latence. Le HEVC devient
+  possible.
+- 8 % d'images en moins : la conversion et l'encodage partagent le GPU avec
+  la copie que fait le compositeur.
+
+**Ce qu'on en retient.**
+- Sur AMD, la mémoire partagée passe par la conversion Vulkan puis VA-API ou
+  Vulkan Video, là où la table convertit déjà en Vulkan.
+- Intel et NVIDIA gardent la paire CPU jusqu'à leur propre banc (`convert=vulkan`
+  la mesure).
+- GNOME donne un DMA-BUF depuis C13.3 bis : ce chemin sert aux compositeurs
+  qui n'en donnent pas.
+- Le plein écran en mémoire partagée reste muet sous GNOME 46. C'est une
+  raison de plus pour l'offre DMA-BUF, qui le couvre.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session

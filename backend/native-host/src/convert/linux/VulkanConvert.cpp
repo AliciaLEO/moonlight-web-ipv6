@@ -194,6 +194,20 @@ struct VulkanConvert::Impl
     uint64_t frames = 0;
     bool failed = false;
     bool saidNoFence = false;
+
+    // The portal's shared memory (C13.10): a picture of the source's own
+    // format that each conversion first fills — by the GPU, from the mapping
+    // itself (VK_EXT_external_memory_host), or from a copy the CPU made into
+    // a buffer of ours, where the driver refuses that mapping.
+    Image hostPicture;
+    VkFormat hostPictureFormat = VK_FORMAT_UNDEFINED;
+    VkBuffer hostCopy = VK_NULL_HANDLE;
+    VkDeviceMemory hostCopyMemory = VK_NULL_HANDLE;
+    void* hostCopyMapped = nullptr;
+    VkDeviceSize hostCopySize = 0;
+    /// The mapping could not be imported once: the CPU copies from then on.
+    bool hostImportRefused = false;
+    bool saidHostPath = false;
     /// MW_VK_CONVERT_FAIL_AT=N: the Nth conversion fails as a lost device
     /// would, and 0 fails init() as a machine without Vulkan would — how the
     /// session's fallback to GL is tested, and benched. (Not VK_DRIVER_FILES:
@@ -337,6 +351,55 @@ VkResult importImage(vulkan::VulkanDevice& device, int fd, uint64_t modifier, in
     out.height = height;
     out.layout = VK_IMAGE_LAYOUT_UNDEFINED;
     return r;
+}
+
+/// Memory this process mapped — the portal's shared memory — as a buffer the
+/// GPU copies from (VK_EXT_external_memory_host): from @p address down to the
+/// alignment the driver wants, @p size bytes past @p address, rounded up.
+/// @p offset says where @p address lands in the buffer.
+VkResult importHostMemory(vulkan::VulkanDevice& device, const void* address, size_t size,
+                          VkBuffer& buffer, VkDeviceMemory& memory, VkDeviceSize& offset)
+{
+    const vulkan::DeviceFunctions& fn = device.fn();
+    const VkDeviceSize align = std::max<VkDeviceSize>(device.hostPointerAlignment(), 1);
+    const auto start = reinterpret_cast<uintptr_t>(address);
+    const uintptr_t base = start / align * align;
+    offset = start - base;
+    const VkDeviceSize bytes = (offset + size + align - 1) / align * align;
+    // The driver reads it, never writes: the pointer is only const for us.
+    void* pointer = reinterpret_cast<void*>(base);
+    VkMemoryHostPointerPropertiesEXT props = {};
+    props.sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT;
+    VkResult r = fn.vkGetMemoryHostPointerPropertiesEXT(
+        device.device(), VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, pointer, &props);
+    if (r != VK_SUCCESS) return r;
+    VkExternalMemoryBufferCreateInfo external = {};
+    external.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
+    external.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+    VkBufferCreateInfo bci = {};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.pNext = &external;
+    bci.size = bytes;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    r = fn.vkCreateBuffer(device.device(), &bci, nullptr, &buffer);
+    if (r != VK_SUCCESS) return r;
+    VkMemoryRequirements req = {};
+    fn.vkGetBufferMemoryRequirements(device.device(), buffer, &req);
+    const uint32_t type = device.memoryType(req.memoryTypeBits & props.memoryTypeBits, 0);
+    if (type == UINT32_MAX) return VK_ERROR_FORMAT_NOT_SUPPORTED;
+    VkImportMemoryHostPointerInfoEXT import = {};
+    import.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT;
+    import.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+    import.pHostPointer = pointer;
+    VkMemoryAllocateInfo mai = {};
+    mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    mai.pNext = &import;
+    mai.allocationSize = bytes;
+    mai.memoryTypeIndex = type;
+    r = fn.vkAllocateMemory(device.device(), &mai, nullptr, &memory);
+    if (r != VK_SUCCESS) return r;
+    return fn.vkBindBufferMemory(device.device(), buffer, memory, 0);
 }
 
 void destroyImage(vulkan::VulkanDevice& device, Image& image)
@@ -925,11 +988,14 @@ bool VulkanConvert::convert(const capture::KmsFrame& frame, const capture::Curso
     // the encode 15 under a load that saturates the 780M, against 3.3 and 2.1
     // with RADV 25, whose list is per command buffer (bench §8o.6). An import
     // is 0.02 to 0.04 ms (§8o.2).
-    if (frame.planeCount <= 0 || frame.fds[0] < 0)
+    // The portal's shared memory (C13.10): mapped pixels, no DMA-BUF.
+    const bool fromHost = frame.mapped != nullptr;
+    if (!fromHost && (frame.planeCount <= 0 || frame.fds[0] < 0))
         return fail("the frame has no DMA-BUF (shared memory is the CPU route's)");
     struct stat st = {};
-    if (::fstat(frame.fds[0], &st) != 0) return fail("the frame's DMA-BUF cannot be read");
-    for (int i = 1; i < frame.planeCount; ++i) {
+    if (!fromHost && ::fstat(frame.fds[0], &st) != 0)
+        return fail("the frame's DMA-BUF cannot be read");
+    for (int i = 1; !fromHost && i < frame.planeCount; ++i) {
         struct stat other = {};
         if (frame.fds[i] < 0 || ::fstat(frame.fds[i], &other) != 0 || other.st_ino != st.st_ino ||
             other.st_dev != st.st_dev)
@@ -937,9 +1003,11 @@ bool VulkanConvert::convert(const capture::KmsFrame& frame, const capture::Curso
                         "import");
     }
     const VkFormat format = sourceFormat(frame.fourcc);
+    if (fromHost && format == VK_FORMAT_UNDEFINED)
+        return fail("the shared memory's format is not one this converts");
     SourceFormat& checked = d->sourceFormat;
-    if (!checked.usable || checked.fourcc != frame.fourcc || checked.modifier != frame.modifier ||
-        checked.planes != frame.planeCount) {
+    if (!fromHost && (!checked.usable || checked.fourcc != frame.fourcc ||
+                      checked.modifier != frame.modifier || checked.planes != frame.planeCount)) {
         VkFormatFeatureFlags2 features = 0;
         uint32_t planes = 0;
         const bool listed = format != VK_FORMAT_UNDEFINED &&
@@ -961,19 +1029,121 @@ bool VulkanConvert::convert(const capture::KmsFrame& frame, const capture::Curso
         checked = SourceFormat{frame.fourcc, frame.modifier, frame.planeCount, true};
     }
     Image sourceImage;
+    // The portal's mapping, imported for this conversion (C13.10).
+    VkBuffer hostBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory hostMemory = VK_NULL_HANDLE;
     // Let go when this conversion returns, whatever it returns: past the CPU
-    // wait below, the GPU is done with it.
+    // wait below, the GPU is done with them.
     struct Release
     {
         vulkan::VulkanDevice& device;
         Image& image;
-        ~Release() { destroyImage(device, image); }
-    } release{*d->device, sourceImage};
-    const VkResult imported = importImage(
-        *d->device, frame.fds[0], frame.modifier, frame.planeCount, frame.offsets, frame.pitches,
-        format, frame.width, frame.height, VK_IMAGE_USAGE_SAMPLED_BIT, sourceImage);
-    if (imported != VK_SUCCESS)
-        return fail("Vulkan refused the scanout buffer: " + resultText(imported));
+        VkBuffer& buffer;
+        VkDeviceMemory& memory;
+        ~Release()
+        {
+            destroyImage(device, image);
+            if (buffer) device.fn().vkDestroyBuffer(device.device(), buffer, nullptr);
+            if (memory) device.fn().vkFreeMemory(device.device(), memory, nullptr);
+        }
+    } release{*d->device, sourceImage, hostBuffer, hostMemory};
+    // Where the shared memory's pixels are read from, and from which byte.
+    VkBuffer hostSource = VK_NULL_HANDLE;
+    VkDeviceSize hostOffset = 0;
+    if (fromHost) {
+        // ── The portal's shared memory: into a picture of ours first ──
+        //
+        // Read where it is mapped where the driver imports the mapping — the
+        // GPU copies it, the CPU never touches a pixel. A driver that refuses
+        // it (amdgpu takes anonymous memory only, and PipeWire's is a memfd)
+        // gets the CPU's copy into a buffer of ours, still a fraction of what
+        // the CPU pair costs: the conversion and the encode stay on the GPU.
+        const size_t bytes = static_cast<size_t>(frame.pitches[0]) * frame.height;
+        if (frame.pitches[0] % 4 != 0 || frame.mappedSize < bytes)
+            return fail("the shared memory's rows do not hold the picture");
+        if (!d->hostPicture.image || d->hostPicture.width != frame.width ||
+            d->hostPicture.height != frame.height || d->hostPictureFormat != format) {
+            destroyImage(*d->device, d->hostPicture);
+            const VkResult r = createImage(
+                *d->device, format, frame.width, frame.height,
+                VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, d->hostPicture);
+            if (r != VK_SUCCESS) return fail("the shared memory's picture: " + resultText(r));
+            d->hostPictureFormat = format;
+        }
+        std::string how;
+        if (!d->hostImportRefused && d->device->importsHostMemory()) {
+            const VkResult r = importHostMemory(*d->device, frame.mapped, bytes, hostBuffer,
+                                                hostMemory, hostOffset);
+            if (r == VK_SUCCESS) {
+                hostSource = hostBuffer;
+                how = "imported where it is mapped (VK_EXT_external_memory_host)";
+            } else {
+                d->hostImportRefused = true;
+                log::info("[native] Vulkan conversion of the portal's shared memory: the driver "
+                          "refused the mapping (" +
+                          resultText(r) + ") — the CPU copies it from here");
+                if (hostBuffer) d->fn->vkDestroyBuffer(d->dev, hostBuffer, nullptr);
+                if (hostMemory) d->fn->vkFreeMemory(d->dev, hostMemory, nullptr);
+                hostBuffer = VK_NULL_HANDLE;
+                hostMemory = VK_NULL_HANDLE;
+                hostOffset = 0;
+            }
+        } else if (!d->device->importsHostMemory()) {
+            how = "copied by the CPU: no VK_EXT_external_memory_host here";
+        }
+        if (!hostSource) {
+            if (d->hostCopySize < bytes) {
+                if (d->hostCopy) fn.vkDestroyBuffer(d->dev, d->hostCopy, nullptr);
+                if (d->hostCopyMemory) fn.vkFreeMemory(d->dev, d->hostCopyMemory, nullptr);
+                d->hostCopy = VK_NULL_HANDLE;
+                d->hostCopyMemory = VK_NULL_HANDLE;
+                d->hostCopyMapped = nullptr;
+                d->hostCopySize = 0;
+                VkBufferCreateInfo bci = {};
+                bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+                bci.size = bytes;
+                bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+                bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+                VkResult r = fn.vkCreateBuffer(d->dev, &bci, nullptr, &d->hostCopy);
+                VkMemoryRequirements req = {};
+                if (r == VK_SUCCESS) fn.vkGetBufferMemoryRequirements(d->dev, d->hostCopy, &req);
+                const uint32_t type = d->device->memoryType(
+                    req.memoryTypeBits,
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+                if (r == VK_SUCCESS && type == UINT32_MAX) r = VK_ERROR_OUT_OF_DEVICE_MEMORY;
+                if (r == VK_SUCCESS) {
+                    VkMemoryAllocateInfo mai = {};
+                    mai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+                    mai.allocationSize = req.size;
+                    mai.memoryTypeIndex = type;
+                    r = fn.vkAllocateMemory(d->dev, &mai, nullptr, &d->hostCopyMemory);
+                }
+                if (r == VK_SUCCESS)
+                    r = fn.vkBindBufferMemory(d->dev, d->hostCopy, d->hostCopyMemory, 0);
+                if (r == VK_SUCCESS)
+                    r = fn.vkMapMemory(d->dev, d->hostCopyMemory, 0, VK_WHOLE_SIZE, 0,
+                                       &d->hostCopyMapped);
+                if (r != VK_SUCCESS)
+                    return fail("the shared memory's copy buffer: " + resultText(r));
+                d->hostCopySize = bytes;
+            }
+            std::memcpy(d->hostCopyMapped, frame.mapped, bytes);
+            hostSource = d->hostCopy;
+            hostOffset = 0;
+        }
+        if (!d->saidHostPath && !how.empty()) {
+            d->saidHostPath = true;
+            log::info("[native] Vulkan conversion of the portal's shared memory: " + how);
+        }
+    } else {
+        const VkResult imported =
+            importImage(*d->device, frame.fds[0], frame.modifier, frame.planeCount, frame.offsets,
+                        frame.pitches, format, frame.width, frame.height,
+                        VK_IMAGE_USAGE_SAMPLED_BIT, sourceImage);
+        if (imported != VK_SUCCESS)
+            return fail("Vulkan refused the scanout buffer: " + resultText(imported));
+    }
+    const VkImageView sourceView = fromHost ? d->hostPicture.view : sourceImage.view;
 
     // ── The pointer: new bytes when its shape changed ──
     const bool upload = cursor.width > 0 && cursor.height > 0 &&
@@ -986,7 +1156,7 @@ bool VulkanConvert::convert(const capture::KmsFrame& frame, const capture::Curso
     // ── The scene the conversion samples: the scanout, or the scaled picture ──
     const bool resampled = m_Filter != ScaleFilter::Bilinear;
     {
-        VkDescriptorImageInfo sourceRead = {resampled ? d->nearest : d->linear, sourceImage.view,
+        VkDescriptorImageInfo sourceRead = {resampled ? d->nearest : d->linear, sourceView,
                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkWriteDescriptorSet w = {};
         w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1052,13 +1222,21 @@ bool VulkanConvert::convert(const capture::KmsFrame& frame, const capture::Curso
 
     if (timed) fn.vkCmdResetQueryPool(cmd, d->timestamps, 0, 2);
     std::vector<VkImageMemoryBarrier2> before;
-    // The scanout, taken over from the compositor (the foreign queue family):
-    // what it drew is visible once its implicit fence, waited on below, has
-    // signalled.
-    before.push_back(imageBarrier(sourceImage.image, VK_IMAGE_LAYOUT_GENERAL,
-                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                  VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, kCompute, kSampled,
-                                  VK_QUEUE_FAMILY_FOREIGN_EXT, family));
+    if (fromHost) {
+        // The shared memory's picture: written whole by the copy below.
+        before.push_back(imageBarrier(
+            d->hostPicture.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, VK_PIPELINE_STAGE_2_COPY_BIT,
+            VK_ACCESS_2_TRANSFER_WRITE_BIT));
+    } else {
+        // The scanout, taken over from the compositor (the foreign queue
+        // family): what it drew is visible once its implicit fence, waited on
+        // below, has signalled.
+        before.push_back(imageBarrier(sourceImage.image, VK_IMAGE_LAYOUT_GENERAL,
+                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                      VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, kCompute,
+                                      kSampled, VK_QUEUE_FAMILY_FOREIGN_EXT, family));
+    }
     if (d->encoderInput) {
         // The Vulkan encoder's input, from where the encoder leaves it —
         // after the encode that read it, which the submission waits for at
@@ -1100,6 +1278,23 @@ bool VulkanConvert::convert(const capture::KmsFrame& frame, const capture::Curso
                                       VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_NONE,
                                       VK_ACCESS_2_NONE, kCompute, kWrite));
     barriers(before);
+
+    if (fromHost) {
+        // The shared memory into the picture the conversion samples: the
+        // submission makes the host's writes visible to the copy.
+        VkBufferImageCopy copy = {};
+        copy.bufferOffset = hostOffset;
+        copy.bufferRowLength = frame.pitches[0] / 4;
+        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copy.imageExtent = {static_cast<uint32_t>(frame.width), static_cast<uint32_t>(frame.height),
+                            1};
+        fn.vkCmdCopyBufferToImage(cmd, hostSource, d->hostPicture.image,
+                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        barriers(
+            {imageBarrier(d->hostPicture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_COPY_BIT,
+                          VK_ACCESS_2_TRANSFER_WRITE_BIT, kCompute, kSampled)});
+    }
 
     if (upload) {
         const uint32_t w = static_cast<uint32_t>(cursor.width);
@@ -1199,10 +1394,11 @@ bool VulkanConvert::convert(const capture::KmsFrame& frame, const capture::Curso
                 plane->image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, kCompute, kWrite,
                 VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, family, VK_QUEUE_FAMILY_FOREIGN_EXT));
     }
-    after.push_back(imageBarrier(sourceImage.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                 VK_IMAGE_LAYOUT_GENERAL, kCompute, kSampled,
-                                 VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, family,
-                                 VK_QUEUE_FAMILY_FOREIGN_EXT));
+    if (!fromHost)
+        after.push_back(imageBarrier(sourceImage.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                     VK_IMAGE_LAYOUT_GENERAL, kCompute, kSampled,
+                                     VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE, family,
+                                     VK_QUEUE_FAMILY_FOREIGN_EXT));
     barriers(after);
     fn.vkEndCommandBuffer(cmd);
 
@@ -1216,7 +1412,9 @@ bool VulkanConvert::convert(const capture::KmsFrame& frame, const capture::Curso
     }
     VkSemaphoreSubmitInfo wait = {};
     uint32_t waits = 0;
-    if (d->implicitFence) {
+    // Shared memory has no fence: the compositor finished writing it before
+    // it handed the buffer over.
+    if (d->implicitFence && !fromHost) {
         struct dma_buf_export_sync_file exported = {};
         exported.flags = DMA_BUF_SYNC_READ;
         exported.fd = -1;
@@ -1238,7 +1436,7 @@ bool VulkanConvert::convert(const capture::KmsFrame& frame, const capture::Curso
             }
         }
     }
-    if (!waits && !d->saidNoFence) {
+    if (!waits && !fromHost && !d->saidNoFence) {
         d->saidNoFence = true;
         log::info("[native] the scanout's implicit fence is not waited on (no sync_file from "
                   "the kernel or the driver): the buffer is read as it stands");
@@ -1289,8 +1487,11 @@ void VulkanConvert::stop()
         destroyImage(device, d->chroma);
         destroyImage(device, d->cursorPixels);
         destroyImage(device, d->cursorInvert);
+        destroyImage(device, d->hostPicture);
         if (d->staging) fn.vkDestroyBuffer(dev, d->staging, nullptr);
         if (d->stagingMemory) fn.vkFreeMemory(dev, d->stagingMemory, nullptr);
+        if (d->hostCopy) fn.vkDestroyBuffer(dev, d->hostCopy, nullptr);
+        if (d->hostCopyMemory) fn.vkFreeMemory(dev, d->hostCopyMemory, nullptr);
         if (d->implicitFence) fn.vkDestroySemaphore(dev, d->implicitFence, nullptr);
         if (d->commands) fn.vkDestroyCommandPool(dev, d->commands, nullptr);
         if (d->descriptors) fn.vkDestroyDescriptorPool(dev, d->descriptors, nullptr);

@@ -183,6 +183,10 @@ const char* const kUsage =
     "                              (the split route)\n"
     "  priovk=normal|high          the Vulkan queues' priority (default: high with\n"
     "                              CAP_SYS_NICE, normal without)\n"
+    "  portaldmabuf=0|1            the portal asked for DMA-BUF (default 1); 0: shared memory\n"
+    "                              only, what a compositor without DMA-BUF hands over\n"
+    "  (in the environment, MW_PORTAL_RESTORE_TOKEN=<grant>: the portal's consent replayed,\n"
+    "  on a binary that cannot read the scanout; a new grant is printed as \"portal grant:\")\n"
     "the bench's own:\n"
     "  dump=<path>      the encoded stream as it comes out (Annex-B, or OBUs for AV1)\n"
     "  lose=<frames>[x<burst>][k]  every N frames, report the latest one lost (reference\n"
@@ -430,6 +434,8 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
             tuning.prioVk = P::High;
         else
             ok = false;
+    } else if (key == "portaldmabuf") {
+        ok = parseChoice(value, tuning.portalDmabuf);
     } else {
         return false;
     }
@@ -652,6 +658,10 @@ int runNativeBenchCommand(const QString& specText)
     config.intraRefresh = spec.intraRefresh;
     config.encodeGpuId = spec.gpu;
     config.tuning = spec.tuning;
+    // The portal route (Linux, a binary without the capability to read the
+    // scanout) asks the user once: a grant from an earlier run replays that
+    // consent without a dialog, and a new one is printed below for the next.
+    config.portalRestoreToken = qEnvironmentVariable("MW_PORTAL_RESTORE_TOKEN").toStdString();
 
     std::mutex rowsMutex;
     std::vector<BenchRow> rows;
@@ -719,6 +729,11 @@ int runNativeBenchCommand(const QString& specText)
         return 1;
     }
     live = session.get();
+    // Called on this thread, inside start(), when the portal granted anew.
+    session->setPortalGrantCallback([&](const std::string& token) {
+        out << "portal grant: MW_PORTAL_RESTORE_TOKEN=" << QString::fromStdString(token) << "\n";
+        out.flush();
+    });
     if (!session->start(error)) {
         err << "native-bench: could not start the session: " << QString::fromStdString(error)
             << "\n";
