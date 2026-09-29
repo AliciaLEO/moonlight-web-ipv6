@@ -3138,6 +3138,54 @@ Trois mesures de la phase 11, sur DualRTX en classe HIGH (sorties
   par NVENC en D3D11, qui a la sienne. Un ROI (pointeur, texte) dans la chaîne
   D3D12 n'a donc pas de GPU où servir aujourd'hui.
 
+### 8n.25 C11.1 : où passe le temps du Lanczos-2 (29/09/2026)
+
+Le rééchantillonnage du produit est fait de deux passes 1-D de Lanczos-2,
+dilaté au rapport, en lumière linéaire. Chaque tap décode son texel sRGB par un
+`pow()` et calcule son poids par deux `sin()`. Sur le N95, les deux passes
+coûtent ~11 ms par image en 1440p → 1080p, contre les 1,5 ms que le garde
+autorise : le N95 streame en bilinéaire.
+
+Le plan prévoyait des shaders SM 6 en types 16 bits (C11.1). La sonde
+`mw-d3d12-lab scale` mesure d'abord où va le temps. Elle écrit les mêmes passes
+de quatre façons et compare chaque image à celle du produit :
+- **product** : les shaders du produit, compilés comme lui (FXC, O3) ;
+- **lut** : les poids calculés une fois par la CPU, une lecture par tap au lieu
+  de deux `sin()` et d'une division ;
+- **once** : `lut`, plus le bureau décodé en lumière linéaire une seule fois,
+  dans une passe à part, au lieu d'une fois par tap ;
+- **half** : `once`, avec une arithmétique `min16float` dans les deux passes.
+
+Temps GPU par image, médiane de 200 images, en classe HIGH (sorties
+`bench-out\d3d12v2\c11\scale`) :
+
+| GPU | product | lut | once | half | bilinéaire (le repli) |
+|---|---|---|---|---|---|
+| N95 (UHD Graphics), 1440p → 1080p | 10,93 ms | 11,88 | 15,53 | 15,53 | **1,46** |
+| N95, 1080p → 720p | 5,40 | 5,59 | 7,91 | 7,47 | 0,70 |
+| iGPU AMD (2 CU) | 5,95 | **3,75** | **2,54** | 2,59 | 0,34 |
+| Arc A380 | 0,94 | 0,99 | 1,39 | 1,38 | 0,14 |
+| RTX 5060 Ti | 0,18 | 0,14 | 0,24 | 0,24 | 0,02 |
+
+Chaque variante rend l'image du produit à une valeur près, au pire.
+
+**Lecture.**
+- **Sur Intel, le Lanczos-2 est lié à la mémoire, pas au calcul.** Retirer les
+  `sin()` et les `pow()` ne change rien sur le N95 ni sur l'Arc. Ajouter une
+  passe de décodage coûte ce qu'elle lit et écrit (+40 %). Le simple fetch
+  bilinéaire prend déjà 1,46 ms sur le N95 : le budget entier. Aucun shader ne
+  fera tenir un Lanczos-2 dans 1,5 ms sur ce GPU, et les types 16 bits visent
+  le calcul, qui n'est pas le goulet.
+- **Sur le petit iGPU AMD, c'est l'inverse** : les poids précalculés font
+  −37 %, le décodage unique −57 %. Mais 2,5 ms restent au-dessus du budget, et
+  le garde retirerait le Lanczos-2 là aussi.
+- `min16float` ne gagne rien nulle part, et le SM 6 n'y changerait rien.
+
+**Verdict C11.1** : pas de shaders SM 6 ni de DXC dans le build. Aucune des
+variantes ne fait passer un GPU de l'autre côté du garde, et la meilleure
+perdrait sur Intel, la chaîne par défaut. La sonde reste au labo pour le jour
+où un GPU tombera près du seuil.
+
 ## 8o. Linux : la chaîne Vulkan (28/09/2026 →)
 
 Phase 13 du plan D3D12 : la même forme de chaîne sous Linux, en Vulkan Video

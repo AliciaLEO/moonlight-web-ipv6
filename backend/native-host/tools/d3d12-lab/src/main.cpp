@@ -24,6 +24,7 @@
 #include "Encode.h"
 #include "Interop.h"
 #include "Queues.h"
+#include "Scale.h"
 #include "Vendors.h"
 
 #include <windows.h>
@@ -43,6 +44,7 @@ void usage()
         "  interop what the DDA handshake costs, and what reading without it does\n"
         "  encode  D3D12 Video Encode HEVC with the product's rate control\n"
         "  vendors NVENC and AMF fed D3D12 pictures\n"
+        "  scale   the Lanczos-2 resample, timed, the product's way and three cheaper ones\n"
         "Run a command with --help for its options.\n");
 }
 
@@ -96,6 +98,13 @@ int wmain(int argc, wchar_t** argv)
             return 0;
         }
         return lab::runVendors(argc - 2, argv + 2);
+    }
+    if (command == L"scale") {
+        if (help) {
+            lab::scaleUsage();
+            return 0;
+        }
+        return lab::runScale(argc - 2, argv + 2);
     }
     usage();
     return command == L"--help" ? 0 : 2;

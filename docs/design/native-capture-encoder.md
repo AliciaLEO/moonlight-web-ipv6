@@ -5692,6 +5692,20 @@ prend pas aujourd'hui.
 
 ### 32.18 Phase 11 : la télémétrie, l'encodeur gardé, et trois études (29/09/2026)
 
+**Les shaders SM 6 en 16 bits (C11.1), mesurés avant d'être écrits.** Le but
+était un Lanczos-2 abordable sur le N95, sous le garde de rééchantillonnage
+(1,5 ms). La sonde `mw-d3d12-lab scale` (banc §8n.25) a d'abord cherché où
+passe le temps.
+- Sur Intel, la passe est liée à la mémoire. Précalculer les poids ou décoder
+  le sRGB une seule fois ne gagne rien, voire perd.
+- Le simple fetch bilinéaire prend déjà 1,46 ms sur le N95, le budget entier.
+- Sur le petit iGPU AMD, lié au calcul, les mêmes réécritures font −57 %, mais
+  2,5 ms restent au-dessus du budget.
+- `min16float` ne gagne rien, nulle part.
+
+**Pas de SM 6 ni de DXC dans le build** : aucune variante ne ferait changer
+un GPU de côté du garde.
+
 **Le temps GPU de l'encodeur (C11.2, `de0184b2`).** Avec `gputiming=1`, deux
 horodatages encadrent chaque soumission sur la file d'encodage. Leur somme
 remplit `gpu_encode_us`, re-encodages compris. Sur la RTX, VE passe 7,6 ms

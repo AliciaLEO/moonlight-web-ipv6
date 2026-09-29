@@ -28,6 +28,7 @@ add_executable(mw-d3d12-lab
     src/LabD3d12.cpp
     src/Encode.cpp
     src/Vendors.cpp
+    src/Scale.cpp
 )
 
 set_target_properties(mw-d3d12-lab PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
