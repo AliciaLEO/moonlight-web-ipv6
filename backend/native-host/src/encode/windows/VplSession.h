@@ -179,4 +179,20 @@ constexpr int kDefaultRefFrames = 4;
 /// the table.
 constexpr int kBudgetHeadroom = 1;
 
+/// Whether a lost frame may be healed with a long-term reference on this
+/// stream (VplEncoder::invalidateReference, design §9.2).
+///
+/// ⚠️ **Not in HEVC while it intra-refreshes.** A repair that lands in a
+/// refresh sweep hangs Intel's HEVC encoder for good: the frame never leaves
+/// the runtime ("still executing"), no TDR, and the stream dies with it. Bench
+/// §8n.30, on an Arc: four losses every second hung it 6 times in 6, and with
+/// the sweeps back to back the first repair was enough. H.264 and AV1 took the
+/// same repairs without a hitch, and so did HEVC without the refresh. Such a
+/// stream marks no long-term reference at all, so /start tells the receiver it
+/// is not healed with a delta, and a loss costs a keyframe.
+inline bool longTermRepairsSafe(Codec codec, bool intraRefresh)
+{
+    return !(codec == Codec::Hevc && intraRefresh);
+}
+
 } // namespace mw::native::encode

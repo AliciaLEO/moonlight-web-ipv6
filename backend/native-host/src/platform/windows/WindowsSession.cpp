@@ -362,8 +362,9 @@ public:
                                     : horizon > 0        ? horizon
                                                   : encode::intraRefreshPeriodFrames(m_EncodeFps);
         // Reported the same way: the receiver decodes through a gap only when
-        // the encoder really heals it (NVENC today; AMF and oneVPL answer an
-        // invalidation with a keyframe).
+        // the encoder really heals it. oneVPL's HEVC under intra-refresh does
+        // not: a repair during a sweep hangs it, so it answers every loss with
+        // a keyframe (encode::longTermRepairsSafe).
         m_Info.referenceInvalidation = m_Pipeline->supportsReferenceInvalidation();
         // Counted, not estimated: one GPU→CPU read of the bitstream. Everything
         // upstream of it stays in VRAM on the capturing adapter — unless the

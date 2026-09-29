@@ -256,11 +256,14 @@ bool VplEncoder::init(ID3D11Device* device, Codec codec, int width, int height, 
     // Asked of the runtime rather than assumed, and answered honestly to
     // /start: a receiver told the stream repairs itself will stop asking for
     // keyframes, so promising it wrongly is worse than not promising it.
+    // HEVC under intra-refresh never gets them: a repair during a sweep hangs
+    // the encoder (longTermRepairsSafe).
     m_RepairPending = false;
     const int refs = static_cast<int>(m_Params.mfx.NumRefFrame);
     const int slots = refs > 1 ? refs - 1 : 0;
-    const bool longTerm =
-        slots > 0 && longTermReferencesWork(*m_Session.api(), m_Session.handle(), m_Params);
+    const bool repairsSafe = longTermRepairsSafe(codec, m_IntraRefresh);
+    const bool longTerm = slots > 0 && repairsSafe &&
+                          longTermReferencesWork(*m_Session.api(), m_Session.handle(), m_Params);
     m_Slots = ReferenceSlots(longTerm ? slots : 0, ReferenceSlots::strideFor(m_Fps, slots));
 
     const std::string overrides = tuning.describe();
@@ -285,7 +288,9 @@ bool VplEncoder::init(ID3D11Device* device, Codec codec, int width, int height, 
              ? ", " + std::to_string(m_Slots.count()) + " long-term references every " +
                    std::to_string(m_Slots.stride()) + " frames (reach " +
                    std::to_string(m_Slots.reachFrames()) + " frames)"
-             : ", no reference invalidation") +
+         : !repairsSafe ? std::string(", no reference invalidation (a repair during an "
+                                      "intra-refresh sweep hangs HEVC: keyframes instead)")
+                        : std::string(", no reference invalidation")) +
         (overrides.empty() ? "" : " [bench: " + overrides + "]"));
     return true;
 }

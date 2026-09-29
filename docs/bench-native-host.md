@@ -3589,6 +3589,29 @@ apparu en 30 jours de journaux, mais le risque existe. Sur `main`, Intel encode
 le HEVC en D3D12 Video Encode, qui n'a pas d'intra-refresh : oneVPL n'y garde le
 HEVC que si le réglage force D3D11.
 
+**Le correctif (option A, choisie par Bruno le 29/09).**
+- En HEVC sous intra-refresh, oneVPL ne marque plus de référence longue
+  (`longTermRepairsSafe`, `VplSession.h`). `/start` répond donc
+  `ref_invalidation:false`, et chaque perte signalée coûte une image clé.
+- H.264, AV1 et le HEVC sans intra-refresh gardent leurs réparations.
+- Rejoué sur le même montage, avec le binaire du correctif (sorties et
+  script : `bench-out\d3d12v2\vplfix`) :
+
+| Variante | Blocages | Réparations | Images clés |
+|---|---|---|---|
+| HEVC, `lose=60x4` (le témoin) | 0/3 | 0 | 96 à 106 |
+| HEVC, vagues bout à bout, sans gouverneur | 0/3 | 0 | 92 à 106 |
+| HEVC sans intra-refresh | 0/1 | 104 | 1 |
+| H.264, intra-refresh | 0/1 | 100 | 1 |
+
+- Chaque perte du banc devient une image clé : 4 pertes d'affilée, jusqu'à 4
+  images clés. Un vrai client en demande moins : tant que l'image clé demandée
+  n'est pas arrivée, il ne redemande qu'au bout d'une seconde.
+- Sur la page qui défile à 20 Mbit/s, une image clé pèse 39 à 45 Ko, contre
+  31 à 34 Ko pour un delta. Le tampon d'une image la plafonne : elle coûte en
+  netteté, pas en débit. Sur 30 s, les octets totaux ne bougent pas (47 à
+  55 Mo, contre 52 sans intra-refresh).
+
 ## 8o. Linux : la chaîne Vulkan (28/09/2026 →)
 
 Phase 13 du plan D3D12 : la même forme de chaîne sous Linux, en Vulkan Video

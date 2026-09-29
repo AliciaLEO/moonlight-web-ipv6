@@ -198,6 +198,19 @@ void run_vpl_params_tests()
         CHECK(p.mfx.NumRefFrame > 1);
     }
 
+    // ── No long-term repair in HEVC under intra-refresh ─────────────────────
+    //
+    // A repair that lands in a refresh sweep hangs Intel's HEVC encoder for
+    // good (bench §8n.30: 6 hangs in 6 at four losses a second, from the first
+    // repair with the sweeps back to back). H.264, AV1 and HEVC without the
+    // sweep took the same repairs without one.
+    {
+        CHECK(!encode::longTermRepairsSafe(Codec::Hevc, /*intraRefresh=*/true));
+        CHECK(encode::longTermRepairsSafe(Codec::Hevc, false));
+        CHECK(encode::longTermRepairsSafe(Codec::H264, true));
+        CHECK(encode::longTermRepairsSafe(Codec::Av1, true));
+    }
+
     // ── HDR: the format, the profile, and the three integers of the VUI ─────
     //
     // A 10-bit stream whose colour description still says BT.709 sRGB is not

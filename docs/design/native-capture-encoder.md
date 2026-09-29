@@ -903,6 +903,9 @@ et bridages par `netem`, un détecteur de dégâts lu sur le canvas du stream) :
   sans vague, 176 réparations passent. H.264 et AV1 ne se bloquent pas. Les
   pertes que le client signale prennent le même chemin : la v0.3.1 y est
   exposée sur Intel.
+- **Corrigé le même jour** (option A de Bruno, §21.6b) : en HEVC sous
+  intra-refresh, oneVPL ne répare plus par référence longue, et chaque perte
+  coûte une image clé. Rejoué sur le banc du §8n.30 : plus aucun blocage.
 
 **Les bancs Windows et Mac, faits le 29/09** (banc §8n.28, le lien bridé côté
 hôte par WinDivert) :
@@ -922,7 +925,8 @@ l'encodeur de la route D3D12 (`SessionInfo::videoEncoder12`) : sur une carte
 NVIDIA, D3D12 Video Encode reste sans.
 
 Ailleurs, rien ne change :
-- oneVPL, jamais : il se bloque ;
+- oneVPL, jamais : son HEVC s'y bloquait, et il ne répare plus du tout sous
+  intra-refresh (§21.6b) ;
 - D3D12 Video Encode : neutre ;
 - AMF en entrée D3D12 : neutre au banc §8n.29, et seule une clé de banc le
   fait tourner ;
@@ -3638,6 +3642,18 @@ HEVC 1080p de l'hôte Intel — cinq pertes nommées, cinq réparations
 demandée, zéro erreur de décodeur**, flux vivant à 16,8 ms. Coût mesuré à
 l'encodage : nul (10,99 ms contre 11,22 sans).
 
+⚠️ **Jamais en HEVC sous intra-refresh (29/09/2026).** Une réparation qui tombe
+pendant une vague bloque l'encodeur HEVC d'Intel pour de bon : l'image ne
+sort jamais du runtime, sans TDR, et le stream meurt (banc §8n.30). H.264, AV1
+et le HEVC sans vague font les mêmes réparations sans broncher. Un tel stream
+ne marque donc aucune référence longue (`longTermRepairsSafe`, `VplSession.h`),
+et `/start` répond `ref_invalidation:false`. Le client ne nomme plus ses
+pertes : il demande une image clé, comme face à tout encodeur sans
+invalidation. C'est l'option A de Bruno, le 29/09 : une image clé au lieu d'un
+delta, dans ce seul cas. Le journal le dit à l'ouverture : « no reference
+invalidation (a repair during an intra-refresh sweep hangs HEVC: keyframes
+instead) ».
+
 ### 21.7 Ce qui est prouvé, et ce qui ne l'est pas
 
 Prouvé sur le banc, le 07/09/2026 :
@@ -6036,7 +6052,8 @@ médian avant l'image clé, et 0 erreur de décodage.
 derrière un interrupteur). La clé `namedrops`, lue par le relais, est décrite
 au §9.10.2. Après les bancs sur lien bridé (banc §8n.27 et §8n.28), Bruno l'a
 mise par défaut pour NVENC et AMF en D3D11 : les images abîmées y fondent, et
-les gels ne bougent pas. Jamais pour oneVPL, qui se bloque ; D3D12 Video Encode,
+les gels ne bougent pas. Jamais pour oneVPL, dont le HEVC se bloquait sous les
+réparations (il ne répare plus sous intra-refresh, §21.6b) ; D3D12 Video Encode,
 neutre, reste sans. Un dernier banc (§8n.29) l'a étendue à NVENC en entrée
 D3D12, qui gagne autant ; AMF en entrée D3D12, neutre, reste sans.
 
