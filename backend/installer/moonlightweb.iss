@@ -288,6 +288,14 @@ const
   // page, so an update does not ask again (the device node itself is the
   // truth about what is installed; the helper never creates a second one).
   VDisplaySetupKey = 'SOFTWARE\{#MyAppName}\Setup';
+  // Ctrl+Alt+Suppr from the stream (design §31.7): Windows takes SendSAS from
+  // the launcher service only under this machine policy — 1 lets services
+  // press it, 3 services and Ease of Access. Set when nothing has set it. Each
+  // edition relying on a value one of our installers set is named under
+  // SasOwnersKey, and the value goes when the last of them is uninstalled.
+  SasPolicyKey = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System';
+  SasPolicyValue = 'SoftwareSASGeneration';
+  SasOwnersKey = 'SOFTWARE\MoonlightWeb\SoftwareSASGeneration';
 
 var
   InternetPage: TWizardPage;
@@ -403,6 +411,39 @@ begin
   Result := RegQueryDWordValue(HKEY_LOCAL_MACHINE, VDisplaySetupKey,
                                'AutostartWanted', v);
   if Result then want := v <> 0;
+end;
+
+// The policy Ctrl+Alt+Suppr needs (see SasPolicyKey). Left alone when anyone
+// else set it — an administrator, a group policy, another remote desktop — to
+// whatever value: their answer stands, and nothing of ours ever removes it.
+procedure ClaimSasPolicy();
+var
+  v: Cardinal;
+begin
+  if not RegQueryDWordValue(HKEY_LOCAL_MACHINE, SasPolicyKey, SasPolicyValue, v) then begin
+    if RegWriteDWordValue(HKEY_LOCAL_MACHINE, SasPolicyKey, SasPolicyValue, 1) then
+      RegWriteDWordValue(HKEY_LOCAL_MACHINE, SasOwnersKey, '{#MyAppName}', 1);
+  end else if RegKeyExists(HKEY_LOCAL_MACHINE, SasOwnersKey) then
+    // One of our installers set it, for the other edition: this one relies on
+    // it too.
+    RegWriteDWordValue(HKEY_LOCAL_MACHINE, SasOwnersKey, '{#MyAppName}', 1);
+end;
+
+// Uninstall: the value goes only if one of our installers set it, no other
+// edition still relies on it, and it still says what we wrote.
+procedure ReleaseSasPolicy();
+var
+  names: TArrayOfString;
+  v: Cardinal;
+begin
+  if not RegKeyExists(HKEY_LOCAL_MACHINE, SasOwnersKey) then Exit;
+  RegDeleteValue(HKEY_LOCAL_MACHINE, SasOwnersKey, '{#MyAppName}');
+  if RegGetValueNames(HKEY_LOCAL_MACHINE, SasOwnersKey, names) and
+     (GetArrayLength(names) > 0) then Exit;
+  RegDeleteKeyIncludingSubkeys(HKEY_LOCAL_MACHINE, SasOwnersKey);
+  RegDeleteKeyIfEmpty(HKEY_LOCAL_MACHINE, 'SOFTWARE\MoonlightWeb');
+  if RegQueryDWordValue(HKEY_LOCAL_MACHINE, SasPolicyKey, SasPolicyValue, v) and (v = 1) then
+    RegDeleteValue(HKEY_LOCAL_MACHINE, SasPolicyKey, SasPolicyValue);
 end;
 
 // True when a Desktop shortcut created by a previous install is still there.
@@ -1479,6 +1520,8 @@ begin
   // And the launcher service above it, which the worker prefers when it is
   // there. Both are kept: the task is the fallback if the service is stopped.
   RegisterWorkerService();
+  // The policy under which that service may press Ctrl+Alt+Suppr.
+  ClaimSasPolicy();
   // "MoonlightWeb Virtual Display" itself: on Accept, and again on every
   // update once accepted (the helper finds the node and creates no second
   // one — this is what makes an update a no-op and a reinstall a repair).
@@ -1669,6 +1712,8 @@ begin
     // The launcher service, while the exe that knows how to remove it is still
     // under {app} — and before the taskkill below, which would take it too.
     UnregisterWorkerService();
+    // And the policy it pressed Ctrl+Alt+Suppr under, if ours alone.
+    ReleaseSasPolicy();
     Exec('taskkill.exe', '/IM "{#MyAppExe}" /F', '', SW_HIDE,
          ewWaitUntilTerminated, rc);
     // Remove the firewall rule added at install time.

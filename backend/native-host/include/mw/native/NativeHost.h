@@ -478,6 +478,15 @@ public:
     static void setKeyboardDiagnostics(bool on);
     static bool keyboardDiagnostics();
 
+    /// How this process has Ctrl+Alt+Suppr pressed on its host (Windows).
+    /// Windows honours SendSAS from a service in session 0 only, which a
+    /// worker in the console session is not, SYSTEM as it may be: the host
+    /// application hands the press to its launcher service through @p sender,
+    /// which returns false with the reason in its argument. Unset, the engine
+    /// calls SendSAS itself. Either way, only a SYSTEM worker asks: it alone
+    /// can follow the screen that opens, and take the Esc that closes it.
+    static void setSecureAttentionSender(std::function<bool(std::string& error)> sender);
+
     /// Whether the input is on a desktop other than the user's own: on Windows
     /// the secure one, `Winlogon`, where the lock screen's PIN and the UAC
     /// prompt's password are typed — or one this process cannot even read,

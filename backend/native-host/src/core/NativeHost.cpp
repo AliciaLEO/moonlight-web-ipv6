@@ -228,6 +228,15 @@ bool NativeHost::keyboardDiagnostics()
     return input::keyboardDiagnostics();
 }
 
+void NativeHost::setSecureAttentionSender(std::function<bool(std::string& error)> sender)
+{
+#ifdef _WIN32
+    platform::setSecureAttentionSender(std::move(sender));
+#else
+    (void)sender;
+#endif
+}
+
 bool NativeHost::secureDesktopHasInput()
 {
 #ifdef _WIN32

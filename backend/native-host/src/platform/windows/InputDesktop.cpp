@@ -21,6 +21,7 @@
 
 #include <windows.h>
 
+#include <mutex>
 #include <string>
 
 namespace mw::native::platform {
@@ -30,6 +31,10 @@ namespace {
 /// be closed after the next switch — and only then, since closing the desktop a
 /// thread is standing on is undefined.
 thread_local HDESK t_Owned = nullptr;
+
+/// setSecureAttentionSender's.
+std::mutex g_SenderLock;
+std::function<bool(std::string&)> g_Sender;
 
 std::string desktopName(HDESK desktop)
 {
@@ -136,17 +141,30 @@ bool attachThread(std::string* name)
     return true;
 }
 
+void setSecureAttentionSender(std::function<bool(std::string& error)> sender)
+{
+    std::lock_guard<std::mutex> lock(g_SenderLock);
+    g_Sender = std::move(sender);
+}
+
 bool sendSecureAttention(std::string& error)
 {
     if (!runningAsSystem()) {
         error = "Ctrl+Alt+Suppr needs the worker to run as SYSTEM (the launcher service)";
         return false;
     }
+    std::function<bool(std::string&)> sender;
+    {
+        std::lock_guard<std::mutex> lock(g_SenderLock);
+        sender = g_Sender;
+    }
+    if (sender) return sender(error);
     // Loaded on demand and kept: sas.dll is present on every desktop Windows,
     // but this is the only thing in the engine that wants it, and a session
-    // that never presses the combination should never map it.
+    // that never presses the combination should never map it. From System32
+    // only: the caller is SYSTEM.
     using SendSasFn = VOID(WINAPI*)(BOOL);
-    static HMODULE library = ::LoadLibraryW(L"sas.dll");
+    static HMODULE library = ::LoadLibraryExW(L"sas.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     static SendSasFn sendSas = library ? reinterpret_cast<SendSasFn>(reinterpret_cast<void*>(
                                              ::GetProcAddress(library, "SendSAS")))
                                        : nullptr;

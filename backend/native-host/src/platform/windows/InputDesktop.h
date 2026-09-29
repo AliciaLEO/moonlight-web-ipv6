@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <functional>
 #include <string>
 
 namespace mw::native::platform {
@@ -69,12 +70,21 @@ bool attachThread(std::string* name = nullptr);
 /// read. For deciding whether a re-attach is due.
 std::string inputDesktopName();
 
-/// Press Ctrl+Alt+Suppr on the host, through `sas.dll`'s SendSAS.
+/// Press Ctrl+Alt+Suppr on the host.
 ///
 /// The one key combination no injected input can ever produce: Windows reserves
-/// it in the kernel, and SendInput cannot forge it by design. SendSAS is the
-/// documented way in, and it needs SYSTEM (or a machine policy this does not
-/// touch). @p error says why when it returns false.
+/// it in the kernel, and SendInput cannot forge it by design. `sas.dll`'s
+/// SendSAS is the documented way in, and Windows honours it from a service in
+/// session 0 only, under a machine policy (SoftwareSASGeneration) that lets
+/// services press it: from the worker, a SYSTEM process in the console
+/// session, the call opens nothing and says nothing (29/09/2026). So the press
+/// goes through the sender the host application set — its launcher service —
+/// and SendSAS is called here only when none was. Asked by a SYSTEM worker
+/// only, the one that can follow the screen that opens. @p error says why
+/// when it returns false.
 bool sendSecureAttention(std::string& error);
+
+/// NativeHost::setSecureAttentionSender.
+void setSecureAttentionSender(std::function<bool(std::string& error)> sender);
 
 } // namespace mw::native::platform

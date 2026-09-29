@@ -749,6 +749,29 @@ private:
         m_ModeChangedHz = 0;
     }
 
+    /// Start @p capture's duplication from a thread standing on the input
+    /// desktop. DXGI duplicates the desktop of the calling thread, and a
+    /// thread that owns a window cannot be moved off `Default` — the worker's
+    /// Qt thread, which starts the session, is one. Started there while the
+    /// secure desktop was up (a Ctrl+Alt+Suppr screen, a locked PC), a session
+    /// ended at once: 0x80070005 (29/09/2026). A thread of its own owns
+    /// nothing, follows, and hands the duplication back; the capture thread
+    /// joins the same desktop before it reads (run()).
+    static bool startCapture(capture::IWindowsCapture& capture, bool attached, std::string& error)
+    {
+        if (attached || !platform::runningAsSystem()) return capture.start(error);
+        bool started = false;
+        std::thread helper([&] {
+            std::string desktop;
+            platform::attachThread(&desktop);
+            log::info("[native] the capture opens from a thread on the \"" + desktop +
+                      "\" desktop");
+            started = capture.start(error);
+        });
+        helper.join();
+        return started;
+    }
+
     bool openCapture(std::string& error)
     {
         // Follow the desktop switch before asking for a duplication. DXGI
@@ -760,8 +783,10 @@ private:
         //
         // Placed here rather than in the loop so that the one call site that
         // matters — restartCapture(), which runs ON the capture thread — is
-        // covered, and so is every future one.
-        platform::attachThread();
+        // covered, and so is every future one. The other one, start(), runs on
+        // the caller's thread, which may own a window and then cannot move:
+        // startCapture() takes it from there.
+        const bool attached = platform::attachThread();
 
         // MW_CAPTURE=wgc takes the fallback on a machine where Desktop
         // Duplication works perfectly well. Without it the WGC path is only
@@ -791,7 +816,7 @@ private:
         } else {
             m_Capture = std::make_unique<capture::DxgiDuplication>(m_Target.captureAdapterHandle,
                                                                    m_Target.outputIndex);
-            if (m_Capture->start(ddaError)) {
+            if (startCapture(*m_Capture, attached, ddaError)) {
                 m_CaptureApi = CaptureApi::DxgiDuplication;
                 m_DdaMayReturn = false;
                 return true;
@@ -1525,6 +1550,10 @@ private:
         else
             log::info("MMCSS Games refused for the capture thread (error " +
                       std::to_string(GetLastError()) + ") — ordinary priority");
+        // On the input desktop from its first picture: a session started while
+        // the secure desktop was up had its duplication opened there
+        // (startCapture), and this thread reads it.
+        platform::attachThread();
         try {
             runLoop();
             logCadence();

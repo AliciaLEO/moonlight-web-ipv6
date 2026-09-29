@@ -104,6 +104,13 @@ bool available();
 /// the worker connecting back is then awaited on the pipes themselves.
 bool requestWorker(const QString& base, QString* error);
 
+/// Ask the service to press Ctrl+Alt+Suppr on the console session. Windows
+/// takes SendSAS from a service in session 0 and ignores it from the worker,
+/// which runs in the console session, SYSTEM or not (design §31.7). The same
+/// checks on the caller as for a worker; true once the service says it
+/// pressed it, false with the reason (the machine's policy, most often).
+bool requestSecureAttention(QString* error);
+
 /// `--worker-service`: the service's own entry point. Runs the control loop
 /// until the SCM stops it, and returns the process exit code.
 int runService();

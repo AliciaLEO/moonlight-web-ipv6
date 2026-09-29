@@ -29,6 +29,7 @@
 #include "../StreamRelay.h"
 #include "../SignalingServer.h"
 #include "../IMediaEngine.h"
+#include "../WorkerService.h"
 #include "../../backend/NvComputer.h"
 #include "../../backend/NvHTTP.h"
 #include "../../backend/IdentityManager.h"
@@ -185,6 +186,16 @@ int runStreamWorker(QCoreApplication& app)
         mw::native::NativeHost::setKeyboardDiagnostics(true);
         qInfo() << "[KBD] keyboard diagnostics on in the worker (never on the secure desktop)";
     }
+
+    // Ctrl+Alt+Suppr: Windows takes it from a service in session 0 only, and
+    // this worker runs in the console session, SYSTEM as it may be. The
+    // launcher service it came from presses it on its behalf (design §31.7).
+    mw::native::NativeHost::setSecureAttentionSender([](std::string& error) {
+        QString why;
+        if (WorkerService::requestSecureAttention(&why)) return true;
+        error = "the launcher service did not press it: " + why.toStdString();
+        return false;
+    });
 
     // ── First stdin line = session config ────────────────────────────────────
     std::string configLine;
