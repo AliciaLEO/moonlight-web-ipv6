@@ -57,6 +57,10 @@ struct BenchSpec
     QString dump;
     /// Every this many frames, the latest one is reported lost (0 = never).
     int loseEvery = 0;
+    /// How many frames in a row each loss takes, each reported as it comes out:
+    /// what the relay does when a stalled link makes it drop frame after frame,
+    /// the repair frames included.
+    int loseBurst = 1;
     /// The target alternates between bitrateKbps and this, every rampSeconds.
     int rampKbps = 0;
     double rampSeconds = 2.0;
@@ -175,7 +179,9 @@ const char* const kUsage =
     "                              CAP_SYS_NICE, normal without)\n"
     "the bench's own:\n"
     "  dump=<path>      the encoded stream as it comes out (Annex-B, or OBUs for AV1)\n"
-    "  lose=<frames>    every N frames, report the latest one lost (reference invalidation)\n"
+    "  lose=<frames>[x<burst>]  every N frames, report the latest one lost (reference\n"
+    "                   invalidation); with x<burst>, that many frames in a row, each\n"
+    "                   reported as it comes out, as a stalled link's drops are\n"
     "  ramp=<kbps>[@<s>]  the target alternates between bitrate= and <kbps> every <s> s\n"
     "                   (default 2), as the rate governor would move it\n";
 
@@ -461,8 +467,16 @@ bool parseSpec(const QString& text, BenchSpec& spec, QString& error)
         else if (key == "dump")
             spec.dump = value;
         else if (key == "lose") {
-            spec.loseEvery = value.toInt(&ok);
+            // <every>[x<burst>]
+            const QStringList parts = value.split('x');
+            spec.loseEvery = parts[0].toInt(&ok);
             ok = ok && spec.loseEvery >= 2 && spec.loseEvery <= 100000;
+            if (ok && parts.size() == 2) {
+                spec.loseBurst = parts[1].toInt(&ok);
+                ok = ok && spec.loseBurst >= 1 && spec.loseBurst < spec.loseEvery;
+            } else if (parts.size() > 2) {
+                ok = false;
+            }
         } else if (key == "ramp") {
             // <kbps>[@<seconds>]
             const QStringList parts = value.split('@');
@@ -739,6 +753,8 @@ int runNativeBenchCommand(const QString& specText)
         std::chrono::duration<double>(spec.rampSeconds));
     auto nextStep = started + rampStep;
     uint32_t nextLoss = static_cast<uint32_t>(spec.loseEvery);
+    uint32_t lastLost = 0;
+    int burstLeft = 0;
     int losses = 0, steps = 0;
     bool low = false;
     const bool driving = spec.loseEvery > 0 || spec.rampKbps > 0;
@@ -746,9 +762,17 @@ int runNativeBenchCommand(const QString& specText)
         std::this_thread::sleep_for(std::chrono::milliseconds(driving ? 2 : 50));
         if (spec.loseEvery > 0 && anyFrame.load()) {
             const uint32_t latest = latestFrame.load();
-            if (latest >= nextLoss) {
+            if (burstLeft > 0 && latest > lastLost) {
+                // The rest of a burst: each new frame, the repair ones included.
                 session->invalidateReference(latest);
                 ++losses;
+                lastLost = latest;
+                --burstLeft;
+            } else if (burstLeft == 0 && latest >= nextLoss) {
+                session->invalidateReference(latest);
+                ++losses;
+                lastLost = latest;
+                burstLeft = spec.loseBurst - 1;
                 nextLoss = latest + static_cast<uint32_t>(spec.loseEvery);
             }
         }
@@ -869,7 +893,10 @@ int runNativeBenchCommand(const QString& specText)
     if (gpuEncode.count() > 0)
         out << "gpu encode ms   " << tail(gpuEncode, 1000.0, 2) << "  (mean / p95 / p99)\n";
     if (losses > 0)
-        out << "losses          " << losses << " reported, every " << spec.loseEvery << " frames\n";
+        out << "losses          " << losses << " reported, every " << spec.loseEvery << " frames"
+            << (spec.loseBurst > 1 ? QStringLiteral(", %1 in a row").arg(spec.loseBurst)
+                                   : QString())
+            << "\n";
     if (steps > 0)
         out << "ramp            " << steps << " steps between " << spec.bitrateKbps << " and "
             << spec.rampKbps << " kbps, every " << spec.rampSeconds << " s\n";

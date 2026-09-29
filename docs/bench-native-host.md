@@ -3283,6 +3283,98 @@ virtuel rendu par l'Arc : quatre changements de mode, puis HDR allumé et
   cette nuit, 717 sans) ;
 - 0 erreur de décodage, D3D12 de bout en bout (`c11\keep\c927-default`).
 
+### 8n.27 L'image jetée au calage du lien, nommée à l'encodeur : client Linux (§9-25, 29/09/2026)
+
+`namedrops=1` (design §9.10.2) contre le comportement d'avant, sur un vrai
+stream que le lien fait caler.
+
+**Montage.**
+- **Hôte** : l'édition dev `0.3.1-81c55309-dev` installée sur DualRTX, donc le
+  worker SYSTEM. Le bras est posé avant chaque passe dans le `native_tuning` du
+  `settings.json`. La chaîne est nommée dans les deux bras (`pipeline=`), parce
+  que le réglage de l'édition était resté à `d3d12` :
+  - RTX : NVENC en D3D11 ;
+  - iGPU AMD : AMF en D3D11 ;
+  - Arc : D3D12 Video Encode (sa chaîne par défaut), et oneVPL en D3D11 (l'ancienne).
+- **Client** : le Chrome de l'UM790Pro (Ubuntu 24.04, décodage VA-API), qui fait
+  le pari du ride-out. HEVC 1080p60 à 20 Mbit/s.
+- **Lien** : `tc netem` sur le client, sur l'UDP du stream seulement. Chaque passe
+  enchaîne :
+  - 12 s de calme ;
+  - deux coupures totales (100 % de pertes dans les deux sens) de 0,3 s, deux
+    de 0,5 s et deux de 1 s, toutes au-delà des 250 ms de tolérance du relais ;
+  - deux bridages du lien descendant à 4 Mbit/s pendant 5 s.
+- Bras alternés (off/on, puis on/off), 2 tours, 16 passes.
+- Sorties : `bench-out\d3d12v2\c925b`. Un premier tour sans le détecteur est dans
+  `c925`.
+- Outils : `c925b-campaign.ps1`, `drops_run_band.py`, `c925_summary.py`, copiés
+  dans `c925b\tools`.
+
+**Le détecteur de dégâts.**
+- La page de défilement porte son numéro d'image (`scroll.html?band=1`) : 24 bits
+  en haut à gauche, les mêmes en bas à gauche, chacun au-dessus de son
+  complément.
+- Un échantillonneur injecté dans la page lit les deux bandes sur le canvas du
+  stream, à chaque image d'animation.
+- **Une image abîmée** a une bande cassée (un bit égal à son complément), ou deux
+  numéros différents en haut et en bas. C'est ce que laisse une image prédite
+  d'une référence que le client n'a jamais reçue, jusqu'au passage de la vague
+  d'intra-refresh.
+- Le même échantillonneur mesure les trous entre deux images nouvelles (les
+  gels).
+- **0 faux positif** : aucune image abîmée pendant le calme d'aucune passe, soit
+  ~650 images par passe.
+
+**Résultats** (sommes des 2 tours ; `c925b\summary.txt`) :
+
+| Encodeur | Images abîmées, off → on | Gel total, off → on | Deltas jetés (nommés) | Deltas bloqués en attente d'une image clé |
+|---|---|---|---|---|
+| RTX, NVENC D3D11 | 1 107 → **77** (−93 %) | 16,1 → 15,8 s | 783 → 822 (822) | 54 → 61 |
+| iGPU AMD, AMF D3D11 | 2 246 → **89** (−96 %) | 19,0 → 19,1 s | 1 342 → 516 (516) | 55 → 733 |
+| Arc, D3D12 VE | 54 → **39** (−28 %) | 19,3 → 17,9 s | 23 → 171 (171) | 871 → 681 |
+| Arc, oneVPL D3D11 | 1 244 → — | — | 908 → — | **le stream meurt, 3 fois sur 3** |
+
+- **Les dégâts viennent surtout des bridages.** Un lien qui ne porte plus le
+  stream pendant 5 s fait jeter delta sur delta. Sans nom, chacun laisse une
+  image fausse jusqu'à la vague. Sur la RTX, sans `namedrops` : 248 et 646
+  images abîmées pendant les bridages des deux passes ; avec : 32 et 0.
+- **Les gels ne bougent pas**, ni leur nombre ni le plus long (~2,2 s, la coupure
+  de 1 s et sa reprise). `namedrops` ne change pas ce que le lien laisse passer.
+  Il change ce que l'image montre après.
+- **D3D12 VE fait déjà peu de dégâts** : sans le pari du ride-out côté hôte, le
+  relais y bloque les deltas jusqu'à une image clé (871 deltas bloqués). Nommer
+  les images en retire un peu (681), et le gel total baisse de 8 %.
+- **AMF bloque plus de deltas avec `namedrops`** (55 → 733). Il refuse certaines
+  invalidations, et la session demande alors une image clé. Le gel total ne
+  change pas.
+
+**oneVPL se bloque.** Les trois passes « on » de l'Arc en oneVPL finissent en
+stream mort :
+- le relais nomme des images jetées d'affilée : 1072, 1073, 1074, 1075 ;
+- oneVPL répare chacune depuis la même référence longue (« healed frame 1072
+  with a delta against frame 1071 », etc.) ;
+- puis un encodage ne se termine jamais : « waiting for the encoded frame
+  failed: still executing », et la session finit 10 s plus tard (100 attentes
+  de 100 ms).
+- Le blocage est venu après la 4ᵉ réparation enchaînée dans une passe. Une autre
+  passe avait d'abord tenu deux chaînes de 5, puis a bloqué après une chaîne
+  de 7. La troisième est morte presque tout de suite, au bout de 648 images.
+- **Pas reproduit hors ligne.** La clé de banc `lose=<n>x<rafale>` a été ajoutée
+  pour cela : toutes les n images, une rafale d'images perdues d'affilée, chacune
+  signalée dès sa sortie, comme le fait le relais. Sur l'Arc, oneVPL,
+  intra-refresh, 30 s, aucun blocage avec `120x4`, `120x8` ni `60x20` (jusqu'à
+  160 réparations). Ce qui le déclenche tient donc au chemin réel, pas à la seule
+  suite des invalidations.
+- **Jamais vu en production** : aucune trace dans les journaux des éditions de
+  DualRTX sur 30 jours, alors que la v0.3.1 encode l'Arc en oneVPL, et que le
+  client y nomme ses trous par le même chemin. Seules les rafales de `namedrops`
+  l'ont produit.
+
+**Trouvé en montant le banc** : `native_tuning` n'atteignait pas le worker
+SYSTEM. Il le lisait dans son propre AppData, celui de `systemprofile`, et les
+deux bras auraient été identiques. Corrigé par `29d5f8e7` : le serveur le lit et
+le passe au worker.
+
 ## 8o. Linux : la chaîne Vulkan (28/09/2026 →)
 
 Phase 13 du plan D3D12 : la même forme de chaîne sous Linux, en Vulkan Video
