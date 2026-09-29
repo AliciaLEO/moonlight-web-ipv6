@@ -25,8 +25,8 @@ C'est la correction la plus importante du plan initial, qui demandait
 |---|---|---|---|---|
 | **ViGEmBus + ViGEmClient** | BSD-3 (pilote) + MIT (client) | ✅ X360 natif | DS4 seulement | **Le seul praticable** |
 | libvirtualhid (LizardByte) | lib MIT, **pilote payant** | ❌ (pas de XUSB) | ✅ | **Exclu** : licence par utilisateur |
-| vJoy | **GPL** | ❌ (DirectInput) | ✅ | **Exclu** : licence + pas de XInput |
-| Pilote UMDF2 maison (VHF) | à nous | ❌ | ✅ | **Coût réel** : signature EV + attestation Microsoft, plusieurs centaines d'euros/an |
+| vJoy | **MIT** ⚠️ (noté GPL jusqu'au 29/09/2026) | ❌ (DirectInput) | ❌ (identité fixe « vJoy Device ») | **Exclu** : pas de XInput, pas un passthrough |
+| Pilote UMDF2 maison (VHF) | à nous | ❌ | ✅ | ⚠️ **Corrigé le 29/09/2026** : signature SignPath suffisante (UMDF, pas de signature noyau) — voir `hid-passthrough-study.md` |
 
 ### 2.1 ViGEmBus est archivé, et ce n'est pas un problème technique
 
@@ -38,16 +38,24 @@ Un successeur (*VirtualPad*) est annoncé mais n'est pas sorti.
 **Ne pas le remplacer par réflexe.** L'abstraction de §5 contient le changement
 à un seul fichier le jour où VirtualPad existe.
 
-### 2.2 ⚠️ Le HID virtuel sous Windows n'est pas gratuit
+### 2.2 ⚠️ Le HID virtuel sous Windows exige un pilote — mais pas un certificat EV
 
 Le plan initial disait « privilégier un périphérique HID virtuel standard ». Cela
 suppose qu'il en existe un accessible en user-mode. **Il n'y en a pas.** Il faut
-VHF, donc un pilote UMDF2, donc une signature EV et une attestation Microsoft.
-C'est exactement ce que libvirtualhid fait payer.
+VHF, donc un pilote « source ».
 
-**Conséquence directe** : les profils DualSense, Switch Pro et Generic HID sont
-**hors de portée sans écrire et signer un pilote**. Ils restent dans
-l'architecture (§6) mais pas dans le périmètre livrable.
+⚠️ **Corrigé le 29/09/2026.** Ce paragraphe concluait « donc une signature EV et
+une attestation Microsoft ». C'est vrai pour un pilote **KMDF**, faux pour un pilote
+**UMDF2** : la politique de signature du noyau ne s'y applique pas, et une signature
+Authenticode du catalogue suffit. Notre propre installeur en est la preuve : le
+pilote d'écran virtuel (IddCx, UMDF) est signé par la SignPath Foundation, sans
+Microsoft. Détail, options et coûts : `hid-passthrough-study.md` §3.
+
+**Conséquence** : les profils DualSense, Switch Pro et Generic HID ne sont plus
+hors de portée par principe. Ils restent hors du périmètre livré tant que le
+passthrough HID de `hid-passthrough-study.md` n'est pas planifié. Il est à
+inscrire à la feuille de route, derrière son POC et l'accord de SignPath pour
+signer un pilote.
 
 ### 2.3 ⚠️ Volants et palonniers : hors périmètre, assumé
 
@@ -57,6 +65,12 @@ L'API Gamepad du navigateur les présente de toute façon comme des manettes
 génériques à axes nombreux, que ViGEm ne peut pas restituer.
 
 À documenter comme limite, pas à poursuivre.
+
+⚠️ **Mis à jour le 29/09/2026.** Deux voies sont désormais ouvertes :
+- le plan radios fait passer volants, joysticks et radios par le mapping vers la
+  manette Xbox 360, sans retour de force ;
+- `hid-passthrough-study.md` propose de recréer l'appareil tel quel sur l'hôte natif
+  (WebHID côté client, pilote UMDF côté Windows, `uhid` côté Linux).
 
 ---
 

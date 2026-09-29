@@ -51,13 +51,14 @@ fait payer en signature de pilote, le noyau le fournit.
 | Solution | Licence | Pourquoi écartée |
 |---|---|---|
 | **libvirtualhid** (LizardByte) | lib MIT, **pilote payant** | licence par utilisateur — exactement la dépendance commerciale que le plan interdit |
-| **vJoy** | **GPL** | licence incompatible avec la relicence du module natif, et pas de XInput (DirectInput seulement) |
-| **Pilote UMDF2 maison** (VHF) | à nous | signature EV + attestation Microsoft : plusieurs centaines d'euros par an. C'est une décision d'investissement, pas une tâche à planifier |
+| **vJoy** | **MIT** ⚠️ | pas de XInput (DirectInput seulement), identité fixe « vJoy Device ». La licence n'est pas en cause : elle était notée GPL jusqu'au 29/09/2026, par erreur |
+| **Pilote UMDF2 maison** (VHF) | à nous | ⚠️ **Plus écarté par principe (29/09/2026).** Il était noté « signature EV + attestation Microsoft, plusieurs centaines d'euros par an ». C'est vrai en KMDF, faux en UMDF2 : une signature SignPath du catalogue suffit, comme pour notre pilote d'écran virtuel. Pour un produit commercial, SignPath Foundation ne s'applique plus : il faudrait un certificat OV à nous, sans EV. Voir `hid-passthrough-study.md` |
 
-Conséquence assumée : les profils **DualSense**, **Switch Pro** et **Generic
-HID**, ainsi que les **volants et palonniers**, sont hors de portée sous Windows
-sans écrire et signer un pilote. Ils restent dans l'architecture, pas dans le
-périmètre livrable — voir §2.2 et §2.3 du plan.
+Conséquence, révisée le 29/09/2026 : les profils **DualSense**, **Switch Pro** et
+**Generic HID**, ainsi que les **volants et palonniers**, restent hors du périmètre
+livré. Ce n'est plus faute de pouvoir signer un pilote. C'est en attendant que le
+passthrough HID (`hid-passthrough-study.md`) soit planifié — voir §2.2 et §2.3 de
+`gamepad-virtual.md`.
 
 ## ViGEmBus est archivé — et ce n'est pas un problème technique
 
