@@ -278,9 +278,14 @@ void run_virtual_display_tests()
         int hz = 165;
         CHECK(normaliseRate(hz));
         CHECK_EQ(hz, 165);
+        // The request is guarded against what the DRIVER takes: the bench's
+        // MW_VDD_REFRESH reaches past the product's ceiling.
+        hz = 500;
+        CHECK(normaliseRate(hz));
+        CHECK_EQ(hz, 500);
         hz = 1000;
         CHECK(normaliseRate(hz));
-        CHECK_EQ(hz, kRateMax);
+        CHECK_EQ(hz, kRateDriverMax);
         hz = 1;
         CHECK(normaliseRate(hz));
         CHECK_EQ(hz, kRateMin);
@@ -321,6 +326,28 @@ void run_virtual_display_tests()
         // No rate measured: the default stands, and the file is the one the
         // installer has always written.
         CHECK_EQ(settingsXml(0, 0, 0), settingsXml());
+    }
+
+    SECTION("VirtualDisplay — the stream's rate under the product's ceiling, the bench's past it");
+    {
+        // The product: the stream's own rate, never past kRateMax, whatever
+        // a page sent as its stream_fps.
+        CHECK_EQ(refreshForStream(120, 0), 120);
+        CHECK_EQ(refreshForStream(400, 0), kRateMax);
+        CHECK_EQ(refreshForStream(10, 0), kRateMin);
+        CHECK_EQ(refreshForStream(0, 0), 0);
+        // MW_VDD_REFRESH: its own rate, up to the driver's ceiling, whatever
+        // the stream's.
+        CHECK_EQ(refreshForStream(60, 500), 500);
+        CHECK_EQ(refreshForStream(60, 240), 240);
+        CHECK_EQ(refreshForStream(0, 165), 165);
+        CHECK_EQ(refreshForStream(60, 900), kRateDriverMax);
+        // 500 travels to the elevated helper and into the driver's list.
+        const auto req = parseRequest("{\"action\":\"activate\",\"refresh\":500}", &err);
+        CHECK(req.has_value());
+        if (req) CHECK_EQ(req->refresh, 500);
+        CHECK(settingsXml(0, 0, 500).contains(
+            QStringLiteral("<g_refresh_rate>500</g_refresh_rate>")));
     }
 
     SECTION("VirtualDisplay — the bundled driver is pinned file by file");

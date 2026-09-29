@@ -150,8 +150,15 @@ bool normaliseRate(int& hz)
         hz = 0;
         return false;
     }
-    hz = std::min(kRateMax, std::max(kRateMin, hz));
+    hz = std::min(kRateDriverMax, std::max(kRateMin, hz));
     return true;
+}
+
+int refreshForStream(int streamFps, int benchHz)
+{
+    if (benchHz > 0) return std::min(kRateDriverMax, std::max(kRateMin, benchHz));
+    if (streamFps <= 0) return 0;
+    return std::min(kRateMax, std::max(kRateMin, streamFps));
 }
 
 std::optional<Result> parseResult(const QByteArray& json)

@@ -3817,7 +3817,17 @@ int main(int argc, char* argv[])
             // 144 Hz streaming an Auto 120 would leave the compositor
             // presenting 24 frames a second into the void.
             // Unmeasured (0) leaves the display's default rate.
-            const int vdRefresh = reqFps;
+            //
+            // MW_VDD_REFRESH (bench only, plan framerate-hote) sets it apart
+            // from the stream's, up to the driver's own 500 Hz: a display
+            // faster than the client, whose presents each wait less for the
+            // compositor. Never set by the product.
+            const int vdBenchRefresh = qEnvironmentVariableIntValue("MW_VDD_REFRESH");
+            const int vdRefresh = VirtualDisplay::refreshForStream(reqFps, vdBenchRefresh);
+            if (vdBenchRefresh > 0 && host->backendType == NativeHostBackend::typeName() &&
+                appId == NativeHostBackend::virtualDisplayAppId())
+                qInfo() << "[Session] virtual display at" << vdRefresh
+                        << "Hz (MW_VDD_REFRESH) for a" << reqFps << "fps stream";
             // HDR asked (the native host asks it whenever this screen can show
             // it): a Mac makes its display EDR-capable then, and only then.
             const bool vdHdr = reqHdr;

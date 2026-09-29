@@ -159,19 +159,30 @@ constexpr int kModeMin = 480;
 constexpr int kModeMax = 4096;
 
 /// What a requested refresh rate may be. The floor is a cadence a desktop is
-/// still usable at, the ceiling is the fastest panel a client can hold; the
-/// driver itself goes to 500 Hz.
+/// still usable at, the ceiling is the fastest panel a client can hold —
+/// the product never asks past it (refreshForStream). The driver itself goes
+/// to 500 Hz, which only the bench reaches (MW_VDD_REFRESH, plan
+/// framerate-hote): a request is guarded against the driver's ceiling, the
+/// product's is applied where the rate is chosen.
 constexpr int kRateMin = 24;
 constexpr int kRateMax = 240;
+constexpr int kRateDriverMax = 500;
 
 /// The mode a request asks for, pinned into bounds and made even. Returns
 /// false — and leaves 0×0 — when there is nothing usable to ask for, which is
 /// the normal case: the default mode then applies.
 bool normaliseMode(int& width, int& height);
 
-/// The refresh rate a request asks for, pinned into bounds. Returns false —
-/// and leaves 0 — when there is none, in which case kRefreshHz applies.
+/// The refresh rate a request asks for, pinned into [kRateMin,
+/// kRateDriverMax]. Returns false — and leaves 0 — when there is none, in
+/// which case kRefreshHz applies.
 bool normaliseRate(int& hz);
+
+/// The refresh rate a stream asks of the display: its own @p streamFps,
+/// under the product's ceiling kRateMax — or, when the bench names one
+/// (MW_VDD_REFRESH, @p benchHz > 0), that one, up to the driver's own
+/// ceiling. 0 leaves the display's default rate.
+int refreshForStream(int streamFps, int benchHz);
 
 // ── The bundled driver (Windows x64) ───────────────────────────────────────
 //
