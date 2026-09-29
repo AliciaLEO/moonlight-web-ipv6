@@ -172,11 +172,11 @@ bool VplEncoder::init(ID3D11Device* device, Codec codec, int width, int height, 
 
     // The gap between sweeps is newer than the sweep itself: a runtime that
     // refuses it still gets its sweeps, back to back, before losing them all.
-    if (intraRefresh && !accepted(started) && m_Tuning.vplIntraRefreshDist >= 0) {
+    if (intraRefresh && !accepted(started) && m_Tuning.intraRefreshDist >= 0) {
         log::warning(std::string("[native] oneVPL declined the gap between intra-refresh "
                                  "sweeps (") +
                      VplApi::statusToString(started) + ") — sweeping back to back");
-        m_Tuning.vplIntraRefreshDist = -1;
+        m_Tuning.intraRefreshDist = -1;
         attachEncodeOptions(m_Params, m_CodingOption, m_CodingOption2, m_CodingOption3,
                             m_SignalInfo, m_ExtBuffers, m_Fps, true, m_Tuning, hdr);
         started = m_Session.api()->EncodeInit(m_Session.handle(), &m_Params);
@@ -189,9 +189,9 @@ bool VplEncoder::init(ID3D11Device* device, Codec codec, int width, int height, 
         // one sweep — the sweep alone when they run back to back. The
         // receiver's watchdog waits that long.
         const int sweep = intraRefreshPeriodFrames(m_Fps);
-        m_IntraRefreshHorizon = m_Tuning.vplIntraRefreshDist < 0 ? sweep
-                                : m_Tuning.vplIntraRefreshDist > 0
-                                    ? m_Tuning.vplIntraRefreshDist + sweep
+        m_IntraRefreshHorizon = m_Tuning.intraRefreshDist < 0 ? sweep
+                                : m_Tuning.intraRefreshDist > 0
+                                    ? m_Tuning.intraRefreshDist + sweep
                                     : intraRefreshDistanceFrames(m_Fps) + sweep;
     } else if (intraRefresh) {
         // Intra-refresh is an optimisation, not a requirement. A generation

@@ -4381,6 +4381,88 @@ l'image parte. Mesuré sur le même montage, avec le même build par ailleurs :
 correctif (§8o.6 à §8o.12) comptent le bourrage. Leurs temps restent justes :
 le bourrage ne coûtait que du débit.
 
+### 8o.14 L'intra-refresh de la chaîne Vulkan Video (C13.9, 29/09/2026)
+
+**La question.** Un client qui traverse les pertes (le *ride-out*) demande à
+l'hôte des balayages d'intra-refresh : l'image se répare d'elle-même, sans
+attendre d'image clé. La chaîne Vulkan Video n'en faisait pas.
+`VK_KHR_video_encode_intra_refresh` le permet-il sur le 780M, et que coûte un
+balayage ?
+
+**Ce que le pilote offre** (RADV, Mesa 26.2.3) : des balayages par blocs, par
+rangées ou par colonnes, de 256 images au plus, avec une référence pendant le
+balayage. La chaîne prend les colonnes (design §32.24).
+
+**Montage.**
+- UM790Pro, capture KMS, HEVC 1080p60 par `pipeline=vulkan`, deux tours, le
+  bourrage retiré (§8o.13). Chaque flux est relu par ffmpeg.
+- La page qui défile (`scroll.html`), 20 Mbit/s demandés, 16 tenus par le lien
+  faute de rapport du récepteur, 20 s par passe :
+  - `noir` : ni intra-refresh ni perte, la référence ;
+  - `ir` : des balayages de 120 images toutes les 480 (le défaut) ;
+  - `ir-b2b` : dos à dos (`irdist=-1`) ;
+  - `ir-lose` : une perte signalée toutes les 2 s, guérie par un delta ; le
+    balayage repart alors de zéro ;
+  - `idr-lose` : sans intra-refresh, chaque perte suivie d'une demande d'image
+    clé (`lose=120k`), comme quand le lien se vide.
+- La page fixe avec un carré qui tourne (`still.html?anim=1`), 20 Mbit/s tenus
+  (`governor=0`), 24 s par passe : deux balayages entiers et le début d'un
+  troisième. C'est là qu'un balayage coûte : la règle de l'écart de
+  `RateControl.h` vient de l'A380, ~30 Ko par image pendant un balayage contre
+  3 Ko entre deux.
+- Sorties et scripts : `bench-out\vk-lab\c13-2026-09-29` (`irbench`,
+  `stillir`).
+
+**La preuve au pixel.** La révision 2 de l'encodeur fait rejouer les verdicts
+gardés. Son témoin balaie maintenant par 4 images dos à dos, à travers les
+images perdues et l'image clé demandée de la séquence. Elle passe : au pire
+39,6 dB par image et 37,4 dB par rangée de CTB (39,8 et 37,4 sans balayage).
+
+**La page qui défile** (les deux tours, après la première seconde ; le QP est
+celui des en-têtes de tranche) :
+
+| variante | débit | Ko par image au p99 | QP moyen | images clés après la première |
+|---|---|---|---|---|
+| `noir` | 11,6-12,1 Mbit/s | 57-58 | 19,1-19,2 | 0 |
+| `ir` (120 toutes les 480) | 11,9-12,2 Mbit/s | 57 | 19,4 | 0 |
+| `ir-b2b` (dos à dos) | 12,7-12,8 Mbit/s | 57-58 | 20,0 | 0 |
+| `ir-lose` (perte → delta) | 12,7-13,0 Mbit/s | 54-57 | 19,8 | 0 |
+| `idr-lose` (perte → image clé) | 10,2-10,7 Mbit/s | 55 | 22,9-23,0 | 9 par passe, 44-45 Ko |
+
+- Espacés de quatre périodes, les balayages ne coûtent rien de mesurable sur
+  une image qui bouge : le même débit, 0,2 de QP.
+- Dos à dos, ou relancés par une perte toutes les 2 s : 5 % d'octets et 0,6 à
+  0,8 de QP de plus.
+- La réparation par image clé coûte moins d'octets, mais de la qualité : le
+  QP monte à 27,3-27,7 sur les 30 images qui suivent chaque image clé, contre
+  19 à 20 autrement. L'image s'adoucit une demi-seconde après chaque perte.
+- L'encodage ne bouge pas : 1,62 à 1,64 ms partout.
+- Une perte pendant un balayage ne bloque rien : le balayage repart de zéro,
+  et 0 erreur au décodage. oneVPL, lui, se bloquait en HEVC sous les
+  réparations (§8n.30).
+- Les deux images de plus de trois budgets par passe (124 à 160 Ko) viennent de
+  la page : elles reviennent toutes les 9,53 s dans les huit passes, balayage ou
+  pas.
+
+**La page fixe** (les deux tours) :
+
+| variante | débit | Ko par image pendant un balayage / entre deux |
+|---|---|---|
+| Vulkan Video, sans intra-refresh | 0,79-0,81 Mbit/s | — / 1,6 |
+| Vulkan Video, 120 toutes les 480 | 1,51-1,54 Mbit/s | 10,3 / 1,5-1,6 |
+| Vulkan Video, dos à dos | 4,87-4,91 Mbit/s | 10,3 en continu |
+
+- Un balayage coûte ~10 Ko par image sur ce texte, trois fois moins que sur
+  l'A380. L'écart de quatre périodes en retire les deux tiers : 1,5 Mbit/s au
+  lieu de 4,9.
+- Mesurée en passant, la paire GL → VA-API (`pipeline=vaapi`) ne se pose pas
+  sur cette page. Son CBR remplit le budget : 14,3 à 14,6 Mbit/s sans
+  intra-refresh, 20 Mbit/s avec sa vague (§8o.15).
+
+**Ce qu'on en retient.** La chaîne Vulkan Video balaie comme les encodeurs de
+Windows. Le prix est celui d'un balayage : quelques Mbit/s sur un écran fixe
+s'ils sont dos à dos, d'où l'écart de quatre périodes, qui vaut ici aussi.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session

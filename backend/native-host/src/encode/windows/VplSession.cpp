@@ -561,7 +561,7 @@ void attachEncodeOptions(mfxVideoParam& params, mfxExtCodingOption& option1,
                               tuning.vplGamingScenario != EncoderTuning::Choice::Default ||
                               tuning.vplWinBrcFrames > 0 ||
                               tuning.vplRateControl == EncoderTuning::VplRateControl::Qvbr ||
-                              (intraRefresh && tuning.vplIntraRefreshDist >= 0);
+                              (intraRefresh && tuning.intraRefreshDist >= 0);
     if (wantsOption3) {
         std::memset(&option3, 0, sizeof(option3));
         option3.Header.BufferId = MFX_EXTBUFF_CODING_OPTION3;
@@ -582,10 +582,10 @@ void attachEncodeOptions(mfxVideoParam& params, mfxExtCodingOption& option1,
             option3.QVBRQuality = static_cast<mfxU16>(tuning.vplQvbrQuality);
         // A gap between two sweeps — see encode::intraRefreshDistanceFrames. -1
         // is back to back, what init() falls back to when the runtime refuses it.
-        if (intraRefresh && tuning.vplIntraRefreshDist >= 0)
-            option3.IntRefCycleDist = static_cast<mfxU16>(tuning.vplIntraRefreshDist > 0
-                                                              ? tuning.vplIntraRefreshDist
-                                                              : intraRefreshDistanceFrames(fps));
+        if (intraRefresh && tuning.intraRefreshDist >= 0)
+            option3.IntRefCycleDist =
+                static_cast<mfxU16>(tuning.intraRefreshDist > 0 ? tuning.intraRefreshDist
+                                                                : intraRefreshDistanceFrames(fps));
 
         buffers.push_back(reinterpret_cast<mfxExtBuffer*>(&option3));
     }

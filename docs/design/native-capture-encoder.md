@@ -2090,7 +2090,9 @@ Deux faits mesurés valent d'être retenus :
   délai aller simple sur (arrivée − présent).
 - **radeonsi 23.2 n'offre pas d'intra-refresh** par colonnes
   (`VAConfigAttribEncIntraRefresh` non supporté) : sur Linux AMD la récupération
-  reste par keyframe, et `intraRefreshEnabled()` le dit.
+  reste par keyframe, et `intraRefreshEnabled()` le dit. **Revu le 29/09/2026
+  (§32.24)** : sous Mesa 26.2.3, radeonsi l'offre, en H.264 comme en HEVC, et
+  `VaapiEncoder` la prend.
 
 Les en-têtes SPS/PPS sont **écrits par le pilote** depuis les paramètres de
 séquence, VUI comprise (`bitstream_restriction` — la leçon B8 — et timing). Les
@@ -5480,6 +5482,9 @@ puis encodée en HEVC par Vulkan Video. Une copie par image, le flux.
     de contrôle, sans remise à zéro.
   - La file d'encodage reste à la priorité par défaut : en HIGH, le noyau 6.8
     refuse sa première soumission (§8o.3).
+  - Depuis le 29/09, les balayages d'intra-refresh remplacent les images clés
+    pour le client qui traverse les pertes (C13.9, §32.24), et le bourrage du
+    CBR de RADV est retiré avant le lien (§32.23).
 - `encode/linux/VulkanHevcDecoder` : les yeux de la preuve. Un décodeur HEVC
   Vulkan Video juste assez large pour les flux du moteur (I et P, ensembles de
   références propres à la tranche, ni tuiles ni listes de quantification). Tout
@@ -6225,3 +6230,69 @@ total à l'arrêt.
 immobile ne coûte presque plus rien sur le réseau, et une image qui bouge
 passe avec un quart à un tiers d'octets en moins, pour la même image. Sur une
 connexion lente, chaque image met d'autant moins de temps à passer.
+
+### 32.24 Linux : l'intra-refresh de la chaîne Vulkan Video (C13.9, 29/09/2026)
+
+Plan C13.9, « Go » de Bruno le 29/09 ; banc §8o.14.
+
+**Pourquoi.** Le client qui traverse les pertes (`rideOutLoss`) demande un
+intra-refresh : l'image se répare par balayages, sans attendre d'image clé. La
+chaîne Vulkan Video n'en faisait pas. `/start` disait `intra_refresh: false`,
+et le client retombait sur les images clés.
+
+**Le code.**
+- `VulkanDevice` active `VK_KHR_video_encode_intra_refresh` et sa
+  fonctionnalité, là où le pilote les a, sur un périphérique ouvert pour
+  encoder (`encodesIntraRefresh`).
+- `VulkanHevcEncoder` crée la session avec son mode
+  (`VkVideoEncodeSessionIntraRefreshCreateInfoKHR`) : les colonnes d'abord,
+  parce qu'un défilement vertical reste dans sa bande, puis les rangées, puis
+  les blocs.
+- Chaque image d'un balayage porte le drapeau d'intra-refresh, la durée du
+  balayage et son rang (`VkVideoEncodeIntraRefreshInfoKHR`). Sa référence dit
+  combien de régions restent à rafraîchir (`VkVideoReferenceIntraRefreshInfoKHR`,
+  la durée moins le rang).
+- `encode/IntraRefreshSweep.h` tient le compte, sur la règle du moteur
+  (`RateControl.h`) : deux secondes d'images par balayage (120 à 60 i/s),
+  toutes les quatre périodes (480). La clé de banc `irdist=`, jusqu'ici à
+  oneVPL seul, vaut pour les deux (`EncoderTuning::intraRefreshDist`).
+- **Une réparation relance le balayage.** Pendant un balayage, seule l'image
+  précédente peut être en partie propre. Une réparation qui prédit depuis une
+  image plus ancienne (l'invalidation de référence de `HevcDpb`) repart donc
+  au rang 0, sa référence comptée sale en entier. Les réparations restent
+  permises : contrairement à oneVPL en HEVC (§21.6b), la preuve et le banc
+  passent sans blocage.
+- L'horizon annoncé au client (`intra_refresh_frames`) : l'écart plus un
+  balayage, 600 images à 60 i/s. C'est ce que le chien de garde du ride-out
+  attend avant de demander une image clé.
+
+**Les refus**, dits au journal ; le stream continue alors en images clés à la
+demande :
+- un pilote sans l'extension ;
+- aucun des trois modes ;
+- aucune référence permise pendant un balayage ;
+- des balayages de moins de 2 images ;
+- une session refusée avec l'intra-refresh : elle est recréée sans.
+
+**La preuve.** La révision 2 de l'encodeur rejoue les verdicts gardés. Son
+témoin balaie par 4 images dos à dos, à travers les pertes et l'image clé de la
+séquence : sur le 780M, 39,6 dB au pire par image (39,8 sans balayage).
+
+**Au banc** (780M, §8o.14), le bourrage retiré (§32.23) :
+- 0 erreur au décodage, perte pendant un balayage comprise ;
+- l'encodage ne bouge pas (1,62 ms) ;
+- sur une page qui défile, les balayages espacés ne coûtent rien de mesurable
+  (le même débit, 0,2 de QP) ; dos à dos, 5 % d'octets ;
+- sur une page fixe, un balayage coûte ~10 Ko par image. Espacés de quatre
+  périodes, les balayages y coûtent 0,7 Mbit/s ; dos à dos, 4,1 Mbit/s ;
+- réparer une perte par une image clé coûte moins d'octets mais adoucit
+  l'image : QP 27,5 sur la demi-seconde qui suit, contre 19 à 20.
+
+**VA-API, vu en passant.** Sous Mesa 26.2.3, VA-API balaie aussi sur le 780M
+(`VAConfigAttribEncIntraRefresh`), en H.264 comme en HEVC ; sous Mesa 23.2, il
+n'en avait pas (§19). Sa vague est continue, sans l'écart de quatre périodes.
+
+**Concrètement, pour l'utilisateur** : sous Linux avec une carte AMD et la
+chaîne Vulkan Video, le mode qui traverse les pertes marche comme sous
+Windows. Une image abîmée se répare d'elle-même, sans le gel de l'image clé
+attendue.

@@ -367,7 +367,6 @@ public:
               int outputHeight, int fps, int bitrateKbps, bool intraRefresh,
               const EncoderTuning& tuning, std::string& error) override
     {
-        (void)intraRefresh; // none through Vulkan Video yet: keyframes on demand
         m_Failed = true;
         // The conversion's queue at HIGH where the process may have it; the
         // encode queue keeps the default (VulkanHevcEncoder).
@@ -380,7 +379,7 @@ public:
         m_Encoder = std::make_unique<encode::VulkanHevcEncoder>();
         if (!m_Encoder->init(device, codec, outputWidth > 0 ? outputWidth : capture.width(),
                              outputHeight > 0 ? outputHeight : capture.height(), fps, bitrateKbps,
-                             tuning, error, encode::witnessFromEnvironment()))
+                             intraRefresh, tuning, error, encode::witnessFromEnvironment()))
             return false;
         const convert::ScaleFilter filter = scaleFilterFromEnvironment(m_ScalerPinned);
         m_Converter = std::make_unique<convert::VulkanConvert>();
@@ -421,8 +420,8 @@ public:
     {
         return m_Encoder->setBitrate(kbps, error);
     }
-    bool intraRefreshEnabled() const override { return false; }
-    int intraRefreshFrames() const override { return 0; }
+    bool intraRefreshEnabled() const override { return m_Encoder->intraRefreshEnabled(); }
+    int intraRefreshFrames() const override { return m_Encoder->intraRefreshFrames(); }
     bool supportsReferenceInvalidation() const override
     {
         return m_Encoder->supportsReferenceInvalidation();

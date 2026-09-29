@@ -191,6 +191,11 @@ struct VulkanHevcEncoder::Impl
     VkVideoEncodeH265CapabilitiesKHR h265Caps = {};
     VkVideoEncodeCapabilitiesKHR encodeCaps = {};
     VkVideoCapabilitiesKHR caps = {};
+    /// Intra refresh (C13.9): what the driver takes, and the way it was asked
+    /// to split the picture — NONE without sweeps.
+    VkVideoEncodeIntraRefreshCapabilitiesKHR refreshCaps = {};
+    VkVideoEncodeIntraRefreshModeFlagBitsKHR refreshMode =
+        VK_VIDEO_ENCODE_INTRA_REFRESH_MODE_NONE_KHR;
     uint32_t codedWidth = 0;
     uint32_t codedHeight = 0;
     uint32_t allocWidth = 0;
@@ -266,7 +271,7 @@ VulkanHevcEncoder::~VulkanHevcEncoder()
 }
 
 bool VulkanHevcEncoder::init(const std::shared_ptr<vulkan::VulkanDevice>& device, Codec codec,
-                             int width, int height, int fps, int bitrateKbps,
+                             int width, int height, int fps, int bitrateKbps, bool intraRefresh,
                              const EncoderTuning& tuning, std::string& error,
                              const Witness& witness)
 {
@@ -302,6 +307,12 @@ bool VulkanHevcEncoder::init(const std::shared_ptr<vulkan::VulkanDevice>& device
     d->encodeCaps.pNext = &d->h265Caps;
     d->caps.sType = VK_STRUCTURE_TYPE_VIDEO_CAPABILITIES_KHR;
     d->caps.pNext = &d->encodeCaps;
+    // Intra refresh's own, asked only of a device that enabled it: naming
+    // the structure anywhere else is invalid usage.
+    if (intraRefresh && device->encodesIntraRefresh()) {
+        d->refreshCaps.sType = VK_STRUCTURE_TYPE_VIDEO_ENCODE_INTRA_REFRESH_CAPABILITIES_KHR;
+        d->h265Caps.pNext = &d->refreshCaps;
+    }
     VkResult r = device->videoCapabilities(d->profile.info, d->caps);
     if (r != VK_SUCCESS) {
         error =
@@ -370,7 +381,61 @@ bool VulkanHevcEncoder::init(const std::shared_ptr<vulkan::VulkanDevice>& device
     m_Dpb = HevcDpb(std::clamp(wanted, 1, std::max(1, std::min(slots, levelDpb))), m_Fps);
     d->dpbLayers = static_cast<uint32_t>(m_Dpb.textures());
 
-    if (!createResources(error) || !createSession(error) || !readParameterSets(error)) {
+    // ── Intra refresh (C13.9) ──
+    //
+    // Asked, not promised: a driver without it, or without a way of splitting
+    // the picture this stream can use, encodes keyframes on demand and says
+    // so. Columns first — a vertical scroll, the desktop's usual motion,
+    // stays inside its band — then rows, then blocks. Two seconds of
+    // pictures a sweep, every four periods (RateControl.h), within what the
+    // driver takes; the proof's own witness sweeps a few pictures back to
+    // back, to cover them in a dozen.
+    m_Sweep = IntraRefreshSweep();
+    std::string noRefresh;
+    if (intraRefresh) {
+        const VkVideoEncodeIntraRefreshModeFlagsKHR modes =
+            device->encodesIntraRefresh() ? d->refreshCaps.intraRefreshModes : 0;
+        d->refreshMode = (modes & VK_VIDEO_ENCODE_INTRA_REFRESH_MODE_BLOCK_COLUMN_BASED_BIT_KHR)
+                             ? VK_VIDEO_ENCODE_INTRA_REFRESH_MODE_BLOCK_COLUMN_BASED_BIT_KHR
+                         : (modes & VK_VIDEO_ENCODE_INTRA_REFRESH_MODE_BLOCK_ROW_BASED_BIT_KHR)
+                             ? VK_VIDEO_ENCODE_INTRA_REFRESH_MODE_BLOCK_ROW_BASED_BIT_KHR
+                         : (modes & VK_VIDEO_ENCODE_INTRA_REFRESH_MODE_BLOCK_BASED_BIT_KHR)
+                             ? VK_VIDEO_ENCODE_INTRA_REFRESH_MODE_BLOCK_BASED_BIT_KHR
+                             : VK_VIDEO_ENCODE_INTRA_REFRESH_MODE_NONE_KHR;
+        const int duration = std::min<int>(
+            witness.sweepPictures > 0 ? witness.sweepPictures : intraRefreshPeriodFrames(m_Fps),
+            static_cast<int>(
+                std::min<uint32_t>(d->refreshCaps.maxIntraRefreshCycleDuration, 1u << 20)));
+        const int distance = witness.sweepPictures > 0 || tuning.intraRefreshDist < 0 ? duration
+                             : tuning.intraRefreshDist > 0 ? tuning.intraRefreshDist
+                                                           : intraRefreshDistanceFrames(m_Fps);
+        if (!device->encodesIntraRefresh())
+            noRefresh = "the driver has no VK_KHR_video_encode_intra_refresh";
+        else if (d->refreshMode == VK_VIDEO_ENCODE_INTRA_REFRESH_MODE_NONE_KHR)
+            noRefresh = "the driver sweeps by none of columns, rows or blocks";
+        else if (d->refreshCaps.maxIntraRefreshActiveReferencePictures < 1)
+            noRefresh = "the driver predicts from nothing during a sweep";
+        else if (duration < 2)
+            noRefresh = "the driver's sweeps last " + std::to_string(duration) + " picture";
+        else
+            m_Sweep = IntraRefreshSweep(duration, distance);
+    }
+
+    if (!createResources(error)) {
+        stop();
+        return false;
+    }
+    if (!createSession(error) && m_Sweep.enabled() && d->session == VK_NULL_HANDLE) {
+        // The driver lists the sweeps and refuses a session with them: the
+        // stream goes on with keyframes on demand, rather than not at all.
+        noRefresh = "the driver refused a session with it (" + error + ")";
+        m_Sweep = IntraRefreshSweep();
+        d->refreshMode = VK_VIDEO_ENCODE_INTRA_REFRESH_MODE_NONE_KHR;
+        error.clear();
+        createSession(error);
+    }
+    if (!d->session || !d->parameters || !readParameterSets(error)) {
+        if (error.empty()) error = "the Vulkan video session did not come up";
         stop();
         return false;
     }
@@ -380,6 +445,7 @@ bool VulkanHevcEncoder::init(const std::shared_ptr<vulkan::VulkanDevice>& device
     // blackens the rows and columns past the visible picture for good.
     m_FirstPicture = true;
     m_GuardLeft = kGuardedPictures;
+    m_Step = IntraRefreshSweep::Step{};
     uint32_t offset = 0, bytes = 0;
     const HevcDpb::Plan warm = m_Dpb.plan(0, true);
     if (!upload(nullptr, error) || !submit(warm, offset, bytes, error) ||
@@ -407,9 +473,24 @@ bool VulkanHevcEncoder::init(const std::shared_ptr<vulkan::VulkanDevice>& device
               std::to_string(d->levelIdc % 30 / 3) + ", CTB " + std::to_string(ctb) +
               ", transform depth " + std::to_string(m_TransformDepth) + ", " +
               std::to_string(m_Dpb.capacity()) + " pictures kept (reach " +
-              std::to_string(m_Dpb.reachFrames()) + " frames), keyframes on demand, " +
+              std::to_string(m_Dpb.reachFrames()) + " frames), " + refreshText(noRefresh) + ", " +
               std::to_string(m_Headers.size()) + " bytes of parameter sets from the driver");
     return true;
+}
+
+std::string VulkanHevcEncoder::refreshText(const std::string& noRefresh) const
+{
+    if (!m_Sweep.enabled())
+        return "keyframes on demand" +
+               (noRefresh.empty() ? "" : " (intra refresh: " + noRefresh + ")");
+    const char* mode =
+        d->refreshMode == VK_VIDEO_ENCODE_INTRA_REFRESH_MODE_BLOCK_COLUMN_BASED_BIT_KHR ? "columns"
+        : d->refreshMode == VK_VIDEO_ENCODE_INTRA_REFRESH_MODE_BLOCK_ROW_BASED_BIT_KHR  ? "rows"
+                                                                                        : "blocks";
+    return std::string("intra refresh by ") + mode + " over " + std::to_string(m_Sweep.duration()) +
+           " pictures" +
+           (m_Sweep.distance() > m_Sweep.duration() ? " every " + std::to_string(m_Sweep.distance())
+                                                    : std::string(", back to back"));
 }
 
 bool VulkanHevcEncoder::createResources(std::string& error)
@@ -625,6 +706,13 @@ bool VulkanHevcEncoder::createSession(std::string& error)
     sci.maxDpbSlots = d->dpbLayers;
     sci.maxActiveReferencePictures = 1;
     sci.pStdHeaderVersion = &d->caps.stdHeaderVersion;
+    // The sweeps are the session's to allow, at its creation (C13.9).
+    VkVideoEncodeSessionIntraRefreshCreateInfoKHR refresh = {};
+    if (m_Sweep.enabled()) {
+        refresh.sType = VK_STRUCTURE_TYPE_VIDEO_ENCODE_SESSION_INTRA_REFRESH_CREATE_INFO_KHR;
+        refresh.intraRefreshMode = d->refreshMode;
+        sci.pNext = &refresh;
+    }
     VkResult r = fn.vkCreateVideoSessionKHR(dev, &sci, nullptr, &d->session);
     if (r != VK_SUCCESS) {
         d->session = VK_NULL_HANDLE;
@@ -1034,6 +1122,28 @@ bool VulkanHevcEncoder::submit(const HevcDpb::Plan& plan, uint32_t& offset, uint
     info.pSetupReferenceSlot = &setupSlot;
     info.referenceSlotCount = plan.idr ? 0 : 1;
     info.pReferenceSlots = plan.idr ? nullptr : &beginSlots[0];
+    // A picture of a sweep (C13.9): its index in it, and — on the reference
+    // it predicts from, the previous picture or a wholly dirty one — how many
+    // regions of that reference are still to be refreshed.
+    VkVideoEncodeIntraRefreshInfoKHR refresh = {};
+    VkVideoReferenceIntraRefreshInfoKHR dirty = {};
+    VkVideoReferenceSlotInfoKHR refreshSlot = {};
+    if (m_Step.refresh) {
+        refresh.sType = VK_STRUCTURE_TYPE_VIDEO_ENCODE_INTRA_REFRESH_INFO_KHR;
+        refresh.pNext = info.pNext;
+        refresh.intraRefreshCycleDuration = m_Step.duration;
+        refresh.intraRefreshIndex = m_Step.index;
+        info.pNext = &refresh;
+        info.flags |= VK_VIDEO_ENCODE_INTRA_REFRESH_BIT_KHR;
+        if (!plan.idr) {
+            dirty.sType = VK_STRUCTURE_TYPE_VIDEO_REFERENCE_INTRA_REFRESH_INFO_KHR;
+            dirty.pNext = beginSlots[0].pNext;
+            dirty.dirtyIntraRefreshRegions = m_Step.referenceDirty;
+            refreshSlot = beginSlots[0];
+            refreshSlot.pNext = &dirty;
+            info.pReferenceSlots = &refreshSlot;
+        }
+    }
     fn.vkCmdBeginQuery(cmd, d->feedback, 0, 0);
     fn.vkCmdEncodeVideoKHR(cmd, &info);
     fn.vkCmdEndQuery(cmd, d->feedback, 0);
@@ -1169,6 +1279,11 @@ bool VulkanHevcEncoder::encode(bool forceKeyframe, uint32_t frameNumber, Encoder
         return false;
     }
     const HevcDpb::Plan plan = m_Dpb.plan(frameNumber, forceKeyframe);
+    // Its step in a sweep: from the previous picture a sweep goes on, from an
+    // older one (a repair) it starts over — IntraRefreshSweep.
+    const bool followsPrevious =
+        !plan.idr && !plan.references.empty() && plan.references[0].poc + 1 == plan.poc;
+    m_Step = m_Sweep.next(plan.idr, followsPrevious);
     uint32_t offset = 0, bytes = 0;
     if (!submit(plan, offset, bytes, error)) return false;
     uint8_t* slices = d->bitstreamCpu + d->sliceOffset + offset;
@@ -1279,6 +1394,8 @@ void VulkanHevcEncoder::stop()
     d = std::make_unique<Impl>();
     m_Input = VulkanPicture{};
     m_Dpb.reset();
+    m_Sweep = IntraRefreshSweep();
+    m_Step = IntraRefreshSweep::Step{};
     m_Headers.clear();
     m_SpsFields = HevcSpsFields{};
     m_PpsFields = HevcPpsFields{};

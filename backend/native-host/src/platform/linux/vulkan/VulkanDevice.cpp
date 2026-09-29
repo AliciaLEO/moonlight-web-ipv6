@@ -406,6 +406,18 @@ std::unique_ptr<VulkanDevice> VulkanDevice::open(const std::string& renderNode,
             error = "the Vulkan loader has no VK_KHR_video_queue queries";
             return nullptr;
         }
+        // Sweeps instead of keyframes where the driver has them: the
+        // extension and its feature, both, or the encoder keeps keyframes.
+        if (has(extensions, VK_KHR_VIDEO_ENCODE_INTRA_REFRESH_EXTENSION_NAME)) {
+            VkPhysicalDeviceVideoEncodeIntraRefreshFeaturesKHR refresh = {};
+            refresh.sType =
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_ENCODE_INTRA_REFRESH_FEATURES_KHR;
+            VkPhysicalDeviceFeatures2 asked = {};
+            asked.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            asked.pNext = &refresh;
+            loader.vkGetPhysicalDeviceFeatures2(device->m_Physical, &asked);
+            device->m_EncodeIntraRefresh = refresh.videoEncodeIntraRefresh == VK_TRUE;
+        }
     }
     if (options.decodeHevc) {
         for (const char* name :
@@ -507,6 +519,8 @@ bool VulkanDevice::create(bool high, std::string& error)
     if (m_Options.encodeHevc) {
         enable.push_back(VK_KHR_VIDEO_ENCODE_QUEUE_EXTENSION_NAME);
         enable.push_back(VK_KHR_VIDEO_ENCODE_H265_EXTENSION_NAME);
+        if (m_EncodeIntraRefresh)
+            enable.push_back(VK_KHR_VIDEO_ENCODE_INTRA_REFRESH_EXTENSION_NAME);
     }
     if (m_Options.decodeHevc) {
         enable.push_back(VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME);
@@ -536,8 +550,12 @@ bool VulkanDevice::create(bool high, std::string& error)
         queue.pQueuePriorities = &one;
         queues.push_back(queue);
     }
+    VkPhysicalDeviceVideoEncodeIntraRefreshFeaturesKHR refresh = {};
+    refresh.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_ENCODE_INTRA_REFRESH_FEATURES_KHR;
+    refresh.videoEncodeIntraRefresh = VK_TRUE;
     VkPhysicalDeviceVulkan13Features f13 = {};
     f13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    f13.pNext = m_Options.encodeHevc && m_EncodeIntraRefresh ? &refresh : nullptr;
     f13.synchronization2 = VK_TRUE;
     VkPhysicalDeviceVulkan12Features f12 = {};
     f12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;

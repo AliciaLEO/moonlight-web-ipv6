@@ -72,6 +72,7 @@ void run_rate_control_tests();
 void run_qp_rate_controller_tests();
 void run_virtual_display_tests();
 void run_reference_slots_tests();
+void run_intra_refresh_sweep_tests();
 void run_audio_pacer_tests();
 void run_audio_interleave_tests();
 void run_cursor_blend_tests();
@@ -149,6 +150,7 @@ int main(int argc, char** argv)
     RUN(qp_rate_controller);
     RUN(virtual_display);
     RUN(reference_slots);
+    RUN(intra_refresh_sweep);
     RUN(audio_pacer);
     RUN(audio_interleave);
     RUN(cursor_blend);

@@ -41,7 +41,8 @@ namespace {
 /// This engine's encoder, as far as a verdict goes: raised whenever what
 /// VulkanHevcEncoder hands the driver changes (its parameter sets, its use of
 /// references), so that a pass proven for another revision proves nothing.
-constexpr int kEncoderRevision = 1;
+/// 2: intra refresh (C13.9), which the proof now covers.
+constexpr int kEncoderRevision = 2;
 
 /// The sequence: an IDR, P pictures, frames 4 and 5 lost and healed from 3,
 /// a keyframe asked for at 10.
@@ -49,6 +50,12 @@ constexpr int kPictures = 12;
 constexpr uint32_t kLostFrom = 4;
 constexpr uint32_t kLostTo = 5;
 constexpr uint32_t kKeyframeAt = 10;
+
+/// Where the driver has intra refresh, sweeps of this many pictures back to
+/// back: pictures 4 to 7 would be the first, the repair at 6 starts it over
+/// from 3 (a wholly dirty reference), and the keyframe at 10 ends the next —
+/// every way a sweep is told to the driver, in the same dozen pictures.
+constexpr int kProofSweep = 4;
 
 /// A right stream sits far above these; the wrong ones of §8o.3 decoded at
 /// 5 dB, and a single wrong CTB row falls under the band's.
@@ -282,8 +289,11 @@ VulkanHevcProof proveVulkanHevc(const std::string& renderNode, int width, int he
     const double scale =
         static_cast<double>(width) * height / (1920.0 * 1080.0) * (fps > 0 ? fps : 60) / 60.0;
     const int kbps = std::max(10000, static_cast<int>(50000.0 * scale));
+    VulkanHevcEncoder::Witness sweeping = witness;
+    sweeping.sweepPictures = kProofSweep;
     VulkanHevcEncoder encoder;
-    if (!encoder.init(device, Codec::Hevc, width, height, fps, kbps, tuning, error, witness)) {
+    if (!encoder.init(device, Codec::Hevc, width, height, fps, kbps, /*intraRefresh=*/true, tuning,
+                      error, sweeping)) {
         proof.summary = error;
         proof.tookMs = took();
         return proof;
@@ -347,11 +357,13 @@ VulkanHevcProof proveVulkanHevc(const std::string& renderNode, int width, int he
     proof.worstPicturePsnr = worstPicture;
     proof.worstBandPsnr = worstBand;
     proof.passed = worstPicture >= kPictureFloorDb && worstBand >= kBandFloorDb;
-    char numbers[160];
+    char numbers[200];
     std::snprintf(numbers, sizeof(numbers),
                   "%d pictures decoded back, worst %.1f dB over a picture and %.1f dB over a CTB "
-                  "row (picture %d), chroma %.1f dB",
-                  decoded, worstPicture, worstBand, worstAt, worstChroma);
+                  "row (picture %d), chroma %.1f dB, %s",
+                  decoded, worstPicture, worstBand, worstAt, worstChroma,
+                  encoder.intraRefreshEnabled() ? "with intra-refresh sweeps"
+                                                : "no intra refresh on this driver");
     proof.summary =
         proof.passed ? std::string(numbers)
                      : "the stream does not decode to what was encoded: " + std::string(numbers) +

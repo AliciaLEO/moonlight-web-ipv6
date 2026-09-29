@@ -20,6 +20,7 @@
 #include "../EncoderOutput.h"
 #include "../HevcDpb.h"
 #include "../HevcSliceParser.h"
+#include "../IntraRefreshSweep.h"
 #include "mw/native/Capabilities.h"
 #include "mw/native/EncoderTuning.h"
 
@@ -73,6 +74,15 @@
 // At the default priority: on the 780M under Linux 6.8 an encode queue at
 // HIGH is created and its first submission refused (§8o.3). The encode runs
 // on a block no game uses; the conversion is what needs the priority.
+//
+// ── Intra refresh (C13.9) ───────────────────────────────────────────────────
+//
+// Where the driver has VK_KHR_video_encode_intra_refresh, a stream whose
+// receiver rides out a loss is refreshed by sweeps rather than keyframes, as
+// on the other encoders: IntraRefreshSweep says which picture refreshes which
+// region, the driver splits the picture into them — columns first, which a
+// vertical scroll crosses without leaving its band. A sweep every four
+// periods, the engine's gap (RateControl.h).
 
 namespace mw::native::vulkan {
 class VulkanDevice;
@@ -106,6 +116,10 @@ struct VulkanEncodeWitness
     /// The driver's rate control at the bitrate asked (the product), or a
     /// constant QP.
     int constantQp = -1;
+    /// Sweeps this many pictures long, back to back, where the stream asks
+    /// for intra refresh: the proof's, which covers them in a dozen
+    /// pictures. 0 = the stream's own (two seconds, every four periods).
+    int sweepPictures = 0;
 };
 
 class VulkanHevcEncoder
@@ -124,9 +138,11 @@ public:
     /// (DeviceOptions::encodeHevc). Refused, with the reason, where the
     /// driver cannot: no HEVC encoder, a size out of range, an input the
     /// conversion cannot write, a first picture that does not come back.
+    /// @p intraRefresh is asked, not promised: a driver without it encodes
+    /// keyframes on demand, and intraRefreshEnabled() says so.
     bool init(const std::shared_ptr<vulkan::VulkanDevice>& device, Codec codec, int width,
-              int height, int fps, int bitrateKbps, const EncoderTuning& tuning, std::string& error,
-              const Witness& witness = Witness());
+              int height, int fps, int bitrateKbps, bool intraRefresh, const EncoderTuning& tuning,
+              std::string& error, const Witness& witness = Witness());
 
     /// The input image: valid from init() to stop().
     const VulkanPicture& input() const { return m_Input; }
@@ -151,9 +167,11 @@ public:
     /// A new target from the next picture, said to the driver in flight.
     bool setBitrate(int bitrateKbps, std::string& error);
 
-    /// No intra refresh through Vulkan Video yet: keyframes on demand.
-    bool intraRefreshEnabled() const { return false; }
-    int intraRefreshFrames() const { return 0; }
+    /// Sweeps instead of keyframes (C13.9), and how many pictures a loss may
+    /// take to heal by them — the gap plus one sweep: the receiver's ride-out
+    /// watchdog waits that long. 0 without intra refresh.
+    bool intraRefreshEnabled() const { return m_Sweep.enabled(); }
+    int intraRefreshFrames() const { return static_cast<int>(m_Sweep.horizon()); }
 
     /// VPS, SPS and PPS as the driver writes them, Annex-B.
     const std::vector<uint8_t>& parameterSets() const { return m_Headers; }
@@ -176,6 +194,8 @@ private:
     bool submit(const HevcDpb::Plan& plan, uint32_t& offset, uint32_t& bytes, std::string& error);
     bool guard(const uint8_t* data, size_t size, const HevcDpb::Plan& plan, std::string& error);
     int reportedQp(const uint8_t* slices, size_t size);
+    /// The intra refresh in force, or why there is none, for the log line.
+    std::string refreshText(const std::string& noRefresh) const;
 
     int m_Width = 0;
     int m_Height = 0;
@@ -185,6 +205,9 @@ private:
     Witness m_Witness;
     VulkanPicture m_Input;
     HevcDpb m_Dpb;
+    /// The sweeps, and the step the picture being submitted takes in one.
+    IntraRefreshSweep m_Sweep;
+    IntraRefreshSweep::Step m_Step;
     std::vector<uint8_t> m_Headers;
     HevcSpsFields m_SpsFields;
     HevcPpsFields m_PpsFields;

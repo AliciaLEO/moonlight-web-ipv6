@@ -251,6 +251,11 @@ public:
     /// and a driver that imports SYNC_FD into a binary semaphore.
     bool importsSyncFile() const { return m_SyncFile; }
 
+    /// VK_KHR_video_encode_intra_refresh, enabled on a device opened to
+    /// encode where the driver offers the extension and its feature (C13.9):
+    /// the encoder may then refresh the picture by sweeps instead of keyframes.
+    bool encodesIntraRefresh() const { return m_EncodeIntraRefresh; }
+
     /// VK_EXT_external_memory_host, enabled where the driver has it (C13.10):
     /// memory another process shares with this one — the portal's — imported
     /// as it is mapped, from an address and a size aligned to
@@ -315,6 +320,7 @@ private:
     bool m_PriorityExtension = false;
     bool m_High = false;
     bool m_SyncFile = false;
+    bool m_EncodeIntraRefresh = false;
     bool m_HostMemory = false;
     VkDeviceSize m_HostAlignment = 4096;
     bool m_Timestamps = false;

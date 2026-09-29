@@ -571,8 +571,9 @@ bool VaapiEncoder::renderRateControl(std::string& error)
     // refinement that cost NVENC 7.7 Mbps and AMF 8.7. The driver does honour
     // min_qp (40 cut scrolling text from 16.7 to 6.3 Mbps), but 18, 22 and 26
     // left the still page byte for byte where it was (3.0-3.15 Mbps over 20 s):
-    // that burst runs above QP 26. This driver has no rolling intra-refresh
-    // either, so there is no sweep to space out.
+    // that burst runs above QP 26. Mesa 23.2 had no rolling intra-refresh
+    // either, so there was no sweep to space out; Mesa 26.2.3 has one
+    // (29/09/2026), and it rolls without a gap (design §32.24).
     rc.min_qp = 0;
     rc.max_qp = 51;
     // No filler: on a still desktop CBR padding would be bytes on the wire that

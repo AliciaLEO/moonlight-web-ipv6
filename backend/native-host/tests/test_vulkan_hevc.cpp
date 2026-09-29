@@ -142,7 +142,8 @@ void run_vulkan_hevc_tests()
         CHECK(device != nullptr);
         if (device) {
             encode::VulkanHevcEncoder encoder;
-            const bool ok = encoder.init(device, Codec::Hevc, 1920, 1080, 60, 20000, tuning, error);
+            const bool ok = encoder.init(device, Codec::Hevc, 1920, 1080, 60, 20000,
+                                         /*intraRefresh=*/false, tuning, error);
             if (!ok) std::fprintf(stderr, "  init: %s\n", error.c_str());
             CHECK(ok);
             if (ok) {
@@ -187,6 +188,68 @@ void run_vulkan_hevc_tests()
                 encoder.releaseOutput();
                 std::fprintf(stderr, "  %s, %zu bytes of parameter sets\n",
                              encoder.describe().c_str(), encoder.parameterSets().size());
+                CHECK(!encoder.intraRefreshEnabled()); // not asked
+            }
+        }
+    }
+
+    SECTION("VulkanHevcEncoder — intra refresh: the stream's sweeps, and a repair in one");
+    {
+        vulkan::DeviceOptions options;
+        options.wantHigh = false;
+        options.encodeHevc = true;
+        std::string error;
+        std::shared_ptr<vulkan::VulkanDevice> device =
+            vulkan::VulkanDevice::open(node, options, error);
+        CHECK(device != nullptr);
+        if (device && !device->encodesIntraRefresh()) {
+            std::fprintf(stderr,
+                         "  skipped: this driver has no VK_KHR_video_encode_intra_refresh\n");
+        } else if (device) {
+            // The stream's own: two seconds a sweep, every four periods.
+            encode::VulkanHevcEncoder stream;
+            CHECK(stream.init(device, Codec::Hevc, 1920, 1080, 60, 20000, true, tuning, error));
+            CHECK(stream.intraRefreshEnabled());
+            std::fprintf(stderr, "  the stream's: horizon %d pictures\n",
+                         stream.intraRefreshFrames());
+            // 480 + 120 where the driver takes a 120-picture sweep; less where
+            // it caps the sweep, never more.
+            CHECK(stream.intraRefreshFrames() > 0 && stream.intraRefreshFrames() <= 600);
+            stream.stop();
+
+            // The proof's: four pictures back to back, a loss in the second.
+            encode::VulkanHevcEncoder::Witness witness;
+            witness.sweepPictures = 4;
+            encode::VulkanHevcEncoder encoder;
+            const bool ok = encoder.init(device, Codec::Hevc, 1280, 720, 60, 20000, true, tuning,
+                                         error, witness);
+            if (!ok) std::fprintf(stderr, "  init: %s\n", error.c_str());
+            CHECK(ok);
+            if (ok) {
+                CHECK(encoder.intraRefreshEnabled());
+                CHECK_EQ(encoder.intraRefreshFrames(), 4);
+                std::vector<uint8_t> grey(1280 * 720 * 3 / 2, 128);
+                int keyframes = 0;
+                for (uint32_t n = 0; n < 14; ++n) {
+                    for (size_t i = 0; i < 1280 * 720; ++i)
+                        grey[i] = static_cast<uint8_t>(16 + (i / 1280 + n * 9) % 200);
+                    CHECK(encoder.upload(grey.data(), error));
+                    // Frames 5 and 6 lost, reported before 7: 7 predicts from
+                    // an older picture kept, and the sweep that began at 4
+                    // starts over from it — a wholly dirty reference.
+                    if (n == 7) CHECK(encoder.invalidateReference(5, error));
+                    encode::EncoderOutput out;
+                    const bool encoded = encoder.encode(false, n, out, error);
+                    if (!encoded) std::fprintf(stderr, "  picture %u: %s\n", n, error.c_str());
+                    CHECK(encoded);
+                    if (!encoded) break;
+                    keyframes += out.keyframe ? 1 : 0;
+                    encoder.releaseOutput();
+                }
+                // The first picture only: the repair is a delta, the sweeps
+                // replace every other keyframe.
+                CHECK_EQ(keyframes, 1);
+                CHECK(!encoder.lost());
             }
         }
     }
@@ -206,6 +269,10 @@ void run_vulkan_hevc_tests()
         CHECK(proof.ran);
         CHECK(proof.passed);
         CHECK_EQ(proof.pictures, 10); // twelve encoded, two lost on the way
+        // The sweeps are part of what is proven, where the driver has them.
+        if (id.decodesHevc && proof.ran)
+            CHECK(contains(proof.summary, "with intra-refresh sweeps") ||
+                  contains(proof.summary, "no intra refresh on this driver"));
     }
 
     SECTION("VulkanHevcProof — the witness: transform depth 2, what coded wrong on the 780M");

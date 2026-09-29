@@ -159,11 +159,12 @@ struct EncoderTuning
     /// QP offset of the intra-refresh band, oneVPL (IntRefQPDelta, -51..51).
     /// 0 is the engine's own: the band at the frame's own quality.
     int vplIntraRefreshQpDelta = 0;
-    /// Frames between the starts of two intra-refresh cycles, oneVPL
-    /// (IntRefCycleDist). 0 is the engine's own (encode::intraRefreshDistanceFrames,
-    /// four periods); -1 is back to back, the engine's fallback for a runtime
-    /// that refuses the gap.
-    int vplIntraRefreshDist = 0;
+    /// Frames between the starts of two intra-refresh sweeps, for the encoders
+    /// that leave a gap between them: oneVPL (IntRefCycleDist) and Vulkan Video
+    /// (encode::IntraRefreshSweep). 0 is the engine's own
+    /// (encode::intraRefreshDistanceFrames, four periods); -1 is back to back,
+    /// oneVPL's fallback for a runtime that refuses the gap.
+    int intraRefreshDist = 0;
 
     /// How many reference pictures the encoder keeps for healing a lost frame
     /// by a delta. NVENC: the decoded picture buffer's depth (engine's own: 4
@@ -353,7 +354,7 @@ struct EncoderTuning
                vplExtBrc == Choice::Default && vplLowDelayBrc == Choice::Default &&
                vplGamingScenario == Choice::Default && vplWinBrcFrames == 0 &&
                vplRateControl == VplRateControl::Default && vplIntraRefreshQpDelta == 0 &&
-               vplIntraRefreshDist == 0 && linkGovernor == Choice::Default &&
+               intraRefreshDist == 0 && linkGovernor == Choice::Default &&
                nameLinkDrops == Choice::Default && vbvFrames == 0 && dpbFrames == 0 &&
                fallback == Fallback::None && pipeline == VideoPipeline::Auto &&
                conv12 == ConvertQueue12::Default && enc12 == Encoder12::Default &&
@@ -408,7 +409,7 @@ struct EncoderTuning
         if (vplRateControl == VplRateControl::Vbr) add("rc=vbr");
         if (vplRateControl == VplRateControl::Qvbr) add("rc=qvbr" + std::to_string(vplQvbrQuality));
         if (vplIntraRefreshQpDelta != 0) add("irqp=" + std::to_string(vplIntraRefreshQpDelta));
-        if (vplIntraRefreshDist != 0) add("irdist=" + std::to_string(vplIntraRefreshDist));
+        if (intraRefreshDist != 0) add("irdist=" + std::to_string(intraRefreshDist));
         if (linkGovernor != Choice::Default) add(std::string("governor=") + choice(linkGovernor));
         if (nameLinkDrops != Choice::Default)
             add(std::string("namedrops=") + choice(nameLinkDrops));

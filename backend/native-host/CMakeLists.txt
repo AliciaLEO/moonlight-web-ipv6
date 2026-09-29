@@ -497,6 +497,7 @@ if(MW_BUILD_TESTS)
         tests/test_d3d12_fault.cpp
         tests/test_linux_route_choice.cpp
         tests/test_reference_slots.cpp
+        tests/test_intra_refresh_sweep.cpp
         tests/test_audio_pacer.cpp
         tests/test_audio_interleave.cpp
         tests/test_cursor_blend.cpp
