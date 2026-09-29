@@ -27,7 +27,10 @@
 
 #include <wrl/client.h>
 
+#include <condition_variable>
 #include <memory>
+#include <mutex>
+#include <thread>
 
 namespace mw::native {
 
@@ -53,6 +56,16 @@ namespace mw::native {
 /// MW_D3D12_FAULT makes each of those happen on demand, at a picture chosen
 /// (D3d12Fault, plan C8.1): the way back to D3D11 is watched on the bench
 /// rather than trusted.
+///
+/// ── Pipelined (pipelined=1, plan Phase 10) ──────────────────────────────────
+///
+/// The converter writes two outputs in turn and step 4 moves to a thread of
+/// its own, which encodes and delivers while the capture thread converts the
+/// next picture — into the output the encoder is not reading. A picture
+/// converted while one is encoding and another waits replaces the waiting
+/// one: at most two in flight, never a queue. D3D12 Video Encode only: the
+/// vendors' SDKs register one input, and AMF hands it back through a fence of
+/// its own.
 class D3d12VideoPipeline final : public WindowsVideoPipeline
 {
 public:
@@ -111,7 +124,13 @@ public:
     {
         if (m_Encoder) m_Encoder->releaseOutput();
     }
+    /// Pipelined, the target waits for the encode thread's next picture when
+    /// it is busy: the encoder is its while a job runs.
     bool setBitrate(int bitrateKbps, std::string& error) override;
+
+    bool pipelined() const override { return m_Pipelined; }
+    void encodeLater(EncodeJob job) override;
+    void settle() override;
     bool intraRefreshEnabled() const override
     {
         return m_Encoder && m_Encoder->intraRefreshEnabled();
@@ -171,8 +190,40 @@ private:
     bool stall(std::string& error);
     /// Timeout: the queue let go, once the chain has given up on it.
     void releaseStall();
-    /// Removed: ID3D12Device5::RemoveDevice, as a TDR would.
-    void removeDevice();
+    /// Removed: ID3D12Device5::RemoveDevice, as a TDR would, before the
+    /// picture of @p conversion is encoded.
+    void removeDevice(uint64_t conversion);
+
+    // ── Pipelined ──────────────────────────────────────────────────────────
+
+    /// A converted picture, as the encode that takes it needs to know it.
+    struct Output
+    {
+        /// m_Converted's value once the conversion into it is done.
+        uint64_t ready = 0;
+        int timerSlot = -1;
+        D3d12Fault::Kind fault = D3d12Fault::Kind::None;
+        /// Which conversion it was (MW_D3D12_FAULT's count).
+        uint64_t conversion = 0;
+    };
+
+    /// A picture's encode, from output @p output as @p picture says it was
+    /// written: encode()'s body, on whichever thread owns the encoder. A
+    /// failure is kept in @p lost rather than lose(): the encode thread may be
+    /// the one failing. The conversion's timer slot is read or freed.
+    EncodeResult encodeOutput(int output, const Output& picture, bool forceKeyframe,
+                              uint32_t frameNumber, encode::EncoderOutput& out, std::string& lost,
+                              std::string& error);
+    /// The conversion just submitted into m_Target, for the encode that takes it.
+    void noteConverted();
+    /// The output the conversion about to be recorded writes: never the one
+    /// encoding; the waiting one, dropped, when the other is encoding.
+    int reserveOutput();
+    /// A failure the encode thread kept, made the chain's.
+    void absorbEncodeLoss();
+    void startEncodeThread();
+    void stopEncodeThread();
+    void encodeLoop();
 
     EncoderTuning m_Tuning;
     EncoderTuning::Encoder12 m_Encoder12 = EncoderTuning::Encoder12::VideoEncode;
@@ -219,6 +270,33 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Fence> m_Stall;
     /// Removed or Encode, for the next encode().
     D3d12Fault::Kind m_EncodeFault = D3d12Fault::Kind::None;
+
+    // Pipelined. The capture thread records conversions; the encode thread
+    // runs jobs; m_JobLock guards what the two hand each other.
+    bool m_Pipelined = false;
+    Output m_Outputs[2];
+    /// The output the last conversion wrote: what encode() re-sends.
+    int m_Latest = 0;
+    /// The output the conversion being recorded writes.
+    int m_Target = 0;
+    std::thread m_EncodeThread;
+    std::mutex m_JobLock;
+    std::condition_variable m_JobPosted;
+    std::condition_variable m_JobDone;
+    EncodeJob m_Waiting;
+    int m_WaitingOutput = -1;
+    int m_EncodingOutput = -1;
+    bool m_StopEncoding = false;
+    /// A target the capture thread set while a job ran, for the next one.
+    int m_PendingKbps = 0;
+    /// Why the encode thread's last picture failed, until the chain takes it.
+    std::string m_EncodeLost;
+    /// m_Timer between the two threads.
+    std::mutex m_TimerLock;
+    uint64_t m_Dropped = 0;
+    uint64_t m_Overlapped = 0;
+    uint64_t m_Jobs = 0;
+    bool m_SaidNotPipelined = false;
 };
 
 } // namespace mw::native

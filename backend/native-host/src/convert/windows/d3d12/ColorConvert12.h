@@ -98,7 +98,19 @@ public:
 
     /// The tests' way to record a conversion alone: the next recordConvert()
     /// skips the one clear of the band outside the picture.
-    void assumeOutputCleared() { m_OutputCleared = true; }
+    void assumeOutputCleared() { m_OutputCleared[m_Target] = true; }
+
+    /// A second output, the same size and format as the first (plan Phase
+    /// 10, pipelined=1): the pipeline converts the next picture into one while
+    /// the encoder still reads the other. Each has its band cleared on its
+    /// first use.
+    bool addOutput(std::string& error);
+    /// 1, or 2 once addOutput() made the second.
+    int outputs() const { return m_Outputs; }
+    /// The output the next recordConvert() or recordClearBlack() writes, and
+    /// output() names: 0 unless the pipeline chose the second.
+    void selectOutput(int index) { m_Target = index > 0 && index < m_Outputs ? index : 0; }
+    int selectedOutput() const { return m_Target; }
 
     /// The list recorded by the last recordConvert() has completed: its
     /// resample timing, if it had one, is read.
@@ -116,8 +128,12 @@ public:
     float sdrWhite() const { return m_SdrWhite; }
 
     /// NV12 or P010, codedWidth() × codedHeight(), the picture in the top-left
-    /// outputWidth() × outputHeight().
-    ID3D12Resource* output() const { return m_Output.Get(); }
+    /// outputWidth() × outputHeight(): the selected output, or @p index.
+    ID3D12Resource* output() const { return m_Output[m_Target].Get(); }
+    ID3D12Resource* output(int index) const
+    {
+        return index >= 0 && index < m_Outputs ? m_Output[index].Get() : nullptr;
+    }
     int outputWidth() const { return m_Geometry.outputWidth; }
     int outputHeight() const { return m_Geometry.outputHeight; }
     int codedWidth() const { return m_CodedWidth; }
@@ -126,7 +142,8 @@ public:
 private:
     void release();
     bool createPipeline(std::string& error);
-    bool createOutput(std::string& error);
+    /// Output @p index and its two plane views.
+    bool createOutput(int index, std::string& error);
     bool createScaler(std::string& error);
     bool createPso(ID3DBlob* vs, ID3DBlob* ps, DXGI_FORMAT target,
                    Microsoft::WRL::ComPtr<ID3D12PipelineState>& pso, std::string& error);
@@ -166,9 +183,13 @@ private:
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_RtvHeap;
     UINT m_RtvStride = 0;
 
-    Microsoft::WRL::ComPtr<ID3D12Resource> m_Output;
-    D3D12_RESOURCE_STATES m_OutputState = D3D12_RESOURCE_STATE_COMMON;
-    bool m_OutputCleared = false;
+    static constexpr int kMaxOutputs = 2;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_Output[kMaxOutputs];
+    D3D12_RESOURCE_STATES m_OutputState[kMaxOutputs] = {D3D12_RESOURCE_STATE_COMMON,
+                                                        D3D12_RESOURCE_STATE_COMMON};
+    bool m_OutputCleared[kMaxOutputs] = {};
+    int m_Outputs = 0;
+    int m_Target = 0;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> m_ScaledMid;
     D3D12_RESOURCE_STATES m_ScaledMidState = D3D12_RESOURCE_STATE_COMMON;

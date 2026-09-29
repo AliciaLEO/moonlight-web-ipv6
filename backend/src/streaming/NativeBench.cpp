@@ -140,6 +140,9 @@ const char* const kUsage =
     "                   (mfcpu), or OpenH264 (cpu) — how they get measured beside NVENC\n"
     "the picture chain (Windows), each defaulting to the engine's own choice:\n"
     "  pipeline=auto|d3d11|d3d12   over the setting and the vendor table\n"
+    "  pipelined=0|1               D3D12 Video Encode on a thread of its own, the next\n"
+    "                              picture converted meanwhile (two in flight at most,\n"
+    "                              a waiting one dropped for a newer one)\n"
     "  conv12=direct|compute       the D3D12 conversion's queue\n"
     "  enc12=ve|nvenc|amf          the D3D12 route's encoder\n"
     "  rc12=driver|qp              D3D12 Video Encode's rate control; qp = the in-house one\n"
@@ -157,6 +160,14 @@ const char* const kUsage =
     "  strict12=0|1                end rather than run D3D11 when D3D12 was asked for\n"
     "  (in the environment, MW_D3D12_FAULT=open|convert|timeout|removed|encode[@N]: that fault\n"
     "  at the Nth D3D12 open or conversion — without strict12, to watch the way back to D3D11)\n"
+    "the picture chain (Linux), each defaulting to the engine's own choice:\n"
+    "  pipeline=auto|vaapi|vulkan  over the setting and the vendor table: vaapi is the chain\n"
+    "                              without Vulkan (GL, then VA-API), vulkan the Vulkan Video\n"
+    "                              one, taken once its pixel proof passes\n"
+    "  convert=gl|vulkan           the conversion in front of VA-API: GL, or Vulkan compute\n"
+    "                              (the split route)\n"
+    "  priovk=normal|high          the Vulkan queues' priority (default: high with\n"
+    "                              CAP_SYS_NICE, normal without)\n"
     "the bench's own:\n"
     "  dump=<path>      the encoded stream as it comes out (Annex-B, or OBUs for AV1)\n"
     "  lose=<frames>    every N frames, report the latest one lost (reference invalidation)\n"
@@ -377,6 +388,8 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
         tuning.gpuTiming = value.toInt(&ok) != 0;
     } else if (key == "strict12") {
         tuning.strict12 = value.toInt(&ok) != 0;
+    } else if (key == "pipelined") {
+        tuning.pipelined = value.toInt(&ok) != 0;
     } else if (key == "convert") {
         using C = mw::native::EncoderTuning::ConvertLinux;
         const QString c = value.toLower();

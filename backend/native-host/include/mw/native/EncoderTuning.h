@@ -287,6 +287,12 @@ struct EncoderTuning
     /// A session asked to run D3D12 that has to run D3D11 ends instead: a
     /// bench row labelled D3D12 is never a D3D11 one.
     bool strict12 = false;
+    /// Two pictures in flight (plan Phase 10): D3D12 Video Encode codes a
+    /// picture on a thread of its own while the capture converts the next
+    /// into a second output; a converted picture still waiting when a newer
+    /// one is ready is dropped, never queued. Off, the engine's own: one
+    /// picture at a time, the capture thread waiting for each bitstream.
+    bool pipelined = false;
 
     // ── The Linux chain (plan pipeline-video-d3d12-v2, Phase 13) ────────────
 
@@ -331,7 +337,7 @@ struct EncoderTuning
                rc12 == RateControl12::Default && reencode12 == Choice::Default &&
                reencodeFit12 == Choice::Default && interFloor12 == 0 &&
                prio12 == Priority12::Default && ownCreator12 == Choice::Default &&
-               ddaSync == DdaSync::Default && !gpuTiming && !strict12 &&
+               ddaSync == DdaSync::Default && !gpuTiming && !strict12 && !pipelined &&
                convertLinux == ConvertLinux::Default && prioVk == PriorityVk::Default;
     }
 
@@ -408,6 +414,7 @@ struct EncoderTuning
         if (ddaSync == DdaSync::Cpu) add("ddasync=cpu");
         if (gpuTiming) add("gputiming=1");
         if (strict12) add("strict12=1");
+        if (pipelined) add("pipelined=1");
         if (convertLinux == ConvertLinux::Gl) add("convert=gl");
         if (convertLinux == ConvertLinux::Vulkan) add("convert=vulkan");
         if (prioVk == PriorityVk::Normal) add("priovk=normal");

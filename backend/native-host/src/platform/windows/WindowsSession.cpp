@@ -1199,6 +1199,13 @@ private:
 
     Restart restartCapture(uint32_t& frameNumber, int64_t floorIntervalUs, std::string& error)
     {
+        // Pipelined: nothing in flight, and what went out taken in, before the
+        // chain behind the capture goes.
+        if (m_Pipeline->pipelined()) {
+            m_Pipeline->settle();
+            if (!absorbDelivered()) return Restart::Ended;
+        }
+
         // The longest the wait may sleep in one go, so a stop() is noticed and
         // a floor due sooner than the next attempt is met.
         constexpr int64_t kMaxSleepUs = 100 * 1000;
@@ -1626,6 +1633,16 @@ private:
         const int refineTimeoutMs = static_cast<int>(refineIntervalUs / 1000);
 
         uint32_t frameNumber = 0;
+        // Pipelined, a job on the encode thread holds the counter above while
+        // it runs: none may be running once the loop is gone.
+        struct SettleOnExit
+        {
+            std::unique_ptr<WindowsVideoPipeline>& pipeline;
+            ~SettleOnExit()
+            {
+                if (pipeline) pipeline->settle();
+            }
+        } settleOnExit{m_Pipeline};
         std::string error;
         int64_t lastSentUs = steadyNowUs();
         // The last frame that came from an actual capture — what the refinement
@@ -1783,34 +1800,49 @@ private:
         // so it has to be the freshest picture) but not encoded. Nothing ever
         // waits on this thread for a tick: a picture held on the host is
         // latency the viewer feels. The reasoning is on FrameCadence.
+        // A real picture went out: one more frame in this second's count. When
+        // the second closes on a different rate, the encoder's budget follows
+        // — through the same setBitrate() the boost and the ladder use, so the
+        // three never disagree about what the encoder holds.
+        auto countPicture = [&]() {
+            if (!effective.noteFrame(steadyNowUs())) return;
+            applyBitrate(boosted ? encode::stillBitrateKbps(baseKbps) : baseKbps);
+            if (cadenceLogged < 5 || effective.changes % 30 == 0) {
+                cadenceLogged++;
+                log::info("[native] frames arrive at " + std::to_string(effective.currentFps) +
+                          " fps for a " + std::to_string(effective.configuredFps) +
+                          " fps stream — encoder budget " +
+                          (effective.scaling()
+                               ? std::to_string(effective.scaledKbps(baseKbps)) +
+                                     " kbps per second of frames (" + std::to_string(baseKbps) +
+                                     " on the wire)"
+                               : std::string("back to ") + std::to_string(baseKbps) + " kbps"));
+            }
+        };
         auto emitPicture = [&](const FrameStamps& stamps) -> bool {
             if (!m_Cadence.admit(stamps.convertedUs)) return true;
             if (!emit(frameNumber, stamps, error)) return false;
             noteReal();
-            // A real picture went out: one more frame in this second's count.
-            // When the second closes on a different rate, the encoder's budget
-            // follows — through the same setBitrate() the boost and the ladder
-            // use, so the three never disagree about what the encoder holds.
-            if (effective.noteFrame(steadyNowUs())) {
-                applyBitrate(boosted ? encode::stillBitrateKbps(baseKbps) : baseKbps);
-                if (cadenceLogged < 5 || effective.changes % 30 == 0) {
-                    cadenceLogged++;
-                    log::info("[native] frames arrive at " + std::to_string(effective.currentFps) +
-                              " fps for a " + std::to_string(effective.configuredFps) +
-                              " fps stream — encoder budget " +
-                              (effective.scaling()
-                                   ? std::to_string(effective.scaledKbps(baseKbps)) +
-                                         " kbps per second of frames (" + std::to_string(baseKbps) +
-                                         " on the wire)"
-                                   : std::string("back to ") + std::to_string(baseKbps) + " kbps"));
-                }
-            }
+            countPicture();
             return true;
+        };
+        // The same, pipelined (plan Phase 10): the picture goes to the encode
+        // thread and the loop goes back to the capture; the cadence counts it
+        // once it went out (absorbDelivered), the refinement window starts now.
+        auto emitPictureLater = [&](const FrameStamps& stamps) {
+            if (!m_Cadence.admit(stamps.convertedUs)) return;
+            emitLater(frameNumber, stamps);
+            noteReal();
         };
 
         m_LoopStartUs = steadyNowUs();
         m_LoadCap.start(m_LoopStartUs);
         while (m_Running.load()) {
+            // Pipelined: what the encode thread delivered since the last turn.
+            if (!absorbDelivered()) return;
+            for (; m_DeliveredUncounted > 0; --m_DeliveredUncounted)
+                countPicture();
+
             if (m_PipelineLost) {
                 // The D3D12 chain failed while streaming (see emit): back to
                 // D3D11 over a capture opened again — whose first frame is
@@ -2171,8 +2203,10 @@ private:
 
             // t₂ once the capture is given back, so the stage reads as the
             // whole of what stands between the acquire and the encoder.
-            if (!emitPicture(
-                    FrameStamps{frame.presentUs, frame.capturedUs, submittedUs, steadyNowUs()}))
+            const FrameStamps stamps{frame.presentUs, frame.capturedUs, submittedUs, steadyNowUs()};
+            if (m_Pipeline->pipelined())
+                emitPictureLater(stamps);
+            else if (!emitPicture(stamps))
                 return;
         }
     }
@@ -2183,51 +2217,166 @@ private:
     /// its own; see resendStamps.
     ///
     /// Returns false when the session must end; the reason has been reported.
-    bool emit(uint32_t& frameNumber, const FrameStamps& stamps, std::string& error)
+    /// Frames the receiver said it never got, told to the encoder before the
+    /// next picture is predicted (design §9.2). An encoder that cannot do it —
+    /// or a frame it refuses — falls back to a keyframe, so the receiver always
+    /// gets SOME repair. On whichever thread owns the encoder.
+    void invalidateLost()
     {
-        // Frames the receiver said it never got, told to the encoder before
-        // the next picture is predicted (design §9.2). An encoder that cannot
-        // do it — or a frame it refuses — falls back to a keyframe, so the
-        // receiver always gets SOME repair.
+        std::vector<uint32_t> lost;
         {
-            std::vector<uint32_t> lost;
-            {
-                std::lock_guard<std::mutex> lock(m_InvalidateMutex);
-                lost.swap(m_PendingInvalidations);
-            }
-            for (uint32_t n : lost) {
-                std::string why;
-                if (m_Pipeline->invalidateReference(n, why)) {
-                    m_Invalidated++;
-                    if (m_Invalidated <= 5 || m_Invalidated % 50 == 0)
-                        log::info("[native] reference invalidated: frame " + std::to_string(n) +
-                                  " never reached the receiver, healing with a delta (" +
-                                  std::to_string(m_Invalidated) + " so far)");
-                } else {
-                    if (m_InvalidateFallbacks++ < 3)
-                        log::info("[native] reference invalidation refused (" + why +
-                                  ") — keyframe instead");
-                    m_ForceKeyframe.store(true);
-                }
+            std::lock_guard<std::mutex> lock(m_InvalidateMutex);
+            lost.swap(m_PendingInvalidations);
+        }
+        for (uint32_t n : lost) {
+            std::string why;
+            if (m_Pipeline->invalidateReference(n, why)) {
+                m_Invalidated++;
+                if (m_Invalidated <= 5 || m_Invalidated % 50 == 0)
+                    log::info("[native] reference invalidated: frame " + std::to_string(n) +
+                              " never reached the receiver, healing with a delta (" +
+                              std::to_string(m_Invalidated) + " so far)");
+            } else {
+                if (m_InvalidateFallbacks++ < 3)
+                    log::info("[native] reference invalidation refused (" + why +
+                              ") — keyframe instead");
+                m_ForceKeyframe.store(true);
             }
         }
+    }
+
+    /// emit(), pipelined (plan Phase 10): the encode and the delivery on the
+    /// encode thread, now if it is idle; what follows the delivery on this
+    /// thread, at absorbDelivered(). @p frameNumber is the loop's: a job holds
+    /// it while it runs, and the loop settles the pipeline before it is gone.
+    void emitLater(uint32_t& frameNumber, const FrameStamps& stamps)
+    {
+        const int encoderKbps = m_EncoderKbps;
+        const int linkKbps = m_LinkKbps;
+        m_Pipeline->encodeLater([this, &frameNumber, stamps, encoderKbps, linkKbps](
+                                    const WindowsVideoPipeline::EncodePicture& encodePicture) {
+            Delivered d;
+            d.stamps = stamps;
+            d.linkKbps = linkKbps;
+            invalidateLost();
+            const bool forceKeyframe = m_ForceKeyframe.exchange(false);
+            encode::EncoderOutput encoded;
+            d.result = encodePicture(forceKeyframe, frameNumber, encoded, d.error);
+            d.encodedUs = steadyNowUs();
+            if (d.result == WindowsVideoPipeline::EncodeResult::Ok) {
+                noteFirstKeyframe(encoded);
+                d.bytes = encoded.size;
+                d.qp = encoded.avgQp;
+                if (encoded.data && encoded.size > 0 && m_Callbacks.onVideo) {
+                    d.frame = encodedFrame(encoded, frameNumber++, stamps, encoderKbps);
+                    m_Callbacks.onVideo(d.frame);
+                    d.frame.data = nullptr;
+                    d.sent = true;
+                }
+                m_Pipeline->releaseOutput();
+            }
+            std::lock_guard<std::mutex> lock(m_DeliveredMutex);
+            m_Delivered.push_back(std::move(d));
+        });
+    }
+
+    /// What emit() does once a picture went out, for each one the encode
+    /// thread delivered since the last call; the cadence counts them in the
+    /// loop (m_DeliveredUncounted). A D3D12 chain lost there is taken as emit()
+    /// takes it. False, the session finished, when an encode failed for good.
+    bool absorbDelivered()
+    {
+        std::vector<Delivered> delivered;
+        {
+            std::lock_guard<std::mutex> lock(m_DeliveredMutex);
+            delivered.swap(m_Delivered);
+        }
+        for (const Delivered& d : delivered) {
+            if (d.result == WindowsVideoPipeline::EncodeResult::Lost) {
+                pipelineLost(d.error);
+                continue;
+            }
+            if (d.result != WindowsVideoPipeline::EncodeResult::Ok) {
+                finish("encode failed: " + d.error);
+                return false;
+            }
+            m_LastEmitBytes = d.bytes;
+            m_LastEmitQp = d.qp;
+            m_Link.sent(d.encodedUs, d.bytes, d.linkKbps);
+            if (d.sent) {
+                noteEncodeLoad(d.frame, d.stamps);
+                noteScalerLoad(d.frame, d.stamps);
+            }
+            m_DeliveredUncounted++;
+        }
+        return true;
+    }
+
+    /// The D3D12 chain failed while streaming — a device gone, a fence past
+    /// its deadline, an encoder error, the header guard. The session goes
+    /// back to D3D11 for good (plan §3.3): the loop rebuilds before its next
+    /// capture.
+    void pipelineLost(const std::string& error)
+    {
+        if (!m_D3d12Failed)
+            log::warning("[native] video pipeline: D3D12 lost (" + error +
+                         ") — back to D3D11 for the rest of the session");
+        m_D3d12Failed = true;
+        m_D3d12FailedWhy = error;
+        m_PipelineLost = true;
+    }
+
+    /// The size of the first keyframe, once. It is the number that says
+    /// whether a still picture will look right: nothing follows it to refine
+    /// it, so on a static screen it IS the picture. Cheap, and it turns "it
+    /// looks soft" into a figure that can be compared across settings.
+    void noteFirstKeyframe(const encode::EncoderOutput& encoded)
+    {
+        if (!encoded.keyframe || m_LoggedFirstKeyframe) return;
+        m_LoggedFirstKeyframe = true;
+        log::info("[native] first keyframe: " + std::to_string(encoded.size / 1024) + " KB (" +
+                  std::to_string(m_Info.width) + "x" + std::to_string(m_Info.height) + ")");
+    }
+
+    /// What goes to onVideo for @p encoded, numbered @p frameNumber.
+    static EncodedFrame encodedFrame(const encode::EncoderOutput& encoded, uint32_t frameNumber,
+                                     const FrameStamps& stamps, int encoderKbps)
+    {
+        EncodedFrame out;
+        out.data = encoded.data;
+        out.size = encoded.size;
+        out.keyframe = encoded.keyframe;
+        out.frameNumber = frameNumber;
+        out.avgQp = encoded.avgQp;
+        out.presentUs = stamps.presentUs;
+        out.capturedUs = stamps.capturedUs;
+        out.submittedUs = stamps.submittedUs;
+        out.convertedUs = stamps.convertedUs;
+        out.encodedUs = steadyNowUs();
+        out.gpuConvertUs = encoded.gpuConvertUs;
+        out.gpuEncodeUs = encoded.gpuEncodeUs;
+        out.encoderKbps = encoderKbps;
+        return out;
+    }
+
+    bool emit(uint32_t& frameNumber, const FrameStamps& stamps, std::string& error)
+    {
+        // Pipelined, the encoder is this thread's once the encode thread holds
+        // nothing, and what it delivered comes first.
+        if (m_Pipeline->pipelined()) {
+            m_Pipeline->settle();
+            if (!absorbDelivered()) return false;
+        }
+
+        invalidateLost();
 
         const bool forceKeyframe = m_ForceKeyframe.exchange(false);
         encode::EncoderOutput encoded;
         const WindowsVideoPipeline::EncodeResult result =
             m_Pipeline->encode(forceKeyframe, frameNumber, encoded, error);
         if (result == WindowsVideoPipeline::EncodeResult::Lost) {
-            // D3D12 only, never D3D11: the chain failed while streaming — a
-            // device gone, a fence past its deadline, an encoder error, the
-            // header guard. The session goes back to D3D11 for good (plan
-            // §3.3): nothing goes out for this picture, and the loop rebuilds
-            // before its next capture.
-            if (!m_D3d12Failed)
-                log::warning("[native] video pipeline: D3D12 lost (" + error +
-                             ") — back to D3D11 for the rest of the session");
-            m_D3d12Failed = true;
-            m_D3d12FailedWhy = error;
-            m_PipelineLost = true;
+            // D3D12 only, never D3D11: nothing goes out for this picture.
+            pipelineLost(error);
             return true;
         }
         if (result != WindowsVideoPipeline::EncodeResult::Ok) {
@@ -2235,36 +2384,13 @@ private:
             return false;
         }
 
-        // The size of the first keyframe, once. It is the number that says
-        // whether a still picture will look right: nothing follows it to refine
-        // it, so on a static screen it IS the picture. Cheap, and it turns "it
-        // looks soft" into a figure that can be compared across settings.
-        if (encoded.keyframe && !m_LoggedFirstKeyframe) {
-            m_LoggedFirstKeyframe = true;
-            log::info("[native] first keyframe: " + std::to_string(encoded.size / 1024) + " KB (" +
-                      std::to_string(m_Info.width) + "x" + std::to_string(m_Info.height) + ")");
-        }
-
+        noteFirstKeyframe(encoded);
         m_LastEmitBytes = encoded.size;
         m_LastEmitQp = encoded.avgQp;
         m_Link.sent(steadyNowUs(), encoded.size, m_LinkKbps);
 
         if (encoded.data && encoded.size > 0 && m_Callbacks.onVideo) {
-            EncodedFrame out;
-            out.data = encoded.data;
-            out.size = encoded.size;
-            out.keyframe = encoded.keyframe;
-            out.frameNumber = frameNumber++;
-            out.avgQp = encoded.avgQp;
-            out.presentUs = stamps.presentUs;
-            out.capturedUs = stamps.capturedUs;
-            out.submittedUs = stamps.submittedUs;
-            out.convertedUs = stamps.convertedUs;
-            out.encodedUs = steadyNowUs();
-            out.gpuConvertUs = encoded.gpuConvertUs;
-            out.gpuEncodeUs = encoded.gpuEncodeUs;
-            out.encoderKbps = m_EncoderKbps;
-
+            const EncodedFrame out = encodedFrame(encoded, frameNumber++, stamps, m_EncoderKbps);
             // Delivered on this thread, and the consumer sends it before
             // returning. The buffer is unlocked immediately after, which is
             // what keeps the GPU→CPU copy at exactly one per frame.
@@ -3018,6 +3144,27 @@ private:
     /// The average QP the encoder reported for the last emit(), -1 when it
     /// reports none. The refinement loop's second witness of convergence.
     int m_LastEmitQp = -1;
+
+    /// A picture the encode thread encoded (pipelined=1, emitLater), for what
+    /// emit() does after the delivery — on the capture thread, which owns it
+    /// (absorbDelivered).
+    struct Delivered
+    {
+        WindowsVideoPipeline::EncodeResult result = WindowsVideoPipeline::EncodeResult::Ok;
+        std::string error;
+        size_t bytes = 0;
+        int qp = -1;
+        int64_t encodedUs = 0;
+        int linkKbps = 0;
+        /// Handed to onVideo: the frame, its data gone with the encoder's buffer.
+        bool sent = false;
+        EncodedFrame frame;
+        FrameStamps stamps;
+    };
+    std::mutex m_DeliveredMutex;
+    std::vector<Delivered> m_Delivered;
+    /// Pictures absorbed but not yet counted by the loop's cadence.
+    int m_DeliveredUncounted = 0;
     /// The flattened image handed to the client. Reused so a shape change does
     /// not allocate on the capture thread.
     std::vector<uint8_t> m_CursorScratch;

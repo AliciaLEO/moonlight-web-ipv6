@@ -44,8 +44,21 @@ enum Rtv : UINT
     RtvChroma,
     RtvScaledMid,
     RtvScaled,
+    /// The second output's planes (addOutput).
+    RtvLuma1,
+    RtvChroma1,
     RtvCount,
 };
+
+Rtv lumaRtv(int output)
+{
+    return output == 1 ? RtvLuma1 : RtvLuma;
+}
+
+Rtv chromaRtv(int output)
+{
+    return output == 1 ? RtvChroma1 : RtvChroma;
+}
 
 D3D12_RESOURCE_DESC textureDesc(int width, int height, DXGI_FORMAT format,
                                 D3D12_RESOURCE_FLAGS flags)
@@ -124,9 +137,13 @@ void ColorConvert12::release()
     m_SrvStride = m_SrvNext = 0;
     m_RtvHeap.Reset();
     m_RtvStride = 0;
-    m_Output.Reset();
-    m_OutputState = D3D12_RESOURCE_STATE_COMMON;
-    m_OutputCleared = false;
+    for (int i = 0; i < kMaxOutputs; ++i) {
+        m_Output[i].Reset();
+        m_OutputState[i] = D3D12_RESOURCE_STATE_COMMON;
+        m_OutputCleared[i] = false;
+    }
+    m_Outputs = 0;
+    m_Target = 0;
     m_ScaledMid.Reset();
     m_Scaled.Reset();
     m_ScaledMidState = m_ScaledState = D3D12_RESOURCE_STATE_COMMON;
@@ -189,7 +206,7 @@ bool ColorConvert12::init(ID3D12Device* device, ID3D12CommandQueue* queue, DXGI_
     m_SourceWidth = sourceWidth;
     m_SourceHeight = sourceHeight;
 
-    if (!createPipeline(error) || !createOutput(error)) return false;
+    if (!createPipeline(error) || !createOutput(0, error)) return false;
     if (m_Geometry.filter != ScaleFilter::Bilinear && !createScaler(error)) return false;
 
     // What the resample pass costs is timed as on D3D11, on the queue the
@@ -341,34 +358,47 @@ bool ColorConvert12::createPipeline(std::string& error)
     return true;
 }
 
-bool ColorConvert12::createOutput(std::string& error)
+bool ColorConvert12::createOutput(int index, std::string& error)
 {
     const DXGI_FORMAT format = m_Hdr ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12;
     const HRESULT hr = committed(
         m_Device.Get(), D3D12_HEAP_TYPE_DEFAULT,
         textureDesc(m_CodedWidth, m_CodedHeight, format, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
-        D3D12_RESOURCE_STATE_COMMON, m_Output);
+        D3D12_RESOURCE_STATE_COMMON, m_Output[index]);
     if (FAILED(hr)) {
         error = std::string("this GPU cannot render into a D3D12 ") + (m_Hdr ? "P010" : "NV12") +
                 " texture (" + d3d12::hresultText(hr) + ")";
         return false;
     }
-    m_OutputState = D3D12_RESOURCE_STATE_COMMON;
-    m_OutputCleared = false;
+    m_OutputState[index] = D3D12_RESOURCE_STATE_COMMON;
+    m_OutputCleared[index] = false;
 
     // A view per plane, told apart by PlaneSlice — D3D11 told them apart by
     // the view's format alone.
     D3D12_RENDER_TARGET_VIEW_DESC view = {};
     view.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
-    D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_RtvHeap->GetCPUDescriptorHandleForHeapStart();
+    const D3D12_CPU_DESCRIPTOR_HANDLE base = m_RtvHeap->GetCPUDescriptorHandleForHeapStart();
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = base;
+    rtv.ptr += static_cast<SIZE_T>(lumaRtv(index)) * m_RtvStride;
     view.Format = m_Hdr ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
     view.Texture2D.PlaneSlice = 0;
-    m_Device->CreateRenderTargetView(m_Output.Get(), &view, rtv);
-    rtv.ptr += static_cast<SIZE_T>(RtvChroma) * m_RtvStride;
+    m_Device->CreateRenderTargetView(m_Output[index].Get(), &view, rtv);
+    rtv = base;
+    rtv.ptr += static_cast<SIZE_T>(chromaRtv(index)) * m_RtvStride;
     view.Format = m_Hdr ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
     view.Texture2D.PlaneSlice = 1;
-    m_Device->CreateRenderTargetView(m_Output.Get(), &view, rtv);
+    m_Device->CreateRenderTargetView(m_Output[index].Get(), &view, rtv);
+    m_Outputs = index + 1 > m_Outputs ? index + 1 : m_Outputs;
     return true;
+}
+
+bool ColorConvert12::addOutput(std::string& error)
+{
+    if (m_Outputs == 0) {
+        error = "colour conversion is not initialized";
+        return false;
+    }
+    return m_Outputs >= kMaxOutputs || createOutput(m_Outputs, error);
 }
 
 bool ColorConvert12::createScaler(std::string& error)
@@ -559,7 +589,8 @@ bool ColorConvert12::recordConvert(ID3D12GraphicsCommandList* list, ID3D12Resour
                                    const capture::CursorState& cursor, const CursorDraw& draw,
                                    std::string& error)
 {
-    if (!list || !source || !m_Output) {
+    ID3D12Resource* output = m_Output[m_Target].Get();
+    if (!list || !source || !output) {
         error = "colour conversion is not initialized";
         return false;
     }
@@ -627,12 +658,12 @@ bool ColorConvert12::recordConvert(ID3D12GraphicsCommandList* list, ID3D12Resour
         }
     }
 
-    transition(list, m_Output.Get(), m_OutputState, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    transition(list, output, m_OutputState[m_Target], D3D12_RESOURCE_STATE_RENDER_TARGET);
     // The band outside the picture, once: nothing ever draws there again.
     // Ahead of the pointer's constants, which the black overwrites.
-    if (!m_OutputCleared) {
+    if (!m_OutputCleared[m_Target]) {
         recordBlack(list);
-        m_OutputCleared = true;
+        m_OutputCleared[m_Target] = true;
     }
 
     // Where the pointer goes: the same constants ColorConvert writes.
@@ -648,8 +679,8 @@ bool ColorConvert12::recordConvert(ID3D12GraphicsCommandList* list, ID3D12Resour
                        m_CursorPixels != nullptr)
                : table(source, m_SourceFormat, m_CursorPixels != nullptr));
 
-    const D3D12_CPU_DESCRIPTOR_HANDLE luma = rtv(RtvLuma);
-    const D3D12_CPU_DESCRIPTOR_HANDLE chroma = rtv(RtvChroma);
+    const D3D12_CPU_DESCRIPTOR_HANDLE luma = rtv(lumaRtv(m_Target));
+    const D3D12_CPU_DESCRIPTOR_HANDLE chroma = rtv(chromaRtv(m_Target));
 
     // Luma at full resolution, chroma at half: 4:2:0.
     list->OMSetRenderTargets(1, &luma, FALSE, nullptr);
@@ -664,7 +695,7 @@ bool ColorConvert12::recordConvert(ID3D12GraphicsCommandList* list, ID3D12Resour
     list->SetPipelineState(m_ChromaPso.Get());
     list->DrawInstanced(3, 1, 0, 0);
 
-    transition(list, m_Output.Get(), m_OutputState, D3D12_RESOURCE_STATE_COMMON);
+    transition(list, output, m_OutputState[m_Target], D3D12_RESOURCE_STATE_COMMON);
     transition(list, source, sourceState, D3D12_RESOURCE_STATE_COMMON);
     return true;
 }
@@ -726,16 +757,17 @@ void ColorConvert12::setHeld(ComPtr<ID3D12Resource> held)
 
 bool ColorConvert12::recordClearBlack(ID3D12GraphicsCommandList* list, std::string& error)
 {
-    if (!list || !m_Output) {
+    ID3D12Resource* output = m_Output[m_Target].Get();
+    if (!list || !output) {
         error = "colour conversion is not initialized";
         return false;
     }
     list->SetGraphicsRootSignature(m_RootSignature.Get());
     list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    transition(list, m_Output.Get(), m_OutputState, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    transition(list, output, m_OutputState[m_Target], D3D12_RESOURCE_STATE_RENDER_TARGET);
     recordBlack(list);
-    m_OutputCleared = true;
-    transition(list, m_Output.Get(), m_OutputState, D3D12_RESOURCE_STATE_COMMON);
+    m_OutputCleared[m_Target] = true;
+    transition(list, output, m_OutputState[m_Target], D3D12_RESOURCE_STATE_COMMON);
     return true;
 }
 
@@ -759,8 +791,8 @@ void ColorConvert12::recordBlack(ID3D12GraphicsCommandList* list)
         list->SetGraphicsRoot32BitConstants(0, 8, value, 0);
         list->DrawInstanced(3, 1, 0, 0);
     };
-    plane(RtvLuma, m_FillLumaPso.Get(), m_CodedWidth, m_CodedHeight, black);
-    plane(RtvChroma, m_FillChromaPso.Get(), m_CodedWidth / 2, m_CodedHeight / 2, grey);
+    plane(lumaRtv(m_Target), m_FillLumaPso.Get(), m_CodedWidth, m_CodedHeight, black);
+    plane(chromaRtv(m_Target), m_FillChromaPso.Get(), m_CodedWidth / 2, m_CodedHeight / 2, grey);
 }
 
 void ColorConvert12::frameCompleted()

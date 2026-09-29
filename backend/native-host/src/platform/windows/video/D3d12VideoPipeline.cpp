@@ -23,8 +23,11 @@
 #include "../../../encode/windows/d3d12/NvencEncoder12.h"
 #include "../../../encode/windows/d3d12/VideoEncode12.h"
 
+#include <avrt.h>
+
 #include <atomic>
 #include <cstdio>
+#include <exception>
 #include <map>
 #include <mutex>
 
@@ -189,6 +192,9 @@ void D3d12VideoPipeline::drain()
 
 void D3d12VideoPipeline::teardown(bool keepHeld)
 {
+    // The encode thread first: its picture goes out, or its failure is kept,
+    // before anything it reads goes.
+    stopEncodeThread();
     // Nothing of ours may still read the surfaces, the held copy or the
     // encoder's input when they go — a stall injected on the queue included.
     releaseStall();
@@ -196,11 +202,20 @@ void D3d12VideoPipeline::teardown(bool keepHeld)
     m_Stall.Reset();
     m_StallNext = false;
     m_EncodeFault = D3d12Fault::Kind::None;
-    if (m_TimerSlot >= 0) {
+    {
+        std::lock_guard<std::mutex> lock(m_TimerLock);
         d3d12::QueueTimer::Sample unused;
-        m_Timer.read(m_TimerSlot, unused);
+        if (m_TimerSlot >= 0) m_Timer.read(m_TimerSlot, unused);
         m_TimerSlot = -1;
+        for (Output& output : m_Outputs) {
+            if (output.timerSlot >= 0) m_Timer.read(output.timerSlot, unused);
+            output = Output{};
+        }
     }
+    m_Latest = 0;
+    m_Target = 0;
+    m_PendingKbps = 0;
+    m_EncodeLost.clear();
     m_KeptHeld.Reset();
     if (keepHeld && m_Converter) m_KeptHeld = m_Converter->takeHeld();
     // Released before the replacements are built, as on D3D11: an encoder
@@ -242,6 +257,18 @@ bool D3d12VideoPipeline::buildConverter(const capture::IWindowsCapture& capture,
     m_SourceFormat = capture.format();
     m_SourceWidth = capture.width();
     m_SourceHeight = capture.height();
+    // Two pictures in flight where the encoder takes pictures from any
+    // texture: D3D12 Video Encode's. Said once, at the first build.
+    const bool wasPipelined = m_Pipelined;
+    m_Pipelined = m_Tuning.pipelined && m_Encoder12 == EncoderTuning::Encoder12::VideoEncode;
+    if (m_Tuning.pipelined && !m_Pipelined && !m_SaidNotPipelined) {
+        m_SaidNotPipelined = true;
+        log::info("[native] pipelined=1 is for D3D12 Video Encode only — this chain encodes one "
+                  "picture at a time");
+    } else if (m_Pipelined && !wasPipelined) {
+        log::info("[native] D3D12 chain pipelined: two outputs, the encode on a thread of its "
+                  "own, at most two pictures in flight");
+    }
 
     // The encoder settles its coded size once it is built, after this; the
     // converter starts at whole blocks of 16 and is made again in
@@ -271,6 +298,10 @@ bool D3d12VideoPipeline::makeConverter(int codedWidth, int codedHeight, std::str
                          m_ConverterBuild.outputHeight, codedWidth, codedHeight,
                          m_ConverterBuild.hdr, m_ConverterBuild.filter, error))
         return false;
+    if (m_Pipelined && !converter->addOutput(error)) {
+        error = "the second output of the pipelined chain: " + error;
+        return false;
+    }
     if (held) converter->setHeld(held);
     if (white > 0.0f) converter->setSdrWhite(white);
     m_Converter = std::move(converter);
@@ -310,6 +341,7 @@ bool D3d12VideoPipeline::buildEncoder(const capture::IWindowsCapture& capture,
         if (!makeConverter(encoder->codedWidth(), encoder->codedHeight(), error)) return false;
     }
     m_Encoder = std::move(encoder);
+    if (m_Pipelined) startEncodeThread();
     return true;
 }
 
@@ -331,6 +363,7 @@ void D3d12VideoPipeline::lose(const std::string& reason)
 {
     if (m_Lost.empty()) m_Lost = reason;
     if (m_TimerSlot >= 0) {
+        std::lock_guard<std::mutex> lock(m_TimerLock);
         m_Timer.cancel(m_TimerSlot);
         m_TimerSlot = -1;
     }
@@ -384,7 +417,7 @@ void D3d12VideoPipeline::releaseStall()
     log::info("[native] " + describe(m_Fault) + ": the stalled conversion let go");
 }
 
-void D3d12VideoPipeline::removeDevice()
+void D3d12VideoPipeline::removeDevice(uint64_t conversion)
 {
     Microsoft::WRL::ComPtr<ID3D12Device5> device5;
     if (FAILED(m_Device->device()->QueryInterface(IID_PPV_ARGS(&device5)))) {
@@ -393,7 +426,7 @@ void D3d12VideoPipeline::removeDevice()
         return;
     }
     log::info("[native] " + describe(m_Fault) + ": the D3D12 device removed before the picture " +
-              "of conversion " + std::to_string(m_Conversions) + " is encoded");
+              "of conversion " + std::to_string(conversion) + " is encoded");
     device5->RemoveDevice();
 }
 
@@ -407,6 +440,9 @@ ID3D12GraphicsCommandList* D3d12VideoPipeline::beginList(std::string& error)
         error = "the previous conversion did not finish: " + error;
         return nullptr;
     }
+    // Pipelined, the encode thread does not touch the converter: the resample
+    // timing of the conversion just waited for is read here instead.
+    if (m_Pipelined) m_Converter->frameCompleted();
     HRESULT h = m_Allocator->Reset();
     if (SUCCEEDED(h)) h = m_List->Reset(m_Allocator.Get(), nullptr);
     if (FAILED(h)) {
@@ -451,7 +487,9 @@ bool D3d12VideoPipeline::convert(capture::IWindowsCapture& capture, ID3D11Textur
 {
     (void)error;
     m_ReleaseAfter = 0;
+    if (m_Pipelined) absorbEncodeLoss();
     if (!m_Lost.empty()) return true;
+    if (m_Pipelined) m_Converter->selectOutput(m_Target = reserveOutput());
     const D3d12Fault::Kind fault = nextConversion();
     std::string why;
     ID3D12Resource* surface = m_Interop.open(captured, why);
@@ -472,7 +510,10 @@ bool D3d12VideoPipeline::convert(capture::IWindowsCapture& capture, ID3D11Textur
         lose(why);
         return true;
     }
-    if (m_Timing) m_TimerSlot = m_Timer.begin(list);
+    if (m_Timing) {
+        std::lock_guard<std::mutex> lock(m_TimerLock);
+        m_TimerSlot = m_Timer.begin(list);
+    }
     // The copy of the desktop for the pointer-only and still-screen paths, in
     // the same list: read before fence B, like the conversion.
     if (retain && !m_Converter->recordCopy(list, surface, why))
@@ -482,8 +523,14 @@ bool D3d12VideoPipeline::convert(capture::IWindowsCapture& capture, ID3D11Textur
         lose("conversion: " + why);
         return true;
     }
-    if (m_TimerSlot >= 0) m_Timer.end(list, m_TimerSlot);
-    if (!submit(acquired, /*signalCapture=*/true, why)) lose(why);
+    if (m_TimerSlot >= 0) {
+        std::lock_guard<std::mutex> lock(m_TimerLock);
+        m_Timer.end(list, m_TimerSlot);
+    }
+    if (!submit(acquired, /*signalCapture=*/true, why))
+        lose(why);
+    else if (m_Pipelined)
+        noteConverted();
     return true;
 }
 
@@ -503,11 +550,13 @@ bool D3d12VideoPipeline::convertHeld(capture::IWindowsCapture& capture,
     (void)capture;
     (void)error;
     m_ReleaseAfter = 0;
+    if (m_Pipelined) absorbEncodeLoss();
     if (!m_Lost.empty()) return true;
     if (!m_Converter || !m_Converter->held()) {
         lose("no desktop held to convert again");
         return true;
     }
+    if (m_Pipelined) m_Converter->selectOutput(m_Target = reserveOutput());
     const D3d12Fault::Kind fault = nextConversion();
     std::string why;
     ID3D12GraphicsCommandList* list = beginList(why);
@@ -515,15 +564,24 @@ bool D3d12VideoPipeline::convertHeld(capture::IWindowsCapture& capture,
         lose(why);
         return true;
     }
-    if (m_Timing) m_TimerSlot = m_Timer.begin(list);
+    if (m_Timing) {
+        std::lock_guard<std::mutex> lock(m_TimerLock);
+        m_TimerSlot = m_Timer.begin(list);
+    }
     if (!m_Converter->recordConvert(list, m_Converter->held(), cursor, draw, why) ||
         !armFault(fault, why)) {
         m_List->Close();
         lose("conversion: " + why);
         return true;
     }
-    if (m_TimerSlot >= 0) m_Timer.end(list, m_TimerSlot);
-    if (!submit(0, /*signalCapture=*/false, why)) lose(why);
+    if (m_TimerSlot >= 0) {
+        std::lock_guard<std::mutex> lock(m_TimerLock);
+        m_Timer.end(list, m_TimerSlot);
+    }
+    if (!submit(0, /*signalCapture=*/false, why))
+        lose(why);
+    else if (m_Pipelined)
+        noteConverted();
     return true;
 }
 
@@ -543,7 +601,9 @@ bool D3d12VideoPipeline::convertBlank(const convert::CursorDraw& draw, std::stri
 {
     (void)draw;
     (void)error;
+    if (m_Pipelined) absorbEncodeLoss();
     if (!m_Lost.empty()) return true;
+    if (m_Pipelined) m_Converter->selectOutput(m_Target = reserveOutput());
     const D3d12Fault::Kind fault = nextConversion();
     std::string why;
     ID3D12GraphicsCommandList* list = beginList(why);
@@ -556,7 +616,10 @@ bool D3d12VideoPipeline::convertBlank(const convert::CursorDraw& draw, std::stri
         lose("black picture: " + why);
         return true;
     }
-    if (!submit(0, /*signalCapture=*/false, why)) lose(why);
+    if (!submit(0, /*signalCapture=*/false, why))
+        lose(why);
+    else if (m_Pipelined)
+        noteConverted();
     return true;
 }
 
@@ -573,14 +636,55 @@ WindowsVideoPipeline::EncodeResult D3d12VideoPipeline::encode(bool forceKeyframe
         error = "the D3D12 chain is not built";
         return EncodeResult::Lost;
     }
-    const D3d12Fault::Kind fault = m_EncodeFault;
+    std::string lost;
+    if (m_Pipelined) {
+        // The encoder is this thread's once the encode thread holds nothing;
+        // what it re-sends is the output the last conversion wrote.
+        settle();
+        if (!m_Lost.empty()) {
+            error = m_Lost;
+            return EncodeResult::Lost;
+        }
+        Output& picture = m_Outputs[m_Latest];
+        const EncodeResult result =
+            encodeOutput(m_Latest, picture, forceKeyframe, frameNumber, out, lost, error);
+        picture.timerSlot = -1;
+        picture.fault = D3d12Fault::Kind::None;
+        if (result != EncodeResult::Ok) lose(lost);
+        return result;
+    }
+    const Output picture{m_ConvertedValue, m_TimerSlot, m_EncodeFault, m_Conversions};
+    m_TimerSlot = -1;
     m_EncodeFault = D3d12Fault::Kind::None;
-    if (fault == D3d12Fault::Kind::Removed) removeDevice();
-    if (!m_Encoder->encode(m_Converter->output(), m_Converted.fence(), m_ConvertedValue,
+    if (encodeOutput(0, picture, forceKeyframe, frameNumber, out, lost, error) !=
+        EncodeResult::Ok) {
+        lose(lost);
+        return EncodeResult::Lost;
+    }
+    // The conversion behind this picture is done — the encoder waited for it
+    // on the GPU, the CPU for the bitstream — so its timings can be read.
+    m_Converter->frameCompleted();
+    return EncodeResult::Ok;
+}
+
+WindowsVideoPipeline::EncodeResult
+D3d12VideoPipeline::encodeOutput(int output, const Output& picture, bool forceKeyframe,
+                                 uint32_t frameNumber, encode::EncoderOutput& out,
+                                 std::string& lost, std::string& error)
+{
+    const auto freeTimer = [&] {
+        if (picture.timerSlot < 0) return;
+        std::lock_guard<std::mutex> lock(m_TimerLock);
+        m_Timer.cancel(picture.timerSlot);
+    };
+    const D3d12Fault::Kind fault = picture.fault;
+    if (fault == D3d12Fault::Kind::Removed) removeDevice(picture.conversion);
+    if (!m_Encoder->encode(m_Converter->output(output), m_Converted.fence(), picture.ready,
                            forceKeyframe, frameNumber, out, error)) {
         std::string reason;
         if (m_Device->removed(reason)) error += " (the device is gone: " + reason + ")";
-        lose(error);
+        lost = error;
+        freeTimer();
         return EncodeResult::Lost;
     }
     // A picture the GPU coded after all is not taken from a device that is
@@ -592,24 +696,213 @@ WindowsVideoPipeline::EncodeResult D3d12VideoPipeline::encode(bool forceKeyframe
         error = fault == D3d12Fault::Kind::Encode
                     ? "fault injected (" + describe(m_Fault) + ")"
                     : "the picture came back from a device that is gone (" + gone + ")";
-        lose(error);
+        lost = error;
+        freeTimer();
         return EncodeResult::Lost;
     }
-    // The conversion behind this picture is done — the encoder waited for it
-    // on the GPU, the CPU for the bitstream — so its timings can be read. A
-    // re-sent picture has none: nothing was converted for it.
-    m_Converter->frameCompleted();
     ++m_Frames;
-    if (m_TimerSlot >= 0) {
+    // The conversion is done — the encoder waited for it on the GPU, the CPU
+    // for the bitstream. A re-sent picture has no timing: nothing was
+    // converted for it.
+    if (picture.timerSlot >= 0) {
         d3d12::QueueTimer::Sample sample;
-        if (m_Timer.read(m_TimerSlot, sample)) {
+        std::lock_guard<std::mutex> lock(m_TimerLock);
+        if (m_Timer.read(picture.timerSlot, sample)) {
             out.gpuConvertUs = sample.gpuUs;
             m_GpuConvertUs += sample.gpuUs;
             ++m_TimedFrames;
         }
-        m_TimerSlot = -1;
     }
     return EncodeResult::Ok;
+}
+
+void D3d12VideoPipeline::noteConverted()
+{
+    std::lock_guard<std::mutex> lock(m_JobLock);
+    Output& picture = m_Outputs[m_Target];
+    // What the output held was never encoded — skipped by the cadence, or
+    // dropped for a newer picture: its timing goes unread, and a fault armed
+    // on it moves to this one.
+    if (picture.timerSlot >= 0) {
+        std::lock_guard<std::mutex> timer(m_TimerLock);
+        m_Timer.cancel(picture.timerSlot);
+    }
+    if (m_EncodeFault == D3d12Fault::Kind::None) m_EncodeFault = picture.fault;
+    picture.ready = m_ConvertedValue;
+    picture.timerSlot = m_TimerSlot;
+    picture.fault = m_EncodeFault;
+    picture.conversion = m_Conversions;
+    m_TimerSlot = -1;
+    m_EncodeFault = D3d12Fault::Kind::None;
+    m_Latest = m_Target;
+}
+
+int D3d12VideoPipeline::reserveOutput()
+{
+    std::lock_guard<std::mutex> lock(m_JobLock);
+    if (m_EncodingOutput >= 0) ++m_Overlapped;
+    if (m_EncodingOutput >= 0 && m_WaitingOutput >= 0) {
+        // Both outputs taken: the waiting picture is the older of the two not
+        // yet encoded, and the one about to be converted takes its place.
+        m_Waiting = nullptr;
+        m_WaitingOutput = -1;
+        ++m_Dropped;
+    }
+    if (m_EncodingOutput >= 0) return 1 - m_EncodingOutput;
+    if (m_WaitingOutput >= 0) return 1 - m_WaitingOutput;
+    return 1 - m_Latest;
+}
+
+void D3d12VideoPipeline::absorbEncodeLoss()
+{
+    std::string lost;
+    {
+        std::lock_guard<std::mutex> lock(m_JobLock);
+        lost = m_EncodeLost;
+    }
+    if (!lost.empty()) lose(lost);
+}
+
+void D3d12VideoPipeline::encodeLater(EncodeJob job)
+{
+    if (m_EncodeThread.joinable()) absorbEncodeLoss();
+    if (!m_EncodeThread.joinable() || !m_Lost.empty()) {
+        // No thread to hand it to: the job runs here, and hears why.
+        settle();
+        const std::string why =
+            !m_Lost.empty() ? m_Lost : std::string("the D3D12 chain is not pipelined");
+        job([why](bool, uint32_t, encode::EncoderOutput&, std::string& error) {
+            error = why;
+            return EncodeResult::Lost;
+        });
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_JobLock);
+        // A picture still waiting is older than this one: the newest wins.
+        if (m_WaitingOutput >= 0) ++m_Dropped;
+        m_Waiting = std::move(job);
+        m_WaitingOutput = m_Latest;
+    }
+    m_JobPosted.notify_one();
+}
+
+void D3d12VideoPipeline::settle()
+{
+    if (!m_EncodeThread.joinable() || std::this_thread::get_id() == m_EncodeThread.get_id()) return;
+    int kbps = 0;
+    {
+        std::unique_lock<std::mutex> lock(m_JobLock);
+        m_JobDone.wait(lock, [this] { return m_WaitingOutput < 0 && m_EncodingOutput < 0; });
+        kbps = m_PendingKbps;
+        m_PendingKbps = 0;
+    }
+    std::string why;
+    if (kbps > 0 && m_Encoder && !m_Encoder->setBitrate(kbps, why))
+        log::warning("[native] bitrate change refused: " + why);
+    absorbEncodeLoss();
+}
+
+void D3d12VideoPipeline::startEncodeThread()
+{
+    stopEncodeThread();
+    {
+        std::lock_guard<std::mutex> lock(m_JobLock);
+        m_StopEncoding = false;
+        m_Waiting = nullptr;
+        m_WaitingOutput = -1;
+        m_EncodingOutput = -1;
+        m_PendingKbps = 0;
+        m_EncodeLost.clear();
+    }
+    m_EncodeThread = std::thread([this] { encodeLoop(); });
+}
+
+void D3d12VideoPipeline::stopEncodeThread()
+{
+    if (!m_EncodeThread.joinable()) return;
+    {
+        std::lock_guard<std::mutex> lock(m_JobLock);
+        m_StopEncoding = true;
+        // A picture not started goes with the thread; the one encoding goes out.
+        if (m_WaitingOutput >= 0) ++m_Dropped;
+        m_Waiting = nullptr;
+        m_WaitingOutput = -1;
+    }
+    m_JobPosted.notify_all();
+    m_EncodeThread.join();
+    std::lock_guard<std::mutex> lock(m_JobLock);
+    m_StopEncoding = false;
+}
+
+void D3d12VideoPipeline::encodeLoop()
+{
+    // As the capture thread: a game's render thread's standing (MMCSS Games).
+    DWORD task = 0;
+    const HANDLE mmcss = ::AvSetMmThreadCharacteristicsW(L"Games", &task);
+    bool saidRefused = false;
+    for (;;) {
+        EncodeJob job;
+        int output = -1;
+        Output picture;
+        int kbps = 0;
+        std::string lostBefore;
+        {
+            std::unique_lock<std::mutex> lock(m_JobLock);
+            m_JobPosted.wait(lock, [this] { return m_StopEncoding || m_WaitingOutput >= 0; });
+            if (m_StopEncoding) break;
+            job = std::move(m_Waiting);
+            m_Waiting = nullptr;
+            output = m_WaitingOutput;
+            m_WaitingOutput = -1;
+            m_EncodingOutput = output;
+            // The job reads the conversion's timing, or frees it.
+            picture = m_Outputs[output];
+            m_Outputs[output].timerSlot = -1;
+            m_Outputs[output].fault = D3d12Fault::Kind::None;
+            kbps = m_PendingKbps;
+            m_PendingKbps = 0;
+            lostBefore = m_EncodeLost;
+        }
+        std::string why;
+        if (kbps > 0 && lostBefore.empty() && !m_Encoder->setBitrate(kbps, why) && !saidRefused) {
+            saidRefused = true;
+            log::warning("[native] bitrate change refused: " + why);
+        }
+        std::string lost;
+        const EncodePicture encodePicture = [&](bool forceKeyframe, uint32_t frameNumber,
+                                                encode::EncoderOutput& out,
+                                                std::string& error) -> EncodeResult {
+            if (!lostBefore.empty()) {
+                error = lostBefore;
+                return EncodeResult::Lost;
+            }
+            const EncodeResult result =
+                encodeOutput(output, picture, forceKeyframe, frameNumber, out, lost, error);
+            picture.timerSlot = -1;
+            return result;
+        };
+        // Nothing may escape a std::thread: it would end the worker process.
+        try {
+            job(encodePicture);
+        } catch (const std::exception& e) {
+            lost = std::string("the encode thread threw: ") + e.what();
+        } catch (...) {
+            lost = "the encode thread threw";
+        }
+        if (picture.timerSlot >= 0) {
+            std::lock_guard<std::mutex> timer(m_TimerLock);
+            m_Timer.cancel(picture.timerSlot);
+        }
+        {
+            std::lock_guard<std::mutex> lock(m_JobLock);
+            if (!lost.empty() && m_EncodeLost.empty()) m_EncodeLost = lost;
+            m_EncodingOutput = -1;
+            ++m_Jobs;
+        }
+        m_JobDone.notify_all();
+    }
+    if (mmcss) ::AvRevertMmThreadCharacteristics(mmcss);
 }
 
 bool D3d12VideoPipeline::setBitrate(int bitrateKbps, std::string& error)
@@ -617,6 +910,18 @@ bool D3d12VideoPipeline::setBitrate(int bitrateKbps, std::string& error)
     if (!m_Encoder) {
         error = "no encoder";
         return false;
+    }
+    if (m_EncodeThread.joinable()) {
+        std::lock_guard<std::mutex> lock(m_JobLock);
+        if (m_EncodingOutput >= 0 || m_WaitingOutput >= 0) {
+            // The encoder is the encode thread's: the target goes with its
+            // next picture, the newest target winning.
+            m_PendingKbps = bitrateKbps;
+            return true;
+        }
+        // Idle, and only this thread posts: the encoder is this thread's.
+        m_PendingKbps = 0;
+        return m_Encoder->setBitrate(bitrateKbps, error);
     }
     return m_Encoder->setBitrate(bitrateKbps, error);
 }
@@ -647,11 +952,21 @@ bool D3d12VideoPipeline::takeResampleCost(int64_t& costUs)
 
 bool D3d12VideoPipeline::dropResample()
 {
+    // The scaler's textures go with it. One picture at a time, the frame in
+    // flight was waited for by its encode; pipelined, the last conversion may
+    // still be running.
+    if (m_Pipelined && m_Converter && m_Converter->scaleFilter() != convert::ScaleFilter::Bilinear)
+        drain();
     return m_Converter && m_Converter->dropResample();
 }
 
 void D3d12VideoPipeline::logEndOfSession() const
 {
+    if (m_Jobs > 0 || m_Dropped > 0)
+        log::info("[native] D3D12 chain pipelined: " + std::to_string(m_Jobs) +
+                  " pictures encoded on the encode thread, " + std::to_string(m_Overlapped) +
+                  " converted while it encoded, " + std::to_string(m_Dropped) +
+                  " dropped for a newer one");
     if (m_TimedFrames == 0) return;
     char mean[32];
     std::snprintf(mean, sizeof(mean), "%.2f",

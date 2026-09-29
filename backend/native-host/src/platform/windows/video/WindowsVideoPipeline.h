@@ -27,6 +27,7 @@
 #include <d3d11.h>
 
 #include <cstdint>
+#include <functional>
 #include <string>
 
 namespace mw::native {
@@ -182,6 +183,37 @@ public:
     virtual int intraRefreshHorizonFrames() const = 0;
     virtual bool supportsReferenceInvalidation() const = 0;
     virtual bool invalidateReference(uint32_t frameNumber, std::string& error) = 0;
+
+    // ── Two pictures in flight (plan Phase 10, pipelined=1) ────────────────
+    //
+    // The loop above encodes one picture at a time: the capture thread waits
+    // for the bitstream before it acquires the next present, so where the
+    // conversion and the encode together take more than the frame interval,
+    // presents are missed. Pipelined, the encode and the delivery run on a
+    // thread of their own, and the capture thread converts the next picture
+    // meanwhile: two outputs, at most two pictures in flight — one encoding,
+    // one converted and waiting — and a waiting picture is dropped for a newer
+    // one rather than queued. A bench key: nothing in the product asks for it.
+
+    /// Encodes the picture a job was posted for: encode(), for the picture
+    /// converted when the job was posted rather than the latest.
+    using EncodePicture = std::function<EncodeResult(
+        bool forceKeyframe, uint32_t frameNumber, encode::EncoderOutput& out, std::string& error)>;
+    /// A picture's encode and delivery, run on the encode thread — which owns
+    /// the encoder while it runs: invalidateReference() and releaseOutput()
+    /// are the job's to call there, as emit() calls them on the capture
+    /// thread.
+    using EncodeJob = std::function<void(const EncodePicture& encode)>;
+
+    /// Whether this build runs pipelined: two outputs and the encode thread.
+    virtual bool pipelined() const { return false; }
+    /// Hand the picture the last conversion wrote to the encode thread, which
+    /// runs @p job when it gets to it — at once when it is idle. A job still
+    /// waiting there is dropped for this one: the newest picture wins.
+    virtual void encodeLater(EncodeJob job) { (void)job; }
+    /// Wait until the encode thread holds no picture — before the capture
+    /// thread uses the encoder itself (a re-send, a rebuild).
+    virtual void settle() {}
 
     // ── Output and colour ──────────────────────────────────────────────────
 

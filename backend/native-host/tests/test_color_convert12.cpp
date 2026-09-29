@@ -536,6 +536,55 @@ void run_color_convert12_tests()
         }
     }
 
+    // Two outputs (plan Phase 10, pipelined=1): the second written exactly as
+    // the first — its band cleared on its own first use — and each left alone
+    // while the other is written.
+    {
+        const std::vector<uint8_t> pixels = picture(64, 60, false, false);
+        convert::ColorConvert12 converter;
+        std::string why;
+        CHECK(converter.init(rig.device->device(), rig.queue.queue.Get(),
+                             DXGI_FORMAT_B8G8R8A8_UNORM, 64, 60, 64, 60, 64, 64, false,
+                             SF::Bilinear, why));
+        CHECK(converter.outputs() == 1);
+        CHECK(converter.addOutput(why));
+        CHECK(converter.outputs() == 2 && converter.output(1) != nullptr &&
+              converter.output(1) != converter.output(0));
+        ComPtr<ID3D12Resource> source12 =
+            rig.texture(64, 60, DXGI_FORMAT_B8G8R8A8_UNORM, pixels, error);
+        if (source12 && converter.outputs() == 2) {
+            const capture::CursorState cursor = pointer(20, 9);
+            ID3D12GraphicsCommandList* list = rig.begin();
+            converter.selectOutput(0);
+            CHECK(
+                converter.recordConvert(list, source12.Get(), cursor, convert::CursorDraw{}, why));
+            CHECK(rig.run(error));
+            const std::vector<uint8_t> first = rig.planes(converter.output(0), 64, 64, 1, error);
+            list = rig.begin();
+            converter.selectOutput(1);
+            CHECK(converter.output() == converter.output(1));
+            CHECK(
+                converter.recordConvert(list, source12.Get(), cursor, convert::CursorDraw{}, why));
+            CHECK(rig.run(error));
+            const std::vector<uint8_t> second = rig.planes(converter.output(1), 64, 64, 1, error);
+            const bool same = !first.empty() && first == second;
+            CHECK(same);
+            list = rig.begin();
+            CHECK(converter.recordClearBlack(list, why));
+            CHECK(rig.run(error));
+            const std::vector<uint8_t> black = rig.planes(converter.output(1), 64, 64, 1, error);
+            bool cleared = black.size() == 64 * 64 * 3 / 2;
+            for (size_t i = 0; cleared && i < black.size(); ++i)
+                cleared = black[i] == (i < 64 * 64 ? 16 : 128);
+            CHECK(cleared);
+            const bool untouched = rig.planes(converter.output(0), 64, 64, 1, error) == first;
+            CHECK(untouched);
+            std::fprintf(stderr, "  two outputs: second %s, black on the second %s, first %s\n",
+                         same ? "identical" : "DIFFERENT", cleared ? "cleared" : "NOT cleared",
+                         untouched ? "untouched" : "OVERWRITTEN");
+        }
+    }
+
     std::string gone;
     CHECK(!rig.device->removed(gone));
 #endif
