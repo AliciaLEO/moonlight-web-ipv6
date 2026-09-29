@@ -4511,6 +4511,102 @@ mêmes réglages, deux tours :
   `stillsplit`) sont dans `c13-after-filler-2026-09-29.tgz`. Ceux d'avant, dans
   `c13-benches-2026-09-29.tgz`.
 
+## 8p. Framerate « Hôte » : l'âge du contenu (29-30/09/2026, provisoire)
+
+Plan `framerate-hote`, design §33. Tout passe par des clés de banc :
+`MW_NATIVE_TUNING=cadence=host|host-ceiling|host-guarded` et `MW_VDD_REFRESH`.
+Le critère est l'**âge du contenu affiché** chez le client : depuis quand
+existe, sur l'hôte, l'image que le client montre à un instant quelconque
+(`scripts/bench/content-age`, README).
+
+### 8p.0 Le montage
+
+- Hôte DualRTX, instance `--dev` (18080/18443), relancée à chaque passe avec
+  ses clés (`local_matrix.py`) ; écran virtuel **du produit** (tuile « Virtual
+  Display »), rendu par l'Arc (D3D12 Video Encode HEVC) ou par la RTX (NVENC
+  D3D11, `--vdd-gpu`), à la taille du client.
+- Contenu : `scroll.html?band=time&px=600`, à la fréquence de l'écran, sa bande
+  calée par CDP sur l'horloge de l'hôte (40 échanges, < 0,3 ms).
+- Clients : Chrome sur DualRTX (iGPU AMD, écran à 60 Hz : mise au point
+  seulement, son rAF suit l'écran virtuel) ; mw-mac (M1 Pro, Chrome 154, écran à
+  120 Hz, tearing, **Wi-Fi**, CDP par tunnel SSH).
+- 30 s mesurées par passe, toutes les images lues (`every: 1`). Sorties dans
+  `bench-out/content-age/<série>-v<Hz>-<cadence>-r<n>.{json,host.txt}` ;
+  `age.py table <série>` résume.
+
+### 8p.1 L'instrument, vérifié
+
+- Estimateur d'horloge du client contre l'horloge exacte de l'hôte (client sur
+  la même machine, même compteur) : +0,01 à +0,08 ms.
+- 1 800 bandes lues sur 1 800 images décodées, aucune invalide ; lecture par
+  `VideoFrame.copyTo`, sans coût mesurable sur le fil principal. La relecture du
+  canevas coûtait 13-14 ms par lecture sur l'iGPU AMD : écartée.
+- L'âge de la capture tombe à 1-4 ms de l'E2E de l'overlay.
+
+### 8p.2 Client DualRTX (mise au point), Arc, une passe par case
+
+| Écran virtuel | Auto (60 i/s) | host | host-ceiling | host-guarded |
+|---|---|---|---|---|
+| 60 Hz | 50,5 | 51,2 | 50,0 | 33,0 (page rapide à ce lancement) |
+| 240 Hz | 36,3 | 557 | 561 | 81,9 |
+| 500 Hz | 31,7 | 697 | 676 | 81,0 |
+
+L'iGPU décode ~120 images/s en 1440p : tout mode hôte au-delà le noie. Signaux
+du crédit sur ce client (240 / 500 Hz) : `decodeQueueSize` 82 / 81,
+`pending` 51-60 / 42-49, `delay` 89 / 94, `delay30` 68 / 96, `mixed` 73 / 66.
+
+### 8p.3 Client mw-mac, Arc
+
+Soirée du 29/09, deux passes alternées par case, signal du crédit du plan
+(`decodeQueueSize`) :
+
+| Écran virtuel | Auto (120 i/s) | host | host-ceiling | host-guarded |
+|---|---|---|---|---|
+| 120 Hz | 52,1 | 49,0 | 49,0 | 50,0 |
+| 240 Hz | 42,5 | 31,1 | 35,6 | 38,4 |
+| 500 Hz | 38,6 | 116 | 185 | 53,6 |
+
+Nuit du 29 au 30/09, **quatre** passes par case, signal `delay` :
+
+| Écran virtuel | Auto | host | host-guarded | avant la capture (Auto) |
+|---|---|---|---|---|
+| 120 Hz | 52,2 | 51,1 | 53,3 | 16,3 |
+| 240 Hz | 41,2 | 35,4 | **35,1** | 5,9 |
+| 500 Hz | 43,6 | 188 | 51,0 | 2,5 |
+
+### 8p.4 Client mw-mac, RTX (nuit, deux passes par case, `delay`)
+
+| Écran virtuel | Auto | host | host-guarded | avant la capture (Auto) |
+|---|---|---|---|---|
+| 120 Hz | 36,1 | 42,9 ¹ | 34,7 | 7,6 |
+| 240 Hz | 34,9 | 33,8 | **32,2** | 7,8 |
+| 500 Hz | 34,8 | 182 | 115 | 3,8 |
+
+¹ Une passe où la page était lente (11,9 ms avant la capture).
+
+### 8p.5 Ce que le banc a appris sur lui-même
+
+- La page de contenu a sa propre chaîne jusqu'à l'écran de l'hôte, qui varie
+  d'un lancement à l'autre (5 à 22 ms sur le même écran virtuel à 60 Hz), et
+  qui dépend du GPU qui la rend (16 ms sur l'Arc, 8 sur la RTX à 120 Hz) :
+  répéter et alterner, et lire aussi `since capture`.
+- Le Wi-Fi du Mac : ±10 ms d'une série à l'autre, après la capture.
+- L'écran virtuel à 500 Hz n'est pas toujours accepté : sur un XML étranger qui
+  a accumulé un second mode à 500 Hz, l'écran n'apparaissait plus du tout, à
+  aucune fréquence. `local_matrix.py` remet le XML avant chaque passe.
+- Une activation qui échoue laisse le nœud de l'écran virtuel activé sans
+  écran : seul le démarrage suivant de l'instance l'éteint (défaut du produit,
+  §9 du plan).
+- L'écran physique de la RTX de DualRTX a quitté Windows pendant une série de
+  bascules de l'écran virtuel (29/09, 21:41), sans revenir au rebranchement.
+
+### 8p.6 Ce qui manque avant la porte
+
+Clients en Ethernet (UM790Pro sous Linux, N95, portable 610M), mode vsync du
+client, contenus texte et RE9, deux débits, iPhone / iPad / Android et
+caméra (Bruno), et un signal du crédit qui vaille sur les deux familles de
+décodeurs.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
