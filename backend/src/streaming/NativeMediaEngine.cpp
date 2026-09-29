@@ -18,6 +18,7 @@
 #include "NativeMediaEngine.h"
 #include "InputWatchdog.h"
 #include "NativeBench.h"
+#include "../server/AppSettings.h"
 
 #include "mw/native/NativeHost.h"
 
@@ -228,17 +229,27 @@ void NativeMediaEngine::startCapture(const StartParams& params)
 
     // The bench's encoder knobs, on a real session, from the environment: the
     // one way to put two encoder settings in front of a person on the same
-    // screen (plan v2 §5, the A/B). Never set in production — nothing in the
-    // product writes it — and logged loudly when it is, so a stray variable
+    // screen (plan v2 §5, the A/B). Or, when the variable is absent, from
+    // settings.json's hand-added "native_tuning": a SYSTEM worker gets its
+    // environment from the launcher service, built from SYSTEM's, and the
+    // variable never reaches it. Never set in production — nothing in the
+    // product writes either — and logged loudly when one is, so a stray knob
     // cannot pass for the engine's own choice.
-    const QString tuningSpec = qEnvironmentVariable("MW_NATIVE_TUNING");
+    QString tuningSpec = qEnvironmentVariable("MW_NATIVE_TUNING");
+    QString tuningSource = QStringLiteral("MW_NATIVE_TUNING");
+    if (tuningSpec.isEmpty()) {
+        tuningSpec = AppSettings().nativeTuning();
+        tuningSource = QStringLiteral("settings.json native_tuning");
+    }
     if (!tuningSpec.isEmpty()) {
         QString parseError;
         if (parseEncoderTuningSpec(tuningSpec, config.tuning, config.encodeGpuId, parseError))
-            qWarning().noquote() << "[NativeMediaEngine] MW_NATIVE_TUNING in effect:" << tuningSpec
+            qWarning().noquote() << "[NativeMediaEngine]" << tuningSource
+                                 << "in effect:" << tuningSpec
                                  << "— this session does not run the engine's own settings";
         else
-            qWarning().noquote() << "[NativeMediaEngine] MW_NATIVE_TUNING ignored:" << parseError;
+            qWarning().noquote() << "[NativeMediaEngine]" << tuningSource
+                                 << "ignored:" << parseError;
     }
     m_NameLinkDrops.store(config.tuning.nameLinkDrops == mw::native::EncoderTuning::Choice::On,
                           std::memory_order_release);

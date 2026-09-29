@@ -589,6 +589,12 @@ bool AppSettings::keyboardDebug() const
     return obj.value("keyboard_debug").toBool(false);
 }
 
+QString AppSettings::nativeTuning() const
+{
+    QJsonObject obj = readAll();
+    return obj.value("native_tuning").toString().trimmed();
+}
+
 // ── Router ports ─────────────────────────────────────────────────────────────
 // What the allocator obtained last time. Read and rewritten as a whole object
 // so a partial write can never leave the tunnel list and the media map

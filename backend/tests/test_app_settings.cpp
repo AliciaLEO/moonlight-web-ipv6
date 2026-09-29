@@ -356,6 +356,21 @@ void run_app_settings_tests()
         CHECK(!s.readAll().contains("router_ports"));
     }
 
+    // The bench's engine knobs: absent, empty and never seeded; read trimmed
+    // once hand-added.
+    CHECK(s.nativeTuning().isEmpty());
+    {
+        s.seedDocumentedDefaults();
+        CHECK(!s.readAll().contains("native_tuning"));
+        QJsonObject obj = s.readAll();
+        obj["native_tuning"] = " namedrops=1 ";
+        s.writeAll(obj);
+        CHECK_EQ(s.nativeTuning(), QString("namedrops=1"));
+        obj.remove("native_tuning");
+        s.writeAll(obj);
+        CHECK(s.nativeTuning().isEmpty());
+    }
+
     // Low-level access.
     QJsonObject all = s.readAll();
     CHECK(all.contains("http_port"));

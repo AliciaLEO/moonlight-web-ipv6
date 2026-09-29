@@ -3907,6 +3907,14 @@ puis `preset=1,aq=1`, puis rien (P4). Le log dit « MW_NATIVE_TUNING in effect �
 et la ligne « NVENC ready » porte `[bench: preset=P1]`. La variable n'est lue que
 par le moteur natif, jamais posée par le produit.
 
+**Sur une édition installée**, la variable n'atteint pas le worker. Il est
+SYSTEM, et le service lanceur lui construit l'environnement de SYSTEM. On
+ajoute donc à la main `"native_tuning": "namedrops=1"` dans le `settings.json`
+de l'édition. Le worker le lit au début de chaque session, quand la variable
+est absente, et le journal dit « settings.json native_tuning in effect ». Rien
+à redémarrer : la clé vaut pour le stream suivant. Le produit ne l'écrit
+jamais ; la retirer rend la session au moteur.
+
 ## 10. Reproduire
 
 ```

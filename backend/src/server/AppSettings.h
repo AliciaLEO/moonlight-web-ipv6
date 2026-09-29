@@ -127,6 +127,18 @@ public:
 
     bool keyboardDebug() const;
 
+    // ── The bench's engine knobs on a real session ────────────────────────────
+    //
+    // "native_tuning": the same `key=value,…` string as MW_NATIVE_TUNING (see
+    // NativeBench.h), read by the native engine at each session start when the
+    // variable is absent. It is the way to give them to a SYSTEM worker: the
+    // launcher service builds that process's environment from SYSTEM's, and
+    // nothing of the server's reaches it. File-only and never seeded, like
+    // keyboard_debug: an instrument for an A/B on an installed edition, logged
+    // loudly whenever it is in effect. Empty by default.
+
+    QString nativeTuning() const;
+
     // ── Stream bitrate ────────────────────────────────────────────────────────
     //
     // Target bitrate in kbps. Stored as JSON int "stream_bitrate", default 20000.
