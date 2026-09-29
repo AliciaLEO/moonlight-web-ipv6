@@ -16,6 +16,7 @@
  */
 
 #include "MoonlightShim.h"
+#include "AnnexBFiller.h"
 #include "InputWatchdog.h"
 
 #include "common/MacActivity.h"
@@ -527,6 +528,30 @@ int MoonlightShim::drSubmitDecodeUnit(PDECODE_UNIT decodeUnit)
             }
         }
         fflush(stderr);
+    }
+
+    // Filler NALs out before anything else sees the frame: a CBR encoder's
+    // padding is bandwidth on the link and, placed ahead of the slice, a
+    // keyframe some decoders refuse (AnnexBFiller.h). AV1 has no start codes.
+    const int videoFormat = instance->m_NegotiatedVideoFormat.load(std::memory_order_acquire);
+    if (videoFormat & (VIDEO_FORMAT_MASK_H264 | VIDEO_FORMAT_MASK_H265)) {
+        const size_t kept = AnnexBFiller::strip(reinterpret_cast<uint8_t*>(frameData.data()),
+                                                static_cast<size_t>(frameData.size()),
+                                                (videoFormat & VIDEO_FORMAT_MASK_H265) != 0);
+        if (kept != static_cast<size_t>(frameData.size())) {
+            const int64_t strippedBytes = frameData.size() - static_cast<int64_t>(kept);
+            frameData.truncate(static_cast<int>(kept));
+            const int64_t frames =
+                instance->m_FillerFrames.fetch_add(1, std::memory_order_relaxed) + 1;
+            const int64_t total =
+                instance->m_FillerBytes.fetch_add(strippedBytes, std::memory_order_relaxed) +
+                strippedBytes;
+            if (frames == 1 || frames % 1800 == 0) {
+                qInfo() << "[MoonlightShim] Host pads its frames with filler data — not sent:"
+                        << strippedBytes << "bytes off frame" << decodeUnit->frameNumber << "("
+                        << kept << "kept);" << frames << "frames," << (total / 1024) << "KB so far";
+            }
+        }
     }
 
     // Measure the time spent in buffer concatenation — contributes to decode latency.

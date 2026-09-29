@@ -341,6 +341,10 @@ private:
     // 0 = unknown, 0x0001 = H.264, 0x0100 = HEVC, 0x0200 = AV1.
     std::atomic<int> m_NegotiatedVideoFormat{0};
 
+    // Filler NALs stripped from the host's frames (AnnexBFiller.h), for the log.
+    std::atomic<int64_t> m_FillerFrames{0};
+    std::atomic<int64_t> m_FillerBytes{0};
+
     // Opus samples-per-frame negotiated in arInit (48 kHz). Default 240 (5 ms).
     std::atomic<int> m_AudioSamplesPerFrame{240};
 
