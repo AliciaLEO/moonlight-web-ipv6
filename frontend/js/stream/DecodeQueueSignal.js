@@ -77,3 +77,55 @@ export class DecodeQueueSignal {
         return null;
     }
 }
+
+/**
+ * The decode queue measured as a delay rather than as a count (bench variant
+ * `mw_decodequeue=delay`, plan framerate-hote).
+ *
+ * A count cannot be right for every decoder. decodeQueueSize sees only what
+ * waits in front of the decoder: under a 500 Hz host, DualRTX's iGPU held
+ * eight frames inside it behind a depth of two. The frames given to decode()
+ * and not yet out of it count those too, but an Apple M1 keeps more than one
+ * in flight while it keeps up with 240 a second — counted, it read as a
+ * queue and held the stream back for nothing.
+ *
+ * A queue is time: the oldest frame still in the decoder has waited longer
+ * than a decode usually takes. That excess, in frames of the stream, plus
+ * the one being decoded, is the depth this gives — 1 while the decoder keeps
+ * up, whatever its own pipeline, 2 once a whole frame interval is standing.
+ */
+export class DecodeDelay {
+    /** @param {number} [windowMs] how far back the usual decode time is looked for */
+    constructor(windowMs = 2000) {
+        this._windowMs = windowMs;
+        /** @type {Array<[number, number]>} [output time, latency], latencies increasing */
+        this._mins = [];
+    }
+
+    /** A frame came out of the decoder @p latencyMs after decode(), at @p now. */
+    noteLatency(latencyMs, now) {
+        if (!(latencyMs >= 0)) return;
+        // A sliding minimum: a later, faster decode makes every slower one
+        // before it irrelevant.
+        while (this._mins.length && this._mins[this._mins.length - 1][1] >= latencyMs)
+            this._mins.pop();
+        this._mins.push([now, latencyMs]);
+        while (this._mins.length && this._mins[0][0] < now - this._windowMs) this._mins.shift();
+    }
+
+    /** The usual decode time: the fastest over the window, 0 before any. */
+    get usualMs() {
+        return this._mins.length ? this._mins[0][1] : 0;
+    }
+
+    /**
+     * The queue's depth, in frames, when the oldest frame still in the
+     * decoder was given to it @p oldestAgeMs ago (0: none) and frames arrive
+     * every @p intervalMs.
+     */
+    depth(oldestAgeMs, intervalMs) {
+        if (!(oldestAgeMs > 0)) return 0;
+        const interval = intervalMs > 0.5 ? intervalMs : 16.7;
+        return 1 + Math.max(0, Math.floor((oldestAgeMs - this.usualMs) / interval));
+    }
+}

@@ -13,7 +13,7 @@
  * told it is clear, and when it is told nothing.
  */
 import { describe, it, expect } from 'vitest';
-import { DecodeQueueSignal, REFRESH_MS } from '../js/stream/DecodeQueueSignal.js';
+import { DecodeDelay, DecodeQueueSignal, REFRESH_MS } from '../js/stream/DecodeQueueSignal.js';
 
 describe('DecodeQueueSignal', () => {
     it('says nothing while the queue stays at one frame or none', () => {
@@ -65,5 +65,41 @@ describe('DecodeQueueSignal', () => {
         expect(s.observe(undefined, 0)).toBeNull();
         expect(s.observe(-3, 1)).toBeNull();
         expect(s.observe(NaN, 2)).toBeNull();
+    });
+});
+
+describe('DecodeDelay', () => {
+    it('reads a deep but steady decoder pipeline as keeping up', () => {
+        // An M1-like decoder: every frame takes 9 ms, frames every 4.2 ms, so
+        // two or three are always in flight — and none is late.
+        const d = new DecodeDelay();
+        for (let t = 0; t < 1000; t += 4.2) d.noteLatency(9, t);
+        expect(d.usualMs).toBe(9);
+        expect(d.depth(9, 4.2)).toBe(1);
+        expect(d.depth(12, 4.2)).toBe(1);
+        expect(d.depth(0, 4.2)).toBe(0);
+    });
+
+    it('reads a frame waiting a whole interval beyond a usual decode as a queue', () => {
+        const d = new DecodeDelay();
+        for (let t = 0; t < 1000; t += 4.2) d.noteLatency(3, t);
+        expect(d.depth(3 + 4.3, 4.2)).toBe(2);
+        expect(d.depth(3 + 30, 4.2)).toBe(8);
+    });
+
+    it('follows the usual decode time as it changes, over its window', () => {
+        const d = new DecodeDelay(2000);
+        d.noteLatency(2, 0);
+        for (let t = 100; t < 3000; t += 10) d.noteLatency(6, t);
+        // The 2 ms decode is more than two seconds old: 6 ms is usual now.
+        expect(d.usualMs).toBe(6);
+        expect(d.depth(8, 16.7)).toBe(1);
+    });
+
+    it('falls back to a 60 fps interval when the arrival rate is unknown', () => {
+        const d = new DecodeDelay();
+        d.noteLatency(5, 0);
+        expect(d.depth(5 + 17, 0)).toBe(2);
+        expect(d.depth(5 + 16, 0)).toBe(1);
     });
 });

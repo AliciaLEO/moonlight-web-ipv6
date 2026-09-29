@@ -82,7 +82,7 @@ import {
     formatMainThread,
 } from '../stream/PipelineDiag.js';
 import { shouldFlushAtKeyframe } from '../stream/DecodeQueuePolicy.js';
-import { DecodeQueueSignal } from '../stream/DecodeQueueSignal.js';
+import { DecodeDelay, DecodeQueueSignal } from '../stream/DecodeQueueSignal.js';
 import { DecodeRateGovernor } from '../stream/DecodeRateGovernor.js';
 import {
     EnhancerGovernor,
@@ -1503,11 +1503,13 @@ export class StreamView {
         // sees only what waits IN FRONT of the decoder; a hardware decoder
         // holds several more (8 frames measured behind a depth of 2 on
         // DualRTX's iGPU). 'pending' counts every frame given to decode() and
-        // not yet out of it.
-        this._queueSignalPending = false;
+        // not yet out of it; 'delay' measures how long the oldest of them has
+        // waited beyond a usual decode (DecodeDelay).
+        this._queueSignalMode = '';
         try {
-            this._queueSignalPending = localStorage.getItem('mw_decodequeue') === 'pending';
+            this._queueSignalMode = localStorage.getItem('mw_decodequeue') || '';
         } catch (e) {}
+        this._decodeDelay = new DecodeDelay();
         // Last config applied to the decoder, re-applied after a queue flush.
         this._activeDecoderCfg = null;
         // Last EncodedVideoChunk timestamp (µs) — enforces monotonicity.
@@ -3417,10 +3419,25 @@ export class StreamView {
     /** Tell a native host where the decode queue stands (DecodeQueueSignal). */
     _tellDecodeQueue() {
         if (!this._nativeHost || !this.decoder) return;
-        const depth = this._queueSignalPending
-            ? this._chunkSubmitTimes.size
-            : this.decoder.decodeQueueSize;
-        const msg = this._queueSignal.observe(depth, performance.now());
+        const now = performance.now();
+        let depth = this.decoder.decodeQueueSize;
+        if (this._queueSignalMode === 'pending') {
+            depth = this._chunkSubmitTimes.size;
+        } else if (this._queueSignalMode === 'delay') {
+            // The oldest frame still in the decoder: the map keeps decode()
+            // order and loses each entry at its output. One gone for longer
+            // than any decode takes was dropped by the decoder, not queued.
+            let oldestAge = 0;
+            for (const [ts, e] of this._chunkSubmitTimes) {
+                if (now - e.perf < 1000) {
+                    oldestAge = now - e.perf;
+                    break;
+                }
+                this._chunkSubmitTimes.delete(ts);
+            }
+            depth = this._decodeDelay.depth(oldestAge, this._diag.arrivalAvgMs);
+        }
+        const msg = this._queueSignal.observe(depth, now);
         if (msg) this._sendToHost(msg);
     }
 
@@ -3469,6 +3486,7 @@ export class StreamView {
             this._chunkSubmitTimes.delete(frame.timestamp);
             const decodeMs = outPerf - submit.perf;
             if (decodeMs >= 0 && decodeMs < 5000) this._clientDecodeStats.addSample(decodeMs);
+            this._decodeDelay.noteLatency(decodeMs, outPerf);
             frame._mwDecodedPerf = outPerf;
             backendTs = submit.backendTs;
         }

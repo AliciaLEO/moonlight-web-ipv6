@@ -159,6 +159,50 @@ def line(d):
                 "" if d.get("clockErrorMs") is None else "  clock %+.2f" % d["clockErrorMs"]))
 
 
+def table(args):
+    """One row per virtual display rate × cadence, the mean of its passes'
+    medians: <prefix>-v<rate>-<cadence>-r<n>.json, as local_matrix.py names
+    them, with the host's own lines beside (.host.txt)."""
+    import glob
+    import re
+    rows = {}
+    for p in sorted(glob.glob(os.path.join(OUT, args.prefix + "-v*-r*.json"))):
+        m = re.search(r"-v(\d+)-(.+)-r(\d+)\.json$", p)
+        if not m:
+            continue
+        with open(p) as f:
+            d = json.load(f)
+        host = ""
+        hp = p[:-5] + ".host.txt"
+        if os.path.exists(hp):
+            with open(hp, encoding="utf-8", errors="replace") as f:
+                host = f.read()
+        pres = re.search(r"(\d+) presents in ([\d.]+) s", host)
+        held = re.search(r"decode credit: (\d+) presents held back \((\d+)/s\)", host)
+        rows.setdefault((int(m.group(1)), m.group(2)), []).append({
+            "shown": (d.get("shown") or {}).get("medianMs"),
+            "p99": (d.get("shown") or {}).get("p99Ms"),
+            "since": (d.get("shownSinceCapture") or {}).get("medianMs"),
+            "capture": (d.get("capture") or {}).get("medianMs"),
+            "before": (d.get("beforeCapture") or {}).get("medianMs"),
+            "draws": d.get("drawsPerSecond"),
+            "pres": int(pres.group(1)) / float(pres.group(2)) if pres else None,
+            "held": int(held.group(2)) if held else None,
+        })
+    order = {c: i for i, c in enumerate(["client", "host", "host-ceiling", "host-guarded"])}
+    mean = lambda xs: (sum(xs) / len(xs)) if xs else None
+    fmt = lambda v, w=6: ("%*.1f" % (w, v)) if isinstance(v, (int, float)) else " " * (w - 1) + "-"
+    print("%5s %-14s %2s %6s %6s %6s %6s %6s %6s %6s %5s" % (
+        "Hz", "cadence", "n", "shown", "p99", "since", "capt", "before", "draw/s", "pres/s", "held"))
+    for (rate, cad) in sorted(rows, key=lambda k: (k[0], order.get(k[1], 9), k[1])):
+        rs = rows[(rate, cad)]
+        col = lambda k: mean([r[k] for r in rs if r[k] is not None])
+        print("%5d %-14s %2d %s %s %s %s %s %s %s %s" % (
+            rate, cad, len(rs), fmt(col("shown")), fmt(col("p99")), fmt(col("since")),
+            fmt(col("capture")), fmt(col("before")), fmt(col("draws")), fmt(col("pres")),
+            fmt(col("held"), 5)))
+
+
 def summary(args):
     for p in args.files:
         with open(p) as f:
@@ -179,10 +223,12 @@ def main():
     r.add_argument("--tag", required=True)
     r.add_argument("--remote", dest="local", action="store_false", default=None,
                    help="a client on another machine, even through a tunnel: no clock check")
+    t = sub.add_parser("table")
+    t.add_argument("prefix")
     s = sub.add_parser("summary")
     s.add_argument("files", nargs="+")
     args = ap.parse_args()
-    {"calibrate": calibrate, "run": run, "summary": summary}[args.cmd](args)
+    {"calibrate": calibrate, "run": run, "table": table, "summary": summary}[args.cmd](args)
 
 
 if __name__ == "__main__":

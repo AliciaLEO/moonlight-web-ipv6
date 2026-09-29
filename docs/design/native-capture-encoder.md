@@ -6400,3 +6400,138 @@ rapportés ; une file de décodage qui tient, ou une descente de l'échelle,
 invalide la passe. La recommandation au produit vise `host-guarded`, à la
 fréquence d'écran virtuel la plus haute qui garde les i/s du jeu à −3 % près.
 Bruno tranche.
+
+### 33.5 Ce qui est construit (29/09/2026)
+
+**Les clés** (Windows seulement ; Linux et macOS gardent leur copie du choix et
+ignorent la clé) :
+- Le choix de la cadence sort de `WindowsSession` pour `core/CadenceChoice.h`,
+  une fonction pure. Sans clé, c'est le même choix et la même ligne de journal,
+  mot pour mot (tests natifs). Avec `cadence=host…`, la ligne dit « the host's
+  rate » et nomme les plafonds reçus et non appliqués ; un plafond qui arrive
+  en cours de session est journalisé de même.
+- Le crédit (`core/DecodeCredit.h`) : le client dit la profondeur de sa file
+  (`decodequeue`, `DecodeQueueSignal.js`) dès qu'une deuxième image attend, la
+  redit toutes les 50 ms tant qu'elle reste pleine, et dit quand elle est
+  revenue à une. L'hôte retient la présentation qu'il allait encoder tant que
+  le dernier mot est « deux ou plus » et date de moins de 250 ms. L'image
+  retenue est toujours la plus fraîche ; elle part dès le retour du crédit,
+  sans attendre la présentation suivante (la boucle regarde alors toutes les
+  millisecondes).
+- Écart au plan : il voulait un signal « frais d'un aller-retour ». Or le
+  client ne redit sa file qu'à ses sorties de décodeur, à quelques
+  millisecondes d'écart au mieux : un crédit qui expire après un aller-retour
+  de LAN laisserait l'hôte envoyer entre deux sorties. D'où le « clear »
+  explicite, et le délai de 250 ms comme seul garde-fou (un « clear » perdu, une
+  page partie).
+- Modèle (tests natifs) : hôte à 500 présentations/s, décodeur à 100 i/s. Sans
+  crédit, 800 images en file après deux secondes. Avec, deux au plus sur un
+  LAN. À 10 ms dans chaque sens, neuf au plus, et 183 images décodées sur 200.
+  Les seuils 2/1 gardent le débit du décodeur au prix d'environ une image en
+  file ; des seuils 1/0 videraient la file pour ~9 % d'images en moins. À
+  trancher par la mesure si la file tient sur un décodeur lent.
+- `MW_VDD_REFRESH` : la garde de chaque requête porte désormais le plafond du
+  pilote (500) ; le plafond du produit (240) s'applique là où le produit
+  choisit la fréquence (`refreshForStream`). Vérifié sur l'Arc : l'écran
+  virtuel du produit en 2560×1440 à 240 puis à 500 Hz. Sur un XML qui n'est pas
+  le nôtre (le VDD de Bruno sur DualRTX), le produit y ajoute le mode demandé ;
+  le banc sauve le fichier avant et le remet après. Ajouter 240 et 500 à la
+  liste **globale** de ce fichier a empêché l'écran d'apparaître : ne pas le
+  refaire.
+
+**L'instrument** (`ContentAgeProbe.js`, `scripts/bench/content-age`) :
+- La bande de `scroll.html?band=time` porte l'horloge `steady_clock` de l'hôte
+  (QPC sous Windows). Le pilote la cale par CDP : `time.perf_counter_ns()` de
+  CPython lit le même compteur (vérifié, 0,002 ms d'écart), et le meilleur de
+  40 échanges laisse moins de 0,3 ms d'erreur.
+- Le client lit la bande dans l'image décodée (`VideoFrame.copyTo` du seul
+  rectangle, asynchrone), date le dessin de la même image (`afterDraw`), et
+  la met sur l'horloge de l'hôte par l'estimateur du ping/pong (le pong porte
+  désormais l'heure de l'hôte). Lire le canevas coûtait 13 à 14 ms de fil
+  principal par lecture sur l'iGPU AMD, à toute cadence : écarté.
+- Trois âges par image : **contenu** (dessin − heure de la page), **capture**
+  (dessin − présentation de l'image sur l'hôte, `backendTs`) et **avant la
+  capture** (leur différence : ne dépend que des horloges de l'hôte).
+- Et l'âge de ce qui est **affiché**, qui seul compare deux cadences : l'image à
+  l'écran vieillit jusqu'à la suivante (16,7 ms de plus à 60 i/s, 2 à 500).
+  `shown` l'échantillonne toutes les 0,5 ms, `atRefresh` à chaque
+  rafraîchissement du client.
+- Contrôle sur DualRTX (client sur la même machine, même compteur) :
+  l'estimateur tombe à 0,01-0,08 ms de l'horloge exacte ; 1 800 bandes lues sur
+  1 800 images, aucune invalide.
+
+### 33.6 Premiers résultats (29/09/2026 au soir, provisoires)
+
+Hôte DualRTX, écran virtuel du produit rendu par l'Arc (D3D12 Video Encode,
+HEVC), `scroll.html` à la fréquence de l'écran, 30 s par passe. Âge médian de
+ce qui est **affiché** (`shown`), en ms.
+
+**Client sur DualRTX** (iGPU AMD, écran à 60 Hz ; mise au point seulement : son
+rAF suit l'écran virtuel), une passe :
+
+| Écran virtuel | Auto (60 i/s) | host | host-ceiling | host-guarded |
+|---|---|---|---|---|
+| 60 Hz | 50,5 | 51,2 | 50,0 | 33,0 ¹ |
+| 240 Hz | 36,3 | 557 | 561 | 81,9 (51,1 avec `pending`) |
+| 500 Hz | 31,7 | 697 | 676 | 81,0 (42,3 avec `pending`) |
+
+¹ Le crédit n'a rien retenu ; la page était plus rapide à ce lancement
+(5 ms avant la capture, contre 22).
+
+**Client mw-mac** (M1, Chrome, 120 Hz, tearing, **Wi-Fi**), moyenne de deux
+passes alternées :
+
+| Écran virtuel | Auto (120 i/s) | host | host-ceiling | host-guarded |
+|---|---|---|---|---|
+| 120 Hz | 52,1 | 49,0 | 49,0 | 50,0 |
+| 240 Hz | 42,5 | **31,1** | 35,6 | 38,4 ² |
+| 500 Hz | 38,6 | 116 | 185 | 53,6 |
+
+² Le crédit n'a presque rien retenu (12 à 14 présentations par passe) : l'écart
+avec `host` est le Wi-Fi d'une passe à l'autre, après la capture.
+
+Lecture provisoire :
+- **L'écran virtuel rapide est le gros levier, même à la cadence
+  d'aujourd'hui.** Sa part se lit avant la capture : 22 → 8 → 4 ms (60 → 240 →
+  500 Hz) sur DualRTX, 17 → 8 → 4 ms (120 → 240 → 500 Hz) avec le Mac. Le flux
+  reste à la fréquence du client : ni débit ni décodage en plus.
+- **La cadence de l'hôte ne paie que si le client décode ce rythme.** Le Mac
+  suit 240 i/s (230 dessinées) : `host` y gagne ~11 ms sur Auto au même écran
+  virtuel, et c'est le meilleur couple mesuré (−21 ms contre l'écran virtuel à
+  la fréquence du client). À 500 Hz, le Mac comme l'iGPU AMD décrochent : 0,1
+  à 0,7 s de file.
+- **Le crédit évite le pire, sans rendre utile un flux plus rapide que le
+  décodeur.** Compter `decodeQueueSize` laisse une file dans le décodeur ;
+  compter les images soumises et pas sorties (`pending`) la divise par deux.
+- **Le Wi-Fi du Mac pèse ±10 ms d'une passe à l'autre**, après la capture : une
+  passe en Ethernet, et plus de répétitions, sont nécessaires avant la porte.
+
+**Ce que le crédit doit compter** (`host-guarded`, âge affiché médian, ms) :
+
+| Client, écran virtuel | `decodeQueueSize` | `pending` | `delay` | `host` |
+|---|---|---|---|---|
+| iGPU AMD local, 240 Hz | 81,9 | 51,1 | — | 557 |
+| iGPU AMD local, 500 Hz | 81,0 | 42,3 | — | 697 |
+| Mac M1, 240 Hz | 38,4 (2 passes) | 53,6 (2) | 37,8 (1) | 31,1 (2) |
+| Mac M1, 500 Hz | 53,6 (2) | 52,0 (2) | 42,5 (1, partielle) | 116 (2) |
+
+- `decodeQueueSize` (le plan) ne voit que ce qui attend devant le décodeur :
+  l'iGPU AMD en tenait huit de plus dedans.
+- `pending` (soumises, pas encore sorties) les voit, mais le M1 en garde plus
+  d'une en vol quand il suit : sous 240 Hz, le crédit retenait 48 à 90
+  présentations par seconde pour rien.
+- `delay` (`DecodeDelay`) compte le retard de la plus ancienne image dans le
+  décodeur au-delà du décodage habituel, en intervalles du flux : indifférent
+  à la profondeur propre du décodeur. Premier chiffre bon sur le Mac ; reste à
+  le mesurer sur l'iGPU AMD, et à le répéter.
+
+**Un défaut vu en passant, antérieur à ce plan** : quand l'activation de
+l'écran virtuel échoue (« the virtual display did not appear »), le nœud reste
+activé sans écran ; seul le démarrage suivant de l'instance l'éteint
+(`resetAtStartup`). Vu deux fois le 29/09 (un XML modifié à la main, puis
+1784×1160 à 500 Hz, refusé une fois après avoir été accepté).
+
+**Et une précaution de banc** : l'écran de la RTX de DualRTX a quitté Windows
+pendant une série de bascules de l'écran virtuel (21:41), et n'est pas revenu
+au rebranchement. Les séries sur l'écran virtuel se font quand Bruno n'est pas
+devant ses écrans.
