@@ -32,6 +32,7 @@
 #include <d3d12video.h>
 #include <wrl/client.h>
 
+#include <chrono>
 #include <memory>
 #include <string>
 #include <vector>
@@ -144,6 +145,13 @@ public:
 
 private:
     bool createResources(std::string& error);
+    /// gputiming=1: two timestamps around each submission on the encode
+    /// queue, resolved into system memory (plan C11.2). False, and said once,
+    /// where the queue cannot be timed.
+    bool setUpTiming();
+    /// One submission's stamps against the time since it was @p submitted,
+    /// until they are trusted or given up (m_StampsTrusted).
+    void checkStamps(int64_t gpuUs, std::chrono::steady_clock::time_point submitted);
     /// One IDR of a blank picture, not kept: the driver's first-picture cost
     /// paid at build, and the header guard's first reading.
     bool warmUp(std::string& error);
@@ -249,6 +257,24 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> m_HwMetadata;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_Metadata; ///< system memory, mapped
     uint8_t* m_MetadataCpu = nullptr;
+
+    /// gputiming=1 (setUpTiming): the encode queue's own time for a picture,
+    /// every submission of it summed — the passes coded again included.
+    bool m_Timing = false;
+    Microsoft::WRL::ComPtr<ID3D12QueryHeap> m_StampHeap;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_Stamps; ///< system memory, mapped
+    const uint64_t* m_StampsCpu = nullptr;
+    uint64_t m_StampFrequency = 0;
+    int64_t m_PictureGpuUs = 0;
+    /// The stamps are believed once they have been seen to bracket the
+    /// encode: over the first pictures their sum against the time the CPU
+    /// waited for them. The Arc's video queue writes both before the picture
+    /// is coded (20 µs for a 4 ms picture, 29/09/2026): nothing is reported
+    /// there rather than a false figure.
+    int m_StampChecks = 0;
+    int64_t m_StampGpuUs = 0;
+    int64_t m_StampWallUs = 0;
+    bool m_StampsTrusted = false;
 
     HevcDpb m_Dpb;
     std::vector<uint8_t> m_Headers; ///< VPS (HEVC), SPS, PPS, Annex-B

@@ -421,6 +421,7 @@ bool VideoEncode12::init(const std::shared_ptr<d3d12::D3d12Device>& device, Code
         stop();
         return false;
     }
+    m_Timing = tuning.gpuTiming && setUpTiming();
     // The first encode costs what the next ones do not — the Arc spends
     // 12.7 ms on its first IDR, ~2.3 after (21/09/2026): paid here, on a blank
     // picture, and its slices are the first the guard reads, so a driver that
@@ -669,6 +670,35 @@ bool VideoEncode12::createResources(std::string& error)
     return true;
 }
 
+bool VideoEncode12::setUpTiming()
+{
+    // Resolved straight into system memory, like the metadata: a readback
+    // heap cannot be written from a video queue.
+    ID3D12Device* d = m_Device->device();
+    D3D12_QUERY_HEAP_DESC heap = {};
+    heap.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+    heap.Count = 2;
+    HRESULT h = d->CreateQueryHeap(&heap, IID_PPV_ARGS(&m_StampHeap));
+    m_Stamps = systemBuffer(d, 256);
+    void* mapped = nullptr;
+    if (SUCCEEDED(h)) h = m_Stamps ? m_Stamps->Map(0, nullptr, &mapped) : E_OUTOFMEMORY;
+    if (SUCCEEDED(h)) h = m_Queue.queue->GetTimestampFrequency(&m_StampFrequency);
+    if (FAILED(h) || m_StampFrequency == 0) {
+        log::warning("[native] D3D12 Video Encode: its queue cannot be timed (" +
+                     d3d12::hresultText(h) + ") — no gpu_encode_us");
+        m_StampHeap.Reset();
+        m_Stamps.Reset();
+        m_StampsCpu = nullptr;
+        return false;
+    }
+    m_StampsCpu = static_cast<const uint64_t*>(mapped);
+    m_StampChecks = 0;
+    m_StampGpuUs = 0;
+    m_StampWallUs = 0;
+    m_StampsTrusted = false;
+    return true;
+}
+
 ID3D12Resource* VideoEncode12::reconResource(int texture) const
 {
     return m_Setup.support.reconTextureArray ? m_Recon[0].Get()
@@ -708,6 +738,9 @@ bool VideoEncode12::submit(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
         transition(m_HwMetadata.Get(), D3D12_RESOURCE_STATE_COMMON,
                    D3D12_RESOURCE_STATE_VIDEO_ENCODE_WRITE),
     };
+    if (m_Timing)
+        pre.push_back(transition(m_Stamps.Get(), D3D12_RESOURCE_STATE_COMMON,
+                                 D3D12_RESOURCE_STATE_VIDEO_ENCODE_WRITE));
     const UINT planes = m_Setup.support.reconTextureArray ? 2u : 1u;
     for (UINT p = 0; p < planes; ++p)
         pre.push_back(reconBarrier(plan.texture, p, D3D12_RESOURCE_STATE_COMMON,
@@ -740,6 +773,7 @@ bool VideoEncode12::submit(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
         h264Descriptors.push_back(ref264);
     }
     m_List->ResourceBarrier(static_cast<UINT>(pre.size()), pre.data());
+    if (m_Timing) m_List->EndQuery(m_StampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
 
     // The used reference is listed first: L0 = {0}.
     UINT list0[1] = {0};
@@ -859,6 +893,11 @@ bool VideoEncode12::submit(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
     D3D12_VIDEO_ENCODER_RESOLVE_METADATA_OUTPUT_ARGUMENTS rout = {};
     rout.ResolvedLayoutMetadata = {m_Metadata.Get(), 0};
     m_List->ResolveEncoderOutputMetadata(&rin, &rout);
+    if (m_Timing) {
+        m_List->EndQuery(m_StampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1);
+        m_List->ResolveQueryData(m_StampHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 2,
+                                 m_Stamps.Get(), 0);
+    }
 
     // Everything back to COMMON: the conversion's queue and the next picture
     // find them as they expect.
@@ -883,6 +922,7 @@ bool VideoEncode12::submit(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
         error = "the encode queue cannot wait for the picture (" + d3d12::hresultText(h) + ")";
         return false;
     }
+    const auto submitted = std::chrono::steady_clock::now();
     ID3D12CommandList* lists[] = {m_List.Get()};
     queue->ExecuteCommandLists(1, lists);
     const uint64_t value = m_Encoded.signal(queue, error);
@@ -893,7 +933,36 @@ bool VideoEncode12::submit(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
             error = "the picture took over " + std::to_string(kWaitMs) + " ms to encode";
         return false;
     }
+    if (m_Timing) {
+        const int64_t gpuUs = m_StampsCpu[1] > m_StampsCpu[0]
+                                  ? static_cast<int64_t>((m_StampsCpu[1] - m_StampsCpu[0]) *
+                                                         1000000 / m_StampFrequency)
+                                  : 0;
+        m_PictureGpuUs += gpuUs;
+        if (!m_StampsTrusted) checkStamps(gpuUs, submitted);
+    }
     return true;
+}
+
+void VideoEncode12::checkStamps(int64_t gpuUs, std::chrono::steady_clock::time_point submitted)
+{
+    constexpr int kChecks = 30;
+    m_StampGpuUs += gpuUs;
+    m_StampWallUs += std::chrono::duration_cast<std::chrono::microseconds>(
+                         std::chrono::steady_clock::now() - submitted)
+                         .count();
+    if (++m_StampChecks < kChecks) return;
+    // A tenth of the wait: the RTX and the AMD iGPU give 0.8 of it, the Arc
+    // 0.005.
+    if (m_StampGpuUs * 10 >= m_StampWallUs) {
+        m_StampsTrusted = true;
+        return;
+    }
+    m_Timing = false;
+    log::info("[native] D3D12 Video Encode: the encode queue's timestamps do not bracket the "
+              "encode on this GPU (" +
+              std::to_string(m_StampGpuUs / kChecks) + " us against " +
+              std::to_string(m_StampWallUs / kChecks) + " us waited) — no gpu_encode_us");
 }
 
 bool VideoEncode12::encode(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t readyValue,
@@ -913,6 +982,7 @@ bool VideoEncode12::encode(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
         return false;
     }
     const HevcDpb::Plan plan = m_Dpb.plan(frameNumber, forceKeyframe);
+    m_PictureGpuUs = 0;
     if (plan.idr) {
         m_IntraRefreshIndex = 0;
         // Coded again after an overshoot, the IDR keeps its number.
@@ -965,6 +1035,7 @@ bool VideoEncode12::encode(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
         out.size = size;
         out.keyframe = plan.idr;
         out.avgQp = m_DriverQp; // the qindex, as NVENC's AV1 says it
+        out.gpuEncodeUs = m_Timing && m_StampsTrusted ? m_PictureGpuUs : -1;
         m_OutputHeld = true;
         return true;
     }
@@ -994,6 +1065,7 @@ bool VideoEncode12::encode(ID3D12Resource* picture, ID3D12Fence* ready, uint64_t
     // Ours is the QP asked, and the driver was held to it; the driver's own
     // otherwise, -1 where it does not say (reportedQp).
     out.avgQp = m_OwnRate ? asked.qp : m_DriverQp;
+    out.gpuEncodeUs = m_Timing && m_StampsTrusted ? m_PictureGpuUs : -1;
     m_OutputHeld = true;
     return true;
 }
@@ -1398,8 +1470,13 @@ void VideoEncode12::stop()
     }
     if (m_Bitstream && m_BitstreamCpu) m_Bitstream->Unmap(0, nullptr);
     if (m_Metadata && m_MetadataCpu) m_Metadata->Unmap(0, nullptr);
+    if (m_Stamps && m_StampsCpu) m_Stamps->Unmap(0, nullptr);
     m_BitstreamCpu = nullptr;
     m_MetadataCpu = nullptr;
+    m_StampsCpu = nullptr;
+    m_Timing = false;
+    m_Stamps.Reset();
+    m_StampHeap.Reset();
     m_Bitstream.Reset();
     m_Metadata.Reset();
     m_HwMetadata.Reset();
