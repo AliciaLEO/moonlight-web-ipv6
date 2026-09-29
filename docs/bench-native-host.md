@@ -3238,6 +3238,9 @@ d'Intel) :
   vol à 244 Hz. L'hôte bouge à peine : +0,1 ms en moyenne, +0,3 à +0,4 ms au
   p99.
 - C'est l'inverse du N95 à 120 Hz (§8n.23), dont la mémoire est partagée.
+- **Décision de Bruno, sur ces chiffres** : deux images en vol par défaut sur
+  un GPU Intel à mémoire propre, une à la fois ailleurs (`9814c606`, design
+  §32.20).
 
 **Les moteurs du N95** (sonde `mw-d3d12-lab encode`, les huit images NV12 du
 labo codées en boucle ; compteurs Windows « GPU Engine » du processus, lus par

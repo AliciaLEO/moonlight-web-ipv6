@@ -1186,10 +1186,10 @@ Tableau remis à jour le 29/09/2026, à la clôture du plan D3D12 (§32.19).
 | **Audio** : WASAPI loopback → cadenceur 5 ms → libopus, thread « Pro Audio » (04/09/2026) | |
 | `IMediaEngine`, relais découplés | |
 | Sonde displays/GPU + association ; WGC en repli, et retour à DDA dès que le bureau de l'utilisateur revient (§32.10) | |
-| Capture DXGI (0,06 ms) ; worker SYSTEM pour le bureau sécurisé (§31) | L'invite UAC cliquable (aucun poste du banc ne l'affiche) ; `C+A+Suppr` sans effet tant que `SoftwareSASGeneration` n'est pas posée (§31.7) |
+| Capture DXGI (0,06 ms) ; worker SYSTEM pour le bureau sécurisé (§31) ; `C+A+Suppr` appuyé par le service lanceur, sous la stratégie que l'installeur pose ; un stream qui démarre sur l'écran de sécurité (§31.7) | L'invite UAC cliquable (aucun poste du banc ne l'affiche) ; le déverrouillage d'un poste verrouillé avant le stream, par Bruno |
 | Conversion NV12 + AYUV 4:4:4 ; HDR (P010 + BT.2020 PQ) | |
 | NVENC (3,46 ms), AMF (3,70 ms), oneVPL (mesuré sur l'Arc et le N95) | |
-| **Chaîne D3D12** (§32) : conversion D3D12, D3D12 Video Encode en HEVC, H.264 et AV1, contrôle de débit maison ; **par défaut sur Intel** (§32.9) ; NVENC et AMF en entrée D3D12 derrière le réglage (§32.12) ; l'encodeur gardé à travers un redémarrage de capture (§32.18, par défaut depuis le 29/09) | NVIDIA et AMD restent en D3D11, plus rapides chez eux ; `pipelined=1` reste une clé de banc, en test à haute fréquence (§32.17, §32.20) |
+| **Chaîne D3D12** (§32) : conversion D3D12, D3D12 Video Encode en HEVC, H.264 et AV1, contrôle de débit maison ; **par défaut sur Intel** (§32.9) ; NVENC et AMF en entrée D3D12 derrière le réglage (§32.12) ; l'encodeur gardé à travers un redémarrage de capture (§32.18) et deux images en vol sur un GPU Intel à mémoire propre (§32.20), par défaut depuis le 29/09 | NVIDIA et AMD restent en D3D11, plus rapides chez eux |
 | Intra-refresh sur les trois encodeurs + ride-out client (sauf plateformes Apple) | |
 | Curseur composé, plancher sur écran immobile choisi par le client (§9.1) | |
 | Copie inter-GPU (§5) : un écran dont le GPU n'encode pas streame quand même ; la relecture passe par la file COPY depuis le 21/09 | |
@@ -1265,7 +1265,8 @@ faire. Campagne du 04/09/2026 et recommandation : `docs/bench-native-host.md`.
   `enc12=ve|nvenc|amf`, `rc12=driver|qp`, `reencode=0|1`, `refit=0|1`,
   `interfloor=<k>|off`, `prio12=normal|high|realtime`,
   `creator12=own|default`, `ddasync=gpu|none|cpu`, `gputiming=0|1`,
-  `strict12=0|1`, `pipelined=0|1` (§32.17) et `keep12=0|1` (§32.18, 1 par
+  `strict12=0|1`, `pipelined=0|1` (§32.17 ; par défaut 1 sur un GPU Intel à
+  mémoire propre, 0 ailleurs, depuis le 29/09) et `keep12=0|1` (§32.18, 1 par
   défaut depuis le 29/09).
 - Sous Linux : `pipeline=auto|vaapi|vulkan`, `convert=gl|vulkan`,
   `priovk=normal|high`.
@@ -5130,6 +5131,57 @@ Le produit ne touche pas à cette stratégie (§31.4). La poser à « services �
 qu'elle n'est pas posée, le bouton est sans effet. Le verrouillage (Win+L) et le
 déverrouillage, eux, marchent (vérifié le 28/09).
 
+**Le même jour, la vraie cause, et le correctif (`456acb1e`).** Bruno a choisi
+l'installeur. Mais la stratégie posée à la main n'a rien changé : même journal,
+et toujours aucun écran.
+- Un service jetable, LocalSystem en session 0, a fait le même appel. L'écran
+  de sécurité est apparu en moins d'une seconde : `LogonUI` lancé dans la
+  session de l'utilisateur.
+- **Windows n'honore `SendSAS` que venant d'un service en session 0.** Il
+  l'ignore, sans un mot, venant d'un processus SYSTEM de la session console, ce
+  qu'est le worker.
+
+Le correctif :
+- **Le worker demande l'appui au service lanceur**, sur son tube de contrôle,
+  par la requête `sas!`. Aucun nom de tube ne peut prendre cette forme.
+- Le service vérifie l'appelant comme pour un worker : même exécutable, session
+  console. Il lit la stratégie, pour qu'un refus s'écrive au journal avec sa
+  raison, puis il appuie (`WorkerService::requestSecureAttention`,
+  `NativeHost::setSecureAttentionSender`).
+- Seul un worker SYSTEM demande : lui seul peut suivre l'écran qui s'ouvre, et
+  recevoir l'Échap qui le ferme. `sas.dll` est chargée depuis System32
+  seulement.
+- **L'installeur pose la stratégie** (1, les services) quand personne ne l'a
+  posée.
+  - Chaque édition qui s'appuie sur une valeur posée par l'un de nos
+    installeurs est inscrite sous `HKLM\SOFTWARE\MoonlightWeb\SoftwareSASGeneration`.
+  - Une désinstallation ne retire la valeur que si elle vient de nous, qu'aucune
+    autre édition ne s'en sert, et qu'elle vaut toujours 1.
+  - Une valeur posée par un tiers (un administrateur, une stratégie de groupe,
+    un autre bureau à distance) reste telle quelle.
+
+**Trouvé au passage : un stream ne démarrait pas si l'écran de sécurité était
+déjà affiché**, et donc pas davantage sur un poste verrouillé (`0x80070005`).
+- La duplication s'ouvrait depuis le fil de l'appelant, le fil Qt du worker. Ce
+  fil possède une fenêtre, et `SetThreadDesktop` refuse de le déplacer
+  (erreur 170) : il duplique `Default`, que Windows refuse pendant que
+  `Winlogon` a la main.
+- Elle s'ouvre désormais depuis un fil à elle, qui ne possède rien et suit le
+  bureau d'entrée. Le fil de capture rejoint ce bureau avant de lire.
+
+**Vérifié le 29/09 sur DualRTX**, avec l'édition dev `0.3.1-456acb1e-dev`
+installée par son installeur, qui a posé la stratégie et s'est inscrit comme
+propriétaire. Le Chrome de l'UM790Pro, en tactile émulé, pilote le stream :
+- **`C+A+Suppr`** : l'écran de sécurité s'affiche dans le stream (« now on the
+  "Winlogon" desktop », duplication rouverte), et **Échap** le referme.
+- **Un stream lancé sur l'écran de sécurité** démarre dessus (« the capture
+  opens from a thread on the "Winlogon" desktop »), prend l'Échap, puis revient
+  au bureau.
+
+Captures : `bench-out\d3d12v2\sas`. Restent à Bruno : le même geste depuis un
+vrai écran tactile, et le déverrouillage d'un poste verrouillé avant le début du
+stream.
+
 **Concrètement, pour l'utilisateur** : le stream ne s'arrête plus devant une
 porte. Quand Windows demande une autorisation administrateur, l'invite apparaît
 à l'écran distant et le bouton « Oui » se clique comme n'importe quel autre ;
@@ -5871,13 +5923,16 @@ le stream.
 **Restaient à Bruno** (plan, §9), et ses réponses du 29/09 (§32.20) :
 - l'image jetée au calage du lien, nommée à l'encodeur (§9-25) : oui, derrière
   un interrupteur d'abord (`namedrops`) ;
-- `pipelined=1` (§9-26, §32.17) : pas tranché, testé à haute fréquence ;
+- `pipelined=1` (§9-26, §32.17) : par défaut sur un GPU Intel à mémoire propre
+  (§32.20) ;
 - `keep12=1` par défaut (§9-27, §32.18) : fait ;
 - G5 sous Counter-Strike 2 ; la file d'encodage HIGH sous le noyau 7.0 reste
   refusée (banc §8o.10) ;
 - les tests manuels : le pompage de G3 et l'invite UAC ; `C+A+Suppr` (§9-28) :
-  tester `SoftwareSASGeneration`, puis l'installeur ;
-- la séance du 780M sous Windows (C10.2), qui demande un redémarrage.
+  fait, par le service lanceur et la stratégie de l'installeur (§31.7), reste
+  le geste de Bruno depuis un vrai tactile et un poste verrouillé ;
+- la séance du 780M sous Windows (C10.2) : sans objet, la décision sur
+  `pipelined` ne touche pas AMD.
 
 **Concrètement, pour l'utilisateur** : sur un PC Intel, le stream part plus
 vite et reste net sous un jeu, avec un débit qui suit la connexion. Sur
@@ -5916,13 +5971,20 @@ l'encodeur d'Intel partage-t-il l'unité de calcul de la conversion ? Banc
   alors écrire les deux images en vol pour NVENC, qui n'enregistre qu'une
   entrée.
 
-La décision revient à Bruno, avec ces chiffres. Un défaut « partout » ne
-toucherait aujourd'hui qu'Intel, la seule chaîne D3D12 par défaut :
-- gain sur l'Arc à haute fréquence ;
-- gain sur le N95 à 60 Hz ;
-- perte sur le N95 à 120 Hz, quand l'iGPU sature.
+**Décision de Bruno (29/09), sur le tableau avant/après : par défaut sur un
+GPU Intel à mémoire propre** (`9814c606`). Seules les lignes de l'Arc changent :
+gain à haute fréquence, rien de mesurable ailleurs.
+- La règle `pipelinedByDefault` (vendeur Intel, pas de mémoire unifiée) entre
+  dans la table des vendeurs, avec ses tests. `D3d12Device` lit le vendeur et
+  le drapeau `UMA` de `D3D12_FEATURE_ARCHITECTURE` ; WARP se déclare en mémoire
+  unifiée, vérifié.
+- La ligne « D3D12 chain on … » du journal dit « memory of its own » ou « the
+  CPU's memory ».
+- Les iGPU (N95, Xe, AMD) restent à une image à la fois.
+- `pipelined=0` force une image à la fois sur l'Arc, `pipelined=1` deux images
+  partout où D3D12 Video Encode tourne.
 
-**Concrètement, pour l'utilisateur** : un changement de résolution rend
-l'image ~0,2 s plus vite sur un PC Intel. Le reste ne change rien tant que
-Bruno n'a pas tranché : l'image jetée nommée attend son banc, et deux images
-en vol restent une clé de banc.
+**Concrètement, pour l'utilisateur** : sur un PC Intel, un changement de
+résolution rend l'image ~0,2 s plus vite. Sur une carte Intel Arc à très haute
+fréquence (240 Hz), le stream tient quelques pour cent d'images de plus.
+L'image jetée nommée attend son banc.
