@@ -82,6 +82,7 @@ import {
     formatMainThread,
 } from '../stream/PipelineDiag.js';
 import { shouldFlushAtKeyframe } from '../stream/DecodeQueuePolicy.js';
+import { DecodeQueueSignal } from '../stream/DecodeQueueSignal.js';
 import { DecodeRateGovernor } from '../stream/DecodeRateGovernor.js';
 import {
     EnhancerGovernor,
@@ -1481,6 +1482,10 @@ export class StreamView {
         this._streamFps = opts.streamFps > 0 ? opts.streamFps : 0;
         this._peakArrivalFps = 0;
         this._rateGovernor = null;
+        // Tells a native host the moment a second frame waits at the decoder,
+        // and when it no longer does (DecodeQueueSignal): a host streaming at
+        // its own display's rate skips presents on it. Native host only.
+        this._queueSignal = new DecodeQueueSignal();
         // Last config applied to the decoder, re-applied after a queue flush.
         this._activeDecoderCfg = null;
         // Last EncodedVideoChunk timestamp (µs) — enforces monotonicity.
@@ -3324,6 +3329,7 @@ export class StreamView {
             }
             this.decoder.decode(chunk);
             this.stats.received++;
+            this._tellDecodeQueue();
             // Keyframe successfully submitted: reference is valid again.
             // Also restart the saturation clock — the stale value would count
             // the recovery wait as queue stall and trigger an instant reset.
@@ -3381,11 +3387,20 @@ export class StreamView {
         this._diag.noteRecovery('flush');
         this._lastQueueFlushMs = performance.now();
         console.warn('[StreamView] Decode queue flushed at the keyframe: ' + queued + ' stale');
+        this._tellDecodeQueue();
         return true;
+    }
+
+    /** Tell a native host where the decode queue stands (DecodeQueueSignal). */
+    _tellDecodeQueue() {
+        if (!this._nativeHost || !this.decoder) return;
+        const msg = this._queueSignal.observe(this.decoder.decodeQueueSize, performance.now());
+        if (msg) this._sendToHost(msg);
     }
 
     onDecodedFrame(frame) {
         this.stats.decoded++;
+        this._tellDecodeQueue();
 
         // A successful decode means we've recovered — reset the counter
         this._recoveryAttempts = 0;
@@ -6945,6 +6960,7 @@ export class StreamView {
             this._trackChunkSubmit(timestamp, 0);
             this.decoder.decode(chunk);
             this.stats.received++;
+            this._tellDecodeQueue();
         } catch (err) {
             console.error('[StreamView] decodeAv1Frame() error:', err.message, err);
             this.stats.dropped++;
