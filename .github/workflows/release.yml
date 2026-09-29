@@ -502,6 +502,11 @@ jobs:
           # Build step below refuses to package that stub again.
           sudo apt-get install -y libdrm-dev libva-dev libegl1-mesa-dev \
             libgles2-mesa-dev libgbm-dev libpipewire-0.3-dev
+          # sd-bus, for the ScreenCast portal: the only capture an AppImage has
+          # (no capability for KMS), and the GNOME virtual display. Missing
+          # here until 29/09/2026, so every package up to v0.3.1 shipped
+          # without the portal — CMake only warns. The Build step now refuses.
+          sudo apt-get install -y libsystemd-dev
           # The split route's Vulkan conversion (plan Phase 13): its compute
           # shaders are built to SPIR-V by glslangValidator. A build tool only —
           # nothing of glslang ships, and the loader is opened at run time.
@@ -547,6 +552,8 @@ jobs:
             || { echo "::error::mw-native-host built WITHOUT its Linux graphics backend — the package would ship the stub"; exit 1; }
           grep -q 'Linux audio (PipeWire' configure.log \
             || { echo "::error::mw-native-host built WITHOUT PipeWire audio — the host would stream silent"; exit 1; }
+          grep -q 'ScreenCast portal ON' configure.log \
+            || { echo "::error::mw-native-host built WITHOUT the ScreenCast portal — the AppImage could not capture at all"; exit 1; }
           cmake --build build -j
 
       # Same gate the CI build job applies; packaging is the only build on a
@@ -592,16 +599,18 @@ jobs:
           wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
           chmod +x linuxdeploy*.AppImage
-          # The graphics and audio stack the native host links is driver- and
+          # The graphics and audio stack the native host uses is driver- and
           # distro-coupled and must stay the SYSTEM's: libva loads its driver
           # (radeonsi_drv_video.so…) and libpipewire its protocol modules from
           # paths compiled into the library — a copy built on Ubuntu looks under
           # /usr/lib/x86_64-linux-gnu and finds nothing on Fedora's /usr/lib64.
           # linuxdeploy's own exclude list already covers libdrm, libEGL, libgbm
           # and libpipewire-0.3, but NOT libva, libva-drm or libGLESv2 (checked
-          # 05/09/2026 against pkg2appimage's excludelist); they are named here,
-          # and the whole set is asserted absent below so a list change upstream
-          # cannot quietly bundle one of them.
+          # 05/09/2026 against pkg2appimage's excludelist); they are named here
+          # AND on the second pass in "Build AppImage", which re-deploys every
+          # dependency it finds. v0.3.1 shipped Ubuntu's libva in the AppImage,
+          # the .deb and the .rpm because only this pass excluded it. The whole
+          # set is asserted absent after that last pass.
           ./linuxdeploy-x86_64.AppImage --appdir AppDir \
             -e "build/$APP" \
             -d "build/$APP.desktop" \
@@ -613,21 +622,28 @@ jobs:
           # A silent miss here only shows up as a crash on a user's headless box.
           test -f AppDir/usr/plugins/platforms/libqoffscreen.so \
             || { echo "::error::offscreen QPA plugin missing from the AppDir — headless hosts cannot start"; exit 1; }
-          for lib in libva.so libva-drm.so libGLESv2.so libdrm.so libEGL.so libgbm.so libpipewire-0.3.so; do
-            if ls AppDir/usr/lib/"$lib"* >/dev/null 2>&1; then
-              echo "::error::$lib was bundled into the AppDir — it must stay the system's (driver paths are compiled into it)"
-              exit 1
-            fi
-          done
-          # And the binary really links them: the stub links none of these.
+          # The binary really links what the backend needs to exist at all: the
+          # stub links none of these. libsystemd is the portal's sd-bus.
           # libGLESv2 is deliberately not in this list although the module links
           # it: Qt6Gui pulls glvnd's libOpenGL.so.0 first, which exports the same
           # gl* entry points, so --as-needed drops libGLESv2 as redundant (seen
           # on Ubuntu 22.04, 05/09/2026). Dispatch to the driver's GLES goes
           # through glvnd either way.
-          for lib in libdrm.so.2 libva.so.2 libEGL.so.1 libgbm.so.1 libpipewire-0.3.so.0; do
+          for lib in libdrm.so.2 libEGL.so.1 libgbm.so.1 libsystemd.so.0; do
             readelf -d "AppDir/usr/bin/$APP" | grep -q "NEEDED.*$lib" \
               || { echo "::error::MoonlightWeb does not link $lib — the native Linux backend is not in this build"; exit 1; }
+          done
+          # And it does NOT link these: they are opened on first use
+          # (backend/native-host/src/platform/linux/LazyLibrary.h), so a machine
+          # without them still starts the program. Linked, libpipewire stopped
+          # the AppImage before main() on the catalog's test machine (29/09/2026).
+          for lib in libva.so libva-drm.so libpipewire-0.3.so; do
+            if readelf -d "AppDir/usr/bin/$APP" | grep -q "NEEDED.*$lib"; then
+              echo "::error::MoonlightWeb links $lib — it must be opened on first use, or a machine without it cannot start the program"
+              exit 1
+            fi
+            strings -a "AppDir/usr/bin/$APP" | grep -q "^$lib" \
+              || { echo "::error::MoonlightWeb has no loader for $lib — the native backend lost it"; exit 1; }
           done
 
       # No Wayland client plugins here, on purpose. A step used to try, guarded
@@ -651,7 +667,21 @@ jobs:
       # immutable gaming distros like SteamOS/Bazzite). Needs chmod +x once.
       - name: Build AppImage
         run: |
-          ./linuxdeploy-x86_64.AppImage --appdir AppDir --output appimage
+          # The same excludes as the first pass: this one deploys dependencies
+          # again, and without them it bundled libva (v0.3.1).
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir \
+            --exclude-library 'libva.so.*' \
+            --exclude-library 'libva-drm.so.*' \
+            --exclude-library 'libGLESv2.so.*' \
+            --output appimage
+          # Checked on the AppDir as it stands after the LAST pass: the .deb and
+          # the .rpm are built from it too.
+          for lib in libva.so libva-drm.so libGLESv2.so libdrm.so libEGL.so libgbm.so libpipewire-0.3.so; do
+            if ls AppDir/usr/lib/"$lib"* >/dev/null 2>&1; then
+              echo "::error::$lib was bundled into the AppDir — it must stay the system's (driver paths are compiled into it)"
+              exit 1
+            fi
+          done
           mv ${{ needs.setup.outputs.app }}*.AppImage ${{ needs.setup.outputs.pkg }}-${{ needs.setup.outputs.pkg_version }}-linux-x64.AppImage
 
       # Native packages: double-click installs via the distro's GUI installer
