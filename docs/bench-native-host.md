@@ -3533,6 +3533,62 @@ Vérifié le jour même sur l'édition dev qui porte ce défaut
 D3D11. Elle ne la porte pas sur D3D12 Video Encode de la RTX, sur AMF en entrée
 D3D12, ni avec `namedrops=0`.
 
+### 8n.30 Pourquoi oneVPL se bloque sous les réparations (§9-25, 29/09/2026)
+
+**La question.** Au §8n.27, avec `namedrops=1`, les trois passes de l'Arc en
+oneVPL ont fini en stream mort (« still executing »). La clé `lose=` ne le
+reproduisait pas hors ligne.
+
+**Montage.**
+- `--native-bench` sur l'Arc de DualRTX (pilote 32.0.101.8993), la page de
+  défilement sur son écran, 1080p60 à 20 Mbit/s, chaîne D3D11 (oneVPL), en
+  utilisateur.
+- Une réparation : l'image perdue est refusée, et l'image suivante ne prédit
+  que d'une référence longue d'avant la perte (`mfxExtAVCRefListCtrl`).
+- La clé `lose=` gagne une variante `k` : chaque rafale se termine par une
+  demande d'image clé, comme quand le lien se vide.
+- Un blocage : l'encodage ne se termine pas en 10 s, et la session s'arrête
+  sur « still executing ».
+- Sorties et scripts : `bench-out\d3d12v2\vplhang`.
+
+**Reproduit hors ligne.** `lose=60x4`, une rafale de 4 pertes toutes les 60
+images, bloque le HEVC en 20 à 30 s, 6 fois sur 6. Le §8n.27 n'avait pas
+essayé ce rythme.
+
+| Variante (HEVC sauf mention) | Blocages | Réparations réussies |
+|---|---|---|
+| `lose=60x4`, intra-refresh (le témoin) | 3/3 | 27 à 35 |
+| le même sans gouverneur (`governor=0`) | 3/3 | 30 à 58 |
+| sans intra-refresh (`intra=0`) | 0/3 | 85 à 91 |
+| chaque rafale close par une image clé (`lose=60x4k`) | 0/3 | 56 à 62 |
+| vagues d'intra-refresh bout à bout (`irdist=-1`) | **2/2, dès la première réparation** | 0 |
+| vagues à 3000 images d'écart, aucune pendant l'essai | 0/2 | 86 et 90 |
+| pertes espacées aux départs de vague (`lose=480x4`, `lose=480`) | 0/4 | 2 à 8 |
+| H.264, vagues bout à bout ou espacement du moteur | 0/4 | 81 à 87 |
+| AV1, vagues bout à bout | 0/2 | 78 et 81 |
+
+- **Il faut une vague d'intra-refresh en cours.** À 60 i/s, une vague dure 120
+  images, et deux vagues partent à 480 images d'écart. Les blocages du témoin
+  tombent tous dans une vague : dernières réparations réussies aux images 483
+  à 600, puis 967. Vagues bout à bout, la première réparation suffit.
+- **Les changements de débit n'y sont pour rien** : sans gouverneur, 3 sur 3
+  aussi, sans un seul `EncodeReset`.
+- **Une réparation isolée passe le plus souvent.** Les pertes espacées aux
+  départs de vague n'ont rien bloqué : le blocage est fréquent, pas certain.
+- **Le GPU ne se plante pas** : aucun TDR, aucun rapport du noyau. Le runtime
+  attend une tâche qui ne se termine jamais.
+- **H.264 et AV1 font les mêmes réparations sans broncher.** C'est le HEVC de
+  l'encodeur Intel qui ne supporte pas une référence longue imposée pendant une
+  vague.
+
+**En production.** La v0.3.1 encode l'Arc et les iGPU Intel en HEVC par
+oneVPL, avec l'intra-refresh dès que le client fait le pari du ride-out. Elle
+répare chaque perte que ce client signale, par le même chemin. Le 29/09, Bruno a
+streamé ainsi la prod de DualRTX depuis son téléphone. Aucun blocage n'est
+apparu en 30 jours de journaux, mais le risque existe. Sur `main`, Intel encode
+le HEVC en D3D12 Video Encode, qui n'a pas d'intra-refresh : oneVPL n'y garde le
+HEVC que si le réglage force D3D11.
+
 ## 8o. Linux : la chaîne Vulkan (28/09/2026 →)
 
 Phase 13 du plan D3D12 : la même forme de chaîne sous Linux, en Vulkan Video

@@ -61,6 +61,10 @@ struct BenchSpec
     /// what the relay does when a stalled link makes it drop frame after frame,
     /// the repair frames included.
     int loseBurst = 1;
+    /// Each burst closed by a keyframe request, as the relay's is when the link
+    /// drains again ("keyframe requested at once"): the next picture is then
+    /// asked for as a keyframe while the last loss's repair is still pending.
+    bool loseKeyframe = false;
     /// The target alternates between bitrateKbps and this, every rampSeconds.
     int rampKbps = 0;
     double rampSeconds = 2.0;
@@ -181,9 +185,10 @@ const char* const kUsage =
     "                              CAP_SYS_NICE, normal without)\n"
     "the bench's own:\n"
     "  dump=<path>      the encoded stream as it comes out (Annex-B, or OBUs for AV1)\n"
-    "  lose=<frames>[x<burst>]  every N frames, report the latest one lost (reference\n"
+    "  lose=<frames>[x<burst>][k]  every N frames, report the latest one lost (reference\n"
     "                   invalidation); with x<burst>, that many frames in a row, each\n"
-    "                   reported as it comes out, as a stalled link's drops are\n"
+    "                   reported as it comes out, as a stalled link's drops are; with k,\n"
+    "                   each burst closed by a keyframe request, as when the link drains\n"
     "  ramp=<kbps>[@<s>]  the target alternates between bitrate= and <kbps> every <s> s\n"
     "                   (default 2), as the rate governor would move it\n";
 
@@ -469,8 +474,13 @@ bool parseSpec(const QString& text, BenchSpec& spec, QString& error)
         else if (key == "dump")
             spec.dump = value;
         else if (key == "lose") {
-            // <every>[x<burst>]
-            const QStringList parts = value.split('x');
+            // <every>[x<burst>][k]
+            QString loss = value;
+            if (loss.endsWith('k')) {
+                spec.loseKeyframe = true;
+                loss.chop(1);
+            }
+            const QStringList parts = loss.split('x');
             spec.loseEvery = parts[0].toInt(&ok);
             ok = ok && spec.loseEvery >= 2 && spec.loseEvery <= 100000;
             if (ok && parts.size() == 2) {
@@ -769,13 +779,14 @@ int runNativeBenchCommand(const QString& specText)
                 session->invalidateReference(latest);
                 ++losses;
                 lastLost = latest;
-                --burstLeft;
+                if (--burstLeft == 0 && spec.loseKeyframe) session->requestKeyframe();
             } else if (burstLeft == 0 && latest >= nextLoss) {
                 session->invalidateReference(latest);
                 ++losses;
                 lastLost = latest;
                 burstLeft = spec.loseBurst - 1;
                 nextLoss = latest + static_cast<uint32_t>(spec.loseEvery);
+                if (burstLeft == 0 && spec.loseKeyframe) session->requestKeyframe();
             }
         }
         if (spec.rampKbps > 0 && std::chrono::steady_clock::now() >= nextStep) {
@@ -898,7 +909,7 @@ int runNativeBenchCommand(const QString& specText)
         out << "losses          " << losses << " reported, every " << spec.loseEvery << " frames"
             << (spec.loseBurst > 1 ? QStringLiteral(", %1 in a row").arg(spec.loseBurst)
                                    : QString())
-            << "\n";
+            << (spec.loseKeyframe ? ", each burst closed by a keyframe request" : "") << "\n";
     if (steps > 0)
         out << "ramp            " << steps << " steps between " << spec.bitrateKbps << " and "
             << spec.rampKbps << " kbps, every " << spec.rampSeconds << " s\n";

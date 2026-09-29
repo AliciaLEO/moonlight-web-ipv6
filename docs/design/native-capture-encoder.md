@@ -895,8 +895,14 @@ et bridages par `netem`, un détecteur de dégâts lu sur le canvas du stream) :
 - D3D12 VE, qui attend déjà des images clés, y gagne un peu.
 - **oneVPL se bloque** : après des réparations enchaînées depuis la même
   référence longue, un encodage ne se termine jamais, et la session finit
-  10 s plus tard. Trois passes sur trois, jamais vu en production, pas
-  reproduit hors ligne. `namedrops` ne doit donc jamais valoir pour oneVPL.
+  10 s plus tard. Trois passes sur trois, jamais vu en production.
+  `namedrops` ne doit donc jamais valoir pour oneVPL.
+- **Cause trouvée le même jour** (banc §8n.30, reproduit hors ligne) : une
+  réparation par référence longue **pendant une vague d'intra-refresh** bloque
+  l'encodeur HEVC d'Intel. Vagues bout à bout, la première réparation suffit ;
+  sans vague, 176 réparations passent. H.264 et AV1 ne se bloquent pas. Les
+  pertes que le client signale prennent le même chemin : la v0.3.1 y est
+  exposée sur Intel.
 
 **Les bancs Windows et Mac, faits le 29/09** (banc §8n.28, le lien bridé côté
 hôte par WinDivert) :
