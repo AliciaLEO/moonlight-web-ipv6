@@ -149,9 +149,10 @@ def line(d):
     c = d.get("clock") or {}
     med = lambda k: (d.get(k) or {}).get("medianMs")
     p99 = lambda k: (d.get(k) or {}).get("p99Ms")
-    return ("%-26s shown %6s (p99 %6s) at refresh %6s  drawn %6s  capture %6s  before %6s ms  "
-            "%s draws/s on %s Hz  invalid %s  rtt %.2f ms%s" % (
-                d.get("tag", "?"), med("shown"), p99("shown"), med("atRefresh"), d.get("medianMs"),
+    return ("%-26s shown %6s (p99 %6s) at refresh %6s  since capture %6s  drawn %6s  capture %6s  "
+            "before %6s ms  %s draws/s on %s Hz  invalid %s  rtt %.2f ms%s" % (
+                d.get("tag", "?"), med("shown"), p99("shown"), med("atRefresh"),
+                med("shownSinceCapture"), d.get("medianMs"),
                 med("capture"), med("beforeCapture"), d.get("drawsPerSecond"), d.get("refreshHz"),
                 ",".join("%s=%s" % kv for kv in (d.get("invalid") or {}).items() if kv[1]) or "0",
                 c.get("rttMinMs") or 0,

@@ -1,4 +1,4 @@
-"""A matrix of content-age passes on this machine: the product's virtual display
+"""A matrix of content-age passes on this host: the product's virtual display
 at several rates × the cadence keys, each pass on a --dev instance launched with
 that pass's keys.
 
@@ -6,7 +6,8 @@ that pass's keys.
 
 A client on the host's own machine is for tuning the bench, not for the verdict
 (plan framerate-hote §2): it shares the host's compositor, whose clock follows
-the primary screen — the virtual display itself, while it streams.
+the primary screen — the virtual display itself, while it streams. With
+--client-port / --client-url the client is a Chrome on another machine.
 
 The virtual display's settings file on DualRTX belongs to Bruno's VDD: the
 product adds its bench modes to it (2560x1440 at 240, at 500). It is saved
@@ -89,7 +90,15 @@ def main():
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--secs", type=float, default=30)
     ap.add_argument("--prefix", default="loc")
+    ap.add_argument("--client-port", type=int, default=0,
+                    help="a client on another machine (pass.py --client-port)")
+    ap.add_argument("--client-url", default="")
+    ap.add_argument("--local-storage", action="append", default=[], metavar="KEY=VALUE")
     a = ap.parse_args()
+    client = (["--client-port", str(a.client_port), "--client-url", a.client_url]
+              if a.client_port else [])
+    for kv in a.local_storage:
+        client += ["--local-storage", kv]
     os.makedirs(OUT, exist_ok=True)
     scratch = os.path.join(OUT, "vdd_settings.saved.xml")
     shutil.copyfile(VDD_XML, scratch)
@@ -105,7 +114,7 @@ def main():
                     since = time.time()
                     launch_dev(rate, cadence, os.path.join(OUT, tag + ".server.log"))
                     r = subprocess.run([sys.executable, os.path.join(HERE, "pass.py"), "--tag", tag,
-                                        "--target", "vdisplay", "--secs", str(a.secs)],
+                                        "--target", "vdisplay", "--secs", str(a.secs)] + client,
                                        capture_output=True, text=True)
                     tail = (r.stdout + r.stderr).strip().splitlines()
                     print("\n".join("   " + l for l in tail[-8:]), flush=True)

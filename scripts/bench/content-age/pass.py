@@ -50,6 +50,8 @@ def main():
     ap.add_argument("--client-port", type=int, default=0,
                     help="a client Chrome on another machine, its debugging port tunnelled here")
     ap.add_argument("--client-url", default="", help="the address that client reaches this host at")
+    ap.add_argument("--local-storage", action="append", default=[], metavar="KEY=VALUE",
+                    help="a bench switch the page reads at launch (mw_decodequeue=pending)")
     a = ap.parse_args()
     remote = a.client_port > 0
 
@@ -75,6 +77,12 @@ def main():
                "navigator.serviceWorker.getRegistrations()) await r.unregister(); return 1; })()")
         d.navigate(access["lan"])
         d.wait_library(access.get("name", "bench"), access.get("pin", ""), tries=25)
+        # The bench profile keeps its localStorage from one pass to the next:
+        # a switch not asked for this time is taken away.
+        d.eval("localStorage.removeItem('mw_decodequeue')")
+        for kv in a.local_storage:
+            k, _, v = kv.partition("=")
+            d.eval("localStorage.setItem(%s, %s)" % (json.dumps(k), json.dumps(v)))
         settings = dict(run.load_matrix()["base"])
         settings.update({"stream_fps": a.fps, "tearing_default_v2": True,
                          "tearing_enabled": a.vsync == "off"})

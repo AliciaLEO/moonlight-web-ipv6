@@ -1499,6 +1499,15 @@ export class StreamView {
         // and when it no longer does (DecodeQueueSignal): a host streaming at
         // its own display's rate skips presents on it. Native host only.
         this._queueSignal = new DecodeQueueSignal();
+        // Bench (plan framerate-hote): what the signal counts. decodeQueueSize
+        // sees only what waits IN FRONT of the decoder; a hardware decoder
+        // holds several more (8 frames measured behind a depth of 2 on
+        // DualRTX's iGPU). 'pending' counts every frame given to decode() and
+        // not yet out of it.
+        this._queueSignalPending = false;
+        try {
+            this._queueSignalPending = localStorage.getItem('mw_decodequeue') === 'pending';
+        } catch (e) {}
         // Last config applied to the decoder, re-applied after a queue flush.
         this._activeDecoderCfg = null;
         // Last EncodedVideoChunk timestamp (µs) — enforces monotonicity.
@@ -3408,7 +3417,10 @@ export class StreamView {
     /** Tell a native host where the decode queue stands (DecodeQueueSignal). */
     _tellDecodeQueue() {
         if (!this._nativeHost || !this.decoder) return;
-        const msg = this._queueSignal.observe(this.decoder.decodeQueueSize, performance.now());
+        const depth = this._queueSignalPending
+            ? this._chunkSubmitTimes.size
+            : this.decoder.decodeQueueSize;
+        const msg = this._queueSignal.observe(depth, performance.now());
         if (msg) this._sendToHost(msg);
     }
 

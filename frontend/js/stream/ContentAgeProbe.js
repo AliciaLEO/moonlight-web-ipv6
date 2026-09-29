@@ -73,7 +73,10 @@
  *   - `atRefresh`, at each of this client's refreshes (requestAnimationFrame) —
  *     what a canvas presenting on vsync shows, give or take the compositor.
  * Both need every frame read (`every: 1`): a moment whose frame was not read
- * is left out.
+ * is left out. `shownSinceCapture` is `shown` counted from the frame's present
+ * on the host rather than from the page's frame: what the stream adds, without
+ * the page's own way to the host's screen — which varies from one launch of
+ * the page to the next (5 to 22 ms on the same virtual display at 60 Hz).
  */
 
 /** Blocks across the frame's width: a block is 1/BAND_BLOCKS of it. */
@@ -426,6 +429,8 @@ export class ContentAgeProbe {
             draws: [],
             /** Frame timestamp → its content age at the draw. */
             ageOf: new Map(),
+            /** Frame timestamp → its capture age at the draw. */
+            captureOf: new Map(),
             /** This client's refreshes (requestAnimationFrame stamps). */
             ticks: [],
         };
@@ -553,6 +558,7 @@ export class ContentAgeProbe {
             // backendTs is whole milliseconds: a capture age is good to one.
             if (captureMs > -5 && captureMs < 10000) {
                 run.capture.push(captureMs);
+                run.captureOf.set(ts, captureMs);
                 run.before.push(contentMs - captureMs);
             } else {
                 captureMs = null;
@@ -590,6 +596,7 @@ export class ContentAgeProbe {
             ...content,
             shown: describe(shownAges(draws, run.ageOf, grid)),
             atRefresh: describe(shownAges(draws, run.ageOf, ticks)),
+            shownSinceCapture: describe(shownAges(draws, run.captureOf, grid)),
             refreshHz: rate(run.ticks.length, run.ticks[0], run.ticks[run.ticks.length - 1]),
             drawsPerSecond: rate(
                 draws.length,
