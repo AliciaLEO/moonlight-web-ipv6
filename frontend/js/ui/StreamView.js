@@ -1228,6 +1228,10 @@ export class StreamView {
         // The host ended the stream on purpose (the app was closed there).
         this.webrtc.onHostEnded = () => this._handleHostEnded();
 
+        // The host side failed under the stream (Sunshine crashed, its encoder
+        // hung) — not this link.
+        this.webrtc.onHostLost = () => this._handleHostLost();
+
         // Physical keys currently held down (e.code → keyup payload). Used to
         // release everything when the window loses focus: the OS can steal focus
         // mid-press (e.g. the Windows key opens the local Start menu), so the
@@ -10098,6 +10102,21 @@ export class StreamView {
     _handleSessionEnded() {
         this._sessionEndedByOwner = true;
         this._handleForcedExit(t('player.endedTitle'), t('player.endedBody'));
+    }
+
+    /**
+     * The host side stopped streaming without meaning to: Sunshine crashed or
+     * its encoder hung the GPU (29/09/2026, Vulkan Video on RADV), or the
+     * native engine died. The browser link is healthy, so "DataChannel closed"
+     * would send the viewer looking in the wrong place; this names the host.
+     * An error, so the alarm transition; the relay closes right after.
+     */
+    _handleHostLost() {
+        if (this._quitting || this._takenOver || this._manualQuitting) return;
+        // A hidden standby leg keeps its own failure path (retire, no toast).
+        if (this._standby) return;
+        this.webrtc.markStopping();
+        this._handleForcedExit(t('stream.hostLostTitle'), t('stream.hostLostBody'));
     }
 
     /**

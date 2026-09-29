@@ -791,8 +791,9 @@ void StreamRelay::onShimConnectionTerminated(int errorCode)
     m_StreamStarted = false;
 
     // Graceful termination: the host ended the stream on purpose (the app was
-    // closed there). Tell the browser before the socket drops.
-    if (errorCode == ML_ERROR_GRACEFUL_TERMINATION) sendExitNotice("host-ended");
+    // closed there). Tell the browser before the socket drops. Any other code
+    // is the host side failing, not this socket: say that instead.
+    sendExitNotice(errorCode == ML_ERROR_GRACEFUL_TERMINATION ? "host-ended" : "host-lost");
 
     // Always emit sessionEnded so cleanup runs, regardless of error code.
     // Graceful termination (code 0) still needs relay/shim cleanup.

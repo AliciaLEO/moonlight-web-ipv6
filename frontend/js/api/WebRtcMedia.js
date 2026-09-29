@@ -129,6 +129,7 @@ export class WebRtcMedia {
         this.onRevoked = null; // () this device's access was revoked by the admin
         this.onSessionEnded = null; // () the owner ended the session we were invited to
         this.onHostEnded = null; // () the host ended the stream on purpose (app closed there)
+        this.onHostLost = null; // () the host side failed (Sunshine crashed, encoder died)
 
         // Stats
         this.stats = { framesReceived: 0, chunksReceived: 0, framesDropped: 0, framesAssembled: 0 };
@@ -630,6 +631,8 @@ export class WebRtcMedia {
                         if (this.onSessionEnded) this.onSessionEnded();
                     } else if (msg.type === 'host-ended') {
                         if (this.onHostEnded) this.onHostEnded();
+                    } else if (msg.type === 'host-lost') {
+                        if (this.onHostLost) this.onHostLost();
                     } else {
                         console.log('[WebRtcMedia] Input DC message:', msg);
                     }

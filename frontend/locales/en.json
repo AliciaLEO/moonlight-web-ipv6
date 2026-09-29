@@ -633,6 +633,8 @@
         "disconnectBody": "Closing session — see you soon.",
         "hostEndedTitle": "App closed",
         "hostEndedBody": "The app was closed on the host.",
+        "hostLostTitle": "Host lost",
+        "hostLostBody": "The host stopped streaming — its streaming server or encoder may have crashed. Check the host.",
         "statResolution": "Resolution:",
         "statFramerate": "Framerate:",
         "statBitrate": "Bitrate:",

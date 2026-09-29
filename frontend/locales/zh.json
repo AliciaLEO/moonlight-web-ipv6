@@ -633,6 +633,8 @@
         "disconnectBody": "正在关闭会话——再见。",
         "hostEndedTitle": "应用已关闭",
         "hostEndedBody": "应用已在主机上关闭。",
+        "hostLostTitle": "主机连接丢失",
+        "hostLostBody": "主机已停止串流——其串流服务或编码器可能已崩溃。请检查主机。",
         "statResolution": "分辨率：",
         "statFramerate": "帧率：",
         "statBitrate": "码率：",

@@ -149,6 +149,7 @@ export class WebRtcDataChannel {
         this.onRevoked = null; // () this device's access was revoked by the admin
         this.onSessionEnded = null; // () the owner ended the session we were invited to
         this.onHostEnded = null; // () the host ended the stream on purpose (app closed there)
+        this.onHostLost = null; // () the host side failed (Sunshine crashed, encoder died)
 
         // Stats
         this.stats = {
@@ -948,6 +949,8 @@ export class WebRtcDataChannel {
                         if (this.onSessionEnded) this.onSessionEnded();
                     } else if (msg.type === 'host-ended') {
                         if (this.onHostEnded) this.onHostEnded();
+                    } else if (msg.type === 'host-lost') {
+                        if (this.onHostLost) this.onHostLost();
                     } else {
                         console.log('[WebRTC] Input DC message:', msg);
                     }
@@ -1742,6 +1745,8 @@ export class WebRtcDataChannel {
                     this.onSessionEnded();
                 } else if (msg.type === 'host-ended' && this.onHostEnded) {
                     this.onHostEnded();
+                } else if (msg.type === 'host-lost' && this.onHostLost) {
+                    this.onHostLost();
                 }
             } catch (e) {
                 /* ignore non-JSON text */
@@ -1811,6 +1816,8 @@ export class WebRtcDataChannel {
                     if (this.onSessionEnded) this.onSessionEnded();
                 } else if (msg.type === 'host-ended') {
                     if (this.onHostEnded) this.onHostEnded();
+                } else if (msg.type === 'host-lost') {
+                    if (this.onHostLost) this.onHostLost();
                 }
             } catch (e) {
                 /* non-JSON text — ignore */

@@ -712,8 +712,10 @@ void MediaTrackRelay::onShimConnectionTerminated(int errorCode)
     qInfo() << "[MediaTrackRelay] Shim connection terminated, code=" << errorCode;
     // Graceful termination: the host ended the stream on purpose, typically
     // because the app was closed there. Say so before the channels drop, or
-    // the browser reads the close as a connection error.
-    if (errorCode == ML_ERROR_GRACEFUL_TERMINATION) sendExitNotice("host-ended");
+    // the browser reads the close as a connection error. Any other code is
+    // the host side failing (Sunshine crashed, its encoder hung the GPU, the
+    // native engine died): the browser link is fine, so say which side went.
+    sendExitNotice(errorCode == ML_ERROR_GRACEFUL_TERMINATION ? "host-ended" : "host-lost");
     if (!m_Stopping.exchange(true)) {
         m_Connected = false;
         emit sessionEnded();

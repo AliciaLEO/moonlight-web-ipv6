@@ -633,6 +633,8 @@
         "disconnectBody": "Fermeture de la session — à bientôt.",
         "hostEndedTitle": "Appli fermée",
         "hostEndedBody": "L'appli a été fermée sur l'hôte.",
+        "hostLostTitle": "Hôte perdu",
+        "hostLostBody": "L'hôte a cessé de diffuser — son serveur de stream ou son encodeur a peut-être planté. Vérifiez l'hôte.",
         "statResolution": "Résolution :",
         "statFramerate": "Fréquence :",
         "statBitrate": "Débit :",
