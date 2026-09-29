@@ -253,9 +253,41 @@ void run_vulkan_convert_tests()
         if (!error.empty()) std::fprintf(stderr, "  Vulkan: %s\n", error.c_str());
         CHECK(!vk.lost());
 
+        // The frame is the display's own buffer, still scanned out: a
+        // compositor drawing into it between the two conversions leaves them
+        // comparing two pictures (1 run in 4 with a page scrolling, Mesa
+        // 26.2.3, 29/09/2026). GL once more after Vulkan brackets it: the
+        // comparison stands when GL wrote the same both times, and is made
+        // again, up to three times, when it did not.
         std::vector<uint8_t> glY, glUv, vkY, vkUv;
-        CHECK(readBack(display, glSurface, glY, glUv));
-        CHECK(readBack(display, vkSurface, vkY, vkUv));
+        bool held = false;
+        for (int attempt = 0; attempt < 3 && !held; ++attempt) {
+            if (attempt > 0) {
+                std::fprintf(stderr, "  %s: the display changed under the comparison — again\n",
+                             g.what);
+                CHECK(gl.convert(frame, cursor, convert::CursorDraw{}, error));
+                gl.detachThread();
+                CHECK(vk.convert(frame, cursor, convert::CursorDraw{}, error));
+            }
+            CHECK(readBack(display, glSurface, glY, glUv));
+            CHECK(readBack(display, vkSurface, vkY, vkUv));
+            std::vector<uint8_t> againY, againUv;
+            CHECK(gl.convert(frame, cursor, convert::CursorDraw{}, error));
+            gl.detachThread();
+            CHECK(readBack(display, glSurface, againY, againUv));
+            held = againY == glY && againUv == glUv;
+        }
+        if (!held) {
+            std::fprintf(stderr,
+                         "  %s: the display never held still for the comparison — "
+                         "skipped\n",
+                         g.what);
+            vk.stop();
+            gl.stop();
+            freeSurface(display, glSurface);
+            freeSurface(display, vkSurface);
+            continue;
+        }
         const Difference luma = compare(glY, vkY);
         const Difference chroma = compare(glUv, vkUv);
         unsigned minLuma = 255, maxLuma = 0;
