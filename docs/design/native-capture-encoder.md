@@ -6191,3 +6191,37 @@ plein écran, un jeu y compris selon toute vraisemblance : l'offre DMA-BUF
 compositeur ne donne que de la mémoire partagée, l'AppImage n'occupe plus un
 cœur du processeur à encoder. Sur une carte AMD, l'image passe par le GPU, en
 HEVC si le navigateur le prend.
+
+### 32.23 Linux : le bourrage de RADV, retiré de la chaîne Vulkan Video (29/09/2026)
+
+Trouvé en relisant, unité par unité, les flux du banc d'intra-refresh ; banc
+§8o.13.
+
+**Ce que RADV écrit.** En CBR, le pilote complète chaque image jusqu'à son
+budget avec des unités de bourrage (*filler data*, type 38 en HEVC), placées
+après les tranches. Sunshine en reçoit autant sur ce pilote, et le shim les
+retire depuis `9ecc3abf`. Le chemin natif, lui, les envoyait :
+- une page qui défile, à 16 Mbit/s : 23 à 37 % des octets ;
+- un écran fixe : 122 Ko par image renvoyée, pour quelques centaines
+  d'octets d'image. Le raffinement de l'image fixe « coûtait » 610 Ko en
+  5 passes, et le lien en retenait 8 images (banc de C13.11).
+
+**Le correctif.** L'encodeur retire le bourrage sur place, dans son tampon de
+flux, avant que l'image parte (`stripHevcFiller`). La fonction vit à côté du
+découpage Annex-B de `HevcSliceParser.h` : le module natif ne peut pas inclure
+l'`AnnexBFiller.h` du shim. Le journal le dit à la première image, et donne le
+total à l'arrêt.
+
+**Ce qui ne change pas.**
+- Les images décodées sont les mêmes. La preuve au pixel garde son verdict,
+  sans nouvelle révision de l'encodeur.
+- Le bourrage n'était jamais devant la tranche d'une IDR : nos en-têtes sont
+  posés devant les tranches, lui vient après. Aucune image clé n'était donc
+  refusée, comme celles de Sunshine sur le Mac ; il ne coûtait que du débit.
+- Aucun des 75 flux Windows gardés des bancs D3D12 n'en contient (D3D12 Video
+  Encode, oneVPL, NVENC et AMF). VA-API le coupe (`disable_bit_stuffing`).
+
+**Concrètement, pour l'utilisateur** : avec la chaîne Vulkan Video, un bureau
+immobile ne coûte presque plus rien sur le réseau, et une image qui bouge
+passe avec un quart à un tiers d'octets en moins, pour la même image. Sur une
+connexion lente, chaque image met d'autant moins de temps à passer.

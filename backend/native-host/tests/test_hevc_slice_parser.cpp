@@ -122,6 +122,57 @@ void run_hevc_slice_parser_tests()
         }
     }
 
+    SECTION("HevcSliceParser — filler out in place: the 780M's picture, a slice then filler");
+    {
+        // What RADV's CBR writes (29/09/2026): the slice, then filler units
+        // (type 38: header 0x4C 0x01, 0xFF bytes, 0x80) up to the budget.
+        const std::vector<uint8_t> slice = {0, 0, 0, 1, 0x02, 0x01, 0xD0, 0x09, 0x72};
+        std::vector<uint8_t> picture = slice;
+        for (int i = 0; i < 2; ++i)
+            picture.insert(picture.end(), {0, 0, 0, 1, 0x4C, 0x01, 0xFF, 0xFF, 0xFF, 0x80});
+        const size_t kept = stripHevcFiller(picture.data(), picture.size());
+        CHECK_EQ(kept, slice.size());
+        CHECK(std::vector<uint8_t>(picture.begin(), picture.begin() + kept) == slice);
+    }
+
+    SECTION("HevcSliceParser — filler out: every other unit keeps its start code and its place");
+    {
+        // Sunshine's RADV keyframe (AnnexBFiller.h): VPS SPS PPS, FILLER, IDR,
+        // FILLER — one three-byte start code, and an IDR whose 00 00 03 01 is
+        // emulation prevention, not a start code.
+        const std::vector<uint8_t> vps = {0, 0, 0, 1, 0x40, 0x01, 0x0C};
+        const std::vector<uint8_t> sps = {0, 0, 1, 0x42, 0x01, 0x01};
+        const std::vector<uint8_t> pps = {0, 0, 0, 1, 0x44, 0x01, 0xC1};
+        const std::vector<uint8_t> filler = {0, 0, 0, 1, 0x4C, 0x01, 0xFF, 0x80};
+        const std::vector<uint8_t> idr = {0, 0, 0, 1, 0x26, 0x01, 0xAF, 0, 0, 3, 1, 0x42};
+        std::vector<uint8_t> unit, wanted;
+        for (const auto* part : {&vps, &sps, &pps, &filler, &idr, &filler})
+            unit.insert(unit.end(), part->begin(), part->end());
+        for (const auto* part : {&vps, &sps, &pps, &idr})
+            wanted.insert(wanted.end(), part->begin(), part->end());
+        const size_t kept = stripHevcFiller(unit.data(), unit.size());
+        CHECK_EQ(kept, wanted.size());
+        CHECK(std::vector<uint8_t>(unit.begin(), unit.begin() + kept) == wanted);
+        const auto units = hevcNalUnits(unit.data(), kept);
+        CHECK_EQ(units.size(), size_t(4));
+        if (units.size() == 4) CHECK_EQ(int(units[3].type()), 19);
+    }
+
+    SECTION("HevcSliceParser — no filler: every byte left where it was; only filler: nothing");
+    {
+        const std::vector<uint8_t> clean = {0, 0, 0, 1,    0x02, 0x01, 0xD0,
+                                            0, 0, 1, 0x02, 0x01, 0x11};
+        std::vector<uint8_t> copy = clean;
+        CHECK_EQ(stripHevcFiller(copy.data(), copy.size()), clean.size());
+        CHECK(copy == clean);
+        std::vector<uint8_t> padding = {0,    0, 0, 1, 0x4C, 0x01, 0xFF,
+                                        0x80, 0, 0, 1, 0x4C, 0x01, 0x80};
+        CHECK_EQ(stripHevcFiller(padding.data(), padding.size()), size_t(0));
+        uint8_t two[] = {0, 0};
+        CHECK_EQ(stripHevcFiller(two, 2), size_t(2));
+        CHECK_EQ(stripHevcFiller(nullptr, 0), size_t(0));
+    }
+
     SECTION("HevcSliceParser — our D3D12 parameter sets read back as they were written");
     {
         HevcSequence shape = shapeOf(2);

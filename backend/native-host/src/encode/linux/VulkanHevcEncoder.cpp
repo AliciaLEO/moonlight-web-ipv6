@@ -1171,7 +1171,7 @@ bool VulkanHevcEncoder::encode(bool forceKeyframe, uint32_t frameNumber, Encoder
     const HevcDpb::Plan plan = m_Dpb.plan(frameNumber, forceKeyframe);
     uint32_t offset = 0, bytes = 0;
     if (!submit(plan, offset, bytes, error)) return false;
-    const uint8_t* slices = d->bitstreamCpu + d->sliceOffset + offset;
+    uint8_t* slices = d->bitstreamCpu + d->sliceOffset + offset;
     if (m_GuardLeft > 0) {
         if (!guard(slices, bytes, plan, error)) {
             m_Failed = true;
@@ -1180,6 +1180,21 @@ bool VulkanHevcEncoder::encode(bool forceKeyframe, uint32_t frameNumber, Encoder
         --m_GuardLeft;
     }
     m_Dpb.encoded(plan);
+
+    // RADV's CBR pads a short picture up to its budget with filler units,
+    // after the slices: bytes for nothing on the link, taken out while the
+    // buffer is still ours (stripHevcFiller).
+    const size_t kept = stripHevcFiller(slices, bytes);
+    if (kept != bytes) {
+        if (m_FillerPictures == 0)
+            log::info("[native] Vulkan Video: the driver pads its pictures with filler data, "
+                      "stripped before the link (" +
+                      std::to_string(bytes - kept) + " of the first one's " +
+                      std::to_string(bytes) + " bytes)");
+        m_FillerBytes += bytes - kept;
+        ++m_FillerPictures;
+        bytes = static_cast<uint32_t>(kept);
+    }
 
     out = EncoderOutput{};
     if (plan.idr && offset == 0) {
@@ -1237,6 +1252,9 @@ std::string VulkanHevcEncoder::describe() const
 
 void VulkanHevcEncoder::stop()
 {
+    if (m_FillerPictures > 0)
+        log::info("[native] Vulkan Video: " + std::to_string(m_FillerBytes / 1024) +
+                  " KB of filler stripped from " + std::to_string(m_FillerPictures) + " pictures");
     if (d && d->device) {
         const vulkan::DeviceFunctions& fn = *d->fn;
         VkDevice dev = d->dev;
@@ -1271,6 +1289,8 @@ void VulkanHevcEncoder::stop()
     m_OutputHeld = false;
     m_Failed = false;
     m_TransformDepth = 0;
+    m_FillerBytes = 0;
+    m_FillerPictures = 0;
 }
 
 } // namespace mw::native::encode

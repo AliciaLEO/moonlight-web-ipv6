@@ -21,6 +21,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -351,6 +352,63 @@ inline std::vector<HevcNalUnit> hevcNalUnits(const uint8_t* data, size_t size)
         units.push_back({data + start, end - start});
     }
     return units;
+}
+
+/// Removes the filler-data units (type 38) of an Annex-B stream in place and
+/// returns the size kept — `size` itself when there are none. Each unit goes
+/// with its own start code; every other byte keeps its order.
+///
+/// A constant-bitrate encoder pads a short picture up to its budget with
+/// them. RADV does, after the slices (Mesa 26.2.3 on the 780M, 29/09/2026): a
+/// quarter to a third of a moving desktop's bytes at 16 Mbit/s, and all but a
+/// few hundred bytes of an unchanged picture's. Nothing past the encoder needs
+/// them — the browser's decoder drops them. The shim strips Sunshine's the
+/// same way (backend/src/streaming/AnnexBFiller.h, which this module may not
+/// include). Annex B's emulation prevention keeps start codes out of a unit,
+/// so the scan cannot cut one in two.
+inline size_t stripHevcFiller(uint8_t* data, size_t size)
+{
+    constexpr size_t kNone = SIZE_MAX;
+    size_t written = 0;       // bytes kept so far, compacted at the front
+    size_t pendingFrom = 0;   // start of the kept run not moved yet
+    size_t unitStart = kNone; // start code of the unit being walked
+    size_t unitHeader = kNone;
+    bool unitIsFiller = false;
+    bool removed = false;
+
+    const auto close = [&](size_t end) {
+        if (unitStart == kNone || !unitIsFiller) return;
+        // Keep what came before this unit, drop the unit itself.
+        if (written != pendingFrom)
+            std::memmove(data + written, data + pendingFrom, unitStart - pendingFrom);
+        written += unitStart - pendingFrom;
+        pendingFrom = end;
+        removed = true;
+    };
+
+    size_t from = 2; // a start code's 0x01 sits at index 2 at the earliest
+    while (from < size) {
+        const void* hit = std::memchr(data + from, 0x01, size - from);
+        if (!hit) break;
+        const size_t one = static_cast<size_t>(static_cast<const uint8_t*>(hit) - data);
+        from = one + 1;
+        if (data[one - 1] != 0 || data[one - 2] != 0) continue;
+        size_t start = one - 2;
+        // The four-byte form, without eating the previous unit's header.
+        if (start > 0 && data[start - 1] == 0 && (unitHeader == kNone || start - 1 > unitHeader))
+            --start;
+        close(start);
+        unitStart = start;
+        unitHeader = one + 1;
+        unitIsFiller = unitHeader < size && ((data[unitHeader] >> 1) & 0x3F) == 38;
+        from = one + 3; // the next 0x01 needs a header byte and two zeros first
+    }
+    close(size);
+
+    if (!removed) return size;
+    if (written != pendingFrom)
+        std::memmove(data + written, data + pendingFrom, size - pendingFrom);
+    return written + (size - pendingFrom);
 }
 
 /// Reads an SPS unit (start code or not) up to the VUI. Empty on success,

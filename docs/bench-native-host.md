@@ -4343,6 +4343,44 @@ que gagne-t-on à encoder sur le GPU ?
 - Le plein écran en mémoire partagée reste muet sous GNOME 46. C'est une
   raison de plus pour l'offre DMA-BUF, qui le couvre.
 
+### 8o.13 Le bourrage de RADV, retiré de la chaîne Vulkan Video (29/09/2026)
+
+**Ce qu'on a trouvé.** En relisant unité par unité les flux du banc
+d'intra-refresh (§8o.14) : en CBR, RADV complète chaque image jusqu'à son
+budget avec des unités de bourrage (type 38 en HEVC), placées après les
+tranches. Le moteur les envoyait telles quelles.
+- La page qui défile, HEVC 1080p60, 16 Mbit/s tenus par le lien : 23 à 37 % des
+  octets. Toutes les variantes envoyaient 16,7 Mbit/s, pour 10,7 à 12,8 Mbit/s
+  d'images.
+- Une image P de 153 octets était suivie de 41,5 Ko de bourrage.
+- La page fixe du banc de C13.11 : chaque image renvoyée pesait 122 Ko. Le
+  raffinement « coûtait » 40 Ko + 610 Ko en 5 passes, et le lien retenait 8
+  images. VA-API raffine la même page pour 10 à 25 Ko.
+- Le bourrage vient toujours après les tranches, jamais devant celle d'une
+  IDR : pas de refus d'image clé à craindre (celui du Mac avec Sunshine), rien
+  que du débit.
+
+**Le correctif** (design §32.23) : l'encodeur retire le bourrage avant que
+l'image parte. Mesuré sur le même montage, avec le même build par ailleurs :
+
+| contenu | avant | après |
+|---|---|---|
+| page qui défile, balayages toutes les 480 images | 34,2 Ko par image | 24,1 à 24,9 Ko |
+| page qui défile, perte → image clé | 34,2 Ko par image | 20,8 à 21,7 Ko |
+| page fixe avec un carré qui tourne (`still.html?anim=1`, 20 Mbit/s) | ~41 Ko par image (le budget) | **1,6 Ko** (0,79 à 0,81 Mbit/s) |
+| image grise inchangée (`test_vulkan_hevc`) | ~41 Ko | **58 octets** |
+
+- 0 unité de bourrage dans les flux, 0 erreur au décodage par ffmpeg.
+- L'encodage ne bouge pas (1,62 ms en moyenne) : le retrait se fait sur place,
+  dans une mémoire que le CPU lit en cache.
+- Aucun des 75 flux Windows gardés dans `bench-out\d3d12v2` n'a de bourrage
+  (D3D12 Video Encode sur les trois GPU, oneVPL, NVENC et AMF).
+- Sorties : `bench-out\vk-lab\c13-2026-09-29` (`irbench`, `stillir`).
+
+**Ce qu'on en retient.** Les octets des bancs Vulkan Video d'avant ce
+correctif (§8o.6 à §8o.12) comptent le bourrage. Leurs temps restent justes :
+le bourrage ne coûtait que du débit.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session

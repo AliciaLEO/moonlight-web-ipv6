@@ -131,7 +131,7 @@ void run_vulkan_hevc_tests()
     }
 
     SECTION("VulkanHevcEncoder — the full transform depth, the driver's parameter sets, an IDR "
-            "that carries them");
+            "that carries them, no filler out");
     {
         vulkan::DeviceOptions options;
         options.wantHigh = false;
@@ -169,6 +169,13 @@ void run_vulkan_hevc_tests()
                 encoder.releaseOutput();
                 CHECK(encoder.encode(false, 1, out, error));
                 CHECK(!out.keyframe);
+                // The same grey again, a picture RADV's CBR pads up to its
+                // whole budget: none of the filler goes out (stripHevcFiller).
+                bool filler = false;
+                for (const encode::HevcNalUnit& u : encode::hevcNalUnits(out.data, out.size))
+                    filler = filler || u.type() == 38;
+                CHECK(!filler);
+                std::fprintf(stderr, "  an unchanged picture: %zu bytes out\n", out.size);
                 encoder.releaseOutput();
                 CHECK(encoder.supportsReferenceInvalidation());
                 CHECK(encoder.invalidateReference(1, error));

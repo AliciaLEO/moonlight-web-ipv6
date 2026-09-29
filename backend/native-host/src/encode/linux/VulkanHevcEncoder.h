@@ -195,6 +195,10 @@ private:
     bool m_OutputHeld = false;
     bool m_Failed = false;
     int m_TransformDepth = 0;
+    /// The driver's filler, stripped from the pictures before the link: said
+    /// on the first one and in total at stop().
+    uint64_t m_FillerBytes = 0;
+    uint64_t m_FillerPictures = 0;
 };
 
 } // namespace mw::native::encode
