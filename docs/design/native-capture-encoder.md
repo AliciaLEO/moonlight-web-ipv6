@@ -907,14 +907,21 @@ hôte par WinDivert) :
   clés demandées, pour les mêmes gels.
 
 **Le défaut, décidé par Bruno le 29/09 : NVENC et AMF en D3D11**, là où les
-bancs montrent un gain (`nameLinkDropsByDefault`, `EncoderTuning.h`). Ailleurs,
-rien ne change :
+bancs montrent un gain (`nameLinkDropsByDefault`, `EncoderTuning.h`).
+
+**NVENC en entrée D3D12 le prend aussi, le même jour** (banc §8n.29) : sur le
+Chrome du N95, il perd 87 % de ses images abîmées, comme NVENC en D3D11. C'est
+la chaîne que le réglage D3D12 donne à une carte NVIDIA. La règle lit donc
+l'encodeur de la route D3D12 (`SessionInfo::videoEncoder12`) : sur une carte
+NVIDIA, D3D12 Video Encode reste sans.
+
+Ailleurs, rien ne change :
 - oneVPL, jamais : il se bloque ;
 - D3D12 Video Encode : neutre ;
-- NVENC et AMF en entrée D3D12 : ce sont d'autres encodeurs (`NvencEncoder12`,
-  `AmfEncoder12`), et aucun banc ne les a mesurés ;
-- VA-API et Vulkan Video sous Linux : pas mesurés non plus ; VideoToolbox n'a
-  pas d'invalidation.
+- AMF en entrée D3D12 : neutre au banc §8n.29, et seule une clé de banc le
+  fait tourner ;
+- VA-API et Vulkan Video sous Linux : pas mesurés ; VideoToolbox n'a pas
+  d'invalidation.
 
 La clé l'emporte sur le défaut : `namedrops=0` l'éteint, `namedrops=1` l'allume
 ailleurs. Le relais lit la chaîne qui tourne (`NativeMediaEngine::nameLinkDrops`) :
@@ -1305,7 +1312,8 @@ faire. Campagne du 04/09/2026 et recommandation : `docs/bench-native-host.md`.
   `priovk=normal|high`.
 - Sur une vraie session seulement (`MW_NATIVE_TUNING`) : `namedrops=0|1`,
   l'image jetée au calage du lien nommée à l'encodeur (§9.10.2, §32.20 ; 1 par
-  défaut pour NVENC et AMF en D3D11 depuis le 29/09, 0 ailleurs).
+  défaut depuis le 29/09 pour NVENC, en entrée D3D11 ou D3D12, et pour AMF en
+  D3D11 ; 0 ailleurs).
 - Les clés du banc lui-même : `dump=<fichier>` (le flux tel qu'il sort),
   `lose=<N>` (une perte signalée toutes les N images) et
   `ramp=<kbps>[@<s>]` (le débit alterne, comme le gouverneur le ferait).
@@ -5987,7 +5995,7 @@ le stream.
 **Restaient à Bruno** (plan, §9), et ses réponses du 29/09 (§32.20) :
 - l'image jetée au calage du lien, nommée à l'encodeur (§9-25) : oui, derrière
   un interrupteur d'abord (`namedrops`), puis par défaut pour NVENC et AMF en
-  D3D11 après les bancs (§32.20) ;
+  D3D11 après les bancs, et pour NVENC en entrée D3D12 (§32.20) ;
 - `pipelined=1` (§9-26, §32.17) : par défaut sur un GPU Intel à mémoire propre
   (§32.20) ;
 - `keep12=1` par défaut (§9-27, §32.18) : fait ;
@@ -6023,7 +6031,8 @@ derrière un interrupteur). La clé `namedrops`, lue par le relais, est décrite
 au §9.10.2. Après les bancs sur lien bridé (banc §8n.27 et §8n.28), Bruno l'a
 mise par défaut pour NVENC et AMF en D3D11 : les images abîmées y fondent, et
 les gels ne bougent pas. Jamais pour oneVPL, qui se bloque ; D3D12 Video Encode,
-neutre, reste sans.
+neutre, reste sans. Un dernier banc (§8n.29) l'a étendue à NVENC en entrée
+D3D12, qui gagne autant ; AMF en entrée D3D12, neutre, reste sans.
 
 **Deux images en vol à haute fréquence** (§9-26, pas tranché). Bruno a demandé
 deux vérifications : un gros GPU à très haute fréquence y gagne-t-il, et

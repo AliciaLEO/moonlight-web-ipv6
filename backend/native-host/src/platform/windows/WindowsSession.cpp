@@ -376,6 +376,9 @@ public:
         m_Info.videoEncoder = m_PipelineChoice.pipeline == VideoPipeline::D3d12
                                   ? m_PipelineChoice.encoder
                                   : std::string();
+        m_Info.videoEncoder12 = m_PipelineChoice.pipeline == VideoPipeline::D3d12
+                                    ? m_PipelineChoice.encoder12
+                                    : EncoderTuning::Encoder12::Default;
         m_Info.videoPipelineRefused = m_PipelineChoice.refused;
 
         // Input comes up last, and its failure is NOT fatal. A session that
@@ -1070,6 +1073,9 @@ private:
         // was for: only a running D3D12 chain has one to show.
         m_Info.videoEncoder =
             choice.pipeline == VideoPipeline::D3d12 ? choice.encoder : std::string();
+        m_Info.videoEncoder12 = choice.pipeline == VideoPipeline::D3d12
+                                    ? choice.encoder12
+                                    : EncoderTuning::Encoder12::Default;
         m_Info.videoPipelineRefused = choice.refused;
         if (changed)
             log::info(std::string("[native] video pipeline: ") +

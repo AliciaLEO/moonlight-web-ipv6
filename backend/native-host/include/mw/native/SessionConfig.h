@@ -323,6 +323,10 @@ struct SessionInfo
     /// overlay can say so in a word. The reason is the log's.
     std::string videoEncoder;
     bool videoPipelineRefused = false;
+    /// The same D3D12 encoder as the engine knows it, Default while D3D11 runs:
+    /// what a rule keyed on the encoder reads (nameLinkDropsByDefault), rather
+    /// than the overlay's words.
+    EncoderTuning::Encoder12 videoEncoder12 = EncoderTuning::Encoder12::Default;
 
     /// True when the session captures the host's playback and delivers Opus
     /// packets. False when no audio callback was given, or when the platform

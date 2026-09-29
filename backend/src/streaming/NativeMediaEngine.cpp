@@ -685,7 +685,8 @@ bool NativeMediaEngine::nameLinkDrops() const
     // D3D11 mid-session says so in the same SessionInfo.
     if (!m_Session || !m_Connected.load(std::memory_order_acquire)) return false;
     const mw::native::SessionInfo& info = m_Session->info();
-    return mw::native::nameLinkDropsByDefault(info.videoPipeline, info.encoder);
+    return mw::native::nameLinkDropsByDefault(info.videoPipeline, info.encoder,
+                                              info.videoEncoder12);
 }
 
 void NativeMediaEngine::reportLink(const mw::native::LinkFeedback& feedback)

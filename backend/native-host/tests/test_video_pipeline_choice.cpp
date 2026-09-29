@@ -356,22 +356,30 @@ void run_video_pipeline_choice_tests()
         CHECK(!pipelinedByDefault(0, false)); // a GPU nobody named
     }
 
-    SECTION("EncoderTuning — link drops named by default for NVENC and AMF through D3D11");
+    SECTION("EncoderTuning — link drops named by default for NVENC, and for AMF through D3D11");
     {
-        CHECK(nameLinkDropsByDefault(VideoPipeline::D3d11, EncoderApi::Nvenc));
-        CHECK(nameLinkDropsByDefault(VideoPipeline::D3d11, EncoderApi::Amf));
+        using E12 = EncoderTuning::Encoder12;
+        CHECK(nameLinkDropsByDefault(VideoPipeline::D3d11, EncoderApi::Nvenc, E12::Default));
+        CHECK(nameLinkDropsByDefault(VideoPipeline::D3d11, EncoderApi::Amf, E12::Default));
         // oneVPL hung under it (§9-25); the fallbacks heal no loss by a delta.
         for (EncoderApi api :
              {EncoderApi::Vpl, EncoderApi::MediaFoundation, EncoderApi::Software, EncoderApi::None})
-            CHECK(!nameLinkDropsByDefault(VideoPipeline::D3d11, api));
-        // The D3D12 route: D3D12 Video Encode, and NVENC or AMF fed D3D12
-        // pictures, which the bench did not measure.
+            CHECK(!nameLinkDropsByDefault(VideoPipeline::D3d11, api, E12::Default));
+        // The D3D12 route: NVENC fed D3D12 pictures, as through D3D11 (bench
+        // §8n.29) — the route the setting gives an NVIDIA GPU.
+        CHECK(nameLinkDropsByDefault(VideoPipeline::D3d12, EncoderApi::Nvenc, E12::Nvenc));
+        // AMF fed D3D12 pictures gained nothing, and D3D12 Video Encode, on
+        // whichever GPU, neither.
+        CHECK(!nameLinkDropsByDefault(VideoPipeline::D3d12, EncoderApi::Amf, E12::Amf));
         for (EncoderApi api : {EncoderApi::Nvenc, EncoderApi::Amf, EncoderApi::Vpl})
-            CHECK(!nameLinkDropsByDefault(VideoPipeline::D3d12, api));
-        // Linux and macOS, not measured either.
-        CHECK(!nameLinkDropsByDefault(VideoPipeline::Vaapi, EncoderApi::VaApi));
-        CHECK(!nameLinkDropsByDefault(VideoPipeline::Vulkan, EncoderApi::VaApi));
-        CHECK(!nameLinkDropsByDefault(VideoPipeline::Auto, EncoderApi::VideoToolbox));
+            CHECK(!nameLinkDropsByDefault(VideoPipeline::D3d12, api, E12::VideoEncode));
+        // Keyed on the route's encoder, not on the GPU's SDK: a D3D12 chain
+        // that names none is off.
+        CHECK(!nameLinkDropsByDefault(VideoPipeline::D3d12, EncoderApi::Nvenc, E12::Default));
+        // Linux and macOS, not measured.
+        CHECK(!nameLinkDropsByDefault(VideoPipeline::Vaapi, EncoderApi::VaApi, E12::Default));
+        CHECK(!nameLinkDropsByDefault(VideoPipeline::Vulkan, EncoderApi::VaApi, E12::Default));
+        CHECK(!nameLinkDropsByDefault(VideoPipeline::Auto, EncoderApi::VideoToolbox, E12::Default));
     }
 
     SECTION("VideoPipeline — a refusal only matters when D3D12 was asked for");

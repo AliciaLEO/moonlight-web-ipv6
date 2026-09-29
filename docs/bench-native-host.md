@@ -3475,6 +3475,57 @@ l'allume sur NVENC en entrée D3D12. L'écran physique de la RTX ayant quitté l
 bureau à 12:33, NVENC a streamé l'écran virtuel, rendu par la RTX le temps du
 contrôle.
 
+### 8n.29 L'image jetée nommée : NVENC et AMF en entrée D3D12 (§9-25, 29/09/2026)
+
+La suite du §8n.28, sur les deux encodeurs que la décision de Bruno laissait
+de côté faute de mesure : NVENC et AMF en entrée D3D12 (`NvencEncoder12`,
+`AmfEncoder12`).
+
+**Montage.**
+- Le même qu'au §8n.28 : l'édition dev (`0.3.1-babff5ff-nd-dev`), le Chrome du
+  N95, le brideur WinDivert côté hôte, les mêmes coupures et bridages, le même
+  détecteur de dégâts.
+- La chaîne est nommée par les clés de banc dans les deux bras :
+  `pipeline=d3d12,enc12=nvenc` sur la RTX, `pipeline=d3d12,enc12=amf` sur
+  l'iGPU AMD, avec `namedrops=0` ou `namedrops=1`. Le réglage de l'édition n'a
+  pas bougé.
+- L'écran physique de la RTX avait quitté le bureau : NVENC a streamé l'écran
+  virtuel de Bruno, rendu par la RTX et mis en 2560×1440 pour le détecteur.
+- Chaque passe relit dans le journal du worker l'écran, la chaîne, l'encodeur
+  et le bras (`[link drops named]`) : les 8 passes sont conformes.
+- Bras alternés, 2 tours : 8 passes. Sorties et outils :
+  `bench-out\d3d12v2\c925d`.
+
+**Relevé en montant le banc : un PID revient.** Le journal d'un worker est
+nommé d'après son PID. Un worker qui reçoit le PID d'un ancien ajoute ses
+lignes au fichier de celui-ci, qui garde sa date de création. La campagne
+cherchait le journal par cette date et a manqué la passe 2 (un fichier ouvert
+à 09:42). Elle prend maintenant les fichiers écrits depuis le début de la
+passe, coupés à son heure.
+
+**Résultats** (sommes des 2 tours ; `c925d\summary.txt` et `events.txt`) :
+
+| Encodeur | Images abîmées, off → on | Gel total, off → on | Deltas jetés (nommés) | Deltas bloqués en attente d'une image clé |
+|---|---|---|---|---|
+| RTX, NVENC en entrée D3D12 | 810 → **107** (−87 %) | 20,3 → 20,6 s | 727 → 681 (681) | 203 → 179 |
+| iGPU AMD, AMF en entrée D3D12 | 101 → 115 | 19,4 → 22,2 s | 673 → 131 (131) | 225 → 782 |
+
+- **NVENC en entrée D3D12 fait comme en D3D11** (−85 % au §8n.28, même
+  client). Les coupures de 0,3 et 0,5 s laissaient 190 et 257 images abîmées,
+  10 et 35 avec ; les bridages 268, puis 1.
+- **AMF en entrée D3D12 ne gagne rien sur ce client.** Ses dégâts restent
+  faibles dans les deux bras, de 46 à 60 images par passe. Comme AMF en D3D11,
+  il bloque plus de deltas en attente d'une image clé avec `namedrops`. Le gel
+  total monte de 1,4 s par passe, dans l'écart entre deux passes du même bras
+  (jusqu'à 1,7 s).
+
+**Ce qu'on en retient.** NVENC en entrée D3D12, la chaîne que le réglage D3D12
+donne à une carte NVIDIA, prend le défaut de NVENC en D3D11
+(`nameLinkDropsByDefault`, qui lit l'encodeur de la route D3D12 dans
+`SessionInfo`). AMF en entrée D3D12 reste sans : aucun réglage ne le choisit,
+puisqu'une carte AMD passe en D3D12 Video Encode, et seule une clé de banc le
+fait tourner.
+
 ## 8o. Linux : la chaîne Vulkan (28/09/2026 →)
 
 Phase 13 du plan D3D12 : la même forme de chaîne sous Linux, en Vulkan Video
