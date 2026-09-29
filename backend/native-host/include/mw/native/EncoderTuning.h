@@ -293,6 +293,12 @@ struct EncoderTuning
     /// one is ready is dropped, never queued. Off, the engine's own: one
     /// picture at a time, the capture thread waiting for each bitstream.
     bool pipelined = false;
+    /// A capture restart (a mode change, a locked screen, a new desktop)
+    /// keeps the D3D12 Video Encode encoder when the stream it codes is the
+    /// same — codec, size, rate, HDR — rather than making it again (plan
+    /// C11.4): the stream starts over on a keyframe either way. Off, the
+    /// engine's own until the bench says what it saves.
+    Choice keep12 = Choice::Default;
 
     // ── The Linux chain (plan pipeline-video-d3d12-v2, Phase 13) ────────────
 
@@ -338,7 +344,8 @@ struct EncoderTuning
                reencodeFit12 == Choice::Default && interFloor12 == 0 &&
                prio12 == Priority12::Default && ownCreator12 == Choice::Default &&
                ddaSync == DdaSync::Default && !gpuTiming && !strict12 && !pipelined &&
-               convertLinux == ConvertLinux::Default && prioVk == PriorityVk::Default;
+               keep12 == Choice::Default && convertLinux == ConvertLinux::Default &&
+               prioVk == PriorityVk::Default;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -415,6 +422,7 @@ struct EncoderTuning
         if (gpuTiming) add("gputiming=1");
         if (strict12) add("strict12=1");
         if (pipelined) add("pipelined=1");
+        if (keep12 != Choice::Default) add(std::string("keep12=") + choice(keep12));
         if (convertLinux == ConvertLinux::Gl) add("convert=gl");
         if (convertLinux == ConvertLinux::Vulkan) add("convert=vulkan");
         if (prioVk == PriorityVk::Normal) add("priovk=normal");

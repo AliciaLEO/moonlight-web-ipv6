@@ -297,6 +297,30 @@ private:
     uint64_t m_Overlapped = 0;
     uint64_t m_Jobs = 0;
     bool m_SaidNotPipelined = false;
+
+    /// What an encoder was built to code: keep12=1 takes a set-aside encoder
+    /// back only for the same (plan C11.4).
+    struct EncoderShape
+    {
+        EncoderTuning::Encoder12 encoder12 = EncoderTuning::Encoder12::VideoEncode;
+        Codec codec = Codec::Hevc;
+        int width = 0;
+        int height = 0;
+        int fps = 0;
+        bool hdr = false;
+        bool intraRefresh = false;
+        bool operator==(const EncoderShape& o) const
+        {
+            return encoder12 == o.encoder12 && codec == o.codec && width == o.width &&
+                   height == o.height && fps == o.fps && hdr == o.hdr &&
+                   intraRefresh == o.intraRefresh;
+        }
+    };
+    EncoderShape m_EncoderShape;
+    /// keep12=1: the encoder a teardown set aside, and what it codes.
+    std::unique_ptr<encode::IVideoEncoder12> m_Parked;
+    EncoderShape m_ParkedShape;
+    uint64_t m_KeptEncoders = 0;
 };
 
 } // namespace mw::native

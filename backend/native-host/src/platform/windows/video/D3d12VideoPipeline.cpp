@@ -219,8 +219,17 @@ void D3d12VideoPipeline::teardown(bool keepHeld)
     m_KeptHeld.Reset();
     if (keepHeld && m_Converter) m_KeptHeld = m_Converter->takeHeld();
     // Released before the replacements are built, as on D3D11: an encoder
-    // holds a hardware session.
-    if (m_Encoder) m_Encoder->stop();
+    // holds a hardware session. keep12=1 sets D3D12 Video Encode's aside
+    // instead: buildEncoder takes it back for the same stream, or releases it
+    // before it makes another.
+    if (m_Encoder && m_Tuning.keep12 == EncoderTuning::Choice::On &&
+        m_Encoder12 == EncoderTuning::Encoder12::VideoEncode) {
+        if (m_Parked) m_Parked->stop();
+        m_Parked = std::move(m_Encoder);
+        m_ParkedShape = m_EncoderShape;
+    } else if (m_Encoder) {
+        m_Encoder->stop();
+    }
     m_Encoder.reset();
     m_Converter.reset();
     m_BlankReady = false;
@@ -320,18 +329,43 @@ bool D3d12VideoPipeline::buildEncoder(const capture::IWindowsCapture& capture,
         error = "4:4:4, which no D3D12 encoder takes";
         return false;
     }
+    EncoderShape shape;
+    shape.encoder12 = build.encoder12;
+    shape.codec = build.codec;
+    shape.width = m_Converter->outputWidth();
+    shape.height = m_Converter->outputHeight();
+    shape.fps = build.fps;
+    shape.hdr = build.hdr;
+    shape.intraRefresh = build.intraRefresh;
     std::unique_ptr<encode::IVideoEncoder12> encoder;
-    switch (build.encoder12) {
-    case EncoderTuning::Encoder12::Nvenc:
-        encoder = std::make_unique<encode::NvencEncoder12>();
-        break;
-    case EncoderTuning::Encoder12::Amf: encoder = std::make_unique<encode::AmfEncoder12>(); break;
-    default: encoder = std::make_unique<encode::VideoEncode12>(); break;
+    // keep12=1: the encoder the teardown set aside, if the stream is the same.
+    // Its next picture is the keyframe the session asks for after a restart.
+    if (m_Parked) {
+        if (m_ParkedShape == shape) {
+            encoder = std::move(m_Parked);
+            ++m_KeptEncoders;
+            log::info("[native] D3D12 Video Encode kept across the rebuild (keep12=1)");
+        } else {
+            m_Parked->stop();
+            m_Parked.reset();
+        }
     }
-    if (!encoder->init(m_Device, build.codec, m_Converter->outputWidth(),
-                       m_Converter->outputHeight(), build.fps, build.bitrateKbps, build.hdr,
-                       build.intraRefresh, build.tuning, error))
-        return false;
+    if (!encoder) {
+        switch (build.encoder12) {
+        case EncoderTuning::Encoder12::Nvenc:
+            encoder = std::make_unique<encode::NvencEncoder12>();
+            break;
+        case EncoderTuning::Encoder12::Amf:
+            encoder = std::make_unique<encode::AmfEncoder12>();
+            break;
+        default: encoder = std::make_unique<encode::VideoEncode12>(); break;
+        }
+        if (!encoder->init(m_Device, build.codec, m_Converter->outputWidth(),
+                           m_Converter->outputHeight(), build.fps, build.bitrateKbps, build.hdr,
+                           build.intraRefresh, build.tuning, error))
+            return false;
+    }
+    m_EncoderShape = shape;
     // The coded size is the encoder's to say; the converter writes it.
     if (encoder->codedWidth() != m_Converter->codedWidth() ||
         encoder->codedHeight() != m_Converter->codedHeight()) {
@@ -348,6 +382,11 @@ bool D3d12VideoPipeline::buildEncoder(const capture::IWindowsCapture& capture,
 void D3d12VideoPipeline::close()
 {
     teardown(false);
+    // Nothing comes to take a set-aside encoder: its hardware session goes.
+    if (m_Parked) {
+        m_Parked->stop();
+        m_Parked.reset();
+    }
     m_Timer.reset();
     m_Timing = false;
     m_Converted.reset();
@@ -962,6 +1001,9 @@ bool D3d12VideoPipeline::dropResample()
 
 void D3d12VideoPipeline::logEndOfSession() const
 {
+    if (m_KeptEncoders > 0)
+        log::info("[native] D3D12 Video Encode kept across " + std::to_string(m_KeptEncoders) +
+                  " rebuild(s) (keep12=1)");
     if (m_Jobs > 0 || m_Dropped > 0)
         log::info("[native] D3D12 chain pipelined: " + std::to_string(m_Jobs) +
                   " pictures encoded on the encode thread, " + std::to_string(m_Overlapped) +
