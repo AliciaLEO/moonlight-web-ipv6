@@ -3917,10 +3917,12 @@ par le moteur natif, jamais posée par le produit.
 **Sur une édition installée**, la variable n'atteint pas le worker. Il est
 SYSTEM, et le service lanceur lui construit l'environnement de SYSTEM. On
 ajoute donc à la main `"native_tuning": "namedrops=1"` dans le `settings.json`
-de l'édition. Le worker le lit au début de chaque session, quand la variable
-est absente, et le journal dit « settings.json native_tuning in effect ». Rien
-à redémarrer : la clé vaut pour le stream suivant. Le produit ne l'écrit
-jamais ; la retirer rend la session au moteur.
+de l'édition, celui de l'utilisateur. Le serveur le lit à chaque démarrage de
+stream et le passe au worker dans sa configuration : le worker ne le lirait pas
+lui-même, son AppData étant celui de SYSTEM (`systemprofile`). Le moteur le
+prend quand la variable est absente, et le journal du worker dit « settings.json
+native_tuning in effect ». Rien à redémarrer : la clé vaut pour le stream
+suivant. Le produit ne l'écrit jamais ; la retirer rend la session au moteur.
 
 ## 10. Reproduire
 

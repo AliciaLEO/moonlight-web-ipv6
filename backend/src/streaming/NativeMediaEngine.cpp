@@ -18,7 +18,6 @@
 #include "NativeMediaEngine.h"
 #include "InputWatchdog.h"
 #include "NativeBench.h"
-#include "../server/AppSettings.h"
 
 #include "mw/native/NativeHost.h"
 
@@ -230,15 +229,17 @@ void NativeMediaEngine::startCapture(const StartParams& params)
     // The bench's encoder knobs, on a real session, from the environment: the
     // one way to put two encoder settings in front of a person on the same
     // screen (plan v2 §5, the A/B). Or, when the variable is absent, from
-    // settings.json's hand-added "native_tuning": a SYSTEM worker gets its
-    // environment from the launcher service, built from SYSTEM's, and the
-    // variable never reaches it. Never set in production — nothing in the
-    // product writes either — and logged loudly when one is, so a stray knob
-    // cannot pass for the engine's own choice.
+    // settings.json's hand-added "native_tuning", which the server read at
+    // /start and handed down: a SYSTEM worker gets its environment from the
+    // launcher service, built from SYSTEM's, and its own AppData is
+    // systemprofile's, so neither the variable nor the file would reach it.
+    // Never set in production — nothing in the product writes either — and
+    // logged loudly when one is, so a stray knob cannot pass for the engine's
+    // own choice.
     QString tuningSpec = qEnvironmentVariable("MW_NATIVE_TUNING");
     QString tuningSource = QStringLiteral("MW_NATIVE_TUNING");
     if (tuningSpec.isEmpty()) {
-        tuningSpec = AppSettings().nativeTuning();
+        tuningSpec = params.tuningSpec.trimmed();
         tuningSource = QStringLiteral("settings.json native_tuning");
     }
     if (!tuningSpec.isEmpty()) {

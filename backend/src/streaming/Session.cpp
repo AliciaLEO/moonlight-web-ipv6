@@ -686,6 +686,8 @@ void StreamSession::onLaunchResult(bool ok, const BackendError& err, const Media
         // does not know leaves Auto in place rather than guessing.
         mw::native::parseVideoPipeline(m_NativeVideoPipeline.toStdString(),
                                        nativeParams.videoPipeline);
+        // The bench's knobs from the settings file, when someone added them.
+        nativeParams.tuningSpec = m_NativeTuning;
 
         // Forwarded rather than acted on here: whoever owns this session owns
         // the settings file, and in a worker that is another process entirely.

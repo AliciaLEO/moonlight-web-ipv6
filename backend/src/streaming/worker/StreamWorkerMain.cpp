@@ -308,6 +308,8 @@ int runStreamWorker(QCoreApplication& app)
     // and the user is asked. Never a failure: a dialog is the fallback.
     session->setPortalRestoreToken(cfg["portalRestoreToken"].toString());
     session->setNativeVideoPipeline(cfg["nativeVideoPipeline"].toString());
+    // Absent (an older parent, or no knob) → empty: the engine's own settings.
+    session->setNativeTuning(cfg["nativeTuning"].toString());
     session->setClientPresentation(cfg["clientRefreshMilliHz"].toInt(0),
                                    cfg["clientVsync"].toBool(false));
     // Absent (an older parent, or a rate the viewer named) → no ceiling, and

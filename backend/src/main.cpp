@@ -3311,6 +3311,8 @@ int main(int argc, char* argv[])
             s->setPortalRestoreToken(appSettings.portalRestoreToken(portalVirtual));
             // The admin's picture chain for a native Windows session.
             s->setNativeVideoPipeline(appSettings.nativeVideoPipeline());
+            // The bench's knobs, when someone added them to the settings file.
+            s->setNativeTuning(appSettings.nativeTuning());
             QObject::connect(s, &StreamSession::portalGrantReceived, qApp,
                              [&appSettings, portalVirtual](const QString& token) {
                                  appSettings.setPortalRestoreToken(token, portalVirtual);
@@ -3455,6 +3457,9 @@ int main(int argc, char* argv[])
             cfg["portalRestoreToken"] = appSettings.portalRestoreToken(portalVirtual);
             // The admin's picture chain for a native Windows session.
             cfg["nativeVideoPipeline"] = appSettings.nativeVideoPipeline();
+            // The bench's knobs, read here: a SYSTEM worker's own AppData is
+            // systemprofile's, where this settings file is not.
+            cfg["nativeTuning"] = appSettings.nativeTuning();
             cfg["clientUniqueId"] = reqClientUniqueId;
             cfg["clientKind"] = NetClassify::toString(clientKind);
             cfg["autoMode"] = true;
@@ -4745,6 +4750,8 @@ int main(int argc, char* argv[])
         // The host's own setting, whoever the viewer is: the chain is the
         // machine's, not the session's.
         cfg["nativeVideoPipeline"] = appSettings.nativeVideoPipeline();
+        // The machine's bench knobs too, as the owner path.
+        cfg["nativeTuning"] = appSettings.nativeTuning();
         // Gamepads from different sessions would all arrive as controller 0;
         // offset each player so they land on distinct virtual pads.
         cfg["gamepadOffset"] = slot - kOwnerSlots + 1;

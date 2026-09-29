@@ -135,6 +135,11 @@ public:
         /// chose it (Advanced) — see SessionConfig::videoPipeline. Auto unless
         /// a choice was made; ignored off Windows.
         mw::native::VideoPipeline videoPipeline = mw::native::VideoPipeline::Auto;
+        /// The bench's keys from the settings file, as the server read them at
+        /// /start (AppSettings::nativeTuning): the way to a session the
+        /// environment cannot reach. Taken only when MW_NATIVE_TUNING is absent
+        /// from this process's own; empty unless someone added it by hand.
+        QString tuningSpec;
     };
 
     /// One encoded frame, borrowed: `data` is the encoder's own output buffer

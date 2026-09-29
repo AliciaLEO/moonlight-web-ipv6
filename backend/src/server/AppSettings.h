@@ -130,12 +130,13 @@ public:
     // ── The bench's engine knobs on a real session ────────────────────────────
     //
     // "native_tuning": the same `key=value,…` string as MW_NATIVE_TUNING (see
-    // NativeBench.h), read by the native engine at each session start when the
-    // variable is absent. It is the way to give them to a SYSTEM worker: the
-    // launcher service builds that process's environment from SYSTEM's, and
-    // nothing of the server's reaches it. File-only and never seeded, like
-    // keyboard_debug: an instrument for an A/B on an installed edition, logged
-    // loudly whenever it is in effect. Empty by default.
+    // NativeBench.h), read by the server at each stream start and handed to the
+    // session (a worker's through its config); the native engine takes it when
+    // the variable is absent. It is the way to give them to a SYSTEM worker,
+    // which would find neither: the launcher service builds its environment
+    // from SYSTEM's, and its own AppData is systemprofile's. File-only and never
+    // seeded, like keyboard_debug: an instrument for an A/B on an installed
+    // edition, logged loudly whenever it is in effect. Empty by default.
 
     QString nativeTuning() const;
 

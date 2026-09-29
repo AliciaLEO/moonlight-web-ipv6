@@ -157,6 +157,13 @@ public:
     /// "d3d12". Only the native engine acts on it; empty or unknown is auto.
     void setNativeVideoPipeline(const QString& pipeline) { m_NativeVideoPipeline = pipeline; }
 
+    /// The bench's engine knobs from the settings file (AppSettings::
+    /// nativeTuning), read by the server, which owns that file: a SYSTEM
+    /// worker's own AppData is systemprofile's. Only the native engine acts on
+    /// it, and only when MW_NATIVE_TUNING is absent; empty is the engine's own
+    /// settings.
+    void setNativeTuning(const QString& spec) { m_NativeTuning = spec; }
+
     /// The client's screen, from the /start request: its refresh in
     /// millihertz (0 = it did not measure one) and whether it paints on
     /// vsync (tearing off, or a browser that cannot tear). Only the native
@@ -462,6 +469,9 @@ private:
     /// See setNativeVideoPipeline. Empty — a parent that predates the setting —
     /// is auto, the engine's own table.
     QString m_NativeVideoPipeline;
+
+    /// See setNativeTuning. Empty — a parent that predates it, or no knob.
+    QString m_NativeTuning;
 
     /// The client's screen at /start — see setClientPresentation.
     int m_ClientRefreshMilliHz = 0;
