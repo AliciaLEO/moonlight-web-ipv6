@@ -100,6 +100,9 @@ def main():
     ap.add_argument("--cadences", default="client,host,host-ceiling,host-guarded")
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--secs", type=float, default=30)
+    ap.add_argument("--every", type=int, default=1,
+                    help="read one frame in N: the copy costs a weak client its frame rate "
+                         "(an N95 fell from 59 to 53 draws a second, 42 to 87 ms of capture age)")
     ap.add_argument("--prefix", default="loc")
     ap.add_argument("--client-port", type=int, default=0,
                     help="a client on another machine (pass.py --client-port)")
@@ -144,7 +147,8 @@ def main():
                     since = time.time()
                     launch_dev(rate, cadence, os.path.join(OUT, tag + ".server.log"))
                     r = subprocess.run([sys.executable, os.path.join(HERE, "pass.py"), "--tag", tag,
-                                        "--target", "vdisplay", "--secs", str(a.secs)] + client,
+                                        "--target", "vdisplay", "--secs", str(a.secs),
+                                        "--every", str(a.every)] + client,
                                        capture_output=True, text=True)
                     tail = (r.stdout + r.stderr).strip().splitlines()
                     print("\n".join("   " + l for l in tail[-8:]), flush=True)

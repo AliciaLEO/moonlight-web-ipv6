@@ -6595,3 +6595,17 @@ Lecture :
   500 Hz sur la RTX, puis toutes les fréquences, une fois que le XML
   étranger avait accumulé un second mode à 500 Hz. Le banc repart désormais
   d'un XML propre à chaque passe (`local_matrix.py`).
+
+**Le N95 (Intel UHD, Wi-Fi, écran à 60 Hz), même nuit, Arc** (banc §8p.4 bis) :
+Auto 66,4 ms à 60 Hz, **53,0 ms** à 240 Hz ; `host` à 240 Hz, plus d'une
+seconde ; `host-guarded` 169 (`delay`) et 144 ms (`pending`). Le crédit y
+ramène l'hôte à ce que le client dessine (~75 i/s) mais laisse 150 ms de file
+hors du décodeur, dans le transport ou le fil principal : aucun des deux
+signaux n'y regarde. Le délai aller du récepteur (`linkstats`, déjà envoyé à
+l'hôte) serait le signal à essayer pour cette file-là.
+
+**Ce que ça dit du produit, à ce stade** : l'écran virtuel à 240 Hz sous la
+cadence d'aujourd'hui gagne sur les trois clients (Mac −11 à −17 ms, N95
+−13 ms), sans rien demander au réseau ni au client. La cadence de l'hôte ne
+gagne que sur un client qui suit (Mac : 1 à 6 ms de plus), et son garde-fou ne
+voit pas encore toutes les files : elle ne peut pas être le défaut en l'état.

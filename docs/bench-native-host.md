@@ -4584,6 +4584,22 @@ Nuit du 29 au 30/09, **quatre** passes par case, signal `delay` :
 
 ¹ Une passe où la page était lente (11,9 ms avant la capture).
 
+### 8p.4 bis Client N95 (Intel UHD, Chrome 154, écran à 60 Hz, Wi-Fi), Arc, nuit du 30/09
+
+Deux passes par case, **une image lue sur dix** (la copie de chaque bande
+coûtait au N95 son débit : 53 images dessinées par seconde au lieu de 59, 87 ms
+de capture au lieu de 42). Âge affiché médian, ms :
+
+| Écran virtuel | Auto (59 i/s) | host | guarded `delay` | guarded `pending` |
+|---|---|---|---|---|
+| 60 Hz | 66,4 | 63,5 | 66,6 | — |
+| 240 Hz | **53,0** | 1 179 | 169 | 144 |
+
+Le crédit retient 135 à 146 présentations par seconde : l'hôte n'envoie plus
+que ~75 images par seconde, ce que le N95 dessine. Mais 150 à 170 ms de capture
+restent : la file est hors du décodeur (transport Wi-Fi ou fil principal), là où
+aucun des deux signaux ne regarde.
+
 ### 8p.5 Ce que le banc a appris sur lui-même
 
 - La page de contenu a sa propre chaîne jusqu'à l'écran de l'hôte, qui varie
@@ -4599,6 +4615,12 @@ Nuit du 29 au 30/09, **quatre** passes par case, signal `delay` :
   §9 du plan).
 - L'écran physique de la RTX de DualRTX a quitté Windows pendant une série de
   bascules de l'écran virtuel (29/09, 21:41), sans revenir au rebranchement.
+
+- La sonde elle-même coûte : copier la bande de chaque image est gratuit pour
+  le M1 et lourd pour un N95 (voir §8p.4 bis) ; les passes « une sur dix »
+  gardent l'âge affiché, échantillonné juste après chaque image lue. Les chiffres
+  de l'iGPU AMD de DualRTX (§8p.2, chaque image lue) en sont gonflés d'une part
+  à mesurer.
 
 ### 8p.6 Ce qui manque avant la porte
 
