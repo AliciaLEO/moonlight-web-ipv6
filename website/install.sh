@@ -626,14 +626,20 @@ install_appimage() {
         say "${dim}Looking up the latest release…${reset}"
         VERSION="$(latest_version)"
     fi
-    APP="moonlightweb-${VERSION}-linux-x64.AppImage"
-    URL="https://github.com/$REPO/releases/download/v${VERSION}/${APP}"
+    # -x86_64 is the name AppImage's catalog asks for, since v0.4.0; releases
+    # up to v0.3.1 carry -linux-x64, and MW_VERSION can still ask for one.
     DEST="$HOME/.local/bin"
 
     say "${bold}Downloading MoonlightWeb ${VERSION}${reset} ${dim}(AppImage)${reset}"
     mkdir -p "$DEST"
-    curl -fL --progress-bar -o "$DEST/MoonlightWeb.AppImage" "$URL" \
-        || die "download failed: $URL"
+    for APP in "moonlightweb-${VERSION}-x86_64.AppImage" "moonlightweb-${VERSION}-linux-x64.AppImage"; do
+        URL="https://github.com/$REPO/releases/download/v${VERSION}/${APP}"
+        if curl -fL --progress-bar -o "$DEST/MoonlightWeb.AppImage" "$URL"; then
+            break
+        fi
+        URL=""
+    done
+    [ -n "$URL" ] || die "download failed: no AppImage in release v${VERSION}"
     # Every AppImage is an ELF; a 404 page is not.
     case "$(head -c 4 "$DEST/MoonlightWeb.AppImage" | od -An -c | tr -d ' \n')" in
         *177ELF*) ;;

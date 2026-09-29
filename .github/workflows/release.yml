@@ -682,7 +682,10 @@ jobs:
               exit 1
             fi
           done
-          mv ${{ needs.setup.outputs.app }}*.AppImage ${{ needs.setup.outputs.pkg }}-${{ needs.setup.outputs.pkg_version }}-linux-x64.AppImage
+          # -x86_64, not -linux-x64: the AppImage catalog's test warns on "linux"
+          # in the name (all AppImages are for Linux) and names the arch this way.
+          # Releases up to v0.3.1 used -linux-x64; website/install.sh tries both.
+          mv ${{ needs.setup.outputs.app }}*.AppImage ${{ needs.setup.outputs.pkg }}-${{ needs.setup.outputs.pkg_version }}-x86_64.AppImage
 
       # Native packages: double-click installs via the distro's GUI installer
       # (no chmod needed). .deb → Debian/Ubuntu/Mint, .rpm → Fedora/RHEL/Nobara.
@@ -698,7 +701,7 @@ jobs:
           path: |
             ${{ needs.setup.outputs.pkg }}-${{ needs.setup.outputs.pkg_version }}-linux-x64.deb
             ${{ needs.setup.outputs.pkg }}-${{ needs.setup.outputs.pkg_version }}-linux-x64.rpm
-            ${{ needs.setup.outputs.pkg }}-${{ needs.setup.outputs.pkg_version }}-linux-x64.AppImage
+            ${{ needs.setup.outputs.pkg }}-${{ needs.setup.outputs.pkg_version }}-x86_64.AppImage
 
       - uses: softprops/action-gh-release@v3
         if: startsWith(github.ref, 'refs/tags/')
@@ -706,7 +709,7 @@ jobs:
           files: |
             ${{ needs.setup.outputs.pkg }}-${{ needs.setup.outputs.pkg_version }}-linux-x64.deb
             ${{ needs.setup.outputs.pkg }}-${{ needs.setup.outputs.pkg_version }}-linux-x64.rpm
-            ${{ needs.setup.outputs.pkg }}-${{ needs.setup.outputs.pkg_version }}-linux-x64.AppImage
+            ${{ needs.setup.outputs.pkg }}-${{ needs.setup.outputs.pkg_version }}-x86_64.AppImage
 
   # ── macOS arm64 (.pkg) ───────────────────────────────────────────────────
   macos:

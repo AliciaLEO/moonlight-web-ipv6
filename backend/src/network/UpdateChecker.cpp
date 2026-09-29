@@ -351,7 +351,7 @@ QString UpdateChecker::pickAsset(const QJsonArray& assets, QString& outName, qin
     // holds (release.yml):
     //   Windows: MoonlightWeb-installer-<ver>-win-x64.exe / -win-arm64.exe
     //   macOS:   moonlightweb-<ver>-macos-arm64.pkg
-    //   Linux:   moonlightweb-<ver>-linux-x64.{deb,rpm,AppImage}
+    //   Linux:   moonlightweb-<ver>-linux-x64.{deb,rpm}, moonlightweb-<ver>-x86_64.AppImage
     QStringList wanted;
 #if defined(Q_OS_WIN)
     wanted << (isArm64() ? QStringLiteral("win-arm64.exe") : QStringLiteral("win-x64.exe"));
