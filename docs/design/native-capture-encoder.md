@@ -889,6 +889,16 @@ quand la remise arrive : ce cas n'est pas couvert. Le compteur
 Le défaut reste « off » jusqu'au banc sur un lien bridé : chaque encodeur,
 clients Windows et Mac.
 
+**Le banc Linux, fait le 29/09** (banc §8n.27 : Chrome de l'UM790Pro, coupures
+et bridages par `netem`, un détecteur de dégâts lu sur le canvas du stream) :
+- NVENC et AMF perdent 93 à 96 % de leurs images abîmées. Presque toutes
+  venaient des bridages du lien, et les gels ne changent pas.
+- D3D12 VE, qui attend déjà des images clés, y gagne un peu.
+- **oneVPL se bloque** : après des réparations enchaînées depuis la même
+  référence longue, un encodage ne se termine jamais, et la session finit
+  10 s plus tard. Trois passes sur trois, jamais vu en production, pas
+  reproduit hors ligne. `namedrops` ne doit donc jamais valoir pour oneVPL.
+
 ### 9.11 La cadence s'aligne sur le rafraîchissement du client (04/09/2026)
 
 Un client qui peint sur son vsync — *tearing* coupé, ou un navigateur qui ne
