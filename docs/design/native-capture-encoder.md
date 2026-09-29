@@ -5642,3 +5642,114 @@ stream D3D12 reste fluide et réactif là où l'ancien chemin perdait des images
 Sur une connexion qui perd des paquets, l'image reste plus sobre (vers
 5 Mb/s) et peut geler un instant quand les pertes commencent. C'est le
 prochain chantier, côté transport.
+
+### 32.17 Deux images en vol : mesuré, gardé en clé de banc (phase 10, 29/09/2026)
+
+La chaîne D3D12 encode une image à la fois : le fil de capture convertit une
+image, attend son bitstream, puis revient acquérir la présentation suivante.
+Là où la conversion et l'encodage dépassent ensemble l'intervalle d'image,
+des présentations sont perdues.
+
+`pipelined=1` (clé de banc, `ee2c326e`) change cette forme :
+- L'encodage et la remise à l'envoi passent sur un fil à eux, à la classe
+  MMCSS du fil de capture.
+- Le convertisseur écrit deux sorties à tour de rôle. La capture convertit
+  l'image suivante dans celle que l'encodeur ne lit pas.
+- Une image convertie qui attend encore quand une plus récente est prête est
+  jetée : au plus deux images en vol, jamais de file.
+- Ce qui suit une remise à l'envoi (modèle du lien, gardes d'encodage et de
+  rééchantillonnage, compte de la cadence) reste sur le fil de capture, à
+  partir d'un relevé laissé par le fil d'encodage.
+- Un débit posé pendant un encodage part avec l'image suivante. Tout autre
+  usage de l'encodeur (renvoi, reconstruction, redémarrage) attend d'abord
+  qu'il ne tienne plus rien.
+- Un échec sur ce fil prend le même chemin de retour vers D3D11 qu'un échec
+  sur le fil de capture.
+- D3D12 Video Encode seulement : les SDK des fabricants enregistrent une seule
+  entrée.
+
+**Mesuré** (banc §8n.23, classe REALTIME, A/B alternés) :
+- Là où l'encodage dépasse l'intervalle et où la conversion tourne sur un
+  autre moteur, le parallélisme paie. C'est l'iGPU AMD en VE à 120 i/s :
+  94,5 images/s au lieu de 79,4, et l'hôte plus court (−0,6 ms en moyenne,
+  −2,6 ms au p99).
+- Là où l'encodage tient dans l'intervalle, rien ne change : RTX et Arc au
+  repos, Arc sous RE9.
+- Sur un iGPU saturé, le N95 à 120 Hz, les conversions faites pendant
+  l'encodage disputent le GPU à l'encodeur : même cadence, p99 de l'hôte
+  +52 ms. À 60 Hz, le N95 gagne un peu (p99 38,9 → 25,6 ms).
+
+**Décision** : le défaut ne change pas (§9-26 du plan). Le seul cas qui gagne
+nettement, l'iGPU AMD en VE, n'est pas la route d'AMD (AMF en D3D11, §32.12),
+et Intel, dont c'est la chaîne par défaut, n'y gagne rien de sûr. La clé
+reste pour le plan « ultra-low latency », qui la reprendra si l'encodage d'une
+image y redevient plus long que l'intervalle.
+
+**Concrètement, pour l'utilisateur** : rien ne change. La chaîne sait
+désormais encoder une image pendant qu'elle convertit la suivante. Le banc
+dit que ce n'est utile que sur un couple GPU × cadence que le produit ne
+prend pas aujourd'hui.
+
+### 32.18 Phase 11 : la télémétrie, l'encodeur gardé, et trois études (29/09/2026)
+
+**Le temps GPU de l'encodeur (C11.2, `de0184b2`).** Avec `gputiming=1`, deux
+horodatages encadrent chaque soumission sur la file d'encodage. Leur somme
+remplit `gpu_encode_us`, re-encodages compris. Sur la RTX, VE passe 7,6 ms
+sur les 8,1 de l'étape d'encodage, et l'iGPU AMD 8,8 sur 13,1 : le reste est
+l'attente de la conversion. L'Arc écrit ses horodatages avant que l'image
+soit codée (20 µs pour 4 ms). Le moteur le voit sur les 30 premières images
+et ne rapporte rien plutôt qu'un chiffre faux. Les cartes de QP et de SATD
+demandent un Agility SDK plus récent que celui du build : hors périmètre.
+
+**L'encodeur gardé à travers un redémarrage de capture (C11.4, `df5187ef`).**
+Un changement de mode, un écran qui passe en HDR, un écran verrouillé :
+chacun reconstruisait toute la chaîne D3D12, encodeur compris. Pourtant, le
+flux codé reste le même, car la session garde la taille et la cadence
+négociées quoi que fasse le bureau. `keep12=1` met l'encodeur de côté au
+démontage, et le reprend si le flux (codec, taille, cadence, HDR,
+intra-refresh) n'a pas changé. Sur l'écran virtuel rendu par l'Arc, le trou
+avant l'image clé d'un redémarrage passe de 717 à 546 ms en médiane, sur
+12 redémarrages par bras, sans aucune erreur de décodage (banc §8n.24).
+**Recommandation : l'activer par défaut** (§9-27 du plan). Le flux ne change
+pas, il repart toujours sur une image clé, et il gagne 0,2 s par redémarrage
+sur la chaîne par défaut d'Intel.
+
+**ROI par carte de QP (C11.3, étude).** La sonde du 29/09 refait le constat
+du 26/09 sur les pilotes du jour :
+- la RTX applique les cartes delta et absolue (cases de 32 px) ;
+- l'Arc annonce la carte delta, mais `EncodeFrame` la refuse ;
+- l'iGPU AMD annonce la carte absolue (cases de 64 px), et `EncodeFrame` la
+  refuse aussi.
+
+Un ROI (pointeur net, texte net) n'a donc de GPU où servir dans la chaîne
+D3D12 que la RTX, dont le stream passe par NVENC en D3D11, qui a sa propre
+carte. **Pas de ROI dans la chaîne D3D12** tant qu'un pilote Intel ne
+l'applique pas. Un ROI sur NVENC (le pointeur composé, par exemple) serait
+une ligne à part de la liste du plan natif, à mesurer pour lui-même.
+
+**L'envoi par tranches (C11.5, étude).** Envoyer une image par tranches
+(slices), au fur et à mesure qu'elles sont codées, fait partir la première
+plus tôt :
+- NVENC le permet par sa lecture partielle (`enableSubFrameWrite` et
+  `reportSliceOffsets`, sur la route du fabricant).
+- D3D12 Video Encode ne le permet qu'avec les notifications de sous-régions
+  d'un Agility SDK en préversion, hors périmètre du plan.
+
+Le gain est borné par le plus petit de deux temps : le temps d'encodage qui
+reste après la première tranche, et le temps d'envoi de l'image.
+- Côté navigateur, WebCodecs décode une unité d'accès entière : le décodeur
+  attend le dernier octet de toute façon.
+- Sur un réseau local à 1 Gbit/s, une image de 40 Ko part en 0,3 ms : c'est
+  le gain maximal.
+- Par Internet à 20 Mbit/s, elle part en 16 ms : l'encodage de NVENC (2 ms)
+  s'y recouvre presque entier, soit 1,5 ms au mieux.
+
+Il faut payer ces 1,5 ms de 2 à 5 % de débit (en-têtes de tranche, prédiction
+coupée aux frontières), et d'une réparation par invalidation plus complexe.
+**Pas fait.** À rouvrir dans le plan « ultra-low latency », si son codec
+décode par blocs indépendants.
+
+**Concrètement, pour l'utilisateur** : si Bruno l'accepte, un changement de
+résolution ou le retour d'un écran verrouillé rendra l'image environ 0,2 s
+plus vite sur un PC Intel. Le reste de la phase outille les bancs, et dit
+pourquoi deux idées (ROI, envoi par tranches) attendront.

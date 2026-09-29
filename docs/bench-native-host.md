@@ -3027,6 +3027,117 @@ bout médiane / p90, `host_total`, file du lien médiane / max).
 - ICE prend l'IPv6 s'il en trouve : un filtre sur l'IPv4 de l'hôte ne bride
   rien. Le script compte les paquets passés par `netem` avant de mesurer.
 
+### 8n.23 Phase 10 : deux images en vol (`pipelined=1`, 29/09/2026)
+
+La chaîne D3D12 encode une image à la fois : le fil de capture attend le
+bitstream avant d'acquérir la présentation suivante. Avec `pipelined=1`,
+l'encodage et la remise à l'envoi passent sur un fil à eux, et la capture
+convertit l'image suivante dans une seconde sortie. Il y a au plus deux images
+en vol : une image convertie qui attend encore quand une plus récente arrive
+est jetée, jamais mise en file (`ee2c326e`, design §32.17).
+
+**Montage.**
+- Binaire figé `bench-out\d3d12v2\c10-bin` (`ee2c326e`). Sur DualRTX,
+  exécuteur élevé (classe REALTIME, `c10-runner.ps1`) ; sur le N95, la copie
+  de l'exécuteur du §8n.8 (`n95-runner-c10.ps1`).
+- A/B alterné `ab-native-bench.ps1` : D3D12 Video Encode une image à la fois
+  (`ve12`, la référence) contre la même chaîne en `pipelined=1` (`pipe12`).
+  HEVC 1080p, 20 Mbit/s, page de défilement, ou RE9 (copie propre, réglages
+  légers du §8n.7) sur l'écran de l'Arc.
+- Sous charge, sur le N95 : `mw-gpu-load` 1,05, huit passes seules de 15 s,
+  alternées.
+- Sorties et scripts : `bench-out\d3d12v2\c10`.
+
+| cas (tours) | i/s | hôte, moyenne | hôte, p99 | encodées pendant un encodage / jetées, par passe |
+|---|---|---|---|---|
+| iGPU AMD, repos, 1080p120 (6) | 79,4 → **94,5** | 16,50 → **15,87** ms | 22,58 → **20,02** | ~1 300 / 175-250 |
+| iGPU AMD, repos, 1080p60 (4) | 59,8 → 59,9 | 15,37 → 14,81 | 20,72 → 19,96 | ~710 / 0-1 |
+| RTX (VE), repos, 1080p120 (4) | 119,6 → 119,9 | 6,55 → 6,59 | 9,13 → 8,93 | 14-81 / 0 |
+| Arc, repos, 1080p120 (4) | 116,6 → 116,8 | 3,99 → 4,04 | 6,55 → 6,48 | 10-17 / 1-3 |
+| Arc sous RE9, 1080p60 (4) | 24,9 → 25,4 | 5,90 → 5,61 | 26,4 → 25,8 | 0-1 / 0 |
+| Arc sous RE9, 1080p120 (4) | 25,0 → 24,9 | 4,74 → 4,72 | 27,0 → 22,2 | 0 / 0 |
+| N95, repos, écran 1080p60 (4) | 55,9 → 57,4 | 8,31 → 8,03 | 38,9 → 25,6 | 2-8 / 0 |
+| N95, repos, écran virtuel 1440p120 → 1080p120 (4) | 40,7 → 41,0 | 26,5 → **28,5** | 84,7 → **136,4** | ~155 / 0 |
+| N95 sous charge 3D, 1080p60 (4 + 4) | ~30 → ~30 | 30,9 → 30,7 | 60,4 → 59,0 | 1-4 / 0 |
+
+- **L'iGPU AMD à 120 i/s est le cas du plan**. Son encodeur VE prend 12 ms
+  par image, plus que l'intervalle : une image à la fois, la boucle n'en tient
+  que 79 par seconde. Pipelinée, elle en tient 94,5, et l'hôte descend en même
+  temps (−0,6 ms en moyenne, −2,6 ms au p99). La présentation qui attendait
+  que la boucle revienne est désormais convertie à l'instant. Une image sur
+  cinq est jetée pour une plus récente, comme prévu.
+- **Là où l'encodage tient dans l'intervalle, rien ne change** : RTX et Arc
+  au repos, et l'Arc sous RE9, où le jeu (25 i/s) ne présente pas plus vite
+  que la chaîne n'encode.
+- **Le N95 à 120 Hz perd** : même cadence, mais +2 ms en moyenne et +52 ms au
+  p99. Son iGPU est saturé : les 155 conversions faites pendant un encodage
+  disputent le GPU à l'encodeur au lieu d'occuper un moteur libre. Rien n'est
+  jeté. À 60 Hz, le N95 gagne un peu (p99 38,9 → 25,6 ms, +1,5 i/s) ; sous
+  une charge 3D, l'écart est nul.
+- Le banc de fumée (classe HIGH, `c10\smoke`) a passé `lose=`, `ramp=`, un
+  écran fixe et une panne injectée (`encode@200`) : chacun se comporte comme
+  une image à la fois, D3D11 reprend sur une image clé, et ffmpeg décode
+  chaque flux sans erreur.
+
+**Lecture.** Le parallélisme ne paie que là où l'encodage dépasse
+l'intervalle et où la conversion tourne sur un moteur que l'encodeur
+n'occupe pas. Aujourd'hui, c'est l'iGPU AMD en VE à 120 i/s, une route qui
+n'est pas celle d'AMD (AMF en D3D11, G4). Sur Intel, la chaîne par défaut,
+c'est neutre à 60 i/s et nuisible sur un iGPU saturé. La clé reste une clé de
+banc, et le défaut ne change pas (§9-26 du plan).
+
+### 8n.24 Phase 11 : le temps GPU de l'encodeur, l'encodeur gardé, les cartes de QP (29/09/2026)
+
+Trois mesures de la phase 11, sur DualRTX en classe HIGH (sorties
+`bench-out\d3d12v2\c11`).
+
+**Le temps GPU de D3D12 Video Encode (C11.2, `de0184b2`).**
+- `gputiming=1` remplit enfin la colonne `gpu_encode_us` : deux horodatages
+  encadrent chaque soumission sur la file d'encodage, re-encodages compris.
+- Sur une page qui défile, en 1080p60 : la RTX (VE) passe 7,6 ms sur les
+  8,1 ms de l'étape d'encodage, l'iGPU AMD 8,8 sur 13,1. Le reste est l'attente
+  de la conversion et le réveil.
+- **L'Arc écrit ses deux horodatages avant que l'image soit codée** : 20 µs
+  pour une image de 4 ms. Le moteur compare la somme des 30 premières
+  soumissions au temps que la CPU les a attendues, et ne rapporte rien quand
+  elle en fait moins du dixième : le journal le dit, la colonne reste à −1.
+- Les cartes de QP et de SATD de la même famille ne sont pas dans le SDK du
+  build (26100) : elles viennent avec un Agility SDK plus récent, hors
+  périmètre.
+
+**L'encodeur gardé à travers un redémarrage de capture (C11.4, `df5187ef`).**
+- `keep12=1` garde D3D12 Video Encode quand le flux qu'il code ne change pas
+  (codec, taille, cadence, HDR, intra-refresh). Le flux repart sur une image
+  clé dans les deux cas.
+- Écran virtuel rendu par l'Arc, scénario du §8n.13 : quatre changements de
+  mode, puis HDR allumé et éteint, dans une session SDR. Deux passes par bras,
+  alternées, soit 12 redémarrages chacun :
+
+| | trou avant l'image clé du redémarrage, médiane | moyenne |
+|---|---|---|
+| encodeur refait (aujourd'hui) | 717 ms | 729 ms |
+| `keep12=1` | **546 ms** | **528 ms** |
+
+- Aucune erreur de décodage, D3D12 d'un bout à l'autre. L'encodeur est gardé
+  à 8 reconstructions sur 9 : à la première, la largeur du flux passe de 1668
+  à 1440 et il est refait, comme prévu.
+- ⚠️ Activer l'écran virtuel la nuit a fait perdre l'écran de la RTX, en
+  veille : il n'est pas revenu en le désactivant, et l'écran de l'Arc est
+  resté principal.
+
+**Les cartes de QP sur les pilotes du jour (C11.3, étude).** Sonde
+`mw-d3d12-lab encode --rc delta|absolute --delta-sweep 6` :
+
+| GPU (pilote) | carte delta | carte absolue |
+|---|---|---|
+| RTX 5060 Ti | acceptée, cases de 32 px, 240 images sans erreur | acceptée, idem |
+| Arc A380 (32.0.101.8993) | annoncée (16 px), **refusée à `EncodeFrame`** (`E_INVALIDARG`) | non annoncée |
+| iGPU AMD (32.0.21045.5002) | non annoncée | annoncée (64 px), **refusée à `EncodeFrame`** (`E_INVALIDARG`) |
+
+- Comme le 26/09 : seule la RTX applique une carte de QP, et son stream passe
+  par NVENC en D3D11, qui a la sienne. Un ROI (pointeur, texte) dans la chaîne
+  D3D12 n'a donc pas de GPU où servir aujourd'hui.
+
 ## 8o. Linux : la chaîne Vulkan (28/09/2026 →)
 
 Phase 13 du plan D3D12 : la même forme de chaîne sous Linux, en Vulkan Video
@@ -3479,6 +3590,85 @@ erreurs ffmpeg par passe, en priorité normale comme en HIGH.
 - L'UM790Pro garde le 1.19 jusqu'à son prochain démarrage, puis le 1.24 avec
   Mesa 25.2.8 (passage en Ubuntu 24.04 le 28/09 au soir), une combinaison
   mesurée juste.
+
+### 8o.8 Ubuntu 24.04 : les trois routes en conditions réelles, Mesa 25.2.8 puis 26.2.3 (29/09/2026)
+
+Le §8o.6 refait comme un utilisateur de 24.04 : le Mesa du système, sans
+préfixe ni root.
+
+**Montage.**
+- UM790Pro en Ubuntu 24.04.5, noyau 6.8.0-142, micrologiciel VCN ENC 1.24.
+- Binaires de `46a73728` compilés sur place (gcc 13.3). `--native-bench` de
+  l'édition dev en utilisateur, avec les capacités que donne le lanceur du
+  paquet (`cap_sys_admin,cap_sys_nice+p`).
+- Le Mesa 25.2.8 de `noble-updates`, puis le 26.2.3 du PPA kisak « fresh »
+  (radeonsi passe à ACO). Le compositeur tourne encore sur 25.2.8 pendant la
+  seconde série.
+- Même banc qu'au §8o.6 : capture KMS 1920 × 1080 à 60 Hz, HEVC à
+  20 Mbit/s, 20 s par passe. Deux tours au repos (Chrome fait défiler la page
+  de banc) et deux sous `mw-gpu-load` 248, ordre inversé d'un tour à l'autre.
+- Sorties : `bench-out\vk-lab\noble-2026-09-29`.
+
+| route | Mesa | repos : encodage | repos : prés. → encodé, moy. / p99 | charge : conversion, moy. / p99 | charge : encodage | charge : prés. → encodé, moy. / p99 | captées sous charge |
+|---|---|---|---|---|---|---|---|
+| GL → VA-API | 25.2.8 | 4,1 ms | 4,86 / 5,45 | 10,1 / 18,4 | 4,4 | 14,5 / 22,9 | 32 i/s |
+| GL → VA-API | 26.2.3 | 4,1 | 4,88 / 5,49 | 10,2 / 22,8 | 4,4 | 14,6 / 27,5 | 32 i/s |
+| route scindée | 25.2.8 | 4,1 | 4,77 / 5,41 | 3,7 / 7,1 | 4,3 | 8,0 / 11,6 | 42 i/s |
+| route scindée | 26.2.3 | 4,1 | 4,81 / 5,43 | 3,6 / 6,9 | 4,3 | 8,0 / 11,5 | 42 i/s |
+| Vulkan Video | 25.2.8 | 1,7 | 2,39 / 2,73 | 3,8 / 7,0 | 2,0 | 5,8 / 9,2 | 42 i/s |
+| Vulkan Video | 26.2.3 | 1,6 | 2,29 / 2,59 | 3,8 / 7,2 | 1,9 | 5,7 / 9,2 | 42 i/s |
+
+- **Sous un jeu qui sature l'iGPU**, l'ordre du §8o.6 tient hors du labo :
+  - la chaîne Vulkan Video rend l'image en 5,7 ms (9,2 au p99) ;
+  - la route scindée en 8,0 ms (11,5) ;
+  - GL en 14,5 ms (23 à 28), et ne capte que 32 images sur les 43 à 44 du
+    jeu. C'est bien mieux qu'avec le Mesa 23.2 de 22.04 (26,8 ms, 23 i/s au
+    §8o.6), mais loin derrière les deux routes Vulkan.
+- **Au repos**, la chaîne Vulkan Video reste à la moitié des deux autres :
+  2,3 ms contre 4,8. Conversion : GL 0,77 ms, Vulkan 0,65.
+- **Deux Mesa, un seul résultat** : 25.2.8 et 26.2.3 donnent les mêmes
+  chiffres à 0,1 ms près. Le correctif du §8o.6 (un import par conversion)
+  tient avec la liste de BO globale de RADV 26.
+- **Sans clé**, le produit prend la route scindée (§9-20) : 4,79 / 4,81 ms.
+- Le jeu garde 43 à 44 i/s partout. Au repos, la page de banc présente 52 à
+  53 i/s pendant Vulkan Video, contre 39 à 46 pendant les routes VA-API, sur
+  les deux Mesa et les deux tours : à revoir sur un contenu à cadence fixe.
+
+**La preuve au pixel.**
+- La preuve de Vulkan Video à l'ouverture passe en utilisateur, sur les deux
+  Mesa, en 125 à 136 ms : pire image 39,8 dB, pire rangée de CTB 37,4,
+  chrominance 42,1. Le témoin à profondeur 2 échoue (5,2 à 6,4 dB) et la
+  session prend VA-API.
+- Les flux du produit, comparés image par image à une page fixe connue
+  affichée 1:1 sans pointeur : au pire 32,4 à 36,1 dB (l'IDR, sur un carré de
+  bruit), médiane 47 à 58 dB. H.264 à 100 Mbit/s : 51,8 dB au pire.
+- L'encodeur VA-API seul, sur huit images qui bougent (ffmpeg) : HEVC 41,7 dB
+  au pire, H.264 39,0. radeonsi 26.2.3 encode juste (26.0 à 26.2.0 cassaient
+  l'encodage).
+- Aucune erreur ffmpeg, sur aucun flux. **Le H.264 tronqué du §8o.7 a
+  disparu** avec le Mesa de 24.04, GL comme route scindée, à 20 et 100 Mbit/s.
+
+**Trois pièges, dont deux corrigés.**
+- `scripts/bench/hevc-psnr.py` décodait en `gray` : ffmpeg 6.1 étire alors la
+  luma d'un flux marqué « plage limitée » (le VUI des flux Linux) et donne un
+  faux 24 dB. Il lit désormais le plan Y du `yuv420p` (`7645f2ef`).
+- `test_vulkan_convert` convertissait deux fois le tampon d'affichage encore à
+  l'écran, par GL puis par Vulkan : quand l'écran bouge, le compositeur le
+  réécrit entre les deux (1 passage sur 4 en échec, page qui défile). Une
+  seconde conversion GL encadre désormais la comparaison, refaite jusqu'à
+  trois fois si l'écran a bougé (`74137b85`) : 4 passages sur 4 verts, suite
+  Linux 6008/6008.
+- Un profil GNOME ouvert automatiquement a son trousseau verrouillé : toute
+  application qui le demande affiche une invite qui assombrit la capture.
+  Chrome de banc en `--password-store=basic`.
+
+**Ce qu'on en retient.**
+- En conditions réelles, la chaîne Vulkan Video est la meilleure route au
+  repos comme sous un jeu. La route scindée, prise par défaut, la suit, et GL
+  ferme la marche.
+- Mesa 26.2.3 n'apporte ni gain ni perte mesurable ; l'UM790Pro reste dessus.
+- Restent pour G5 : Counter-Strike 2 (une connexion Steam de Bruno) et les
+  30 min d'endurance, puis la file d'encodage HIGH sous le noyau HWE 7.0.
 
 ## 9. Pour l'A/B
 
