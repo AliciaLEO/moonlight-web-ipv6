@@ -1186,7 +1186,7 @@ Tableau remis à jour le 29/09/2026, à la clôture du plan D3D12 (§32.19).
 | **Audio** : WASAPI loopback → cadenceur 5 ms → libopus, thread « Pro Audio » (04/09/2026) | |
 | `IMediaEngine`, relais découplés | |
 | Sonde displays/GPU + association ; WGC en repli, et retour à DDA dès que le bureau de l'utilisateur revient (§32.10) | |
-| Capture DXGI (0,06 ms) ; worker SYSTEM pour le bureau sécurisé (§31) ; `C+A+Suppr` appuyé par le service lanceur, sous la stratégie que l'installeur pose ; un stream qui démarre sur l'écran de sécurité (§31.7) | L'invite UAC cliquable (aucun poste du banc ne l'affiche) ; le déverrouillage d'un poste verrouillé avant le stream, par Bruno |
+| Capture DXGI (0,06 ms) ; worker SYSTEM pour le bureau sécurisé (§31) ; `C+A+Suppr` appuyé par le service lanceur, sous la stratégie que l'installeur pose ; un stream qui démarre sur l'écran de sécurité ; l'invite UAC cliquée depuis le client (§31.7) | Le déverrouillage d'un poste verrouillé avant le stream, par Bruno |
 | Conversion NV12 + AYUV 4:4:4 ; HDR (P010 + BT.2020 PQ) | |
 | NVENC (3,46 ms), AMF (3,70 ms), oneVPL (mesuré sur l'Arc et le N95) | |
 | **Chaîne D3D12** (§32) : conversion D3D12, D3D12 Video Encode en HEVC, H.264 et AV1, contrôle de débit maison ; **par défaut sur Intel** (§32.9) ; NVENC et AMF en entrée D3D12 derrière le réglage (§32.12) ; l'encodeur gardé à travers un redémarrage de capture (§32.18) et deux images en vol sur un GPU Intel à mémoire propre (§32.20), par défaut depuis le 29/09 | NVIDIA et AMD restent en D3D11, plus rapides chez eux |
@@ -5182,6 +5182,24 @@ Captures : `bench-out\d3d12v2\sas`. Restent à Bruno : le même geste depuis un
 vrai écran tactile, et le déverrouillage d'un poste verrouillé avant le début du
 stream.
 
+**L'invite UAC, vérifiée le même jour sur DualRTX**, avec la même édition et le
+même client, qui streame cette fois l'écran principal (la RTX). Aucun poste du
+banc n'affiche l'invite : Bruno a remis lui-même l'UAC à son réglage par défaut
+le temps du test, puis l'a redescendu.
+- Win+R, `cmd` puis Ctrl+Shift+Entrée, tapés dans le stream : l'invite
+  « Windows Command Processor » s'affiche dans le stream (« now on the
+  "Winlogon" desktop », duplication rouverte).
+- **Le clic sur « Yes »**, à la souris depuis le client, ouvre « Administrator:
+  C:\WINDOWS\system32\cmd.exe », et le worker revient sur `Default`. L'invite
+  élevée a été refermée par un `exit` tapé dans le stream.
+- C'est la première preuve de la **souris** sur le bureau sécurisé. Les essais
+  précédents n'y envoyaient que le clavier (le PIN, Échap).
+
+Captures : `bench-out\d3d12v2\uac`. Un piège du banc, pas du produit : l'hôte
+tape la touche physique selon **sa** disposition. Un client qui simule des
+touches doit donc envoyer la position AZERTY (le « m » est `Semicolon`) : avec
+`KeyM`, « cmd » est arrivé en « c,d ».
+
 **Concrètement, pour l'utilisateur** : le stream ne s'arrête plus devant une
 porte. Quand Windows demande une autorisation administrateur, l'invite apparaît
 à l'écran distant et le bouton « Oui » se clique comme n'importe quel autre ;
@@ -5930,9 +5948,10 @@ le stream.
   refusée (banc §8o.10) ;
 - les tests manuels : le pompage de G3, **fait** (Bruno, 29/09, en 5G :
   aucun pompage sur du texte ni sous RE9, à 10 et 5 Mb/s ; banc §8n.22) ;
-  l'invite UAC ; `C+A+Suppr` (§9-28) : fait, par le service lanceur et la
-  stratégie de l'installeur (§31.7), reste le geste de Bruno depuis un vrai
-  tactile et un poste verrouillé ;
+  l'invite UAC, **faite** (29/09, cliquée depuis le client, Bruno ayant remis
+  l'UAC par défaut le temps du test ; §31.7) ; `C+A+Suppr` (§9-28) : fait,
+  par le service lanceur et la stratégie de l'installeur (§31.7), reste le
+  geste de Bruno depuis un vrai tactile et un poste verrouillé ;
 - la séance du 780M sous Windows (C10.2) : sans objet, la décision sur
   `pipelined` ne touche pas AMD.
 
