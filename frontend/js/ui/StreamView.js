@@ -92,6 +92,7 @@ import {
     rememberRung,
 } from '../stream/EnhancerGovernor.js';
 import { drawCapFor } from '../stream/RenderPacing.js';
+import { ContentAgeProbe } from '../stream/ContentAgeProbe.js';
 import { LatencyProbe } from '../stream/LatencyProbe.js';
 import { t } from '../i18n/i18n.js';
 
@@ -827,6 +828,18 @@ export class StreamView {
         // the measuring side installed — see stream/LatencyProbe.js.
         this._latencyFlag = opts.latencyFlag === true;
         this._latencyProbe = null;
+        // Content-age probe (bench, plan framerate-hote): reads the time the
+        // bench page codes into its band back off each drawn picture — see
+        // stream/ContentAgeProbe.js. Idle until `mwContentAge.start()`.
+        this._contentAge = new ContentAgeProbe({
+            renderer: () => this._renderer,
+            sendPing: (seq, ts) => {
+                if (this.webrtc) this.webrtc.send({ type: 'ping', seq, ts });
+            },
+            results: (window.mwContentAgeResults = window.mwContentAgeResults || []),
+        });
+        // Standby views measure nothing; the visible one owns the console handle.
+        if (!this._standby) window.mwContentAge = this._contentAge;
         // Native host: mouse motion goes out on `pointerrawupdate` — every
         // report the device makes, not the one-per-display-frame sum that
         // `mousemove` delivers. Decided in _bindPointerRaw; while it is on, the
@@ -2282,6 +2295,7 @@ export class StreamView {
                 videoEl: this._useVideoSink ? this.videoEl : null,
             }).then((r) => {
                 this._renderer = r;
+                this._contentAge.attach(r);
                 this._activeRendererKind = r.kind;
                 this._rendererHdrActive = !!r.hdrActive;
                 this._createEnhancerGovernor(r);
@@ -3446,6 +3460,7 @@ export class StreamView {
             frame._mwDecodedPerf = outPerf;
             backendTs = submit.backendTs;
         }
+        if (this._contentAge.running) this._contentAge.onDecoded(frame, backendTs);
 
         // Presentation deadline (see FramePacer). Timed from the decoder output
         // rather than network arrival on purpose: decode time varies too, and it
@@ -3573,6 +3588,7 @@ export class StreamView {
         this._standby = false;
         // The console handle follows the visible view.
         if (this._latencyProbe) window.mwLatency = this._latencyProbe;
+        window.mwContentAge = this._contentAge;
         if (this._rootEl) this._rootEl.style.visibility = '';
         // This leg is the live stream now, so it needs the full header — the
         // owner's Share menu above all: the retiring view takes its own away
@@ -6253,6 +6269,7 @@ export class StreamView {
             return;
         }
         if (msg.type === 'pong') {
+            this._contentAge.notePong(msg, performance.now());
             const browserRtt = performance.now() - msg.ts;
             if (browserRtt > 0 && browserRtt < 10000) {
                 this._browserRttStats.addSample(browserRtt);
@@ -10679,6 +10696,8 @@ export class StreamView {
             if (window.mwLatency === this._latencyProbe) window.mwLatency = null;
             this._latencyProbe = null;
         }
+        if (this._contentAge.running) this._contentAge.stop();
+        if (window.mwContentAge === this._contentAge) window.mwContentAge = null;
         if (this._mainThreadProbe) {
             this._mainThreadProbe.stop();
             this._mainThreadProbe = null;

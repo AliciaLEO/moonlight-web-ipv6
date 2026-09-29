@@ -47,6 +47,16 @@ export class VideoRenderer {
     lastDraw = { submitMs: 0, waitMs: 0, path: '' };
 
     /**
+     * Content-age probe (stream/ContentAgeProbe.js): called with this
+     * renderer and the drawn frame's timestamp at the end of every draw that
+     * put a picture on the canvas — the moment the probe dates it. Null when
+     * nothing listens. The main-thread Canvas2D and WebGL renderers call it;
+     * the others never do.
+     * @type {((renderer: VideoRenderer, timestamp: number) => void)|null}
+     */
+    afterDraw = null;
+
+    /**
      * Async factory — subclasses implement it: set up the context and resources.
      * @param {HTMLCanvasElement|OffscreenCanvas} canvas
      * @param {object} opts

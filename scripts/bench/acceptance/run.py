@@ -214,13 +214,15 @@ def kiosk_start(url, on_gpu=None):
     time.sleep(5)
 
 
-def content_start(page, probe=True):
+def content_start(page, probe=True, debug_port=0):
     """Put a bench page (content/<page>) TOPMOST over the captured screen.
 
     What the host streams is otherwise whatever the operator has open there —
     a terminal that scrolls whenever a session prints — and no two passes see
     the same picture. The rectangle is MW_BENCH_CONTENT_RECT ("x,y,w,h",
-    physical pixels), the primary screen at 2560x1440 by default.
+    physical pixels), the primary screen at 2560x1440 by default. `debug_port`
+    opens the page's DevTools port, for a bench that has to talk to it (the
+    content-age band is calibrated that way, ../content-age/age.py).
     """
     rect = os.environ.get("MW_BENCH_CONTENT_RECT", "0,0,2560,1440").split(",")
     path, _, query = page.partition("?")
@@ -234,7 +236,12 @@ def content_start(page, probe=True):
     for _attempt in range(3):
         subprocess.run(["powershell", "-NoProfile", "-File",
                         os.path.join(os.path.dirname(HERE), "kiosk.ps1"), "-Url", url,
-                        "-X", rect[0], "-Y", rect[1], "-W", rect[2], "-H", rect[3]],
+                        "-X", rect[0], "-Y", rect[1], "-W", rect[2], "-H", rect[3]]
+                       # A port makes kiosk.ps1 pick the CLIENT's profile, and
+                       # kill the client holding it: the content keeps one of
+                       # its own.
+                       + (["-DebugPort", str(debug_port), "-ChromeProfile", ".chrome-content-cdp"]
+                          if debug_port else []),
                        capture_output=True, text=True)
         if not probe:
             return  # a screen ddagrab may not reach: nothing to check it with

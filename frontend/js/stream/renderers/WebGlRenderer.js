@@ -957,6 +957,8 @@ export class WebGlRenderer extends VideoRenderer {
         const drawStart = performance.now();
         let waitMs = 0;
         this._checkFence(drawStart);
+        // Closed before the draw below: the content-age probe dates it by this.
+        const frameTs = frame.timestamp;
 
         const inW = frame.displayWidth || frame.codedWidth || 0;
         const inH = frame.displayHeight || frame.codedHeight || 0;
@@ -1095,6 +1097,7 @@ export class WebGlRenderer extends VideoRenderer {
                 gl.activeTexture(gl.TEXTURE0);
             }
             if (this._probeActive) this._readProbePixels(cw, ch);
+            if (this.afterDraw) this.afterDraw(this, frameTs);
             this._setFence(performance.now());
         } catch (e) {
             console.error('[WebGlRenderer] draw failed: ' + e.message);

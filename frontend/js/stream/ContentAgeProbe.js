@@ -1,0 +1,541 @@
+/*
+ * MoonlightWeb — browser-based Sunshine/GameStream client.
+ * Copyright (C) 2026 Bruno Martin <brunoocto@gmail.com>
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation, either version 3 of the License, or (at your option)
+ * any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+ * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
+/**
+ * ContentAgeProbe — how old what this client shows is, image by image, on the
+ * host's clock (plan framerate-hote, design §33.3).
+ *
+ * The per-frame end-to-end the overlay shows starts when the host captured a
+ * frame. It cannot see how long the picture waited BEFORE the capture — for a
+ * present the cadence gate skipped, or for the compositor of a 60 Hz display —
+ * and that wait is exactly what a stream at the host's own rate is meant to
+ * remove. So the content carries its own time:
+ *
+ *   - the bench page (scripts/bench/content/scroll.html?band=time) codes, at
+ *     each of its frames, the host's steady clock in a band across the top of
+ *     the screen — calibrated against the host by the bench driver over CDP,
+ *     and absent until it is;
+ *   - this probe reads the band out of the decoded frame (VideoFrame.copyTo of
+ *     that strip alone: asynchronous, where reading the canvas back cost the
+ *     main thread 13 ms a read on an iGPU), and notes when the renderer drew
+ *     that same frame (VideoRenderer.afterDraw);
+ *   - the draw is put on the host's clock with an estimate made from the
+ *     ping/pong, whose pong carries the host's time; the difference is the
+ *     content's age when it was shown.
+ *
+ * The frame's own capture time (backendTs, the host's steady clock too) gives
+ * the capture's age on the same estimate: it should read what the overlay's
+ * end-to-end reads, which checks the clocks; content minus capture is the time
+ * the picture spent on the host before the capture took it.
+ *
+ * ── The band ─────────────────────────────────────────────────────────────────
+ *
+ * 40 blocks, each a hundredth of the frame's width square, from the top-left
+ * corner: 32 bits of the host's steady clock in units of 10 µs (least
+ * significant first; it wraps every 11.9 hours), then 8 bits of check
+ * (bandCheck). White is 1. The row of blocks under it holds the complement,
+ * so a block the encoder smeared reads as invalid rather than as a wrong bit.
+ * Sized on the width, it lands on the same blocks at any scale the stream
+ * is decoded at. A band that fails any of this is counted, never guessed.
+ *
+ * ── What it sees ─────────────────────────────────────────────────────────────
+ *
+ * The main-thread decode path, drawn by the Canvas2D or WebGL renderer; not
+ * the decode worker, not WebGPU, not <video>. The age is taken at the end of
+ * the draw: on a canvas that tears (Chromium desktop's default) the picture
+ * is on screen then; on one presenting on vsync, the compositor adds up to
+ * one refresh of the client that the age does not see. A frame decoded but
+ * never drawn (drop-to-latest) is not an age: it is counted as `undrawn`.
+ */
+
+/** Blocks across the frame's width: a block is 1/BAND_BLOCKS of it. */
+export const BAND_BLOCKS = 100;
+/** 32 bits of time and 8 of check. */
+export const BAND_BITS = 40;
+/** The band's clock unit, in microseconds. */
+export const BAND_UNIT_US = 10;
+const WRAP = 2 ** 32;
+/** Luma a block must clear to read as white, and stay under to read as black. */
+const WHITE = 160;
+const BLACK = 96;
+/** A frame read but not drawn within this long never will be. */
+const PENDING_MS = 1000;
+
+/**
+ * The check byte of @p value: the sum of its four bytes, xor 0xA5. The bench
+ * page computes it the same way (scroll.html).
+ * @param {number} value unsigned 32-bit
+ */
+export function bandCheck(value) {
+    const v = value >>> 0;
+    return (((v & 255) + ((v >>> 8) & 255) + ((v >>> 16) & 255) + (v >>> 24)) ^ 0xa5) & 255;
+}
+
+/**
+ * The strip to read out of a frame whose visible part is @p width wide, from
+ * @p x, @p y (VideoFrame.visibleRect): the band's two rows of blocks. Even
+ * everywhere, as a 4:2:0 frame's copyTo wants it.
+ * @returns {{x: number, y: number, w: number, h: number, block: number}}
+ */
+export function bandRegion(width, x = 0, y = 0) {
+    const block = width / BAND_BLOCKS;
+    const even = (v) => Math.ceil(v / 2) * 2;
+    return {
+        x: x & ~1,
+        y: y & ~1,
+        w: Math.min(width & ~1, even(BAND_BITS * block)),
+        h: even(2 * block),
+        block,
+    };
+}
+
+/**
+ * Read the band out of a strip of luma.
+ * @param {Uint8Array|Uint8ClampedArray|Float32Array} luma one value per pixel,
+ *        top-down, @p w × @p h
+ * @param {number} w
+ * @param {number} h
+ * @param {number} block the block's size in these pixels (bandRegion)
+ * @returns {{ok: boolean, value?: number, why?: string}}
+ */
+export function decodeBand(luma, w, h, block) {
+    if (!luma || !(block >= 2) || w < Math.floor(BAND_BITS * block) || h < Math.floor(2 * block))
+        return { ok: false, why: 'size' };
+    const mean = (x0, x1, y0, y1) => {
+        let sum = 0;
+        let n = 0;
+        for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++, n++) sum += luma[y * w + x];
+        return n ? sum / n : 0;
+    };
+    // The middle half of a block: its edges are where compression and a
+    // non-integer scale blur one block into the next.
+    const span = (lo, hi, limit) => {
+        const a = Math.min(limit - 1, Math.ceil(lo));
+        const b = Math.min(limit - 1, Math.max(a, Math.floor(hi)));
+        return [a, b];
+    };
+    const [a0, a1] = span(0.25 * block, 0.75 * block, h);
+    const [b0, b1] = span(1.25 * block, 1.75 * block, h);
+    let value = 0;
+    let check = 0;
+    for (let bit = 0; bit < BAND_BITS; bit++) {
+        const [x0, x1] = span((bit + 0.25) * block, (bit + 0.75) * block, w);
+        const top = mean(x0, x1, a0, a1);
+        const under = mean(x0, x1, b0, b1);
+        const one = top > WHITE && under < BLACK;
+        const zero = top < BLACK && under > WHITE;
+        if (!one && !zero) return { ok: false, why: 'block' };
+        if (!one) continue;
+        if (bit < 32) value += 2 ** bit;
+        else check |= 1 << (bit - 32);
+    }
+    if (bandCheck(value) !== check) return { ok: false, why: 'check' };
+    return { ok: true, value };
+}
+
+/**
+ * The host's time, in µs, of a band @p value read when the host's clock was
+ * about @p nearUs: the band keeps only the low 32 bits of its 10 µs units.
+ */
+export function unwrapBand(value, nearUs) {
+    return unwrap32(value, Math.floor(nearUs / BAND_UNIT_US)) * BAND_UNIT_US;
+}
+
+/** The whole number whose low 32 bits are @p value, nearest to @p near. */
+export function unwrap32(value, near) {
+    let diff = (near - value) % WRAP;
+    if (diff < 0) diff += WRAP;
+    if (diff > WRAP / 2) diff -= WRAP;
+    return near - diff;
+}
+
+/**
+ * One frame's luma strip out of copyTo's bytes: the first plane of a 4:2:0
+ * frame is luma already; a packed RGB frame is weighed into it.
+ * @returns {Uint8Array|Float32Array|null}
+ */
+export function lumaOf(format, data, layout, w, h) {
+    const plane = layout && layout[0];
+    if (!plane) return null;
+    const { offset, stride } = plane;
+    if (format === 'NV12' || format === 'I420' || format === 'I420A' || format === 'NV12A') {
+        const out = new Uint8Array(w * h);
+        for (let y = 0; y < h; y++)
+            out.set(data.subarray(offset + y * stride, offset + y * stride + w), y * w);
+        return out;
+    }
+    const rgb = { RGBA: [0, 1, 2], RGBX: [0, 1, 2], BGRA: [2, 1, 0], BGRX: [2, 1, 0] }[format];
+    if (!rgb) return null;
+    const out = new Float32Array(w * h);
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            const i = offset + y * stride + x * 4;
+            out[y * w + x] =
+                0.299 * data[i + rgb[0]] + 0.587 * data[i + rgb[1]] + 0.114 * data[i + rgb[2]];
+        }
+    }
+    return out;
+}
+
+/**
+ * This client's clock against the host's, from ping/pong: the pong carries the
+ * host's steady clock at the moment it answered. Each exchange gives the
+ * offset at the middle of its round trip, give or take half of it — so only
+ * the exchanges near the shortest round trip are believed, and a line through
+ * them over time follows a drift between the two clocks.
+ *
+ * What no two-way exchange can see is a link slower one way than the other:
+ * the offset is then wrong by half the difference, and every age with it.
+ */
+export class ClockEstimator {
+    /** @param {{windowMs?: number}} [opts] how much history the fit keeps */
+    constructor({ windowMs = 30000 } = {}) {
+        this._windowMs = windowMs;
+        /** @type {{mid: number, off: number, rtt: number}[]} */
+        this._samples = [];
+        this._a = 0; // offset (µs) at _t0
+        this._b = 0; // drift, µs of offset per ms
+        this._t0 = 0;
+        this._fitted = false;
+        this._streak = 0;
+        this.jumps = 0;
+        this.rejected = 0;
+    }
+
+    /**
+     * One exchange: sent at @p sendMs, answered with the host's @p hostUs,
+     * back at @p recvMs (this client's performance.now()).
+     * @returns {boolean} whether the sample was kept
+     */
+    note(sendMs, hostUs, recvMs) {
+        const rtt = recvMs - sendMs;
+        if (!(rtt >= 0 && rtt < 2000) || !(hostUs > 0)) return false;
+        const mid = (sendMs + recvMs) / 2;
+        const off = hostUs - mid * 1000;
+        if (this._fitted) {
+            // A sample far off the line: noise once, a clock that jumped when
+            // it keeps happening — the history is then of another clock.
+            const err = off - this._offsetAt(mid);
+            if (Math.abs(err) > Math.max(2000, rtt * 1000)) {
+                if (++this._streak < 3) {
+                    this.rejected++;
+                    return false;
+                }
+                this.jumps++;
+                this._samples = [];
+                this._fitted = false;
+            }
+            this._streak = 0;
+        }
+        this._samples.push({ mid, off, rtt });
+        while (this._samples.length && this._samples[0].mid < mid - this._windowMs)
+            this._samples.shift();
+        this._refit();
+        return true;
+    }
+
+    _offsetAt(ms) {
+        return this._a + this._b * (ms - this._t0);
+    }
+
+    _refit() {
+        const all = this._samples;
+        if (!all.length) return;
+        let minRtt = Infinity;
+        for (const s of all) minRtt = Math.min(minRtt, s.rtt);
+        // Near the best round trip: within 0.3 ms or a quarter of it.
+        const good = all.filter((s) => s.rtt <= minRtt + Math.max(0.3, minRtt * 0.25));
+        const t0 = good[0].mid;
+        const span = good[good.length - 1].mid - t0;
+        let a = 0;
+        let b = 0;
+        if (good.length >= 3 && span >= 5000) {
+            let sx = 0;
+            let sy = 0;
+            let sxx = 0;
+            let sxy = 0;
+            for (const s of good) {
+                const x = s.mid - t0;
+                sx += x;
+                sy += s.off;
+                sxx += x * x;
+                sxy += x * s.off;
+            }
+            const n = good.length;
+            b = (n * sxy - sx * sy) / (n * sxx - sx * sx);
+            a = (sy - b * sx) / n;
+        } else {
+            for (const s of good) a += s.off;
+            a /= good.length;
+        }
+        this._a = a;
+        this._b = b;
+        this._t0 = t0;
+        this._fitted = true;
+    }
+
+    /** True once enough exchanges have been heard to put a time on the host's clock. */
+    get ready() {
+        return this._fitted && this._samples.length >= 3;
+    }
+
+    /** The host's steady clock, in µs, at this client's @p clientMs. */
+    toHostUs(clientMs) {
+        return clientMs * 1000 + this._offsetAt(clientMs);
+    }
+
+    /** What the estimate stands on, for the results. */
+    get summary() {
+        let minRtt = Infinity;
+        for (const s of this._samples) minRtt = Math.min(minRtt, s.rtt);
+        return {
+            samples: this._samples.length,
+            rttMinMs: Number.isFinite(minRtt) ? minRtt : null,
+            driftPpm: this._b * 1000,
+            jumps: this.jumps,
+            rejected: this.rejected,
+        };
+    }
+}
+
+/** Percentile @p p (0..1) of a sorted array. */
+function percentile(sorted, p) {
+    if (!sorted.length) return null;
+    const i = Math.min(sorted.length - 1, Math.max(0, Math.round(p * (sorted.length - 1))));
+    return sorted[i];
+}
+
+function describe(values) {
+    const sorted = values.slice().sort((a, b) => a - b);
+    const round = (x) => (x === null ? null : Math.round(x * 100) / 100);
+    return {
+        n: sorted.length,
+        medianMs: round(percentile(sorted, 0.5)),
+        p90Ms: round(percentile(sorted, 0.9)),
+        p99Ms: round(percentile(sorted, 0.99)),
+        meanMs: round(sorted.length ? sorted.reduce((s, x) => s + x, 0) / sorted.length : null),
+        minMs: round(percentile(sorted, 0)),
+        maxMs: round(percentile(sorted, 1)),
+    };
+}
+
+/**
+ * The console handle, `mwContentAge`:
+ *
+ *   mwContentAge.start({every: 1})   // read the band of every decoded frame
+ *   ... the page scrolls on the host ...
+ *   mwContentAge.stop()              // → summary, also pushed to mwContentAgeResults
+ *
+ * While it runs it pings the host ten times a second for the clock estimate.
+ */
+export class ContentAgeProbe {
+    /**
+     * @param {object} deps
+     * @param {() => any} deps.renderer the view's current VideoRenderer
+     * @param {(seq: number, ts: number) => void} deps.sendPing a `ping` the
+     *        host answers with a `pong` carrying `host` (its steady µs)
+     * @param {any[]} [deps.results] where finished runs go
+     *        (window.mwContentAgeResults)
+     */
+    constructor({ renderer, sendPing, results = [] }) {
+        this._renderer = renderer;
+        this._sendPing = sendPing;
+        this.results = results;
+        this._run = null;
+        this._clock = new ClockEstimator();
+        this._pingTimer = null;
+        this._seq = 1 << 20; // apart from the view's own pings
+        this._onDraw = (_r, ts) => this.onDrawn(ts, performance.now());
+    }
+
+    get running() {
+        return this._run !== null;
+    }
+
+    /**
+     * Start reading. @p every: read one decoded frame in that many (each read
+     * holds a clone of the frame until its strip is copied out).
+     */
+    start({ every = 1 } = {}) {
+        if (this._run) this.stop();
+        this._run = {
+            every: Math.max(1, Math.floor(every) || 1),
+            decoded: 0,
+            read: 0,
+            startedMs: performance.now(),
+            /** @type {Map<number, {at: number, backendTs: number, value: number|null, drawnMs: number|null}>} */
+            pending: new Map(),
+            content: [],
+            capture: [],
+            before: [],
+            samples: [],
+            invalid: { size: 0, block: 0, check: 0, copy: 0, clock: 0, undrawn: 0 },
+        };
+        this._pingTimer = setInterval(() => this._sendPing(this._seq++, performance.now()), 100);
+        this.attach(this._renderer());
+        return 'content-age probe running: page scripts/bench/content/scroll.html?band=time';
+    }
+
+    /** The view changed renderer mid-run: hear its draws. */
+    attach(renderer) {
+        if (renderer && this._run) renderer.afterDraw = this._onDraw;
+    }
+
+    /**
+     * The host's steady clock, in µs, at this client's @p clientMs, by the
+     * estimate — null until there is one. For a bench to check it against a
+     * clock it can read (scripts/bench/content-age/age.py).
+     */
+    hostUs(clientMs) {
+        return this._clock.ready ? this._clock.toHostUs(clientMs) : null;
+    }
+
+    /** A pong arrived (StreamView forwards them all). */
+    notePong(msg, recvMs) {
+        if (!msg || typeof msg.host !== 'number' || typeof msg.ts !== 'number') return;
+        this._clock.note(msg.ts, msg.host, recvMs);
+    }
+
+    /**
+     * A frame came out of the decoder. @p backendTs: its capture time on the
+     * host's steady clock, in ms (low 32 bits), 0 when unknown.
+     * @param {VideoFrame} frame
+     */
+    onDecoded(frame, backendTs) {
+        const run = this._run;
+        if (!run) return;
+        if (run.decoded++ % run.every !== 0) return;
+        this._expire(performance.now());
+        const vr = frame.visibleRect || { x: 0, y: 0, width: frame.codedWidth };
+        const region = bandRegion(vr.width, vr.x, vr.y);
+        const entry = { at: performance.now(), backendTs, value: null, drawnMs: null };
+        const ts = frame.timestamp;
+        run.pending.set(ts, entry);
+        run.read++;
+        let clone;
+        try {
+            clone = frame.clone();
+            const rect = { x: region.x, y: region.y, width: region.w, height: region.h };
+            const buf = new Uint8Array(clone.allocationSize({ rect }));
+            const format = clone.format;
+            clone
+                .copyTo(buf, { rect })
+                .then((layout) => {
+                    const luma = lumaOf(format, buf, layout, region.w, region.h);
+                    const band = luma
+                        ? decodeBand(luma, region.w, region.h, region.block)
+                        : { ok: false, why: 'size' };
+                    if (!band.ok) {
+                        this._fail(ts, band.why);
+                        return;
+                    }
+                    entry.value = band.value;
+                    this._settle(ts);
+                })
+                .catch(() => this._fail(ts, 'copy'))
+                .finally(() => clone.close());
+        } catch (e) {
+            if (clone) clone.close();
+            this._fail(ts, 'copy');
+        }
+    }
+
+    /** The renderer drew the frame stamped @p ts, at @p nowMs. */
+    onDrawn(ts, nowMs) {
+        const run = this._run;
+        if (!run) return;
+        const entry = run.pending.get(ts);
+        if (!entry || entry.drawnMs !== null) return;
+        entry.drawnMs = nowMs;
+        this._settle(ts);
+    }
+
+    _fail(ts, why) {
+        const run = this._run;
+        if (!run || !run.pending.delete(ts)) return;
+        run.invalid[why] = (run.invalid[why] || 0) + 1;
+    }
+
+    _expire(nowMs) {
+        const run = this._run;
+        for (const [ts, e] of run.pending) {
+            if (nowMs - e.at < PENDING_MS) break; // in decode order
+            run.pending.delete(ts);
+            run.invalid.undrawn++;
+        }
+    }
+
+    /** Both halves known — the band and the draw: the ages. */
+    _settle(ts) {
+        const run = this._run;
+        const e = run && run.pending.get(ts);
+        if (!e || e.value === null || e.drawnMs === null) return;
+        run.pending.delete(ts);
+        if (!this._clock.ready) {
+            run.invalid.clock++;
+            return;
+        }
+        const nowUs = this._clock.toHostUs(e.drawnMs);
+        const contentMs = (nowUs - unwrapBand(e.value, nowUs)) / 1000;
+        run.content.push(contentMs);
+        let captureMs = null;
+        if (e.backendTs > 0) {
+            captureMs = nowUs / 1000 - unwrap32(e.backendTs, Math.floor(nowUs / 1000));
+            // backendTs is whole milliseconds: a capture age is good to one.
+            if (captureMs > -5 && captureMs < 10000) {
+                run.capture.push(captureMs);
+                run.before.push(contentMs - captureMs);
+            } else {
+                captureMs = null;
+            }
+        }
+        run.samples.push([
+            Math.round(e.drawnMs * 10) / 10,
+            Math.round(contentMs * 100) / 100,
+            captureMs === null ? null : Math.round(captureMs * 100) / 100,
+        ]);
+    }
+
+    /** Stop, and give the run's summary (kept in `results` too). */
+    stop() {
+        const run = this._run;
+        if (!run) return null;
+        this._expire(Infinity);
+        this._run = null;
+        clearInterval(this._pingTimer);
+        this._pingTimer = null;
+        const r = this._renderer();
+        if (r && r.afterDraw === this._onDraw) r.afterDraw = null;
+        const content = describe(run.content);
+        const summary = {
+            seconds: Math.round((performance.now() - run.startedMs) / 10) / 100,
+            decoded: run.decoded,
+            read: run.read,
+            ages: content.n,
+            invalid: run.invalid,
+            ...content,
+            capture: describe(run.capture),
+            beforeCapture: describe(run.before),
+            clock: this._clock.summary,
+            renderer: r ? r.kind : null,
+            // [drawn at (client ms), content age (ms), capture age (ms)]
+            samples: run.samples,
+        };
+        this.results.push(summary);
+        return summary;
+    }
+}

@@ -69,6 +69,59 @@ function drawBands() {
   }
 }
 
+// ?band=time: the host's steady clock at this frame, for the client's
+// content-age probe (frontend/js/stream/ContentAgeProbe.js, plan
+// framerate-hote). 40 blocks, each a hundredth of the screen's width, from the
+// top-left corner: 32 bits of the clock in units of 10 µs, least significant
+// first, then 8 of check — the sum of the value's four bytes, xor 0xA5. White
+// is 1; the row under it holds the complement. Sized on the width so the
+// client finds the same blocks at whatever scale it decodes; block edges fall
+// on round(i × W / 100) device pixels, exactly where it looks for them.
+//
+// Nothing is drawn until the bench driver has told the page where the host's
+// clock stands against performance.now() — mwBand.calibrate(offsetMs), over
+// CDP (scripts/bench/content-age/age.py): an uncalibrated band would be read
+// as a wrong age rather than as none.
+const timeBand = params.get("band") === "time";
+let bandOffsetMs = null;
+let timeCtx = null, bandW = 0;
+if (timeBand) {
+  const dpr = window.devicePixelRatio || 1;
+  bandW = Math.round(window.innerWidth * dpr);
+  const c = document.createElement("canvas");
+  c.width = Math.round(40 * bandW / 100);
+  c.height = Math.round(2 * bandW / 100);
+  c.style.cssText = "position:fixed;left:0;top:0;z-index:10;image-rendering:pixelated;" +
+    "display:none;width:" + c.width / dpr + "px;height:" + c.height / dpr + "px";
+  document.body.appendChild(c);
+  timeCtx = c.getContext("2d");
+  window.mwBand = {
+    calibrate(offsetMs) {
+      bandOffsetMs = offsetMs;
+      c.style.display = "block";
+      return "band calibrated: " + bandW + " px wide, offset " + offsetMs.toFixed(3) + " ms";
+    },
+    width: bandW,
+  };
+}
+function bandCheck(v) {
+  return (((v & 255) + ((v >>> 8) & 255) + ((v >>> 16) & 255) + (v >>> 24)) ^ 0xa5) & 255;
+}
+function drawTimeBand(t) {
+  if (bandOffsetMs === null) return;
+  const units = Math.floor((t + bandOffsetMs) * 100) % 4294967296;
+  const check = bandCheck(units);
+  const r1 = Math.round(bandW / 100), r2 = Math.round(2 * bandW / 100);
+  for (let bit = 0; bit < 40; bit++) {
+    const one = bit < 32 ? Math.floor(units / 2 ** bit) % 2 === 1 : ((check >> (bit - 32)) & 1) === 1;
+    const x0 = Math.round(bit * bandW / 100), x1 = Math.round((bit + 1) * bandW / 100);
+    timeCtx.fillStyle = one ? "#fff" : "#000";
+    timeCtx.fillRect(x0, 0, x1 - x0, r1);
+    timeCtx.fillStyle = one ? "#000" : "#fff";
+    timeCtx.fillRect(x0, r1, x1 - x0, r2 - r1);
+  }
+}
+
 let y = 0, last = 0;
 function frame(t) {
   const moving = !(pause > 0) || Math.floor(t / 1000 / pause) % 2 === 0;
@@ -76,6 +129,7 @@ function frame(t) {
   last = t;
   col.style.transform = "translateY(" + (-y) + "px)";
   if (bands.length) drawBands();
+  if (timeBand) drawTimeBand(t);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

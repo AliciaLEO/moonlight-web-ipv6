@@ -278,6 +278,7 @@ export class Canvas2DRenderer extends VideoRenderer {
             }
 
             if (this._probeActive) this._readProbePixels();
+            if (this.afterDraw && success) this.afterDraw(this, frame.timestamp);
             frame.close();
             this._rendered++;
             this._noteDraw(
@@ -339,6 +340,7 @@ export class Canvas2DRenderer extends VideoRenderer {
         }
 
         if (this._probeActive && rendered) this._readProbePixels();
+        if (this.afterDraw && rendered) this.afterDraw(this, frame.timestamp);
         frame.close();
         this._rendered++;
         this._noteDraw(drawStart, waitMs, rendered ? path : 'failed');

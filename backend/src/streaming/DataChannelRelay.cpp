@@ -1573,6 +1573,12 @@ void DataChannelRelay::onInputMessage(const std::string& message)
         pong["type"] = "pong";
         pong["seq"] = seq;
         pong["ts"] = ts;
+        // The host's steady clock as it answers, in µs: the clock frames are
+        // stamped on (backendTs), for a client that puts its own on it — the
+        // content-age probe (frontend ContentAgeProbe.js). Exact in a double.
+        pong["host"] = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                               std::chrono::steady_clock::now().time_since_epoch())
+                                               .count());
         QByteArray pongJson = QJsonDocument(pong).toJson(QJsonDocument::Compact);
         if (m_InputDc && !m_Stopping.load()) {
             try {
