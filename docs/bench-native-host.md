@@ -3724,6 +3724,36 @@ préfixe ni root.
 - Restent pour G5 : Counter-Strike 2 (une connexion Steam de Bruno) et les
   30 min d'endurance, puis la file d'encodage HIGH sous le noyau HWE 7.0.
 
+### 8o.9 G5 : 30 minutes de Vulkan Video sous une charge qui sature le 780M (29/09/2026)
+
+La partie d'endurance de G5, sans attendre Counter-Strike 2 : la chaîne Vulkan
+Video pendant 30 min sous `mw-gpu-load` 248, en utilisateur, Mesa 26.2.3.
+
+**Montage.**
+- `--native-bench pipeline=vulkan`, HEVC 1080p à 10 Mbit/s, 1 800 s, le flux
+  entier gardé pour ffmpeg.
+- La charge relancée en boucle : sa garde thermique la coupe à 85 °C. Elle a
+  tourné 1 209 s sur les 1 800, par à-coups, le 780M entre 69 et 88 °C : une
+  charge au plafond thermique, plus dure qu'un jeu régulier.
+- La mémoire du processus relevée chaque minute. Sorties :
+  `/tmp/noble/soak2` sur l'UM790Pro.
+
+**Résultats.**
+- 73 204 images, **toutes par Vulkan Video** : aucun repli, une seule image
+  clé (la première).
+- ffmpeg décode les 73 204 images **sans une erreur**.
+- Hôte : 7,8 ms en moyenne, 62,8 ms au p99. Le p99 est celui des reprises de la
+  charge : le GPU passe de froid à saturé plusieurs fois par minute. Le premier
+  et le dernier sixième ne diffèrent que de 0,8 ms en moyenne.
+- Mémoire : 106,2 → 112,9 Mo. Ce sont les lignes du banc, gardées en mémoire
+  jusqu'à la fin (~92 octets par image). La même passe au repos (5 520 images)
+  reste plate.
+
+**Ce qu'on en retient.** La chaîne Vulkan Video tient 30 min sous une charge
+au plafond thermique, sans repli, sans image fausse ni fuite. Pour G5, il ne
+manque que le vrai jeu (Counter-Strike 2) et la file d'encodage HIGH sous le
+noyau 7.0.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
