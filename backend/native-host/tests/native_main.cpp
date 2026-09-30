@@ -85,6 +85,7 @@ void run_frame_fit_tests();
 void run_painted_pointer_tests();
 void run_cursor_position_gate_tests();
 void run_feed_header_tests();
+void run_feed_arbiter_tests();
 
 void installTestLogSink()
 {
@@ -167,6 +168,7 @@ int main(int argc, char** argv)
     RUN(painted_pointer);
     RUN(cursor_position_gate);
     RUN(feed_header);
+    RUN(feed_arbiter);
     RUN(capture);
     RUN(color_convert);
     RUN(color_convert12);

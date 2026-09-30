@@ -560,12 +560,19 @@ void NativeMediaEngine::onFeedControl(const QJsonObject& message)
                                   message.value(QStringLiteral("hdrCapable")).toBool());
         return;
     }
-    if (type == QLatin1String("codec") || type == QLatin1String("bye")) {
+    if (type == QLatin1String("codec")) {
         // The feed changes codec for everyone (a guest who decodes no HEVC
-        // arrived) or ends: this session ends with it, and the browser comes
-        // back the way it comes back from any codec fallback.
-        qInfo() << "[NativeMediaEngine] the shared feed says" << type
-                << "— this guest's session ends, to be joined again";
+        // arrived) and ends in a moment: the browser is told, and comes back
+        // into the new feed the way it comes back from its own codec fallback.
+        // A page that does not act loses the feed with everyone else's.
+        const QString codec = message.value(QStringLiteral("codec")).toString();
+        qInfo() << "[NativeMediaEngine] the shared feed goes" << codec
+                << "— this guest's browser rejoins in it";
+        emit sharedFeedCodecChanged(codec);
+        return;
+    }
+    if (type == QLatin1String("bye")) {
+        qInfo() << "[NativeMediaEngine] the shared feed ends — so does this guest's session";
         m_Connected.store(false, std::memory_order_release);
         emit connectionTerminated(-1);
     }
@@ -890,6 +897,9 @@ void NativeMediaEngine::setCompositeCursor(bool composite, int cursorFramePx)
 
 void NativeMediaEngine::setFrameFloorFps(int fps)
 {
+    // The shared feed keeps its own pace (60 fps, every refresh): nothing one
+    // guest's page asks of the cadence reaches the others' pictures.
+    if (m_Subscriber) return;
     m_FrameFloorFps.store(fps, std::memory_order_release);
     if (m_Session) m_Session->setFrameFloorFps(fps);
 }
@@ -912,6 +922,7 @@ void NativeMediaEngine::invalidateReference(uint32_t frameNumber)
 
 void NativeMediaEngine::setClientRefresh(int milliHz, bool vsync)
 {
+    if (m_Subscriber) return; // the feed's pace, see setFrameFloorFps
     m_ClientRefreshMilliHz.store(milliHz, std::memory_order_relaxed);
     m_ClientVsync.store(vsync, std::memory_order_relaxed);
     m_ClientRefreshKnown.store(true, std::memory_order_release);
@@ -920,17 +931,20 @@ void NativeMediaEngine::setClientRefresh(int milliHz, bool vsync)
 
 void NativeMediaEngine::setClientFpsCap(int fps)
 {
+    if (m_Subscriber) return; // the feed's pace, see setFrameFloorFps
     if (m_Session) m_Session->setClientFpsCap(fps);
 }
 
 void NativeMediaEngine::setClientDecodeQueue(int depth)
 {
+    if (m_Subscriber) return; // the feed's pace, see setFrameFloorFps
     if (m_Session) m_Session->setClientDecodeQueue(depth);
 }
 
 void NativeMediaEngine::setClientVsyncGrid(double periodUs, int64_t phaseUs, int64_t leadUs,
                                            bool tearing, bool steady, double budgetFps)
 {
+    if (m_Subscriber) return; // the feed's pace, see setFrameFloorFps
     if (m_Session)
         m_Session->setClientVsyncGrid(periodUs, phaseUs, leadUs, tearing, steady, budgetFps);
 }

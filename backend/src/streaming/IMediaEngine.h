@@ -375,6 +375,13 @@ signals:
     void displayFormatChanged(int displayWidth, int displayHeight, int frameWidth, int frameHeight,
                               bool displayHdr, bool hdr, bool hdrCapable);
 
+    /// The guests' shared feed goes to @p codec for everyone ("h264": a guest
+    /// whose browser decodes no HEVC joined it), and the feed this session
+    /// carries ends in a moment. Native host, guests on the shared feed only.
+    /// Forwarded to the browser, which comes back in that codec the way its
+    /// own codec fallback does.
+    void sharedFeedCodecChanged(QString codec);
+
 protected:
     /// Written once by the session thread at stream start, read on every
     /// keystroke by whichever thread owns the input channel — hence atomic.

@@ -28,6 +28,8 @@ const VIEW_MESSAGES = new Set([
     // Native host only: presses refused, and the display changing mode.
     'inputgate',
     'displayformat',
+    // Native host, a guest on the shared feed: the feed changes codec.
+    'feedcodec',
 ]);
 
 /** Whether a host message of this type goes to the stream view. */

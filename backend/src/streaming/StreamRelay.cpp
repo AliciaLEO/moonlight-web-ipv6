@@ -95,6 +95,16 @@ StreamRelay::StreamRelay(IMediaEngine* engine, quint16 wsPort, const QSslConfigu
                     QString::fromUtf8(QJsonDocument(m).toJson(QJsonDocument::Compact)));
             });
 
+    // The guests' shared feed changes codec (native host) — see DataChannelRelay.
+    connect(m_Shim, &IMediaEngine::sharedFeedCodecChanged, this, [this](QString codec) {
+        if (!m_WsClient || m_WsClient->state() != QAbstractSocket::ConnectedState) return;
+        QJsonObject m;
+        m["type"] = "feedcodec";
+        m["codec"] = codec;
+        m_WsClient->sendTextMessage(
+            QString::fromUtf8(QJsonDocument(m).toJson(QJsonDocument::Compact)));
+    });
+
     bool secure = !sslConfig.isNull();
     m_WsServer = new QWebSocketServer(
         QString("Moonlight-Relay"),

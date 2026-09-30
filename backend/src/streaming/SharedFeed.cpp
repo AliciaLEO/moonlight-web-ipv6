@@ -58,22 +58,37 @@ bool SharedFeed::enabled(bool setting)
 bool SharedFeed::acquire(const Spec& spec, int slot, Ticket& out)
 {
     if (m_Failed) return false;
+    QSet<int> others = m_Guests;
+    others.remove(slot);
     if (m_Worker && !spec.sameFeed(m_Spec)) {
-        // The owner moved to another display, or this guest needs another
-        // codec: a feed with nobody on it is replaced, one with guests is
-        // theirs, and this guest encodes on its own.
-        QSet<int> others = m_Guests;
-        others.remove(slot);
+        // The owner moved to another display: a feed with nobody on it is
+        // replaced, one with guests is theirs, and this guest encodes on its
+        // own.
         if (!others.isEmpty()) {
             qInfo() << "[SharedFeed] slot" << slot << "wants app" << spec.appId << "at"
-                    << spec.height << (spec.h264 ? "H.264" : "HEVC") << "— the feed shows app"
-                    << m_Spec.appId << "to other guests: this guest encodes on its own";
+                    << spec.height << "— the feed shows app" << m_Spec.appId << "at"
+                    << m_Spec.height << "to other guests: this guest encodes on its own";
             return false;
         }
         stopWorker();
+    } else if (m_Worker && spec.h264 && !m_Spec.h264) {
+        // A guest whose browser decodes no HEVC: the whole feed goes H.264,
+        // which every browser decodes, and stays there until it stops — never
+        // two feeds. The guests already on it are told by the feed itself;
+        // their pages come back the way a codec fallback does, into the new
+        // one. One keyframe for everyone, once.
+        if (!others.isEmpty()) {
+            qInfo() << "[SharedFeed] slot" << slot << "decodes no HEVC — the feed goes H.264,"
+                    << others.size() << "guest(s) on it rejoin";
+            retireForCodec(QStringLiteral("h264"));
+        } else {
+            stopWorker();
+        }
     }
     m_IdleTimer.stop();
     if (!m_Worker) {
+        // An H.264 feed serves every browser (a guest that decodes HEVC joins
+        // it as it is, above): once switched, it stays so until it stops.
         m_Spec = spec;
         m_Pipe = feedpipe::newName(m_Edition);
         m_Token = feedpipe::newToken();
@@ -150,6 +165,27 @@ bool SharedFeed::launch(bool relaunch)
             << m_Spec.appId << "at" << m_Spec.width << "x" << m_Spec.height
             << (m_Spec.h264 ? "H.264" : "HEVC") << m_Spec.bitrateKbps << "kbps on" << m_Pipe;
     return true;
+}
+
+void SharedFeed::retireForCodec(const QString& codec)
+{
+    StreamWorkerHost* worker = m_Worker.data();
+    m_Worker.clear();
+    m_IdleTimer.stop();
+    m_RestartTimer.stop();
+    // Its guests leave it; they come back to the new feed, one by one.
+    m_Guests.clear();
+    if (!worker) return;
+    // Its end is asked for: not a death to count.
+    disconnect(worker, &StreamWorkerHost::ended, this, nullptr);
+    worker->sendControl(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("codec")},
+                                    {QStringLiteral("codec"), codec}});
+    // It ends itself once its guests have read the news; one that does not
+    // is ended.
+    QPointer<StreamWorkerHost> guard(worker);
+    QTimer::singleShot(3000, this, [guard]() {
+        if (guard) guard->requestQuit();
+    });
 }
 
 void SharedFeed::stopWorker()

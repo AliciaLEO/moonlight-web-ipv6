@@ -20,6 +20,7 @@
 #include "../Session.h"
 #include "../InputMessageCodec.h"
 #include "../../server/AppSettings.h"
+#include "mw/native/FeedArbiter.h"
 #include "mw/native/NativeHost.h"
 #include "CoopSessionResolver.h"
 #include "../../backend/streambackend/StreamBackendRegistry.h"
@@ -47,6 +48,7 @@
 #include <QTimer>
 #include <QDebug>
 
+#include <chrono>
 #include <cstdio>
 #include <iostream>
 #include <memory>
@@ -211,14 +213,21 @@ int runFeedWorker(const QJsonObject& cfg)
         QTimer::singleShot(500, qApp, &QCoreApplication::quit);
     };
 
-    // What the guests ask of the one encoder they share. Handed straight on
-    // for now; the arbitration between guests is its own step (S6).
+    // What the guests ask of the one encoder they share, arbitrated (S6):
+    // their keyframes gathered and rationed, their link reports folded into
+    // the slowest one's for the feed's governor. See FeedArbiter.
+    auto arbiter = std::make_shared<mw::native::FeedArbiter>();
+    auto steadyMs = []() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    };
     QObject::connect(
         publisher, &FeedPublisher::controlReceived, qApp,
-        [engine](int, const QJsonObject& msg) {
+        [arbiter, steadyMs](int id, const QJsonObject& msg) {
             const QString type = msg.value(QStringLiteral("type")).toString();
             if (type == QLatin1String("idr")) {
-                engine->requestIdrFrame();
+                arbiter->requestKeyframe(id, steadyMs());
             } else if (type == QLatin1String("link")) {
                 mw::native::LinkFeedback fb;
                 fb.owdRiseMs = msg.value(QStringLiteral("owdRiseMs")).toInt();
@@ -226,15 +235,26 @@ int runFeedWorker(const QJsonObject& cfg)
                 fb.evictions = msg.value(QStringLiteral("evictions")).toInt();
                 fb.receivedFps = msg.value(QStringLiteral("fps")).toInt();
                 fb.resumed = msg.value(QStringLiteral("resumed")).toBool();
-                engine->reportLink(fb);
+                arbiter->report(id, fb, steadyMs());
             }
         },
         Qt::QueuedConnection);
+    auto* arbitrate = new QTimer(qApp);
+    arbitrate->setInterval(25);
+    QObject::connect(arbitrate, &QTimer::timeout, qApp, [arbiter, engine, steadyMs]() {
+        const int64_t now = steadyMs();
+        if (arbiter->keyframeDue(now)) engine->requestIdrFrame();
+        mw::native::LinkFeedback merged;
+        if (arbiter->linkDue(now, merged)) engine->reportLink(merged);
+    });
+    arbitrate->start();
     QObject::connect(publisher, &FeedPublisher::subscriberJoined, qApp, [](int id, int slot) {
         qInfo() << "[StreamWorker] feed: guest of slot" << slot << "in (" << id << ")";
     });
-    QObject::connect(publisher, &FeedPublisher::subscriberLeft, qApp, [](int id, int slot) {
-        qInfo() << "[StreamWorker] feed: guest of slot" << slot << "gone (" << id << ")";
+    QObject::connect(publisher, &FeedPublisher::subscriberLeft, qApp, [arbiter](int id, int slot) {
+        arbiter->leave(id);
+        qInfo() << "[StreamWorker] feed: guest of slot" << slot << "gone (" << id
+                << ") — keyframes asked" << arbiter->asked() << ", served" << arbiter->served();
     });
 
     QObject::connect(engine, &IMediaEngine::connectionStarted, qApp, [engine]() {
@@ -290,14 +310,30 @@ int runFeedWorker(const QJsonObject& cfg)
             << "@" << p.fps << "," << p.bitrateKbps << "kbps,"
             << (cfg["h264"].toBool() ? "H.264" : "HEVC") << "— pipe" << publisher->name();
 
-    std::thread stdinThread([finish]() {
+    std::thread stdinThread([finish, publisher]() {
         std::string line;
         while (std::getline(std::cin, line)) {
             const QJsonObject msg =
                 QJsonDocument::fromJson(QByteArray::fromStdString(line)).object();
             const QString cmd = msg["cmd"].toString();
-            if (cmd == QLatin1String("quit") || cmd == QLatin1String("sessionEnded"))
+            if (cmd == QLatin1String("quit") || cmd == QLatin1String("sessionEnded")) {
                 QMetaObject::invokeMethod(qApp, finish, Qt::QueuedConnection);
+            } else if (cmd == QLatin1String("codec")) {
+                // A guest arrived whose browser decodes no HEVC: the feed goes
+                // H.264 for everyone, from a new worker. This one's guests are
+                // told, and their pages come back the way a codec fallback
+                // does; the pipe closes a moment after, once they have read it.
+                const QString codec = msg["codec"].toString();
+                QMetaObject::invokeMethod(
+                    qApp,
+                    [publisher, codec, finish]() {
+                        publisher->publishControl(
+                            QJsonObject{{QStringLiteral("type"), QStringLiteral("codec")},
+                                        {QStringLiteral("codec"), codec}});
+                        QTimer::singleShot(1000, qApp, finish);
+                    },
+                    Qt::QueuedConnection);
+            }
         }
         // EOF: the server is gone — never encode without a supervisor.
         QMetaObject::invokeMethod(qApp, finish, Qt::QueuedConnection);

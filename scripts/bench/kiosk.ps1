@@ -34,6 +34,10 @@ param(
     # on one screen (display-follow.ps1 -Share) otherwise cover each other, and
     # Chrome stops painting a window nothing of which is visible.
     [switch] $Windowed,
+    # More Chrome features to switch off, comma-separated — a browser that
+    # decodes no HEVC is "PlatformHEVCDecoderSupport". One list: Chrome keeps
+    # only the last --disable-features it is given.
+    [string] $DisableFeatures = '',
     [switch] $Verify
 )
 Add-Type @"
@@ -105,7 +109,7 @@ $chromeArgs = @(
     # page loaded while the screen stays white, and a pass streams that white
     # at 2 fps (22/09/2026). Nothing here is ever really hidden, so the
     # occlusion guess is switched off rather than trusted.
-    "--disable-features=CalculateNativeWinOcclusion",
+    "--disable-features=CalculateNativeWinOcclusion$(if ($DisableFeatures) { ",$DisableFeatures" })",
     "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding"
 )
 if ($Windowed) { $chromeArgs += "--window-size=$W,$H" } else { $chromeArgs += "--kiosk" }

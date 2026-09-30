@@ -3227,6 +3227,23 @@ export class StreamView {
     }
 
     /**
+     * A guest on the native host's shared feed: the feed goes H.264 for
+     * everyone (another guest's browser decodes no HEVC) and the one this page
+     * watches ends in a moment. Back in, in H.264, exactly as this page's own
+     * codec fallback comes back — the app relaunches it on the quit.
+     */
+    _followFeedCodec(codec) {
+        if (codec !== 'h264' || !this._playerMode) return;
+        if (this._codecFallbackRequested || this._quitting || this._manualQuitting) return;
+        const cur = (this.videoCodec === 'auto' ? 'hevc' : this.videoCodec).toLowerCase();
+        if (cur === 'h264') return;
+        console.warn('[StreamView] The shared feed goes H.264 — rejoining in it');
+        this._codecFallback = { codec: 'h264', hdr: false };
+        this._codecFallbackRequested = true;
+        this.quit();
+    }
+
+    /**
      * Compute the next {codec, hdr} step in the fallback chain from the current
      * codec + HDR state, or null when nothing remains (already H.264 SDR).
      *
@@ -6457,6 +6474,10 @@ export class StreamView {
                     (msg.hdr ? ' HDR' : ' SDR'),
             );
             if (this.onHostDisplayFormat) this.onHostDisplayFormat(msg);
+            return;
+        }
+        if (msg.type === 'feedcodec') {
+            this._followFeedCodec(msg.codec);
             return;
         }
         if (msg.type === 'cursor') {

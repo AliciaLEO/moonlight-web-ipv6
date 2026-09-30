@@ -232,9 +232,12 @@ def first_number(text):
 # ── the guests ──────────────────────────────────────────────────────────────
 
 class Guest:
-    def __init__(self, slot, rect, luid, patience=40):
+    def __init__(self, slot, rect, luid, patience=40, no_hevc=False):
         self.slot = slot
         self.patience = patience
+        # A browser that decodes no HEVC: its join turns the guests' shared
+        # feed H.264 for everyone (S6), the others' pages rejoining in it.
+        self.no_hevc = no_hevc
         self.rect = rect
         self.luid = luid
         self.port = GUEST_PORT + slot
@@ -259,7 +262,8 @@ class Guest:
         subprocess.run(["powershell", "-NoProfile", "-File", os.path.join(BENCH, "kiosk.ps1"),
                         "-Url", url, "-X", str(x), "-Y", str(y), "-W", str(w), "-H", str(h),
                         "-DebugPort", str(self.port), "-ChromeProfile", self.profile,
-                        "-AdapterLuid", self.luid, "-Windowed"],
+                        "-AdapterLuid", self.luid, "-Windowed"]
+                       + (["-DisableFeatures", "PlatformHEVCDecoderSupport"] if self.no_hevc else []),
                        capture_output=True, text=True)
         self.d = drive.Driver(self.port)
         # On every document this Chrome opens from now on, then on this one:
@@ -300,6 +304,16 @@ class Guest:
         except drive.PassFailed:
             return []
 
+    def codec(self):
+        """What each of this page's joins was answered (the codec its worker
+        streams), and the shared feed's `feedcodec` notices it got."""
+        try:
+            return self.d.json_eval("JSON.stringify(window.__mwS0 ? {joins: window.__mwS0.joins, "
+                                    "notices: window.__mwS0.notices.length, "
+                                    "logs: window.__mwS0.logs.splice(0)} : {})")
+        except drive.PassFailed:
+            return {}
+
     def leave(self, owner):
         """The owner closes the row: the worker goes at once (a guest who only
         closes the window is noticed when the link times out)."""
@@ -333,11 +347,15 @@ def main():
     ap.add_argument("--ssh", default="", help="SSH alias of the remote host (PIN, worker count)")
     ap.add_argument("--fleet-id", default="", help="its id in hosts.local.json, for fleet.probe")
     ap.add_argument("--display-index", default="0", help="remote host: which physical display")
+    ap.add_argument("--no-hevc-slots", default="",
+                    help="guests whose Chrome decodes no HEVC, by slot (\"4\"): the shared feed "
+                         "goes H.264 when one joins")
     ap.add_argument("--join-patience", type=int, default=40,
                     help="seconds a guest's page may take at each step of joining: a host that "
                          "is already on its knees serves its page slowly")
     a = ap.parse_args()
     schedule = [int(x) for x in a.guests.split(",")]
+    no_hevc = {int(x) for x in a.no_hevc_slots.split(",") if x.strip()}
     remote = bool(a.host_url)
     os.makedirs(OUT, exist_ok=True)
 
@@ -426,8 +444,9 @@ def main():
             for i, slot in enumerate(slots[:want]):
                 if slot not in guests:
                     g = Guest(slot, (spots[i][0], spots[i][1], GUEST_W, GUEST_H), guest_luid,
-                              a.join_patience)
-                    print("  guest %d joins" % slot, flush=True)
+                              a.join_patience, slot in no_hevc)
+                    print("  guest %d joins%s" % (slot, " (no HEVC)" if g.no_hevc else ""),
+                          flush=True)
                     try:
                         g.join(d, base)
                     except drive.PassFailed:
@@ -456,6 +475,7 @@ def main():
                 "ownerOverlay": overlay(d),
                 "guestStages": {slot: summarize(g.take()) for slot, g in guests.items()},
                 "guestOverlay": {slot: overlay(g.d) for slot, g in guests.items()},
+                "guestCodec": {slot: g.codec() for slot, g in guests.items()},
                 "workers": worker_count(a.ssh if remote else ""),
                 "sessions": [] if remote else [s for s in sessions(started) if not s["ended"]],
                 "nvenc": nvenc() if "NVIDIA" in encoder["gpu"] else None,
@@ -492,16 +512,20 @@ def line(win):
     guest_enc = [((s.get("encode") or {}).get("p50Ms")) for s in win["guestStages"].values()]
     guest_fps = [(s.get("total") or {}).get("frames", 0) / max(1, s.get("seconds", 1))
                  for s in win["guestStages"].values()]
+    guest_codec = ["%s%s" % ("/".join(j[1] for j in (c.get("joins") or [])) or "?",
+                             " +%d notice(s)" % c["notices"] if c.get("notices") else "")
+                   for c in (win.get("guestCodec") or {}).values()]
     print("  guests %d | owner total p50 %s p99 %s | encode p50 %s p99 %s | acquire p50 %s | "
           "queue p99 %s | E2E %s ms %s fps | workers %s sessions %s%s | guests' encode p50 %s "
-          "at %s fps" % (
+          "at %s fps (%s)" % (
               win["guests"], fmt(g("total", "p50Ms")), fmt(g("total", "p99Ms")),
               fmt(g("encode", "p50Ms")), fmt(g("encode", "p99Ms")), fmt(g("acquire", "p50Ms")),
               fmt(g("queue", "p99Ms")), fmt(lat), fmt(fps, 5), win["workers"],
               len(win.get("sessions") or []) or "-",
               (" | NVENC sessions %s avg %s us" % (nv.get("sessions"), nv.get("latencyUs"))) if nv else "",
               ",".join(fmt(x, 5) for x in guest_enc) or "-",
-              ",".join("%.0f" % x for x in guest_fps) or "-"), flush=True)
+              ",".join("%.0f" % x for x in guest_fps) or "-",
+              ", ".join(guest_codec) or "-"), flush=True)
 
 
 if __name__ == "__main__":

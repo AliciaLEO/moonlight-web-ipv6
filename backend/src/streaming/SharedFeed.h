@@ -52,8 +52,9 @@ class SharedFeed : public QObject
     Q_OBJECT
 
 public:
-    /// What a feed shows and how. Two guests share one only when all of it
-    /// agrees.
+    /// What a feed shows and how. Two guests share one when it shows the same
+    /// display at the same height; the codec is not a reason for two feeds
+    /// (an H.264 one serves every browser).
     struct Spec
     {
         QString hostUuid;
@@ -61,6 +62,7 @@ public:
         int width = 0;
         int height = 1080;
         int bitrateKbps = 10000;
+        /// This guest's browser decodes no HEVC.
         bool h264 = false;
         /// The machine's own, as every native session carries them.
         QString videoPipeline;
@@ -69,8 +71,7 @@ public:
 
         bool sameFeed(const Spec& o) const
         {
-            return hostUuid == o.hostUuid && appId == o.appId && height == o.height &&
-                   h264 == o.h264;
+            return hostUuid == o.hostUuid && appId == o.appId && height == o.height;
         }
     };
 
@@ -124,6 +125,9 @@ private:
     /// one ran, when it is a relaunch its guests are waiting for.
     bool launch(bool relaunch);
     void stopWorker();
+    /// The feed switches codec: its worker tells its guests (their pages
+    /// rejoin the way a codec fallback does) and ends itself.
+    void retireForCodec(const QString& codec);
     void onEnded(StreamWorkerHost* worker);
 
     QString m_Edition;

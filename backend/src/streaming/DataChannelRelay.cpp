@@ -615,6 +615,19 @@ DataChannelRelay::DataChannelRelay(IMediaEngine* engine, QObject* parent)
                 } catch (const std::exception&) {}
             });
 
+    // The guests' shared feed changes codec (native host): the browser comes
+    // back in it, as from its own codec fallback.
+    connect(m_Shim, &IMediaEngine::sharedFeedCodecChanged, this, [this](QString codec) {
+        if (m_Stopping.load() || !m_InputDc) return;
+        QJsonObject m;
+        m["type"] = "feedcodec";
+        m["codec"] = codec;
+        QByteArray j = QJsonDocument(m).toJson(QJsonDocument::Compact);
+        try {
+            m_InputDc->send(std::string(j.constData(), j.size()));
+        } catch (const std::exception&) {}
+    });
+
     // ICE connection timeout: emit iceTimedOut() if PC doesn't reach
     // Connected within m_IceTimeoutMs after setRemoteDescription().
     // Triggers WebSocket fallback when UDP is blocked (corporate firewall).

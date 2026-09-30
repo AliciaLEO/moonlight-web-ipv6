@@ -116,6 +116,18 @@ MediaTrackRelay::MediaTrackRelay(IMediaEngine* engine, QObject* parent)
                 } catch (const std::exception&) {}
             });
 
+    // The guests' shared feed changes codec (native host) — see DataChannelRelay.
+    connect(m_Shim, &IMediaEngine::sharedFeedCodecChanged, this, [this](QString codec) {
+        if (m_Stopping.load() || !m_InputDc) return;
+        QJsonObject m;
+        m["type"] = "feedcodec";
+        m["codec"] = codec;
+        QByteArray j = QJsonDocument(m).toJson(QJsonDocument::Compact);
+        try {
+            m_InputDc->send(std::string(j.constData(), j.size()));
+        } catch (const std::exception&) {}
+    });
+
     // The mouse pointer's shape when the browser draws it (native host, desktop
     // mode) — same message as DataChannelRelay's, same reasoning there. The
     // input DC carries it here exactly as it does on the other transport.

@@ -95,6 +95,10 @@ public:
     /// live relays and releases whatever the old policy had held down.
     void setInputPolicy(bool gamepad, bool keyboardMouse);
 
+    /// A command for the worker's own loop, as it is (the guests' feed:
+    /// {"cmd":"codec","codec":"h264"}). Fire-and-forget, like the policy.
+    void sendControl(const QJsonObject& command) { sendJson(command); }
+
     bool isRunning() const;
 
 signals:
