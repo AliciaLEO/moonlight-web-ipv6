@@ -88,7 +88,8 @@ struct KmsOutput
     int x = 0; ///< position on the virtual desktop
     int y = 0;
     bool connected = false;
-    bool active = false; ///< has a CRTC with a framebuffer — something is shown
+    bool active = false;       ///< has a CRTC with a framebuffer — something is shown
+    std::vector<uint8_t> edid; ///< the monitor's, when connected and it has one
 };
 
 class KmsCapture final : public IScreenCapture

@@ -181,6 +181,29 @@ bool readPlaneProps(int card, uint32_t planeId, PlaneProps& out)
     return out.type != 0;
 }
 
+/// The connector's EDID blob as the kernel holds it — what an X driver reads
+/// too, byte for byte (input/linux/X11Layout.h). Empty when it has none.
+std::vector<uint8_t> connectorEdid(int card, const drmModeConnector* c)
+{
+    std::vector<uint8_t> edid;
+    for (int i = 0; i < c->count_props && edid.empty(); ++i) {
+        drmModePropertyRes* p = drmModeGetProperty(card, c->props[i]);
+        if (!p) continue;
+        if ((p->flags & DRM_MODE_PROP_BLOB) && std::strcmp(p->name, "EDID") == 0 &&
+            c->prop_values[i] != 0) {
+            drmModePropertyBlobRes* blob =
+                drmModeGetPropertyBlob(card, static_cast<uint32_t>(c->prop_values[i]));
+            if (blob) {
+                const auto* data = static_cast<const uint8_t*>(blob->data);
+                if (data) edid.assign(data, data + blob->length);
+                drmModeFreePropertyBlob(blob);
+            }
+        }
+        drmModeFreeProperty(p);
+    }
+    return edid;
+}
+
 } // namespace
 
 // ── Enumeration ─────────────────────────────────────────────────────────────
@@ -241,6 +264,7 @@ std::vector<KmsOutput> KmsCapture::listOutputs(const std::string& cardPath, std:
         out.name = std::string(connectorTypeName(c->connector_type)) + "-" +
                    std::to_string(c->connector_type_id);
         out.connected = c->connection == DRM_MODE_CONNECTED;
+        if (out.connected) out.edid = connectorEdid(card, c);
         if (out.connected && c->encoder_id) {
             drmModeEncoder* e = drmModeGetEncoder(card, c->encoder_id);
             if (e && e->crtc_id) {

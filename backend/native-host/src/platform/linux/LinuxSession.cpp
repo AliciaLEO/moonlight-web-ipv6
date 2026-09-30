@@ -45,6 +45,7 @@
 #include "../../input/linux/UinputGamepad.h"
 #include "../../input/linux/UinputInput.h"
 #include "../../input/linux/WaylandLayout.h"
+#include "../../input/linux/X11Layout.h"
 #if defined(MW_NATIVE_LINUX_AUDIO)
 #include "../../audio/PacedOpusSink.h"
 #include "../../audio/linux/HostMute.h"
@@ -994,10 +995,9 @@ private:
     /// one, and the pointer lands somewhere else entirely.
     ///
     /// Read outside the input lock on purpose: this opens the DRM card, and
-    /// inject() waits on that same lock. Only this card's outputs are counted —
-    /// a desktop spanning two GPUs would need every card, which no host this
-    /// engine runs on has, and getting it wrong there costs the same misplaced
-    /// pointer we are fixing rather than anything worse.
+    /// inject() waits on that same lock. Only this card's outputs are counted
+    /// by KMS — a desktop spanning two GPUs is X's to describe (readX11Rects),
+    /// and a Wayland compositor's (below).
     struct InputRects
     {
         capture::DesktopRect display;
@@ -1012,8 +1012,17 @@ private:
 
         std::string listError;
         bool any = false;
+        input::KmsIdentity identity;
         for (const capture::KmsOutput& out :
              capture::KmsCapture::listOutputs(m_CardPath, listError)) {
+            if (m_ConnectorId != 0 && out.connectorId == m_ConnectorId) {
+                identity.edid = out.edid;
+                identity.connectorId = out.connectorId;
+                identity.x = out.x;
+                identity.y = out.y;
+                identity.width = out.width;
+                identity.height = out.height;
+            }
             if (!out.active || out.width <= 0 || out.height <= 0) continue;
             const capture::DesktopRect r{out.x, out.y, out.x + out.width, out.y + out.height};
             if (!any) {
@@ -1026,6 +1035,8 @@ private:
             rects.desktop.right = std::max(rects.desktop.right, r.right);
             rects.desktop.bottom = std::max(rects.desktop.bottom, r.bottom);
         }
+
+        if (readX11Rects(identity, rects)) return rects;
 
         // A Wayland compositor scans every output out of its own buffer, so
         // the CRTC positions above are all (0, 0) there and the union is the
@@ -1092,6 +1103,67 @@ private:
                       " — pointer mapped on the KMS layout");
         }
         return rects;
+    }
+
+    /// An X11 session: X stretches an absolute device over its whole root,
+    /// every GPU's monitors included, and only RandR knows where a monitor of
+    /// a second GPU sits (X11Layout.h — the centre of the picture sent the
+    /// pointer to 2241,720 instead of 3520,540 on the UM790Pro, 30/09/2026).
+    /// The captured display is found among X's outputs by what the driver
+    /// read from KMS; the portal route's by the place the portal named, which
+    /// GNOME's X11 backend gives in root coordinates.
+    /// False, @p rects untouched, when there is no X server to ask — a Wayland
+    /// session, a headless host — or the display is not recognised.
+    bool readX11Rects(const input::KmsIdentity& identity, InputRects& rects) const
+    {
+        std::vector<input::X11Output> outputs;
+        int rootWidth = 0;
+        int rootHeight = 0;
+        std::string displayUsed;
+        std::string why;
+        if (!input::X11Layout::read(outputs, rootWidth, rootHeight, displayUsed, why)) {
+            log::debug("[native] input: no X layout: " + why);
+            return false;
+        }
+        const capture::DesktopRect root{0, 0, rootWidth, rootHeight};
+        const auto rectOf = [](const input::X11Output& out) {
+            return capture::DesktopRect{out.x, out.y, out.x + out.width, out.y + out.height};
+        };
+
+        if (m_Target.capture == CaptureApi::PipeWire) {
+            InputRects x = rects;
+            int index = input::findX11OutputAt(outputs, x.display.left, x.display.top,
+                                               x.display.right, x.display.bottom);
+            // A portal that named no place left its picture at the origin; the
+            // one output of that size, when there is one, is then its monitor.
+            if (index < 0 && x.display.left == 0 && x.display.top == 0) {
+                index = input::findX11OutputSized(outputs, x.display.right, x.display.bottom);
+                if (index >= 0) x.display = rectOf(outputs[index]);
+            }
+            x.desktop = root;
+            rects = x;
+            log::info("[native] input: pointer mapped on the X layout (\"" + displayUsed +
+                      "\"): portal display " + rectText(rects.display) +
+                      (index >= 0 ? " = " + outputs[index].name
+                                  : std::string(" (no output matches it)")) +
+                      ", root " + rectText(rects.desktop));
+            return true;
+        }
+
+        std::string how;
+        const int index = input::findX11Output(outputs, identity, how);
+        if (index < 0) {
+            log::info("[native] input: X layout read (\"" + displayUsed + "\", " +
+                      std::to_string(outputs.size()) + " outputs) but none is recognised as " +
+                      m_ConnectorName + " — pointer mapped on the KMS layout");
+            return false;
+        }
+        rects.display = rectOf(outputs[index]);
+        rects.desktop = root;
+        log::info("[native] input: pointer mapped on the X layout (\"" + displayUsed +
+                  "\"): " + m_ConnectorName + " is X's " + outputs[index].name + " (by " + how +
+                  ") at " + rectText(rects.display) + ", root " + rectText(rects.desktop));
+        return true;
     }
 
     static std::string rectText(const capture::DesktopRect& r)
