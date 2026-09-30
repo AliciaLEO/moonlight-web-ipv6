@@ -1895,8 +1895,7 @@ const MoonlightApp = {
             if (codecOverride === 'h264') {
                 streamingSettings.hdr_enabled = false;
                 // Remember that the user had asked for it: the overlay says so.
-                if (streamingSettings.chroma_444_enabled)
-                    this._chroma444Declined = 'dropped with the codec';
+                if (streamingSettings.chroma_444_enabled) this._chroma444Declined = '4:4:4 dropped';
                 streamingSettings.chroma_444_enabled = false;
             }
             // The stream that asked for this fallback had frames arriving: its
@@ -1984,7 +1983,7 @@ const MoonlightApp = {
                 console.log(
                     `[MW] 4:4:4 preference ignored: this browser decodes no 4:4:4 in ${asked || 'hevc'}`,
                 );
-                this._chroma444Declined = 'this browser decodes none';
+                this._chroma444Declined = 'no 4:4:4 decoder';
                 streamingSettings.chroma_444_enabled = false;
                 // Said once: the preference is put away in this browser, whose
                 // settings page greys the box out anyway.
@@ -3134,7 +3133,7 @@ const MoonlightApp = {
             chroma444Declined:
                 this._chroma444Declined ||
                 (streamingSettings.chroma_444_enabled === true && result.yuv444 !== true
-                    ? 'the host does not encode it'
+                    ? 'no 4:4:4 on host'
                     : null),
         };
         // The degradation ladder stands down for the native host — see

@@ -5512,7 +5512,7 @@ export class StreamView {
         // when a setting did not take, the overlay says so where the setting
         // would have shown.
         if (!this._yuv444 && this._yuv444Declined)
-            codecLabel += ' 4:2:0 (4:4:4: ' + this._yuv444Declined + ')';
+            codecLabel += ' 4:2:0 (' + this._yuv444Declined + ')';
         if (this._hdrEnabled) {
             // HDR→SDR when the stream is tone-mapped for an SDR output (ACES, or
             // the browser's own on import); HDR* when the canvas or the <video>
