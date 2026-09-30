@@ -4639,6 +4639,19 @@ image lue sur cinq ; deux passes par case. Âge affiché médian, ms :
 Les p99 restent à 31-49 ms (le Wi-Fi du Mac : 90 à 350). Le crédit ne retient
 presque rien (3 présentations par seconde) : le 780M suit 240 i/s.
 
+### 8p.4 sexies Trois hôtes, un client en Ethernet (30/09, ~03:00-04:00)
+
+Client UM790Pro sous Windows (780M, 120 Hz, tearing, câble), une image sur
+cinq, deux passes par case. L'écran virtuel du produit rendu tour à tour par
+chaque GPU de DualRTX (`--vdd-gpu`). Âge affiché médian, ms (avant la capture
+entre parenthèses) :
+
+| Hôte | 120 Hz Auto (aujourd'hui) | 240 Hz Auto | 240 Hz host | 240 Hz host-guarded |
+|---|---|---|---|---|
+| iGPU AMD (AMF, D3D11) | 45,5 (26,2) | 28,6 (8,9) | 27,8 | **25,9** |
+| Arc (D3D12 VE) | 35,6 (16,4) | 26,4 (8,4) | 23,8 | **21,8** |
+| RTX (NVENC, D3D11) | 23,7 (7,4) | 25,7 (10,3) | 25,1 | **22,9** |
+
 ### 8p.5 Ce que le banc a appris sur lui-même
 
 - La page de contenu a sa propre chaîne jusqu'à l'écran de l'hôte, qui varie

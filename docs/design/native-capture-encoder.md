@@ -6637,3 +6637,11 @@ virtuel à 240 Hz donne −9,2 ms sous Auto, −11,8 sous `host`, **−13,8 ms s
 `host-guarded` (21,8 ms, p99 31)** ; en vsync −5,6 (Auto) et −8,3 ms (`host`).
 Sur un client qui suit, en Ethernet, la cadence de l'hôte ajoute 2 à 5 ms à ce
 que l'écran virtuel rapide gagne seul.
+
+**Trois hôtes, le client en Ethernet** (banc §8p.4 sexies). Le gain de
+l'écran virtuel à 240 Hz suit le temps que l'hôte met à composer ce qui
+s'affiche : **−17 à −20 ms sur l'iGPU AMD** (45,5 → 25,9 ms), −9 à −14 ms sur
+l'Arc, rien de sûr sur la RTX (23,7 → 22,9 ms, dans la variation de la page
+d'un lancement à l'autre). C'est là que l'écran virtuel à la fréquence du
+client coûte le plus : un GPU faible compose la page en une à deux images de
+l'écran, et chacune dure 8 ms à 120 Hz contre 4 à 240.
