@@ -2163,17 +2163,19 @@ int main(int argc, char* argv[])
     // down. Suppresses the slot's normal ended-cleanup (no Sunshine /cancel:
     // take-over and standby-restart both want the Sunshine session kept alive
     // for the /resume that follows). The host object self-deletes on exit.
-    auto detachWorkerSlot = [&g_Pool, &authManager, &anyOtherSlotLive](int i, bool takenOver,
-                                                                       bool sessionEnded = false) {
+    auto detachWorkerSlot = [&g_Pool, &authManager](int i, bool takenOver,
+                                                    bool sessionEnded = false) {
         SessionPool::Slot& sl = g_Pool.at(i);
         StreamWorkerHost* old = g_Pool.workerAs<StreamWorkerHost>(i);
         const QString token = sl.sessionToken;
         const QString hostUuid = sl.hostUuid;
         // A stream on "MoonlightWeb Virtual Display" leaving by this door
-        // (quit, take-over, standby restart) bypasses the slot's ended
-        // handler, so the display's release is decided here: off, after the
-        // grace, unless another slot still streams it — and a take-over's
-        // own /start cancels the grace on its way in.
+        // (quit, take-over, standby restart, a guest's Leave) bypasses the
+        // slot's ended handler, so the display's release is decided here:
+        // off, after the grace, unless a slot still streams it by then — and
+        // a take-over's own /start cancels the grace on its way in. A stream
+        // on another app of this host does not keep it: nothing would turn
+        // it off once that one ends.
         const bool onVirtualDisplay = hostUuid == NativeHostBackend::hostUuid() &&
                                       sl.appId == NativeHostBackend::virtualDisplayAppId();
         sl.worker = nullptr;
@@ -2181,8 +2183,7 @@ int main(int argc, char* argv[])
         sl.hostUuid.clear();
         sl.sessionToken.clear();
         sl.appId = 0;
-        if (onVirtualDisplay && !anyOtherSlotLive(i, hostUuid))
-            VirtualDisplayJob::instance().releaseSoon();
+        if (onVirtualDisplay) VirtualDisplayJob::instance().releaseSoon();
         if (!old) return static_cast<StreamWorkerHost*>(nullptr);
         QObject::disconnect(old, &StreamWorkerHost::ended, nullptr, nullptr);
         QObject::connect(old, &StreamWorkerHost::ended, qApp, [token, &authManager]() {
@@ -4662,10 +4663,10 @@ int main(int argc, char* argv[])
         shareManager.setStreaming(slot, false);
     };
     shareDeps.startPlayerStream = [&computerManager, &g_Pool, &g_LiveSunshineUids, &shareManager,
-                                   &detachWorkerSlot, &anyOtherSlotLive, &reapCoopSession,
-                                   &slotSignalingPort, &slotWsPath, &server, &appSettings,
-                                   &sessionMetrics, signalingPort, stunServer, &g_HostAspect,
-                                   &routerPorts, &g_PlayerUids, &cancelGuestHostSessionSoon,
+                                   &detachWorkerSlot, &reapCoopSession, &slotSignalingPort,
+                                   &slotWsPath, &server, &appSettings, &sessionMetrics,
+                                   signalingPort, stunServer, &g_HostAspect, &routerPorts,
+                                   &g_PlayerUids, &cancelGuestHostSessionSoon,
                                    &dropPendingHostCancel, &releaseGuestHoleSoon, &keepGuestHole,
                                    &g_PlayerRetiring,
                                    &sharedFeed](int slot, int height, QString aspect,
@@ -4925,29 +4926,27 @@ int main(int argc, char* argv[])
         // The guest's worker carries its pictures, and rides out a loss
         // (the feed refreshes by intra-refresh: nobody's loss costs everyone a
         // keyframe). Every other host, and a switch turned off, keeps the
-        // encoder per guest exactly as it was.
+        // encoder per guest exactly as it was. Joined once the display is
+        // there (below): the feed's worker looks for it as it starts.
+        const bool feedWanted = host->backendType == NativeHostBackend::typeName() &&
+                                SharedFeed::enabled(appSettings.sharedFeedEnabled());
+        SharedFeed::Spec feedSpec;
+        if (feedWanted) {
+            feedSpec.hostUuid = hostUuid;
+            feedSpec.appId = appId;
+            feedSpec.height = height;
+            feedSpec.width = width;
+            feedSpec.bitrateKbps = bitrateKbps;
+            feedSpec.h264 = h264;
+            feedSpec.videoPipeline = appSettings.nativeVideoPipeline();
+            feedSpec.tuning = appSettings.nativeTuning();
+            feedSpec.portalToken = appSettings.portalRestoreToken(portalVirtual);
+        }
         auto feedTicket = std::make_shared<SharedFeed::Ticket>();
-        bool onFeed = false;
-        if (host->backendType == NativeHostBackend::typeName() &&
-            SharedFeed::enabled(appSettings.sharedFeedEnabled())) {
-            SharedFeed::Spec spec;
-            spec.hostUuid = hostUuid;
-            spec.appId = appId;
-            spec.height = height;
-            spec.width = width;
-            spec.bitrateKbps = bitrateKbps;
-            spec.h264 = h264;
-            spec.videoPipeline = appSettings.nativeVideoPipeline();
-            spec.tuning = appSettings.nativeTuning();
-            spec.portalToken = appSettings.portalRestoreToken(portalVirtual);
-            onFeed = sharedFeed.acquire(spec, slot, *feedTicket);
-        }
-        if (onFeed) {
-            cfg["feedPipe"] = feedTicket->pipe;
-            cfg["feedToken"] = QString::fromLatin1(feedTicket->token);
-            cfg["feedSlot"] = slot;
-            cfg["rideOutLoss"] = true;
-        }
+        auto onFeed = std::make_shared<bool>(false);
+        auto joinFeed = [&sharedFeed, feedWanted, feedSpec, feedTicket, onFeed, slot]() {
+            if (feedWanted) *onFeed = sharedFeed.acquire(feedSpec, slot, *feedTicket);
+        };
 
         auto* worker = new StreamWorkerHost(qApp);
         QObject::connect(worker, &StreamWorkerHost::exited, worker, &QObject::deleteLater);
@@ -5000,7 +4999,7 @@ int main(int argc, char* argv[])
 
         QObject::connect(
             worker, &StreamWorkerHost::ended, qApp,
-            [worker, &g_Pool, &shareManager, &anyOtherSlotLive, &reapCoopSession, &sessionMetrics,
+            [worker, &g_Pool, &shareManager, &reapCoopSession, &sessionMetrics,
              &cancelGuestHostSessionSoon, &sharedFeed, sessionFacts, sessionStartedAt, slot, host,
              uid, coopSessionId]() {
                 qInfo() << "[main] Player worker ended (slot" << slot << ")";
@@ -5033,8 +5032,11 @@ int main(int argc, char* argv[])
                     // on it: the last guest leaving stops the feed soon.
                     sharedFeed.release(slot);
                 }
-                if (onVirtualDisplay && !anyOtherSlotLive(slot, host->uuid))
-                    VirtualDisplayJob::instance().releaseSoon();
+                // Off after the grace unless a stream still shows it — the
+                // grace's own question. Not skipped for a stream on another
+                // app of this host: nobody would ask again, and the display a
+                // guest turned on stayed on under the owner's.
+                if (onVirtualDisplay) VirtualDisplayJob::instance().releaseSoon();
             });
 
         // However this worker goes — ended, left, ended by the owner — its
@@ -5049,16 +5051,18 @@ int main(int argc, char* argv[])
             // does, or its pipe would not let it in; a guest that cannot be
             // started that way encodes on its own.
             bool started = false;
-            if (onFeed) {
-                started = worker->startAs(withHole, feedTicket->launch);
+            if (*onFeed) {
+                QJsonObject fed = withHole;
+                fed["feedPipe"] = feedTicket->pipe;
+                fed["feedToken"] = QString::fromLatin1(feedTicket->token);
+                fed["feedSlot"] = slot;
+                fed["rideOutLoss"] = true;
+                started = worker->startAs(fed, feedTicket->launch);
                 if (!started) {
                     qWarning() << "[Session] Player slot" << slot
                                << "could not start as the shared feed runs — encoding on its own";
                     sharedFeed.release(slot);
-                    QJsonObject own = withHole;
-                    for (const char* key : {"feedPipe", "feedToken", "feedSlot", "rideOutLoss"})
-                        own.remove(QLatin1String(key));
-                    started = worker->start(own);
+                    started = worker->start(withHole);
                 }
             } else {
                 started = worker->start(withHole);
@@ -5080,8 +5084,9 @@ int main(int argc, char* argv[])
         // sequence, generation guard included: a newer join on the slot while
         // the router is being asked stands this one down.
         const quint64 generation = ++g_SlotLaunchGeneration[slot];
-        auto claimThenStart = [&routerPorts, &keepGuestHole, startWorker, cfg, slot, generation,
-                               worker, respond]() {
+        auto claimThenStart = [&routerPorts, &keepGuestHole, joinFeed, startWorker, cfg, slot,
+                               generation, worker, respond]() {
+            joinFeed();
             keepGuestHole(slot);
             routerPorts.claimMediaPort(
                 slot, static_cast<uint16_t>(kMediaBasePort + slot), qApp,
@@ -5105,11 +5110,57 @@ int main(int argc, char* argv[])
                 });
         };
 
+        // "MoonlightWeb Virtual Display" is off between streams, and turned on
+        // by the /start that opens it. A guest who opens an invitation on it
+        // with no owner streaming — the cold start above — turns it on the
+        // same way, or the worker found no display to show ("The virtual
+        // display is not on") and the page could only say it could not join.
+        // At the size of the picture the guests watch: nobody looks at this
+        // display but them. At the rate the owner's /start would give it.
+        // Already on — the owner's, another guest's, a grace running out — it
+        // is left as it is: a new mode would take it from whoever watches it.
+        std::function<void()> readyThenStart = claimThenStart;
+        if (host->backendType == NativeHostBackend::typeName() &&
+            appId == NativeHostBackend::virtualDisplayAppId()) {
+            // As the owner's /start: 240 Hz on Windows whatever the stream's.
+#ifdef Q_OS_WIN
+            constexpr bool vdFaster = true;
+#else
+            constexpr bool vdFaster = false;
+#endif
+            const int vdRefresh = VirtualDisplay::refreshForStream(
+                60, qEnvironmentVariableIntValue("MW_VDD_REFRESH"), vdFaster);
+            readyThenStart = [claimThenStart, worker, respond, slot, generation, width, height,
+                              vdRefresh]() {
+                qInfo() << "[Session] Player slot" << slot << "on the virtual display — on at"
+                        << width << "x" << height << "@" << vdRefresh << "Hz unless it already is";
+                VirtualDisplayJob::instance().activateIfOff(
+                    width, height, vdRefresh,
+                    [claimThenStart, worker, respond, slot, generation](bool ok,
+                                                                        const QString& error) {
+                        if (g_SlotLaunchGeneration.value(slot) != generation) {
+                            worker->deleteLater();
+                            respond(HttpResponse::error(409, "Superseded by a newer join"));
+                            return;
+                        }
+                        if (!ok) {
+                            qWarning() << "[Session] Player slot" << slot
+                                       << "— the virtual display could not be turned on:" << error;
+                            worker->deleteLater();
+                            respond(HttpResponse::error(
+                                500, "The virtual display could not be turned on: " + error));
+                            return;
+                        }
+                        claimThenStart();
+                    });
+            };
+        }
+
         // Wait for this slot's previous child to release its ports.
         if (previousWorker)
-            QObject::connect(previousWorker, &QObject::destroyed, qApp, claimThenStart);
+            QObject::connect(previousWorker, &QObject::destroyed, qApp, readyThenStart);
         else
-            claimThenStart();
+            readyThenStart();
     };
 
     registerShareRoutes(server, shareManager, shareDeps);

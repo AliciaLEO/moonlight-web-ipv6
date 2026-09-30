@@ -83,6 +83,14 @@ public:
     void activate(int width, int height, int refresh, bool hdr, Callback cb);
     void activate(Callback cb) { activate(0, 0, 0, false, std::move(cb)); }
 
+    /// For an invited guest, who arrives with no owner stream on it: turn the
+    /// display on, in that mode, when it is off. On already — whatever its
+    /// mode — or on its way on, it is left as it is and answers once it is
+    /// there: another guest may be watching it, and a new mode would take it
+    /// from them for as long as the driver restarts. SDR (Windows' display
+    /// is, and a guest's stream is). Cancels a pending releaseSoon().
+    void activateIfOff(int width, int height, int refresh, Callback cb);
+
     /// Turn it off (previous primary back, disable). @p cb may be null.
     void deactivate(Callback cb);
 

@@ -166,6 +166,38 @@ void VirtualDisplayJob::activate(int width, int height, int refresh, bool hdr, C
     enqueue(Action::Activate, width, height, refresh, hdr, std::move(cb));
 }
 
+void VirtualDisplayJob::activateIfOff(int width, int height, int refresh, Callback cb)
+{
+    m_Release.stop();
+    if (VirtualDisplay::livesInStream()) {
+        if (cb) cb(true, QString());
+        return;
+    }
+    // On its way on, in whatever mode: that operation's outcome is the
+    // answer. (One on its way off is followed by this one.)
+    const bool lastIsActivate = m_Queue.isEmpty()
+                                    ? running() && m_Request.action == Action::Activate
+                                    : m_Queue.last().action == Action::Activate;
+    if (lastIsActivate) {
+        if (!cb) return;
+        if (m_Queue.isEmpty()) {
+            m_Callbacks.append(std::move(cb));
+            return;
+        }
+        Callback prev = m_Queue.last().cb;
+        m_Queue.last().cb = [prev, cb](bool ok, const QString& err) {
+            if (prev) prev(ok, err);
+            cb(ok, err);
+        };
+        return;
+    }
+    if (!running() && m_Queue.isEmpty() && VirtualDisplay::probe().active) {
+        if (cb) cb(true, QString());
+        return;
+    }
+    activate(width, height, refresh, false, std::move(cb));
+}
+
 void VirtualDisplayJob::deactivate(Callback cb)
 {
     m_Release.stop();
