@@ -4652,6 +4652,20 @@ entre parenthèses) :
 | Arc (D3D12 VE) | 35,6 (16,4) | 26,4 (8,4) | 23,8 | **21,8** |
 | RTX (NVENC, D3D11) | 23,7 (7,4) | 25,7 (10,3) | 25,1 | **22,9** |
 
+### 8p.4 septies Deux débits (30/09, ~03:45, série interrompue)
+
+Client UM790Pro en Ethernet, Arc, écran virtuel à 240 Hz. Arrêtée en cours par
+Claude Code, la machine manquant de mémoire (Chrome de Bruno : 289 processus,
+23,5 Go ; 21 sessions Claude Code, 14 Go) : 5 passes sur 8.
+
+| | 40 Mbit/s (automatique à 120 i/s) | 80 Mbit/s (automatique à 240 i/s) |
+|---|---|---|
+| Auto | 27,0 (2 passes) | 30,0 (1 passe) |
+| host-guarded | 23,8 (2 passes) | — |
+
+Doubler le débit coûte ~3 ms à Auto : des images deux fois plus lourdes à
+envoyer et à décoder. À refaire en entier.
+
 ### 8p.5 Ce que le banc a appris sur lui-même
 
 - La page de contenu a sa propre chaîne jusqu'à l'écran de l'hôte, qui varie
@@ -4676,10 +4690,11 @@ entre parenthèses) :
 
 ### 8p.6 Ce qui manque avant la porte
 
-Clients en Ethernet (UM790Pro sous Linux, N95, portable 610M), mode vsync du
-client, contenus texte et RE9, deux débits, iPhone / iPad / Android et
-caméra (Bruno), et un signal du crédit qui vaille sur les deux familles de
-décodeurs.
+Le coût de la sonde sur le Mac ; les deux débits en entier ; RE9 (sans bande :
+caméra et clic → drapeau, avec Bruno) ; iPhone / iPad / Android et caméra
+(Bruno). Le contenu « texte » ne se distingue pas du défilement pour cet
+instrument : la bande change à chaque image, donc toute page change à chaque
+image — seule la charge de l'encodeur diffère.
 
 ## 9. Pour l'A/B
 
