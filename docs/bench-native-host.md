@@ -4908,6 +4908,81 @@ deux passes alternées par fréquence, 60 clics par passe (`pass.py --clicks`,
   d'ffmpeg une image en 20 s — avec et sans le réglage VRR de Windows. À
   refaire avec Bruno (H3.2), le jeu lancé à la main.
 
+## 8q. Flux commun des invités : ce qu'un invité coûte au owner (S0, 30/09/2026)
+
+Plan « flux commun des invités », mesure de référence avant tout changement :
+aujourd'hui, chaque invité d'un hôte natif a son propre worker, avec sa capture
+et son encodeur. Banc `scripts/bench/shared-feed` (README) : un stream du owner,
+puis des invités qui rejoignent par la popin de partage comme une personne (lien,
+PIN, bouton Rejoindre), fenêtres de 30 s dans l'ordre 0, 1, 3, 0, 3, 1, 0 invités.
+Les étapes de l'hôte pour le owner sont lues image par image dans les messages
+`stats` qu'il reçoit (un crochet sur la page, rien ne change dans l'app).
+
+### 8q.0 Le montage
+
+- DualRTX : instance `--dev` du build à HEAD, lancée élevée (classe GPU
+  REALTIME pour chaque worker, comme le worker SYSTEM du service). Owner en
+  2560×1440 HEVC à 60 i/s (réglages de la matrice), invités en 1920×1080 HEVC à
+  60 i/s (leur profil fixe), sans intra-refresh pour les invités.
+- Trois écrans, trois GPU : l'écran capturé est celui du GPU encodeur ; le Chrome
+  du owner décode sur un deuxième GPU, les trois fenêtres d'invités sur le
+  troisième. Page `scroll.html` sur l'écran capturé.
+- N95 : édition dev `0.3.1-031d0c5e` installée (worker SYSTEM), écran 1920×1080 à
+  60 Hz, en **Wi-Fi** ; owner et invités sur DualRTX.
+- L'iGPU AMD mesuré est celui de DualRTX (9900X) : l'UM790Pro est sous Ubuntu.
+
+### 8q.1 DualRTX
+
+| Encodeur | Invités | Total hôte p50 / p99, ms | Encodage p50 / p99, ms | i/s envoyées au owner | Sessions d'encodage (moteur) |
+|---|---|---|---|---|---|
+| RTX 5060 Ti, NVENC (D3D11) | 0 | 3,58 / 4,07 | 3,07 / 3,54 | 60 | 1 (16 %) |
+| | 1 | 3,84 / 6,16 | 3,33 / 5,67 | 60 | 2 (25 %) |
+| | 3 | **6,78 / 10,69** | 6,27 / 10,14 | 60 | 4 (45 %) |
+| Arc A380, D3D12 VE | 0 | 5,12 / 7,68 | 4,61 / 7,16 | 53 | 1 |
+| | 1 | 4,86 / 7,81 | 4,61 / 7,32 | 55 | 2 |
+| | 3 | 5,12 / **9,24** | 4,61 / 8,63 | 54 | 4 |
+| iGPU AMD (9900X), AMF | 0 | 9,22 / 9,72 | 9,22 / 9,34 | 60 | 1 |
+| | 1 | 9,22 / 9,73 | 9,08 / 9,17 | 60 | 2 |
+| | 3 | **11,26 / 12,13** | 11,26 / 11,65 | 60 | 4 |
+
+Moyenne des fenêtres de même nombre d'invités (3 à 0, 2 à 1 et à 3). Les
+fenêtres rejouées concordent à 0,3 ms près.
+
+- **La RTX paie le plus cher** : chaque session NVENC de plus allonge celle du
+  owner. À 3 invités, son total hôte double au p50 (+3,2 ms) et gagne 6,6 ms au
+  p99 ; le moteur d'encodage passe de 16 à 45 %.
+- **L'Arc garde son p50**, son p99 prend 1,6 ms. Il envoie ~54 i/s au owner
+  avec ou sans invités : une limite de la route D3D12 en 1440p60 sur un écran à
+  120 Hz, pas un effet des invités.
+- **L'iGPU AMD** ne bouge pas avec un invité, prend 2 ms (p50) et 2,4 ms (p99)
+  avec trois.
+- L'acquisition et la file ne bougent pas : tout se joue dans l'encodage.
+- Les invités encodent eux-mêmes en 4,1-7,2 ms (RTX, Arc), 6,7-16,4 ms (AMD).
+- L'E2E de l'overlay du owner (10-19 ms) varie d'une fenêtre à l'autre sans
+  suivre les invités : la mesure qui tranche est celle des étapes de l'hôte.
+
+### 8q.2 N95 (UHD, D3D12 VE, Wi-Fi)
+
+| Invités | Total hôte p50 / p99, ms | Encodage p50 / p99, ms | Acquisition p50 | i/s envoyées au owner | E2E de l'overlay |
+|---|---|---|---|---|---|
+| 0 | 7,2-7,7 / 23-28 | 5,6-6,1 / 12,3-12,8 | 0,16 ms | 55-57 | 14-38 ms |
+| 1 | **22,5 / 76-127** | 7,7-9,2 / 18-19 | **5,6 ms** | **28-34** | **76 ms à 2,4 s** |
+| 2 | la page du deuxième invité ne se charge pas en 120 s (deux essais) | | | | |
+
+Un seul invité suffit à mettre le N95 à genoux : la capture elle-même attend
+(5,6 ms d'acquisition au lieu de 0,16), le owner tombe à 28-34 i/s, et sur le
+Wi-Fi du N95 les deux flux montants font une file de plusieurs centaines de
+millisecondes à 2,4 s. Le flux commun ne retire que la part de l'hôte (un
+encodage pour tous les invités) : chaque invité reçoit toujours son propre
+exemplaire sur le lien montant.
+
+### 8q.3 Ce que S9 devra montrer
+
+- 2 sessions d'encodage au plus, quel que soit le nombre d'invités (ici 1 + N).
+- Sur la RTX, le total hôte du owner à 3 invités revenu vers 3,6 / 4-6 ms (celui
+  d'un seul encodage de plus, soit la ligne « 1 invité »).
+- Sur le N95, un deuxième et un troisième invité qui rejoignent.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
