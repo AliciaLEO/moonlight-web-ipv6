@@ -683,6 +683,106 @@
     }
 }
 
+/* Phone: a sheet over nearly the whole screen, and one column all the way
+   down. Nothing is wider than the board any more — the PIN and the lifetime
+   used to sit side by side and run ~170 px past its edge, clipped by the card
+   but still scrollable, which is what let the whole board be dragged sideways
+   on iOS like a picture. overflow-x and overscroll-behavior shut that door for
+   good, whatever grows too wide next. */
+@media (max-width: 640px) {
+    .share-board-overlay {
+        padding: 8px;
+    }
+    .share-board {
+        max-height: 100%;
+        overflow-x: hidden;
+        overscroll-behavior: contain;
+        padding: 14px 12px 16px;
+    }
+    .share-board-head {
+        top: -14px;
+        gap: var(--space-2);
+        margin: -14px -12px 0;
+        padding: 14px 12px 12px;
+    }
+    .share-board-title {
+        letter-spacing: 0.14em;
+    }
+
+    /* Name and START on the first line, the two boxes on the second, the
+       state and the level they add up to on the third. */
+    .share-brow {
+        grid-template-columns: 30px auto 1fr auto;
+        grid-template-areas:
+            'icon id id action'
+            '. perms perms perms'
+            '. state badge badge';
+        column-gap: 10px;
+        row-gap: 8px;
+        padding: 10px;
+    }
+    .share-brow .status-icon {
+        grid-area: icon;
+    }
+    .share-brow-id {
+        grid-area: id;
+    }
+    .share-brow-action {
+        grid-area: action;
+    }
+    .share-brow-perms {
+        grid-area: perms;
+        flex-wrap: wrap;
+        gap: 6px 16px;
+    }
+    .share-brow-state {
+        grid-area: state;
+    }
+    .share-access-badge {
+        grid-area: badge;
+    }
+    .share-toggle-btn {
+        width: auto;
+        padding: 7px 14px;
+    }
+
+    .share-brow-detail {
+        padding: 12px 10px 14px;
+    }
+    /* The link gets a line of its own, its two buttons share the next. */
+    .share-copy-row {
+        flex-wrap: wrap;
+    }
+    .share-detail-line .share-link-input {
+        flex: 1 1 100%;
+    }
+    .share-detail-line > .share-copy-row > .share-copy-btn,
+    .share-regen-btn {
+        flex: 1 1 0;
+        justify-content: center;
+    }
+    /* PIN, then the lifetime under it, each the full width. */
+    .share-detail-split {
+        flex-direction: column;
+        gap: 12px;
+    }
+    .share-detail-pin .share-copy-row {
+        flex-wrap: nowrap;
+    }
+    .share-detail-pin .share-pin {
+        flex: 1 1 auto;
+        width: auto;
+        font-size: 22px;
+    }
+    .share-detail-ttl {
+        min-width: 0;
+    }
+    /* Lined up with nothing now that it sits under the PIN, not beside it. */
+    .share-ttl-body {
+        padding-top: 0;
+    }
+}
+
 /* ── Owner: the share popin ────────────────────────────────────────────── */
 
 .share-popin-overlay {
