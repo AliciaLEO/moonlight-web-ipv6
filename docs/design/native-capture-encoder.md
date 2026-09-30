@@ -6326,6 +6326,70 @@ Linux avec une carte AMD et un Mesa récent, un bureau presque immobile peut
 consommer presque tout le débit réglé. Ce n'est gênant que sur une connexion
 limitée, et c'est à régler.
 
+### 32.26 Linux : un bureau X11 sur deux GPU, et le portail du paquet (30/09/2026)
+
+Six défauts vus le 30/09 sur l'UM790Pro, quand le pilote NVIDIA de la GTX 1050
+y a fait passer GDM en X11 (deux écrans sur deux GPU). « Go » de Bruno pour
+chacun ; G5 au banc §8o.16.
+
+**Une fenêtre de la racine (5, `6465fbff`).** Sous X11, tous les écrans d'une
+carte lisent un seul tampon, la racine de X : l'écran de 1920×1080 est une
+fenêtre d'un tampon de 4480×1440. `KmsCapture` y voyait un changement de mode
+sans fin : 0 image. Il lit désormais le rectangle `SRC_X/Y/W/H` du plan
+primaire (`ScanoutWindow.h`), importe le tampon entier et ne convertit que ce
+rectangle (GL, Vulkan, CPU).
+
+**Une image recopiée (6, `f758982c`).** Un jeu en synchro coupée est recopié
+par X dans le même tampon : le tampon ne change pas, et la capture, réveillée
+par un nouveau tampon, livrait 1 image en 5 s. `X11Damage` écoute les
+« damage » de la racine (80 par seconde sous le jeu, aucun sur un bureau
+immobile) ; `KmsCapture` relit le même tampon au vblank quand il y en a eu.
+
+**Un écran que KMS ne montre pas (3, `1750eab9`).** Le pilote X de NVIDIA règle
+ses modes sans KMS : le M27Q de la GTX y est « 0×0 · 0 Hz (off) », était pourtant
+proposé, et son lancement échouait. Une sortie sans CRTC n'est plus proposée ;
+la sonde dit pourquoi, et la session compte les écrans par la même règle.
+
+**Le pointeur sur la disposition de X (2, `4ae134c7`).** X étale un pointeur
+absolu sur toute sa racine, écrans de tous les GPU compris ; la session ne
+connaissait que la carte capturée, et un puits PRIME lit son tampon depuis 0,0.
+Le centre de l'image de l'AMD visait donc 2241,720 au lieu de 3520,540.
+`X11Layout` lit RandR par `dlopen` : le rectangle de chaque sortie, son EDID, le
+connecteur KMS que publie le pilote, et la taille de la racine. L'écran capturé
+y est reconnu par son EDID, puis son connecteur, puis sa place, jamais par son
+nom : chaque pilote X nomme à sa façon (HDMI-A-1 du noyau = HDMI-A-0
+d'amdgpu). Mesuré de bout en bout avec le paquet de la CI : sur sept points
+visés depuis un client, le pointeur tombe à un pixel près (banc §8o.17).
+
+**Le portail du paquet (1, `470341ef`).** xdg-desktop-portal 1.18 identifie
+l'appelant par `/proc/<pid>/root`, que le noyau ne lui ouvre que si ses
+capacités couvrent celles de l'appelant. Le worker du paquet en porte
+(`CAP_SYS_ADMIN`, `CAP_SYS_NICE`), le portail aucune : toute route portail du
+`.deb` et du `.rpm` était refusée. Un processus qui porte des capacités demande
+désormais par un auxiliaire : le même binaire, relancé sans aucune capacité
+(`no_new_privs`), qui tient la session du portail et rend le descripteur
+PipeWire par une paire de sockets. La capture garde ses files en priorité haute.
+Sous X11, l'écran virtuel n'est plus proposé : seul le compositeur Wayland de
+GNOME sait en créer un.
+- Vérifié par la suite avec capacités, sous X11. Pas encore par le paquet sous
+  Wayland : l'UM790Pro n'y revient pas tant que le pilote NVIDIA y est.
+- Le thème GNOME de Qt lit ses réglages d'apparence par le même portail, au
+  démarrage de l'app et du worker. Il est refusé de la même façon, ce qu'écrit
+  une ligne « dbus reply error ». Sans effet sur le stream.
+
+**Les tests sur la mémoire partagée (4, `9e30b407`).** Sous X11, le portail de
+GNOME donne de la mémoire partagée, que GL ne lit pas : quand la conversion
+Vulkan lâche, c'est le CPU qui prend la suite, et un client HEVC seul est
+refusé. La suite supposait le DMA-BUF de Wayland (12 échecs) ; elle suit
+maintenant la raison de la route. Sans capacités, 6191/6191 ; avec, 6376/6376.
+
+**Concrètement, pour l'utilisateur** : sous Linux avec une carte NVIDIA à côté
+d'une autre, le bureau passe en X11, et il devient streamable : chaque écran de
+la carte qui le montre se capte, jeux en synchro coupée compris. La souris va
+là où on vise sur un bureau à plusieurs écrans. Un écran que le pilote NVIDIA
+tient hors de portée n'est plus proposé pour rien. Et le paquet installé n'est
+plus refusé par le portail, dont dépend l'écran virtuel sous Wayland.
+
 ## 33. Framerate « Hôte » : le stream à la cadence de l'écran de l'hôte (ouvert le 29/09/2026)
 
 Plan `framerate-hote.md` : l'essai « cadence de l'hôte » du POC Ultra, sorti en

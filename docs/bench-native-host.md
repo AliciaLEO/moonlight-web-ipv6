@@ -4511,6 +4511,141 @@ mêmes réglages, deux tours :
   `stillsplit`) sont dans `c13-after-filler-2026-09-29.tgz`. Ceux d'avant, dans
   `c13-benches-2026-09-29.tgz`.
 
+### 8o.16 G5 : Rise of the Tomb Raider sur un bureau X11 à deux écrans (30/09/2026)
+
+G5 sous un vrai jeu, sur le 780M saturé, et sur le bureau que le pilote NVIDIA
+impose : X11, deux écrans sur deux GPU.
+
+**Montage.**
+- UM790Pro, Ubuntu 24.04, Mesa 26.2.3, noyau 7.0. GDM passe en X11 à cause du
+  pilote NVIDIA 580 de la GTX 1050. Le 780M est le GPU de X :
+  - son écran virtuel « HDMI-A-0 » est à 0,0 en 1920×1080 ;
+  - le M27Q de la GTX, puits PRIME « HDMI-1-0 », est à 1920,0 ;
+  - la racine fait 4480×1440.
+- Le banc intégré de Rise of the Tomb Raider (Feral, Vulkan ;
+  `steam -applaunch 391220 -nolauncher -benchmark`) : trois scènes en 1080p,
+  synchro verticale et triple tampon coupés, le 780M à 99 %.
+- La capture tourne pendant tout le banc du jeu (85 s, HEVC 1080p60 à
+  20 Mbit/s, `--native-bench`). Les files sont en priorité haute
+  (`CAP_SYS_NICE`).
+- Deux correctifs rendent ce bureau capturable : le 5 (`6465fbff`, la fenêtre
+  de l'écran dans la racine de X) et le 6 (`f758982c`, la relecture sur les
+  « damage » de X). Sans eux : 0 image, puis 1 image en 5 s.
+- Cinq passes, refroidies à 50 °C entre deux : le jeu seul, Vulkan Video
+  (`pipeline=vulkan`), la route scindée (`convert=vulkan`), GL
+  (`convert=gl`), puis le jeu seul à nouveau. Ensuite, 30 min de Vulkan
+  Video à 10 Mbit/s, le banc du jeu relancé en boucle.
+- Script `~/g5/g5-run.sh`, sorties `/tmp/g5r` sur l'UM790Pro.
+
+**Le jeu, en images par seconde (moyenne de chaque scène).**
+
+| passe | Spine of the Mountain | Prophet's Tomb | Geothermal Valley | moyenne | écart |
+|---|---|---|---|---|---|
+| jeu seul (1) | 64,0 | 45,8 | 40,7 | 50,17 | |
+| Vulkan Video | 63,5 | 44,4 | 39,3 | 49,07 | −2,0 % |
+| route scindée | 63,1 | 45,0 | 39,9 | 49,33 | −1,4 % |
+| GL | 63,1 | 44,9 | 39,8 | 49,27 | −1,6 % |
+| jeu seul (2) | 63,8 | 45,6 | 40,4 | 49,93 | |
+
+- L'écart est pris sur la moyenne des deux passes du jeu seul (50,05).
+- Le critère (98 % du jeu seul) est tenu, Vulkan Video tout juste.
+- Scène par scène, Vulkan Video perd 0,6 à 3,1 % ; la plus lourde,
+  Geothermal Valley, perd le plus. La route scindée et GL perdent 1,3 à 1,8 %
+  partout.
+
+**La capture sous le jeu (85 s).**
+
+| route | images (captées + renvoyées) | conversion ms, moy. / p95 / p99 | encodage ms, moy. | hôte (CSV) ms, moy. / p50 / p99 |
+|---|---|---|---|---|
+| Vulkan Video | 2 981 + 79 | 17,2 / 30,7 / 36,9 | 1,9 | 19,2 / 18,7 / 36,2 |
+| route scindée | 2 706 + 118 | 16,7 / 30,7 / 41,0 | 4,4 | 21,4 / 20,1 / 44,0 |
+| GL | 2 718 + 102 | 17,0 / 32,8 / 41,0 | 4,4 | 21,6 / 20,5 / 42,2 |
+
+- La conversion attend derrière le jeu (§8o.1), même en priorité haute : 17 ms
+  en moyenne.
+- On capte environ 33 à 35 images par seconde, quand le jeu en fait environ 49.
+- ffmpeg décode les trois flux sans une erreur.
+
+**L'endurance (30 min, Vulkan Video, 10 Mbit/s).**
+- 74 530 images (58 768 captées, 15 762 renvoyées), toutes par Vulkan Video :
+  aucun repli, une seule image clé.
+- ffmpeg décode les 74 530 images sans une erreur.
+- Le jeu a tourné 24 min, en 12 boucles complètes de son banc. Au 13ᵉ
+  lancement, une fenêtre de message de Feral l'a arrêté : c'est l'outillage,
+  pas le produit. Les 5 dernières minutes ne montrent qu'un bureau immobile.
+- Hôte : 15,3 ms en moyenne sur le premier sixième (sous le jeu), p99
+  37,2 ms. Le dernier sixième (bureau immobile) : 2,2 ms.
+- Le jeu, sur les 12 boucles : 62,4, 44,2 et 39,3 i/s en moyenne, moins de
+  1 i/s d'écart d'une boucle à l'autre. C'est 97,1 % du jeu seul, mais à
+  90 °C tout du long, contre 50 °C au départ des passes courtes.
+- Mémoire : 141,1 → 147,5 Mo. Ce sont les lignes du banc gardées jusqu'à la
+  fin (~88 octets par image), pas une fuite.
+
+**Ce qu'on en retient.**
+- G5 passe sous un vrai jeu : moins de 2 % d'images en moins pour le jeu,
+  quelle que soit la route.
+- La chaîne Vulkan Video tient 30 min sans repli, sans erreur ni fuite.
+- Reste la latence sous un GPU saturé : environ 20 ms en moyenne. Et près
+  d'une image du jeu sur trois n'est pas captée, parce que la conversion
+  passe après le jeu.
+
+### 8o.17 Le paquet de la CI sur les bancs (30/09/2026)
+
+Le paquet DEV `0.3.1.g5d1` (`5d16861a`, correctifs 1 à 6 du design §32.26),
+tel que la CI le livre.
+
+**UM790Pro, le `.deb`, sur le bureau X11 du §8o.16.**
+- Installé par `dpkg -i` à côté de la prod 0.2.4, en LAN seul :
+  `MW_LAN_ONLY=1` est posé dans le gestionnaire systemd de l'utilisateur le
+  temps de l'installation, et la DEV que le postinst relance en hérite. La
+  prod n'a pas bougé, et aucun port de tunnel n'a été pris.
+- Un seul écran proposé, « Display 1 » (l'AMD). La sonde dit pourquoi
+  l'écran de la GTX et l'écran virtuel ne le sont pas.
+- Le pointeur, de bout en bout : un Chrome client sur DualRTX vise sept
+  points de l'image, et `XQueryPointer` lit sur l'hôte où tombe le pointeur
+  de X.
+
+| point de l'image | visé | obtenu | écart |
+|---|---|---|---|
+| centre | 960,540 | 960,540 | 0,0 |
+| 10 %, 10 % | 192,108 | 191,108 | −1,0 |
+| 90 %, 10 % | 1728,108 | 1727,108 | −1,0 |
+| 10 %, 90 % | 192,972 | 191,972 | −1,0 |
+| 90 %, 90 % | 1728,972 | 1727,972 | −1,0 |
+| 25 %, 75 % | 480,810 | 480,809 | 0,−1 |
+
+- Un pixel du client vaut ici 1,55 pixel de l'hôte : l'écart d'un pixel est
+  celui de l'arrondi. Le matin, avant le correctif 2, le même banc tombait
+  de 257 à 2 307 pixels à côté. L'écran de l'AMD était alors à 2560,0.
+- Au démarrage, l'app et son worker écrivent chacun une ligne de plus :
+  « dbus reply error … Unable to open /proc/<pid>/root ». C'est le thème
+  GNOME de Qt : il lit les réglages d'apparence par le portail, qui le lui
+  refuse pour la même raison qu'il refusait la capture. Sans effet sur le
+  stream.
+- Pas vu : l'auxiliaire du portail dans le paquet même, sous Wayland (l'écran
+  virtuel). L'UM790Pro reste en X11 tant que le pilote NVIDIA y est, et sous
+  X11 aucune route du paquet ne passe par le portail.
+
+**PC ARM (Snapdragon 7c), l'installeur ARM64.**
+- Installation silencieuse en 12 s. Stream H.264 par l'encodeur Qualcomm
+  (Media Foundation) : 24 images par seconde pendant un balayage de la
+  souris.
+- ⚠️ **Le pointeur reste peint dans l'image.** Le pilote Adreno n'a pas de
+  pointeur matériel : la duplication DXGI le peint dans l'image. Depuis
+  `a9350aca` (12/09), la session passe alors à Windows.Graphics.Capture, qui
+  le laisse au client.
+  - Le matin, le service SYSTEM était arrêté : le worker tournait comme
+    l'utilisateur, élevé, et la bascule s'est faite en 240 ms.
+  - Le soir, l'installeur avait démarré le service (`--worker-service`), et
+    le worker tournait en SYSTEM (`765fd962`, 23/09). Le constat est au
+    journal (« Desktop Duplication paints the pointer… »), la bascule jamais.
+    Déduction : pour un worker SYSTEM, `WgcCapture::available()` répond non.
+  - Défaut antérieur à ce chantier, noté au plan §9 pour décision.
+
+**Mac : pas fait.** L'app DEV de `/Applications` appartient à root : sans
+`sudo`, on ne peut ni la déplacer ni la renommer. L'ancienne (`0.3.0.g007`) a
+été relancée, avec ses deux autorisations intactes.
+
 ## 8p. Framerate « Hôte » : l'âge du contenu (29-30/09/2026, provisoire)
 
 Plan `framerate-hote`, design §33. Tout passe par des clés de banc :
