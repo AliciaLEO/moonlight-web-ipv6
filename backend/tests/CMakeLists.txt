@@ -138,6 +138,7 @@ add_executable(run_tests
     # The session census: what leaves the machine, and what must not.
     ${_src}/src/network/SessionMetrics.cpp
     # The guests' shared feed: the pipe between the feed worker and theirs.
+    ${_src}/src/streaming/FeedInfo.cpp
     ${_src}/src/streaming/FeedPublisher.cpp
     ${_src}/src/streaming/FeedSubscriber.cpp
     ${_src}/src/common/Logger.cpp

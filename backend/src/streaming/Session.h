@@ -164,6 +164,17 @@ public:
     /// settings.
     void setNativeTuning(const QString& spec) { m_NativeTuning = spec; }
 
+    /// A guest of a native host on the guests' shared feed (plan « flux commun
+    /// des invités »): the feed's pipe and the token it asks, and the guest's
+    /// slot. The native engine then carries the feed's pictures instead of
+    /// capturing its own. Empty: the session captures, as every other does.
+    void setSharedFeed(const QString& pipe, const QByteArray& token, int slot)
+    {
+        m_FeedPipe = pipe;
+        m_FeedToken = token;
+        m_FeedSlot = slot;
+    }
+
     /// The client's screen, from the /start request: its refresh in
     /// millihertz (0 = it did not measure one) and whether it paints on
     /// vsync (tearing off, or a browser that cannot tear). Only the native
@@ -472,6 +483,11 @@ private:
 
     /// See setNativeTuning. Empty — a parent that predates it, or no knob.
     QString m_NativeTuning;
+
+    /// See setSharedFeed. Empty: this session captures its own pictures.
+    QString m_FeedPipe;
+    QByteArray m_FeedToken;
+    int m_FeedSlot = -1;
 
     /// The client's screen at /start — see setClientPresentation.
     int m_ClientRefreshMilliHz = 0;

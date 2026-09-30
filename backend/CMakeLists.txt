@@ -292,6 +292,7 @@ add_executable(mw-server
     src/streaming/InputWatchdog.cpp
     src/streaming/MoonlightShim.cpp
     src/streaming/NativeMediaEngine.cpp
+    src/streaming/FeedInfo.cpp
     src/streaming/FeedPublisher.cpp
     src/streaming/FeedSubscriber.cpp
     src/streaming/NativeBench.cpp

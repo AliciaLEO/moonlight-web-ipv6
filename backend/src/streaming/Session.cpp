@@ -688,6 +688,10 @@ void StreamSession::onLaunchResult(bool ok, const BackendError& err, const Media
                                        nativeParams.videoPipeline);
         // The bench's knobs from the settings file, when someone added them.
         nativeParams.tuningSpec = m_NativeTuning;
+        // A guest on the shared feed: the pictures come down its pipe.
+        nativeParams.feedPipe = m_FeedPipe;
+        nativeParams.feedToken = m_FeedToken;
+        nativeParams.feedSlot = m_FeedSlot;
 
         // Forwarded rather than acted on here: whoever owns this session owns
         // the settings file, and in a worker that is another process entirely.

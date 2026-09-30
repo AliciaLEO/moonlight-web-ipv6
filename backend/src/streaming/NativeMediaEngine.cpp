@@ -16,14 +16,19 @@
  */
 
 #include "NativeMediaEngine.h"
+#include "FeedInfo.h"
+#include "FeedPublisher.h"
+#include "FeedSubscriber.h"
 #include "InputWatchdog.h"
 #include "NativeBench.h"
 
+#include "mw/native/FeedWire.h"
 #include "mw/native/NativeHost.h"
 
 #include <QBuffer>
 #include <QDebug>
 #include <QImage>
+#include <QJsonArray>
 
 namespace {
 
@@ -189,6 +194,13 @@ NativeMediaEngine::~NativeMediaEngine()
 
 void NativeMediaEngine::startCapture(const StartParams& params)
 {
+    // A guest on the shared feed captures nothing: its pictures come down the
+    // feed's pipe, its session is input and audio.
+    if (!params.feedPipe.isEmpty()) {
+        startSubscriber(params);
+        return;
+    }
+
     mw::native::SessionConfig config;
     config.displayId = params.displayId;
     config.width = params.width;
@@ -200,6 +212,8 @@ void NativeMediaEngine::startCapture(const StartParams& params)
     config.hdr = params.hdr;
     config.yuv444 = params.yuv444;
     config.intraRefresh = params.intraRefresh;
+    config.intraRefreshRequired = params.intraRefreshRequired;
+    config.governorFloorPercent = params.governorFloorPercent;
     config.followDisplayShape = params.followDisplayShape;
     config.fitRequestedBox = params.fitRequestedBox;
     config.allowUpscale = params.allowUpscale;
@@ -255,18 +269,23 @@ void NativeMediaEngine::startCapture(const StartParams& params)
     m_NameLinkDropsKey.store(config.tuning.nameLinkDrops, std::memory_order_release);
 
     std::string error;
-    m_Session = mw::native::NativeHost::createSession(
-        config, [this](const mw::native::EncodedFrame& frame) { onEncodedFrame(frame); },
-        // Opus packets, 5 ms each, from the engine's audio thread. Emitted as
-        // the same signal the GameStream engine emits from moonlight-common-c's
-        // audio thread: the relays already copy the bytes onto their own
-        // thread and stamp the RTP clock by audioSamplesPerFrame(), which is
-        // the 240 the engine produces.
-        [this](const mw::native::AudioPacket& packet) {
+    // Opus packets, 5 ms each, from the engine's audio thread. Emitted as the
+    // same signal the GameStream engine emits from moonlight-common-c's audio
+    // thread: the relays already copy the bytes onto their own thread and
+    // stamp the RTP clock by audioSamplesPerFrame(), which is the 240 the
+    // engine produces. None at all for the guests' feed, whose guests each
+    // capture their own.
+    mw::native::AudioCallback onAudio;
+    if (params.captureAudio) {
+        onAudio = [this](const mw::native::AudioPacket& packet) {
             if (!packet.data || packet.size == 0) return;
             emit audioSampleReady(QByteArray(reinterpret_cast<const char*>(packet.data),
                                              static_cast<qsizetype>(packet.size)));
-        },
+        };
+    }
+    m_Session = mw::native::NativeHost::createSession(
+        config, [this](const mw::native::EncodedFrame& frame) { onEncodedFrame(frame); },
+        std::move(onAudio),
         // Rumble is the only signal that travels host → browser. It arrives on
         // a ViGEm callback thread, so it is emitted as a queued signal rather
         // than touched directly: the relay that forwards it lives on another
@@ -337,8 +356,21 @@ void NativeMediaEngine::startCapture(const StartParams& params)
     });
 
     // Same thread story as the gate: said on the capture thread, forwarded by
-    // a relay that lives elsewhere.
+    // a relay that lives elsewhere. The feed says it to its subscribers too,
+    // with the session as it now stands (frame size, the display's place).
     m_Session->setDisplayFormatCallback([this](const mw::native::DisplayFormat& f) {
+        if (m_Publisher) {
+            publishInfo();
+            m_Publisher->publishControl(
+                QJsonObject{{QStringLiteral("type"), QStringLiteral("displayFormat")},
+                            {QStringLiteral("displayWidth"), f.displayWidth},
+                            {QStringLiteral("displayHeight"), f.displayHeight},
+                            {QStringLiteral("frameWidth"), f.frameWidth},
+                            {QStringLiteral("frameHeight"), f.frameHeight},
+                            {QStringLiteral("displayHdr"), f.displayHdr},
+                            {QStringLiteral("hdr"), f.hdr},
+                            {QStringLiteral("hdrCapable"), f.hdrCapable}});
+        }
         QMetaObject::invokeMethod(
             this,
             [this, f]() {
@@ -352,8 +384,206 @@ void NativeMediaEngine::startCapture(const StartParams& params)
     m_NegotiatedVideoFormat.store(formatFromSession(info), std::memory_order_release);
     m_Connected.store(true, std::memory_order_release);
 
+    // The feed worker: what its subscribers join, before its first picture.
+    m_Publisher = params.feedPublisher;
+    if (m_Publisher) publishInfo();
+
     qInfo().noquote() << "[NativeMediaEngine] streaming" << describeSession();
     emit connectionStarted();
+}
+
+void NativeMediaEngine::publishInfo()
+{
+    if (!m_Publisher || !m_Session) return;
+    const mw::native::SessionInfo& info = m_Session->info();
+    m_Publisher->setInfo(
+        feedinfo::toJson(info, formatFromSession(info), describeEncoder(), describeSession()));
+}
+
+void NativeMediaEngine::startSubscriber(const StartParams& params)
+{
+    m_Subscriber =
+        std::make_unique<FeedSubscriber>(params.feedPipe, params.feedToken, params.feedSlot);
+    m_Subscriber->setFrameCallback([this](const mw::native::feed::Header& header,
+                                          const uint8_t* data,
+                                          size_t size) { onFeedFrame(header, data, size); });
+    // Emitted on the subscriber's thread; handled on this engine's.
+    connect(m_Subscriber.get(), &FeedSubscriber::controlReceived, this,
+            &NativeMediaEngine::onFeedControl, Qt::QueuedConnection);
+    connect(m_Subscriber.get(), &FeedSubscriber::disconnected, this, &NativeMediaEngine::onFeedLost,
+            Qt::QueuedConnection);
+    connect(m_Subscriber.get(), &FeedSubscriber::rejoined, this, &NativeMediaEngine::onFeedRejoined,
+            Qt::QueuedConnection);
+    m_FeedNeedsKeyframe.store(true, std::memory_order_release);
+
+    QJsonObject info;
+    QString why;
+    // The feed may be starting at this very moment (the first guest's join is
+    // what launches it): its pipe gets a few seconds to answer.
+    if (!m_Subscriber->start(8000, &info, &why) || !takeFeedInfo(info)) {
+        if (why.isEmpty()) why = QStringLiteral("the feed described no session");
+        qWarning() << "[NativeMediaEngine] cannot join the guests' shared feed:" << why;
+        m_Subscriber.reset();
+        emit connectionFailed(QStringLiteral("The shared stream is not answering: ") + why);
+        return;
+    }
+
+    mw::native::SessionConfig config;
+    config.videoSource = mw::native::VideoSource::External;
+    mw::native::SessionInfo feed;
+    {
+        std::lock_guard<std::mutex> lock(m_FeedMutex);
+        feed = m_FeedInfo;
+    }
+    config.displayId = feed.displayId;
+    config.externalLeft = feed.desktopLeft;
+    config.externalTop = feed.desktopTop;
+    config.externalRight = feed.desktopRight;
+    config.externalBottom = feed.desktopBottom;
+    config.allowElevatedInput = params.viewerAdmin;
+    config.muteHostAudio = params.muteHostAudio;
+
+    std::string error;
+    m_Session = mw::native::NativeHost::createSession(
+        config, nullptr,
+        [this](const mw::native::AudioPacket& packet) {
+            if (!packet.data || packet.size == 0) return;
+            emit audioSampleReady(QByteArray(reinterpret_cast<const char*>(packet.data),
+                                             static_cast<qsizetype>(packet.size)));
+        },
+        [this](const mw::native::RumbleEvent& event) {
+            QMetaObject::invokeMethod(
+                this,
+                [this, event]() {
+                    emit rumble(event.controllerNumber, event.lowFrequencyMotor,
+                                event.highFrequencyMotor);
+                },
+                Qt::QueuedConnection);
+        },
+        nullptr,
+        [this](const std::string& reason) {
+            m_Connected.store(false, std::memory_order_release);
+            emit connectionTerminated(-1);
+            qWarning() << "[NativeMediaEngine] session ended:" << QString::fromStdString(reason);
+        },
+        error);
+    if (!m_Session || !m_Session->start(error)) {
+        qWarning() << "[NativeMediaEngine] could not start the guest's session:"
+                   << QString::fromStdString(error);
+        m_Session.reset();
+        m_Subscriber->stop();
+        m_Subscriber.reset();
+        emit connectionFailed(QString::fromStdString(error));
+        return;
+    }
+    m_Session->setInputGateCallback([this](const mw::native::InputGate& gate) {
+        const bool blocked = gate.blocked;
+        const QString reason = QString::fromLatin1(gate.reason ? gate.reason : "");
+        const QString window = QString::fromStdString(gate.window);
+        QMetaObject::invokeMethod(
+            this,
+            [this, blocked, reason, window]() { emit inputGateChanged(blocked, reason, window); },
+            Qt::QueuedConnection);
+    });
+
+    m_Connected.store(true, std::memory_order_release);
+    qInfo().noquote() << "[NativeMediaEngine] streaming" << describeSession();
+    emit connectionStarted();
+    // The feed is already running: this guest starts from its next keyframe.
+    requestIdrFrame();
+}
+
+bool NativeMediaEngine::takeFeedInfo(const QJsonObject& info)
+{
+    mw::native::SessionInfo feed;
+    int format = 0;
+    QString encoder;
+    QString description;
+    if (!feedinfo::fromJson(info, feed, format, encoder, description)) return false;
+    {
+        std::lock_guard<std::mutex> lock(m_FeedMutex);
+        m_FeedInfo = feed;
+        m_FeedEncoder = encoder;
+        m_FeedDescription = description;
+    }
+    m_NegotiatedVideoFormat.store(format, std::memory_order_release);
+    return true;
+}
+
+void NativeMediaEngine::onFeedFrame(const mw::native::feed::Header& header, const uint8_t* data,
+                                    size_t size)
+{
+    // Joined mid-stream, or back after the feed died: nothing to decode
+    // against until a keyframe (asked for when this began).
+    if (m_FeedNeedsKeyframe.load(std::memory_order_acquire)) {
+        if (!header.keyframe) return;
+        m_FeedNeedsKeyframe.store(false, std::memory_order_release);
+    }
+    // The feed's own stamps, from its display's present: the same clock in
+    // both processes. The hop down the pipe is counted in "queue".
+    mw::native::EncodedFrame frame;
+    frame.data = data;
+    frame.size = size;
+    frame.keyframe = header.keyframe;
+    frame.frameNumber = header.frameNumber;
+    frame.presentUs = header.presentUs;
+    frame.capturedUs = header.capturedUs;
+    frame.submittedUs = header.submittedUs;
+    frame.convertedUs = header.convertedUs;
+    frame.encodedUs = header.encodedUs;
+    onEncodedFrame(frame);
+}
+
+void NativeMediaEngine::onFeedControl(const QJsonObject& message)
+{
+    const QString type = message.value(QStringLiteral("type")).toString();
+    if (type == QLatin1String("info")) {
+        // The feed rebuilt: its frame, or the display's place on the desktop.
+        if (!takeFeedInfo(message)) return;
+        mw::native::SessionInfo feed;
+        {
+            std::lock_guard<std::mutex> lock(m_FeedMutex);
+            feed = m_FeedInfo;
+        }
+        if (m_Session)
+            m_Session->setExternalDesktop(feed.desktopLeft, feed.desktopTop, feed.desktopRight,
+                                          feed.desktopBottom);
+        return;
+    }
+    if (type == QLatin1String("displayFormat")) {
+        emit displayFormatChanged(message.value(QStringLiteral("displayWidth")).toInt(),
+                                  message.value(QStringLiteral("displayHeight")).toInt(),
+                                  message.value(QStringLiteral("frameWidth")).toInt(),
+                                  message.value(QStringLiteral("frameHeight")).toInt(),
+                                  message.value(QStringLiteral("displayHdr")).toBool(),
+                                  message.value(QStringLiteral("hdr")).toBool(),
+                                  message.value(QStringLiteral("hdrCapable")).toBool());
+        return;
+    }
+    if (type == QLatin1String("codec") || type == QLatin1String("bye")) {
+        // The feed changes codec for everyone (a guest who decodes no HEVC
+        // arrived) or ends: this session ends with it, and the browser comes
+        // back the way it comes back from any codec fallback.
+        qInfo() << "[NativeMediaEngine] the shared feed says" << type
+                << "— this guest's session ends, to be joined again";
+        m_Connected.store(false, std::memory_order_release);
+        emit connectionTerminated(-1);
+    }
+}
+
+void NativeMediaEngine::onFeedRejoined(const QJsonObject& info)
+{
+    m_FeedNeedsKeyframe.store(true, std::memory_order_release);
+    onFeedControl(info); // the feed's session as it came back, desktop included
+    requestIdrFrame();
+}
+
+void NativeMediaEngine::onFeedLost(const QString& why)
+{
+    if (!m_Connected.load(std::memory_order_acquire)) return;
+    qWarning() << "[NativeMediaEngine] the shared feed went away:" << why;
+    m_Connected.store(false, std::memory_order_release);
+    emit connectionTerminated(-1);
 }
 
 void NativeMediaEngine::setDirectFrameSink(FrameSink sink)
@@ -407,6 +637,22 @@ void NativeMediaEngine::onEncodedFrame(const mw::native::EncodedFrame& encoded)
     if (encodedUs > presentUs) {
         m_ProcWindowTotalUs.fetch_add(encodedUs - presentUs, std::memory_order_acq_rel);
         m_ProcWindowCount.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    // The feed worker: every picture to the guests' pipe. It is a copy per
+    // subscriber, never a wait on one (FeedPublisher). The worker has no
+    // relay of its own, so nothing else wants the frame.
+    if (m_Publisher) {
+        FeedPublisher::Stamps stamps;
+        stamps.frameNumber = frameNumber;
+        stamps.presentUs = presentUs;
+        stamps.capturedUs = encoded.capturedUs;
+        stamps.submittedUs = encoded.submittedUs;
+        stamps.convertedUs = encoded.convertedUs;
+        stamps.encodedUs = encodedUs;
+        m_Publisher->publishFrame(encoded.data, encoded.size, encoded.keyframe, stamps);
+        std::lock_guard<std::mutex> lock(m_SinkMutex);
+        if (!m_DirectSink) return;
     }
 
     // The zero-copy path: the relay that owns the video takes the frame from
@@ -510,10 +756,16 @@ void NativeMediaEngine::logStageSummary()
 
 void NativeMediaEngine::stopConnection()
 {
+    // A guest's pipe first: no picture may reach the relay once this returns.
+    if (m_Subscriber) {
+        m_Subscriber->stop();
+        m_Subscriber.reset();
+    }
     if (!m_Session) return;
     m_Connected.store(false, std::memory_order_release);
     m_Session->stop();
     m_Session.reset();
+    m_Publisher = nullptr;
     logStageSummary();
     emit connectionStopped();
 }
@@ -527,6 +779,11 @@ void NativeMediaEngine::interruptConnection()
 
 void NativeMediaEngine::requestIdrFrame()
 {
+    // A guest asks the feed, which groups every guest's asking into one.
+    if (m_Subscriber) {
+        m_Subscriber->sendControl(QJsonObject{{QStringLiteral("type"), QStringLiteral("idr")}});
+        return;
+    }
     if (m_Session) m_Session->requestKeyframe();
 }
 
@@ -644,6 +901,12 @@ void NativeMediaEngine::releaseInputBlock()
 
 void NativeMediaEngine::invalidateReference(uint32_t frameNumber)
 {
+    // No repair by reference on the shared feed (referenceInvalidation says
+    // so): a lost frame there is the wave's to heal, or a keyframe's.
+    if (m_Subscriber) {
+        requestIdrFrame();
+        return;
+    }
     if (m_Session) m_Session->invalidateReference(frameNumber);
 }
 
@@ -686,6 +949,9 @@ NativeMediaEngine::VsyncGridStatus NativeMediaEngine::vsyncGridStatus() const
 
 void NativeMediaEngine::setClientBitrate(int kbps)
 {
+    // The shared feed's rate is the feed's: sized for the height the owner
+    // chose, followed down by the slowest guest's link.
+    if (m_Subscriber) return;
     // The same bounds as the setting itself (AppSettings::setStreamBitrate).
     if (kbps < 1000 || kbps > 150000) {
         qWarning() << "[NativeMediaEngine] Ignoring a client bitrate of" << kbps << "kbps";
@@ -696,12 +962,16 @@ void NativeMediaEngine::setClientBitrate(int kbps)
 
 bool NativeMediaEngine::referenceInvalidation() const
 {
+    // Never on the shared feed: a repair aimed at one guest's loss would be
+    // every guest's next frame. The feed's intra-refresh repairs instead.
+    if (m_Subscriber) return false;
     return m_Session && m_Connected.load(std::memory_order_acquire) &&
            m_Session->info().referenceInvalidation;
 }
 
 bool NativeMediaEngine::nameLinkDrops() const
 {
+    if (m_Subscriber) return false;
     using Choice = mw::native::EncoderTuning::Choice;
     const Choice key = m_NameLinkDropsKey.load(std::memory_order_acquire);
     if (key != Choice::Default) return key == Choice::On;
@@ -717,28 +987,60 @@ void NativeMediaEngine::reportLink(const mw::native::LinkFeedback& feedback)
 {
     mw::native::LinkFeedback fb = feedback;
     fb.evictions += m_Evictions.exchange(0, std::memory_order_relaxed);
+    // A guest's link goes to the feed, which follows the slowest guest's
+    // (down to its floor) — this one's governor has no encoder to move.
+    if (m_Subscriber) {
+        m_Subscriber->sendControl(QJsonObject{{QStringLiteral("type"), QStringLiteral("link")},
+                                              {QStringLiteral("owdRiseMs"), fb.owdRiseMs},
+                                              {QStringLiteral("gaps"), fb.gaps},
+                                              {QStringLiteral("evictions"), fb.evictions},
+                                              {QStringLiteral("fps"), fb.receivedFps},
+                                              {QStringLiteral("resumed"), fb.resumed}});
+        return;
+    }
     if (m_Session) m_Session->reportLink(fb);
 }
 
 bool NativeMediaEngine::intraRefreshActive() const
 {
+    if (m_Subscriber) {
+        std::lock_guard<std::mutex> lock(m_FeedMutex);
+        return m_FeedInfo.intraRefresh;
+    }
     return m_Session && m_Session->info().intraRefresh;
 }
 
 int NativeMediaEngine::intraRefreshFrames() const
 {
+    if (m_Subscriber) {
+        std::lock_guard<std::mutex> lock(m_FeedMutex);
+        return m_FeedInfo.intraRefresh ? m_FeedInfo.intraRefreshFrames : 0;
+    }
     return intraRefreshActive() ? m_Session->info().intraRefreshFrames : 0;
 }
 
 bool NativeMediaEngine::sessionInfo(mw::native::SessionInfo& out) const
 {
     if (!m_Session || !m_Connected.load(std::memory_order_acquire)) return false;
+    if (m_Subscriber) {
+        // The feed's session, with this guest's own audio beside it.
+        const mw::native::SessionInfo& own = m_Session->info();
+        std::lock_guard<std::mutex> lock(m_FeedMutex);
+        out = m_FeedInfo;
+        out.audio = own.audio;
+        out.hostMuted = own.hostMuted;
+        return true;
+    }
     out = m_Session->info();
     return true;
 }
 
 QString NativeMediaEngine::describeSession() const
 {
+    if (m_Subscriber) {
+        std::lock_guard<std::mutex> lock(m_FeedMutex);
+        return QStringLiteral("the guests' shared feed · ") + m_FeedDescription;
+    }
     if (!m_Session) return {};
     const mw::native::SessionInfo& info = m_Session->info();
 
@@ -757,6 +1059,10 @@ QString NativeMediaEngine::describeSession() const
 
 QString NativeMediaEngine::describeEncoder() const
 {
+    if (m_Subscriber) {
+        std::lock_guard<std::mutex> lock(m_FeedMutex);
+        return m_FeedEncoder;
+    }
     if (!m_Session) return {};
     return encoderLabel(m_Session->info());
 }

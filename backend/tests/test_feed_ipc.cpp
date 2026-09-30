@@ -8,6 +8,7 @@
  */
 #include "test_framework.h"
 
+#include "streaming/FeedInfo.h"
 #include "streaming/FeedPublisher.h"
 #include "streaming/FeedSubscriber.h"
 
@@ -64,6 +65,65 @@ void run_feed_ipc_tests()
         CHECK(!feedpipe::sameToken(t, other));
         CHECK(!feedpipe::sameToken(t, t.left(31)));
         CHECK(!feedpipe::sameToken(QByteArray(), QByteArray()));
+    }
+
+    SECTION("Feed info — a guest describes to its browser the feed's session, word for word");
+    {
+        mw::native::SessionInfo s;
+        s.displayId = 2;
+        s.width = 1920;
+        s.height = 1080;
+        s.fps = 60;
+        s.codec = mw::native::Codec::Hevc;
+        s.encoder = mw::native::EncoderApi::Vpl;
+        s.gpuName = "Intel(R) Arc(TM) A380 Graphics";
+        s.displayWidth = 2560;
+        s.displayHeight = 1440;
+        s.hdrCapable = true;
+        s.desktopLeft = 2560;
+        s.desktopRight = 5120;
+        s.desktopBottom = 1440;
+        s.intraRefresh = true;
+        s.intraRefreshFrames = 240;
+        s.referenceInvalidation = true; // the feed's own; never a guest's
+        s.videoPipeline = mw::native::VideoPipeline::D3d11;
+        s.videoPipelineRefused = true;
+        const QJsonObject j = feedinfo::toJson(s, 0x0100, QStringLiteral("oneVPL (D3D11)"),
+                                               QStringLiteral("Arc - oneVPL HEVC"));
+        CHECK_EQ(j.value(QStringLiteral("type")).toString(), QStringLiteral("info"));
+        mw::native::SessionInfo back;
+        int format = 0;
+        QString encoder;
+        QString description;
+        CHECK(feedinfo::fromJson(j, back, format, encoder, description));
+        CHECK_EQ(back.displayId, 2);
+        CHECK_EQ(back.width, 1920);
+        CHECK_EQ(back.height, 1080);
+        CHECK_EQ(back.fps, 60);
+        CHECK(back.codec == mw::native::Codec::Hevc);
+        CHECK(back.encoder == mw::native::EncoderApi::Vpl);
+        CHECK_EQ(back.gpuName, std::string("Intel(R) Arc(TM) A380 Graphics"));
+        CHECK_EQ(back.displayWidth, 2560);
+        CHECK(back.hdrCapable);
+        CHECK_EQ(back.desktopLeft, 2560);
+        CHECK_EQ(back.desktopRight, 5120);
+        CHECK_EQ(back.desktopBottom, 1440);
+        CHECK(back.intraRefresh);
+        CHECK_EQ(back.intraRefreshFrames, 240);
+        CHECK(!back.referenceInvalidation);
+        CHECK(back.videoPipeline == mw::native::VideoPipeline::D3d11);
+        CHECK(back.videoPipelineRefused);
+        CHECK(back.capture == mw::native::CaptureApi::None);
+        CHECK_EQ(format, 0x0100);
+        CHECK_EQ(encoder, QStringLiteral("oneVPL (D3D11)"));
+        CHECK_EQ(description, QStringLiteral("Arc - oneVPL HEVC"));
+        // Not an info, or one naming no frame: refused, nothing written.
+        CHECK(!feedinfo::fromJson(QJsonObject{{QStringLiteral("type"), QStringLiteral("cursor")}},
+                                  back, format, encoder, description));
+        QJsonObject noFrame = j;
+        noFrame[QStringLiteral("width")] = 0;
+        CHECK(!feedinfo::fromJson(noFrame, back, format, encoder, description));
+        CHECK_EQ(back.width, 1920);
     }
 
     SECTION("Feed pipe — a wrong token is refused, the right one is told `info` first");

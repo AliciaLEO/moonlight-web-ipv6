@@ -56,6 +56,11 @@ public:
     using FrameCallback = std::function<void(const mw::native::feed::Header& header,
                                              const uint8_t* data, size_t size)>;
 
+    /// How long a subscriber waits for a feed that went away to come back
+    /// (the server relaunches a feed that died, under the same name) before
+    /// the subscription ends.
+    static constexpr int kRejoinMs = 10000;
+
     FeedSubscriber(QString name, QByteArray token, int slot, QObject* parent = nullptr);
     ~FeedSubscriber() override;
 
@@ -63,7 +68,8 @@ public:
     void setFrameCallback(FrameCallback callback);
 
     /// Connect, present the token, and wait for the feed's `info` — at most
-    /// @p timeoutMs. True with @p info filled; false with @p error.
+    /// @p timeoutMs, trying again while the feed is not there yet (it may be
+    /// starting). True with @p info filled; false with @p error.
     bool start(int timeoutMs, QJsonObject* info, QString* error);
 
     /// Close the pipe and join the thread. Idempotent; never from inside the
@@ -82,8 +88,12 @@ signals:
     /// (the feed rebuilt at a new shape), `cursor`, `displayFormat`, `codec`,
     /// `bye`. Emitted on the subscriber's thread.
     void controlReceived(const QJsonObject& message);
-    /// The subscription ended: the feed closed, went away, or said something
-    /// unreadable. Emitted once, on the subscriber's thread.
+    /// The feed went away and came back within kRejoinMs, and says what it
+    /// is now: its pictures follow from its next keyframe. On the
+    /// subscriber's thread.
+    void rejoined(const QJsonObject& info);
+    /// The subscription ended: the feed closed and did not come back, or said
+    /// something unreadable. Emitted once, on the subscriber's thread.
     void disconnected(const QString& why);
 
 private:

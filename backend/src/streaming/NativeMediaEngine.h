@@ -36,8 +36,13 @@ namespace mw::native {
 class Session;
 struct CursorUpdate;
 struct EncodedFrame;
+namespace feed {
+struct Header;
+} // namespace feed
 } // namespace mw::native
 
+class FeedPublisher;
+class FeedSubscriber;
 class InputWatchdog;
 
 /**
@@ -140,6 +145,31 @@ public:
         /// environment cannot reach. Taken only when MW_NATIVE_TUNING is absent
         /// from this process's own; empty unless someone added it by hand.
         QString tuningSpec;
+
+        // ── The guests' shared feed (plan « flux commun des invités ») ─────
+        //
+        // A native host's guests watch ONE stream, encoded once by the feed
+        // worker. That worker's engine publishes every frame to its pipe; each
+        // guest's engine takes its pictures from that pipe instead of a
+        // capture, and its session only injects input and captures audio.
+
+        /// The feed worker's: where every encoded frame goes, beside the
+        /// relay if there is one, and what the session is (its `info`). Not
+        /// owned; must outlive the session.
+        FeedPublisher* feedPublisher = nullptr;
+        /// A guest worker's: the feed's pipe and the token it asks first.
+        /// Non-empty turns this engine into a subscriber.
+        QString feedPipe;
+        QByteArray feedToken;
+        /// The guest's slot on the share board, for the feed's log.
+        int feedSlot = -1;
+        /// SessionConfig::intraRefreshRequired and ::governorFloorPercent —
+        /// the feed's own two.
+        bool intraRefreshRequired = false;
+        int governorFloorPercent = 20;
+        /// Capture the host's audio. The feed worker does not: each guest's
+        /// own worker captures it for its browser.
+        bool captureAudio = true;
     };
 
     /// One encoded frame, borrowed: `data` is the encoder's own output buffer
@@ -357,8 +387,13 @@ public:
 
     /// What the session settled on, copied; false (and @p out untouched) until
     /// a session has started. The launch reply reads the frame and display
-    /// geometry and the dynamic range off it.
+    /// geometry and the dynamic range off it. A guest on the shared feed gets
+    /// the feed's, with its own session's audio beside it.
     bool sessionInfo(mw::native::SessionInfo& out) const;
+
+    /// This engine carries the guests' shared feed instead of its own capture
+    /// (StartParams::feedPipe).
+    bool isFeedSubscriber() const { return m_Subscriber != nullptr; }
 
 signals:
     /// The desktop portal issued a consent worth keeping — store it and hand
@@ -372,6 +407,26 @@ signals:
 
 private:
     void onEncodedFrame(const mw::native::EncodedFrame& frame);
+
+    /// A guest's start: join the feed, wait for its `info`, then a session of
+    /// input and audio only. Emits connectionStarted or connectionFailed.
+    void startSubscriber(const StartParams& params);
+    /// A picture from the feed, on the subscriber's thread, borrowed for the
+    /// call: the same road as one this engine encoded itself.
+    void onFeedFrame(const mw::native::feed::Header& header, const uint8_t* data, size_t size);
+    /// A control message from the feed (a later `info`, `displayFormat`,
+    /// `codec`, `bye`), on this engine's thread.
+    void onFeedControl(const QJsonObject& message);
+    /// The feed's pipe closed and it did not come back: this guest's session
+    /// ends.
+    void onFeedLost(const QString& why);
+    /// The feed died and came back (relaunched under the same name): its
+    /// pictures follow from its next keyframe, asked for at once.
+    void onFeedRejoined(const QJsonObject& info);
+    /// The feed worker's: say what the session is now, to every subscriber.
+    void publishInfo();
+    /// The feed's `info`, taken as this engine's own; false when unreadable.
+    bool takeFeedInfo(const QJsonObject& info);
 
     /// The session's stage figures, once, when it ends. Idempotent.
     void logStageSummary();
@@ -472,4 +527,22 @@ private:
     /// The session's EncoderTuning::nameLinkDrops key, for the relay's thread.
     std::atomic<mw::native::EncoderTuning::Choice> m_NameLinkDropsKey{
         mw::native::EncoderTuning::Choice::Default};
+
+    // ── The guests' shared feed ─────────────────────────────────────────────
+
+    /// The feed worker's publisher (StartParams::feedPublisher), not owned.
+    FeedPublisher* m_Publisher = nullptr;
+    /// A guest's end of the feed's pipe; null for every other engine.
+    std::unique_ptr<FeedSubscriber> m_Subscriber;
+    /// The feed's session as its `info` said — what a guest's engine reports
+    /// instead of its own — its overlay name and its log line. Under
+    /// m_FeedMutex: read by the relay's thread, written on this engine's.
+    mutable std::mutex m_FeedMutex;
+    mw::native::SessionInfo m_FeedInfo;
+    QString m_FeedEncoder;
+    QString m_FeedDescription;
+    /// Nothing of the feed goes to the relay before a keyframe: at the join,
+    /// and again when a feed that died comes back — its deltas reference
+    /// pictures this guest never had. Subscriber's thread and this engine's.
+    std::atomic<bool> m_FeedNeedsKeyframe{true};
 };

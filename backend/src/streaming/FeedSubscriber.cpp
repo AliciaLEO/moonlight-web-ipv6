@@ -17,10 +17,12 @@
 
 #include "FeedSubscriber.h"
 
+#include <QDeadlineTimer>
 #include <QDebug>
 #include <QJsonDocument>
 #include <QLocalSocket>
 #include <QThread>
+#include <QTimer>
 
 #include <chrono>
 #include <condition_variable>
@@ -68,8 +70,11 @@ public:
     QJsonObject m_Info;
     QString m_Error;
 
-    void open()
+    /// Connect, and keep trying until @p deadline: the feed may be starting
+    /// at this very moment — the first guest's arrival is what launches it.
+    void open(QDeadlineTimer deadline)
     {
+        m_Deadline = deadline;
         m_Socket = new QLocalSocket(this);
         QObject::connect(m_Socket, &QLocalSocket::connected, this, [this]() {
             QJsonObject hello{{QStringLiteral("type"), QStringLiteral("hello")},
@@ -79,9 +84,9 @@ public:
         });
         QObject::connect(m_Socket, &QLocalSocket::readyRead, this, [this]() { read(); });
         QObject::connect(m_Socket, &QLocalSocket::disconnected, this,
-                         [this]() { end(QStringLiteral("the feed closed the pipe")); });
+                         [this]() { lost(QStringLiteral("the feed closed the pipe")); });
         QObject::connect(m_Socket, &QLocalSocket::errorOccurred, this,
-                         [this](QLocalSocket::LocalSocketError) { end(m_Socket->errorString()); });
+                         [this](QLocalSocket::LocalSocketError) { lost(m_Socket->errorString()); });
         m_Socket->connectToServer(m_Owner->m_Name);
     }
 
@@ -138,7 +143,16 @@ private:
                 if (msg.value(QStringLiteral("type")).toString() != QLatin1String("info")) continue;
                 m_GotInfo = true;
                 m_Owner->m_Connected.store(true, std::memory_order_release);
-                settle(true, msg, QString());
+                if (m_EverIn) {
+                    // A feed that came back (relaunched under the same name):
+                    // the stream goes on, from its next keyframe.
+                    qInfo() << "[FeedSubscriber] back on the feed" << m_Owner->m_Name;
+                    m_Rejoining = false;
+                    emit m_Owner->rejoined(msg);
+                } else {
+                    m_EverIn = true;
+                    settle(true, msg, QString());
+                }
                 continue;
             }
             emit m_Owner->controlReceived(msg);
@@ -148,12 +162,41 @@ private:
         if (at > 0) m_Inbox.remove(0, at);
     }
 
+    /// The pipe closed, or never opened. Before the first `info`: tried again
+    /// until start()'s deadline. After it: the feed died, and is relaunched
+    /// under the same name by the server — tried again for kRejoinMs, the
+    /// guest's own stream to its browser staying up meanwhile.
+    void lost(const QString& why)
+    {
+        if (m_Ended || m_RetryPending) return;
+        m_GotInfo = false;
+        m_Inbox.clear();
+        m_Owner->m_Connected.store(false, std::memory_order_release);
+        if (m_EverIn && !m_Rejoining) {
+            m_Rejoining = true;
+            m_Deadline = QDeadlineTimer(kRejoinMs);
+            qWarning() << "[FeedSubscriber] the feed went away (" << why
+                       << ") — waiting for it to come back";
+        }
+        if (m_Deadline.hasExpired()) {
+            end(why);
+            return;
+        }
+        m_RetryPending = true;
+        QTimer::singleShot(m_EverIn ? 250 : 100, this, [this]() {
+            m_RetryPending = false;
+            if (m_Ended || !m_Socket) return;
+            m_Socket->abort();
+            m_Socket->connectToServer(m_Owner->m_Name);
+        });
+    }
+
     void end(const QString& why)
     {
         if (m_Ended) return;
         m_Ended = true;
         m_Owner->m_Connected.store(false, std::memory_order_release);
-        if (!m_GotInfo) settle(false, QJsonObject(), why);
+        if (!m_EverIn) settle(false, QJsonObject(), why);
         qInfo() << "[FeedSubscriber] subscription ended:" << why;
         emit m_Owner->disconnected(why);
     }
@@ -174,8 +217,15 @@ private:
     FeedSubscriber* m_Owner;
     QLocalSocket* m_Socket = nullptr;
     QByteArray m_Inbox;
+    /// The current connection has had its `info`.
     bool m_GotInfo = false;
+    /// A first `info` came, ever: start() has returned, and a loss from now
+    /// on is the feed dying, which is waited out.
+    bool m_EverIn = false;
+    bool m_Rejoining = false;
+    bool m_RetryPending = false;
     bool m_Ended = false;
+    QDeadlineTimer m_Deadline;
 };
 
 // ── FeedSubscriber ──────────────────────────────────────────────────────────
@@ -206,7 +256,9 @@ bool FeedSubscriber::start(int timeoutMs, QJsonObject* info, QString* error)
     m_Client->moveToThread(m_Thread);
     // The pictures are handed on from this thread: it is on the frame's path.
     m_Thread->start(QThread::HighestPriority);
-    QMetaObject::invokeMethod(m_Client, [this]() { m_Client->open(); }, Qt::QueuedConnection);
+    const QDeadlineTimer deadline(timeoutMs);
+    QMetaObject::invokeMethod(
+        m_Client, [this, deadline]() { m_Client->open(deadline); }, Qt::QueuedConnection);
 
     bool ok = false;
     QString why;
