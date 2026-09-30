@@ -38,9 +38,13 @@
  * Replaced, the same value by the same stand-in across the whole archive so a
  * reader can still follow one machine or one address from line to line:
  *   - public IP addresses by documentation addresses (203.0.113.x, then
- *     198.51.100.x and 192.0.2.x; 2001:db8::x). LAN, loopback, link-local,
- *     CGNAT/Tailscale and ULA addresses stay: they are what explains a LAN
- *     problem, and they locate nobody;
+ *     198.51.100.x and 192.0.2.x; 2001:db8::x);
+ *   - LAN addresses (private ranges, CGNAT/Tailscale, link-local, ULA) by a
+ *     letter for their /24 (/64 in IPv6) and a number for the machine in it,
+ *     under the range's own prefix: 192.168.A1, 10.B2, 172.24.C1, 100.D1,
+ *     fd::E1. Which machines share a network, and who talks to whom, can
+ *     still be read; .0 and .255 keep their number. Loopback, multicast and
+ *     0.0.0.0 stay: they are the same on every machine;
  *   - the names it is given (Names) by host-N, this-pc, instance-name and
  *     user, and the user name in home paths (C:\Users\<name>, /home/<name>,
  *     /Users/<name>), the instance's own moonlightweb.top subdomain and
@@ -74,6 +78,9 @@ public:
 private:
     QString publicV4(const QString& ip);
     QString publicV6(const QString& ip);
+    /// A LAN address's stand-in within its subnet: letters for the subnet,
+    /// then the host's number in order of appearance, or @p fixed if >= 0.
+    QString lanHost(const QString& subnet, const QString& host, int fixed);
     QString nameFor(const QString& key, const QString& kind);
     void replaceNames(QString& line);
     void replaceAddresses(QString& line);
@@ -91,5 +98,8 @@ private:
     int m_Hosts = 0;
     int m_V4 = 0;
     int m_V6 = 0;
+    QHash<QString, QString> m_SubnetLetters; ///< subnet → its letters
+    QHash<QString, int> m_SubnetHosts;       ///< subnet → hosts numbered so far
+    int m_Subnets = 0;
     int m_Tailnet = 0;
 };

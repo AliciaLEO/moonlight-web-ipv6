@@ -51,23 +51,46 @@ QRegularExpression re(const char* pattern)
                               QRegularExpression::CaseInsensitiveOption);
 }
 
-// Addresses that locate nobody, and explain a LAN: kept as they are.
-bool privateV4(const QString& ip, bool& valid)
+enum class V4Kind
+{
+    Keep,
+    Lan,
+    Public
+};
+
+// @p o gets the four octets. Kept as they are: what is the same on every
+// machine (loopback, 0/8, multicast, broadcast) and the documentation ranges,
+// which are the stand-ins themselves. LAN: the private ranges, CGNAT (which
+// Tailscale uses) and link-local.
+V4Kind classifyV4(const QString& ip, int o[4])
 {
     const QStringList parts = ip.split(QLatin1Char('.'));
-    int o[4];
-    valid = parts.size() == 4;
-    for (int i = 0; valid && i < 4; ++i) {
+    if (parts.size() != 4) return V4Kind::Keep;
+    for (int i = 0; i < 4; ++i) {
         bool ok = false;
         o[i] = parts[i].toInt(&ok);
-        valid = ok && o[i] >= 0 && o[i] <= 255;
+        if (!ok || o[i] < 0 || o[i] > 255) return V4Kind::Keep;
     }
-    if (!valid) return true;
-    return o[0] == 10 || o[0] == 127 || o[0] == 0 || o[0] >= 224 ||
-           (o[0] == 172 && o[1] >= 16 && o[1] <= 31) || (o[0] == 192 && o[1] == 168) ||
-           (o[0] == 169 && o[1] == 254) || (o[0] == 100 && o[1] >= 64 && o[1] <= 127) ||
-           (o[0] == 192 && o[1] == 0 && o[2] == 2) || (o[0] == 198 && o[1] == 51 && o[2] == 100) ||
-           (o[0] == 203 && o[1] == 0 && o[2] == 113) || (o[0] == 198 && (o[1] & 0xFE) == 18);
+    if (o[0] == 127 || o[0] == 0 || o[0] >= 224 || (o[0] == 192 && o[1] == 0 && o[2] == 2) ||
+        (o[0] == 198 && o[1] == 51 && o[2] == 100) || (o[0] == 203 && o[1] == 0 && o[2] == 113) ||
+        (o[0] == 198 && (o[1] & 0xFE) == 18))
+        return V4Kind::Keep;
+    if (o[0] == 10 || (o[0] == 172 && o[1] >= 16 && o[1] <= 31) || (o[0] == 192 && o[1] == 168) ||
+        (o[0] == 169 && o[1] == 254) || (o[0] == 100 && o[1] >= 64 && o[1] <= 127))
+        return V4Kind::Lan;
+    return V4Kind::Public;
+}
+
+// A, B, ... Z, AA, AB...: the letters of the n-th subnet (1-based).
+QString subnetLetters(int n)
+{
+    QString s;
+    while (n > 0) {
+        --n;
+        s.prepend(QChar(u'A' + n % 26));
+        n /= 26;
+    }
+    return s;
 }
 
 // Words a host may well be called that are also words of the log itself.
@@ -165,6 +188,23 @@ QString LogScrubber::publicV6(const QString& ip)
     return stand;
 }
 
+QString LogScrubber::lanHost(const QString& subnet, const QString& host, int fixed)
+{
+    const QString k = QStringLiteral("lan|") + subnet + QLatin1Char('|') + host;
+    auto it = m_Stand.constFind(k);
+    if (it != m_Stand.constEnd()) return *it;
+    QString& letters = m_SubnetLetters[subnet];
+    if (letters.isEmpty()) letters = subnetLetters(++m_Subnets);
+    int n = fixed;
+    if (n < 0) {
+        n = ++m_SubnetHosts[subnet];
+        if (n == 255) n = ++m_SubnetHosts[subnet]; // .255 is the broadcast's
+    }
+    const QString stand = letters + QString::number(n);
+    m_Stand.insert(k, stand);
+    return stand;
+}
+
 void LogScrubber::replaceNames(QString& line)
 {
     for (const NameRule& rule : m_Names) {
@@ -186,26 +226,63 @@ void LogScrubber::replaceAddresses(QString& line)
             const qsizetype at = m.capturedStart();
             if (at >= 2 && line[at - 1] == QLatin1Char('/') && line[at - 2].isLetterOrNumber())
                 return ip;
-            bool valid = false;
-            if (privateV4(ip, valid)) return ip;
-            return publicV4(ip);
+            int o[4];
+            switch (classifyV4(ip, o)) {
+            case V4Kind::Keep: return ip;
+            case V4Kind::Public: return publicV4(ip);
+            case V4Kind::Lan: break;
+            }
+            // The range's own prefix stays, so a reader still sees which kind
+            // of network it is: 192.168.A1, 10.B2, 172.24.C1, 100.D1.
+            QString prefix;
+            if (o[0] == 192 || o[0] == 169)
+                prefix = QStringLiteral("%1.%2.").arg(o[0]).arg(o[1]);
+            else if (o[0] == 172)
+                prefix = QStringLiteral("172.%1.").arg(o[1]);
+            else
+                prefix = QStringLiteral("%1.").arg(o[0]);
+            // The network and the broadcast keep their number.
+            const int fixed = o[3] == 0 ? 0 : o[3] == 255 ? 255 : -1;
+            return prefix + lanHost(QStringLiteral("%1.%2.%3").arg(o[0]).arg(o[1]).arg(o[2]),
+                                    QString::number(o[3]), fixed);
         });
     }
 
+    // Groups of up to five characters: libdatachannel writes an address and
+    // its port without brackets ("fd7a:115c:a1e0::c036:292d:48550/UDP").
     static const QRegularExpression v6(
-        QStringLiteral(R"((?<![\w:.])([0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7})(?![\w:.]))"));
+        QStringLiteral(R"((?<![\w:.])([0-9A-Fa-f]{0,5}(?::[0-9A-Fa-f]{0,5}){2,8})(?![\w:.]))"));
     if (line.contains(QLatin1Char(':'))) {
         static const QPair<QHostAddress, int> doc = QHostAddress::parseSubnet("2001:db8::/32");
         static const QPair<QHostAddress, int> mapped = QHostAddress::parseSubnet("::ffff:0:0/96");
         line = replaceEach(line, v6, [&](const QRegularExpressionMatch& m) {
-            const QString text = m.captured(1);
-            const QHostAddress a(text);
-            if (a.protocol() != QAbstractSocket::IPv6Protocol || a.isLoopback() ||
-                a.isLinkLocal() || a.isUniqueLocalUnicast() || a.isMulticast() ||
-                a == QHostAddress(QHostAddress::AnyIPv6) || a.isInSubnet(doc) ||
-                a.isInSubnet(mapped))
-                return text;
-            return publicV6(text);
+            QString text = m.captured(1);
+            QString port;
+            QHostAddress a(text);
+            if (a.protocol() != QAbstractSocket::IPv6Protocol) {
+                const qsizetype colon = text.lastIndexOf(QLatin1Char(':'));
+                bool digits = colon > 0 && colon + 1 < text.size();
+                for (qsizetype i = colon + 1; digits && i < text.size(); ++i)
+                    digits = text[i].isDigit();
+                if (!digits) return text;
+                a = QHostAddress(text.left(colon));
+                if (a.protocol() != QAbstractSocket::IPv6Protocol) return text;
+                port = text.mid(colon);
+                text.truncate(colon);
+            }
+            if (a.isLoopback() || a.isMulticast() || a == QHostAddress(QHostAddress::AnyIPv6) ||
+                a.isInSubnet(doc) || a.isInSubnet(mapped))
+                return text + port;
+            if (!a.isLinkLocal() && !a.isUniqueLocalUnicast()) return publicV6(text) + port;
+            if (!a.isLinkLocal() && !a.isUniqueLocalUnicast()) return publicV6(text);
+            // ULA (Tailscale's among them) and link-local, whose host part may
+            // be the card's MAC: a letter for the /64, a number for the host.
+            const Q_IPV6ADDR b = a.toIPv6Address();
+            const QByteArray bytes(reinterpret_cast<const char*>(b.c), 16);
+            return (a.isLinkLocal() ? QStringLiteral("fe80::") : QStringLiteral("fd::")) +
+                   lanHost(QString::fromLatin1(bytes.left(8).toHex()),
+                           QString::fromLatin1(bytes.mid(8).toHex()), -1) +
+                   port;
         });
     }
 }
@@ -366,6 +443,7 @@ QString LogScrubber::notice()
         "taken out: PINs, passwords, keys and tokens, cookies, the links that open this\n"
         "instance, typed keys, window titles, e-mail and MAC addresses show as \"(hidden)\".\n"
         "Public IP addresses are replaced by documentation ones (203.0.113.x, 2001:db8::x),\n"
-        "and machine and user names by host-N, this-pc, instance-name and user: the same\n"
-        "value always by the same stand-in. LAN addresses are left as they are.\n");
+        "LAN ones by a letter for their network and a number for the machine (192.168.A1,\n"
+        "10.B2, 100.C1, fd::D1), machine and user names by host-N, this-pc, instance-name\n"
+        "and user: the same value always by the same stand-in.\n");
 }
