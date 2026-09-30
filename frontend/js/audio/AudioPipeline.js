@@ -73,6 +73,11 @@ export class AudioPipeline {
         /** @type {AudioWorkletNode|null} */
         this.node = null;
 
+        /** @type {GainNode|null} The stream header's volume, between node and speakers. */
+        this.gainNode = null;
+        /** Output level 0..1, kept until the gain node exists to take it. */
+        this._volume = 1;
+
         /** @type {AudioDecoder|null} WebCodecs Opus decoder. */
         this.decoder = null;
 
@@ -155,7 +160,12 @@ export class AudioPipeline {
                 outputChannelCount: [2],
             });
             this.node.port.onmessage = this._onWorkletMessage;
-            this.node.connect(this.context.destination);
+            // The header's volume control. This path is Web Audio already, so a
+            // gain stage costs nothing here (the RTP paths set <audio>.volume).
+            this.gainNode = this.context.createGain();
+            this.gainNode.gain.value = this._volume;
+            this.node.connect(this.gainNode);
+            this.gainNode.connect(this.context.destination);
 
             // Push runtime config to the worklet (time-stretch kill switch).
             this.node.port.postMessage({ type: 'config', timeStretch: this.timeStretch });
@@ -637,6 +647,16 @@ export class AudioPipeline {
     /**
      * Internal cleanup (no guard).
      */
+    /**
+     * Output level, 0 (silent) to 1 (as decoded): the stream header's volume
+     * control. Safe before init(), which applies it.
+     * @param {number} level
+     */
+    setVolume(level) {
+        this._volume = Math.max(0, Math.min(1, Number(level) || 0));
+        if (this.gainNode) this.gainNode.gain.value = this._volume;
+    }
+
     cleanup() {
         if (this._gestureResumeCleanup) {
             try {
@@ -682,6 +702,14 @@ export class AudioPipeline {
                 /* ignore */
             }
             this.node = null;
+        }
+        if (this.gainNode) {
+            try {
+                this.gainNode.disconnect();
+            } catch (e) {
+                /* ignore */
+            }
+            this.gainNode = null;
         }
         if (this.context && this.context.state !== 'closed') {
             this.context.onstatechange = null;

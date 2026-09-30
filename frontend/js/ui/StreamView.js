@@ -28,6 +28,7 @@ import { BackendClient } from '../api/BackendClient.js';
 import { Toast } from './Toast.js';
 import { StatsGraph } from './StatsGraph.js';
 import { AudioPipeline } from '../audio/AudioPipeline.js';
+import * as streamVolume from '../audio/streamVolume.js';
 import { JitterController } from '../stream/JitterController.js';
 import { FramePacer } from '../stream/FramePacer.js';
 import { measureRefreshRate, onRefreshRateChange } from '../util/RefreshRate.js';
@@ -202,6 +203,13 @@ const PHONE_CURSOR_CSS_PX = 14;
  * into the corner. False is the previous behaviour.
  */
 const MOBILE_CURSOR_CLIENT_DRAWN = true;
+
+/**
+ * How long the mouse-gaming-mode reminder stays over the picture before it
+ * fades — about the time the shortcuts slide gets at launch, long enough to
+ * read four keys and a verb.
+ */
+const GAMING_HINT_SHOW_MS = 5000;
 
 /**
  * How long to wait for the host's first position before placing the pointer
@@ -966,10 +974,9 @@ export class StreamView {
         // the local arrow stays visible over the host cursor (double cursor).
         this._lastMouseClientX = undefined;
         this._lastMouseClientY = undefined;
-        // Per-session "closed" flags: the user can dismiss the stats and the
-        // gaming-mode exit overlay with their × button; they stay hidden after.
+        // Per-session "closed" flag: the user can dismiss the stats card with
+        // its × button; it stays hidden after.
         this._statsClosed = false;
-        this._gamingClosed = false;
 
         // Audio transport: on WebRTC transports (webrtc / webrtc-media) audio is a
         // native RTP Opus track decoded by the browser (jitter buffer + in-band
@@ -1045,6 +1052,10 @@ export class StreamView {
         this._latencyDetail = false;
         // Mouse-gaming-mode exit reminder (discreet, draggable, top-center).
         this._gamingOverlay = null;
+        // Whether it floats over the picture (fullscreen) rather than sitting
+        // in the header, and the timer that fades it out when it does.
+        this._gamingFloating = null;
+        this._gamingFadeTimer = null;
         this._resolution = ''; // "1920x1080" — set once on first frame
         this._codec = this.videoCodec; // Same as videoCodec
         this._transport = transport; // "webrtc" or "wss"
@@ -1413,6 +1424,8 @@ export class StreamView {
 
         // Mobile fullscreen button state
         this._mobileFsBtn = null;
+        // Stream volume control (desktop header, left of the Fullscreen button).
+        this._volumeCtl = null;
 
         // Mobile orientation tracking (see StreamViewFullscreen). _lastLandscape
         // is the orientation we last ACTED on: rotation signals arrive before
@@ -2058,13 +2071,6 @@ export class StreamView {
             this._buildGamingOverlayContent();
             this._rootEl.appendChild(this._gamingOverlay);
             this._makeStatsDraggable(this._gamingOverlay);
-            // × hides the reminder for the rest of the session.
-            this._gamingOverlay.addEventListener('click', (e) => {
-                if (!(/** @type {Element} */ (e.target).closest('.overlay-close-btn'))) return;
-                e.stopPropagation();
-                e.preventDefault();
-                this._closeOverlayEl(this._gamingOverlay);
-            });
         }
 
         // ── Cyberpunk "signal acquired" reveal ─────────────────────────────
@@ -2170,6 +2176,7 @@ export class StreamView {
             // Insert before the quit button (first child)
             header.insertBefore(this._mobileFsBtn, header.firstChild);
         }
+        this._buildVolumeControl(header);
         // Initial state: desktop = visible, mobile = landscape only
         this._updateMobileFsButtonVisibility();
 
@@ -3671,6 +3678,9 @@ export class StreamView {
         // pauses it, unless the unmute happens on a user activation — and an
         // automatic quality degradation has none. Restart it, with the same
         // gesture retry as the ontrack path if that restart is refused too.
+        // The level may have been changed on the live view since this one was
+        // built in the background.
+        this._applyVolume();
         if (this.audioEl) {
             this.audioEl.muted = false;
             if (this.audioEl.paused) {
@@ -3830,7 +3840,6 @@ export class StreamView {
             panY: this._panY,
             kbdVisible: this._kbdVisible === true,
             statsClosed: this._statsClosed === true,
-            gamingClosed: this._gamingClosed === true,
         };
     }
 
@@ -3854,15 +3863,11 @@ export class StreamView {
         this._applyViewState(state);
     }
 
-    /** Carry the × dismissals of the stats / gaming-mode cards to this view. */
+    /** Carry the × dismissal of the stats card to this view. */
     _adoptOverlayDismissals(s) {
         if (s.statsClosed) {
             this._statsClosed = true;
             if (this._overlayEl) this._overlayEl.style.display = 'none';
-        }
-        if (s.gamingClosed) {
-            this._gamingClosed = true;
-            this._updateGamingOverlay();
         }
     }
 
@@ -5281,15 +5286,91 @@ export class StreamView {
         return btn;
     }
 
-    /** Dismiss a draggable overlay (× button). */
+    /** Dismiss the stats card (× button). */
     _closeOverlayEl(el) {
         if (el === this._overlayEl) {
             this._statsClosed = true;
             if (this._overlayEl) this._overlayEl.style.display = 'none';
-        } else if (el === this._gamingOverlay) {
-            this._gamingClosed = true;
-            this._updateGamingOverlay();
         }
+    }
+
+    // ── Stream volume (header, beside the Fullscreen button) ─────────────
+
+    /**
+     * The stream's own volume (issue #29): a speaker that mutes and unmutes,
+     * and a slider that opens from it on hover. It sits left of the Fullscreen
+     * button, so it is there whenever the header is, for the owner and for an
+     * invited player alike.
+     *
+     * Desktop only: a phone or a tablet has volume keys on its side, and iOS
+     * does not let a page set an element's volume at all. The level goes to the
+     * browser's own <audio> element on the RTP paths (never a Web Audio stage
+     * there — see iosAudioUnlock), and to the pipeline's gain on WSS.
+     * @param {HTMLElement|null} header
+     */
+    _buildVolumeControl(header) {
+        if (!header || IS_MOBILE_OR_TABLET) return;
+        const label = t('stream.volume');
+        const ctl = document.createElement('div');
+        ctl.className = 'stream-volume';
+        ctl.setAttribute('role', 'group');
+        ctl.setAttribute('aria-label', label);
+        ctl.innerHTML =
+            '<input type="range" class="stream-volume-slider" min="0" max="100" step="1">' +
+            '<button type="button" class="stream-volume-btn"></button>';
+        const slider = /** @type {HTMLInputElement} */ (ctl.querySelector('.stream-volume-slider'));
+        const btn = /** @type {HTMLButtonElement} */ (ctl.querySelector('.stream-volume-btn'));
+        slider.setAttribute('aria-label', label);
+        slider.addEventListener('input', () => {
+            const level = Number(slider.value) / 100;
+            streamVolume.setLevel(level);
+            // Turning a muted stream up is also how it comes back.
+            if (level > 0) streamVolume.setMuted(false);
+            this._applyVolume();
+        });
+        // Give the keyboard back to the game once the level is set: a focused
+        // range is a local keyboard target, and the next keys would move it
+        // instead of reaching the host.
+        slider.addEventListener('change', () => slider.blur());
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (streamVolume.outputLevel() > 0) {
+                streamVolume.setMuted(true);
+            } else {
+                streamVolume.setMuted(false);
+                // Unmuting a level dragged down to nothing would change nothing.
+                if (streamVolume.getLevel() === 0) streamVolume.setLevel(0.5);
+            }
+            this._applyVolume();
+            // Same reason: Space in the game would toggle it again.
+            btn.blur();
+        });
+        // Before the Fullscreen button, for the tab order; where it shows is
+        // _positionGamingOverlay's business.
+        header.insertBefore(ctl, this._mobileFsBtn || header.firstChild);
+        this._volumeCtl = ctl;
+        this._applyVolume();
+    }
+
+    /** Send the stream volume to whatever plays this view's audio, and redraw the control. */
+    _applyVolume() {
+        const ctl = this._volumeCtl;
+        if (!ctl) return;
+        const out = streamVolume.outputLevel();
+        if (this.audioEl) this.audioEl.volume = out;
+        if (this.audioPipeline) this.audioPipeline.setVolume(out);
+
+        const slider = /** @type {HTMLInputElement} */ (ctl.querySelector('.stream-volume-slider'));
+        const btn = /** @type {HTMLButtonElement} */ (ctl.querySelector('.stream-volume-btn'));
+        const pct = Math.round(out * 100);
+        slider.value = String(pct);
+        slider.style.setProperty('--level', pct + '%');
+        btn.innerHTML =
+            out === 0 ? Icons.volumeMuted : out < 0.5 ? Icons.volumeLow : Icons.volumeHigh;
+        const action = out === 0 ? t('stream.unmute') : t('stream.mute');
+        btn.title = action;
+        btn.setAttribute('aria-label', action);
+        ctl.classList.toggle('is-muted', out === 0);
     }
 
     // ── Mouse-gaming-mode exit reminder ──────────────────────────────────
@@ -5318,6 +5399,8 @@ export class StreamView {
      * Build the gaming-mode overlay content: the platform-correct exit combo
      * plus a one-line reminder of what it does (free the mouse + leave
      * fullscreen). Built once — the combo never changes during a session.
+     * No × any more (issue #28): in the header it covers nothing, and over the
+     * picture it leaves by itself.
      */
     _buildGamingOverlayContent() {
         if (!this._gamingOverlay) return;
@@ -5335,32 +5418,50 @@ export class StreamView {
         html += '</span>';
         html += '<span class="gm-text">' + t('stream.gamingExitTitle') + '</span>';
         this._gamingOverlay.innerHTML = html;
-        this._gamingOverlay.appendChild(this._makeOverlayCloseBtn());
         this._gamingOverlay.title = t('stream.gamingExitTitle');
     }
 
     /**
-     * Show the gaming-mode overlay only while gaming mode actually holds the
-     * mouse (pointer locked). Hidden otherwise so it never clutters the view.
+     * Show the gaming-mode reminder while gaming mode is on, and decide how
+     * long it stays.
+     *
+     * Docked in the header beside the Fullscreen button, it covers nothing and
+     * stays. Over the picture — fullscreen, or dragged there — it shows for a
+     * few seconds each time it lands there, then fades (issue #28: it sat on
+     * top of a fullscreen game until clicked away, and a captured mouse cannot
+     * click anything).
      */
     _updateGamingOverlay() {
-        if (!this._gamingOverlay) return;
+        const el = this._gamingOverlay;
         // Visible whenever gaming mode is on (after the first frame), NOT only
         // while the mouse is captured: a captured (pointer-locked) cursor cannot
         // be moved onto the card to drag it, so it must be reachable pre-capture.
-        const show = this._gamingMode && this._firstFrameRendered && !this._gamingClosed;
-        this._gamingOverlay.classList.toggle('visible', show);
-        if (show) this._positionGamingOverlay();
+        const show = !!el && this._gamingMode && this._firstFrameRendered;
+        if (el) el.classList.toggle('visible', show);
+        const docked = this._positionGamingOverlay();
+        this._setGamingOverlayFloating(show && !docked);
     }
 
     /**
-     * Place the gaming-mode reminder.
-     *  - Non-fullscreen (Fullscreen button visible): dock it in the header just
-     *    right of the centered Fullscreen button — outside the streamed image,
-     *    so it never covers the game (and the fade effect stays off there).
-     *  - Fullscreen (button hidden): back to the CSS default (top-center).
-     * No-op once the user has dragged the card (manual position wins).
+     * Start the reminder's time over the picture, or end it. Restarted on each
+     * arrival there (fullscreen entered, gaming mode switched on), so the combo
+     * is on screen exactly when it has just become the way out.
+     * @param {boolean} floating
      */
+    _setGamingOverlayFloating(floating) {
+        const el = this._gamingOverlay;
+        if (!el || floating === this._gamingFloating) return;
+        this._gamingFloating = floating;
+        if (this._gamingFadeTimer) clearTimeout(this._gamingFadeTimer);
+        this._gamingFadeTimer = null;
+        el.classList.remove('faded');
+        if (!floating) return;
+        this._gamingFadeTimer = setTimeout(() => {
+            this._gamingFadeTimer = null;
+            el.classList.add('faded');
+        }, GAMING_HINT_SHOW_MS);
+    }
+
     /**
      * Place the stats card just under the header, not over it: on a phone the
      * header holds the keyboard button, and a card parked on top of it had to
@@ -5378,38 +5479,72 @@ export class StreamView {
         el.style.top = r && r.height > 0 ? Math.round(r.bottom + 10) + 'px' : '';
     }
 
+    /**
+     * Lay out the middle of the header, and place the gaming-mode reminder.
+     *  - Out of fullscreen (Fullscreen button laid out): the volume control on
+     *    the button's left, the reminder on its right — outside the streamed
+     *    image, so it never covers the game — and the group centred as one.
+     *  - Fullscreen (button hidden): the reminder goes back to the CSS default
+     *    (top-center, over the picture).
+     * A reminder the user has dragged keeps its place.
+     * @returns {boolean} whether the reminder is docked in the header
+     */
     _positionGamingOverlay() {
         const el = this._gamingOverlay;
-        if (!el) return;
+        const vol = this._volumeCtl;
         const fsBtn = this._mobileFsBtn;
         // Default: button back to its CSS-centered position (cleared each pass so
-        // the pair-centering offset below is never left stale).
+        // the group-centering offset below is never left stale).
         if (fsBtn) fsBtn.style.transform = '';
-        if (el.classList.contains('user-moved')) return;
         // Require a REAL on-screen rect: in native fullscreen the header (and its
         // button) is hidden via CSS, so style.display stays '' while the rect
         // collapses to 0. Docking off a 0-rect would slam the card to top-left
         // over the stats card. Only dock when the button is actually laid out.
         const r = fsBtn && fsBtn.isConnected ? fsBtn.getBoundingClientRect() : null;
-        const fsVisible = r && r.width > 0 && r.height > 0 && fsBtn.style.display !== 'none';
-        if (fsVisible && el.classList.contains('visible')) {
-            // Center the PAIR (Fullscreen button + reminder) as a group: shift the
-            // button left by half the reminder's footprint, then dock the reminder
-            // to its right. The midpoint of the pair lands on the viewport center.
+        const fsVisible = !!r && r.width > 0 && r.height > 0 && fsBtn.style.display !== 'none';
+        const dock =
+            fsVisible &&
+            !!el &&
+            el.classList.contains('visible') &&
+            !el.classList.contains('user-moved');
+        if (vol) vol.hidden = !fsVisible;
+
+        if (fsVisible) {
             const gap = 12;
-            const overlayW = el.getBoundingClientRect().width;
-            const shift = (overlayW + gap) / 2;
-            fsBtn.style.transform = `translate(calc(-50% - ${shift}px), -50%)`;
+            // The volume counts at its resting width: the slider it opens on
+            // hover grows leftwards and must not push the Fullscreen button
+            // about under the cursor.
+            let volW = 0;
+            if (vol) {
+                const speaker = vol.querySelector('.stream-volume-btn');
+                volW =
+                    (speaker ? speaker.getBoundingClientRect().width : 0) +
+                    (vol.offsetWidth - vol.clientWidth); // its border
+            }
+            const left = vol ? volW + gap : 0;
+            const right = dock ? el.getBoundingClientRect().width + gap : 0;
+            const shift = (right - left) / 2;
+            if (shift) fsBtn.style.transform = `translate(calc(-50% - ${shift}px), -50%)`;
             const rb = fsBtn.getBoundingClientRect();
-            el.style.left = Math.round(rb.right + gap) + 'px';
-            el.style.top = Math.round(rb.top + rb.height / 2) + 'px';
-            el.style.transform = 'translateY(-50%)';
-        } else {
+            if (vol && vol.parentElement) {
+                // Anchored by its right edge (translateX(-100%) in the CSS).
+                const hr = vol.parentElement.getBoundingClientRect();
+                vol.style.left = Math.round(rb.left - gap - hr.left) + 'px';
+            }
+            if (dock) {
+                el.style.left = Math.round(rb.right + gap) + 'px';
+                el.style.top = Math.round(rb.top + rb.height / 2) + 'px';
+                el.style.transform = 'translateY(-50%)';
+                return true;
+            }
+        }
+        if (el && !el.classList.contains('user-moved')) {
             // Restore the CSS default (left:50% + translateX(-50%), safe-area top).
             el.style.left = '';
             el.style.top = '';
             el.style.transform = '';
         }
+        return false;
     }
 
     // ── Stats overlay (refreshed every 500ms) ────────────────────────────
@@ -10602,6 +10737,16 @@ export class StreamView {
             this._onFullscreenChange = null;
         }
 
+        // The reminder's fade and the volume control go with the header.
+        if (this._gamingFadeTimer) {
+            clearTimeout(this._gamingFadeTimer);
+            this._gamingFadeTimer = null;
+        }
+        if (this._volumeCtl) {
+            this._volumeCtl.remove();
+            this._volumeCtl = null;
+        }
+
         // Remove mobile fullscreen button
         if (this._mobileFsBtn) {
             this._mobileFsBtn.remove();
@@ -10810,6 +10955,16 @@ export class StreamView {
                 this.videoEl.removeEventListener('webkitendfullscreen', this._onFullscreenChange);
             }
             this._onFullscreenChange = null;
+        }
+
+        // The reminder's fade and the volume control go with the header.
+        if (this._gamingFadeTimer) {
+            clearTimeout(this._gamingFadeTimer);
+            this._gamingFadeTimer = null;
+        }
+        if (this._volumeCtl) {
+            this._volumeCtl.remove();
+            this._volumeCtl = null;
         }
 
         // Remove mobile fullscreen button

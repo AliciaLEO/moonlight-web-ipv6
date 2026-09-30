@@ -539,8 +539,7 @@ body.streaming-active::after {
     align-items: center;
     gap: 8px;
     border-radius: 8px;
-    /* Extra right padding reserves room for the absolute × close button. */
-    padding: 5px 24px 5px 11px;
+    padding: 5px 11px;
     font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
     font-size: 10.5px;
     white-space: nowrap;
@@ -567,6 +566,14 @@ body.streaming-active::after {
 }
 .stream-gaming-overlay.visible {
     display: flex;
+}
+/* Over the picture it only passes through (issue #28): a few seconds on
+   arrival, then gone — and out of the way of the clicks under it. Not while it
+   is being dragged, which is the one time someone is plainly looking at it. */
+.stream-gaming-overlay.visible.faded:not(.dragging) {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.8s ease;
 }
 .stream-gaming-overlay.dragging {
     cursor: grabbing;
@@ -595,7 +602,7 @@ body.streaming-active::after {
     color: rgba(255, 255, 255, 0.8);
 }
 
-/* ── Overlay × close button (stats + gaming-mode cards) ─────────────────────── */
+/* ── Overlay × close button (stats card) ─────────────────────── */
 .overlay-close-btn {
     position: absolute;
     top: 2px;
@@ -948,6 +955,103 @@ body.streaming-active::after {
     font-size: 10px;
     line-height: 1.4;
     color: rgba(255, 255, 255, 0.85);
+}
+
+/* ── Stream volume (issue #29) ─────────────────────────────────────────────
+   Left of the Fullscreen button, in the same pill. At rest only the speaker
+   shows; hovering (or tabbing into) it slides the level out to the LEFT — the
+   control is anchored by its right edge (translate -100%, left set by
+   StreamView._positionGamingOverlay), so opening it never nudges the
+   Fullscreen button under the cursor. */
+.stream-volume {
+    position: absolute;
+    top: 50%;
+    transform: translate(-100%, -50%);
+    display: inline-flex;
+    align-items: center;
+    height: 30px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 0.65);
+    transition:
+        background 0.2s,
+        border-color 0.2s;
+}
+.stream-volume[hidden] {
+    display: none;
+}
+.stream-volume:hover,
+.stream-volume:focus-within {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.3);
+}
+.stream-volume-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 28px;
+    padding: 0;
+    background: none;
+    border: none;
+    color: inherit;
+    font-size: 16px;
+    cursor: pointer;
+}
+.stream-volume:hover .stream-volume-btn,
+.stream-volume-btn:focus-visible {
+    color: #fff;
+}
+/* Muted: the speaker says so in the colour the rest of the app uses for "off". */
+.stream-volume.is-muted .stream-volume-btn {
+    color: var(--c-danger-text, #ff6b8b);
+}
+.stream-volume-slider {
+    width: 0;
+    height: 4px;
+    margin: 0;
+    opacity: 0;
+    -webkit-appearance: none;
+    appearance: none;
+    /* Filled up to the level, the rest is track. */
+    background: linear-gradient(
+        to right,
+        rgba(255, 255, 255, 0.85) 0,
+        rgba(255, 255, 255, 0.85) var(--level, 100%),
+        rgba(255, 255, 255, 0.18) var(--level, 100%)
+    );
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+    transition:
+        width 0.18s ease,
+        margin 0.18s ease,
+        opacity 0.18s ease;
+}
+.stream-volume:hover .stream-volume-slider,
+.stream-volume:focus-within .stream-volume-slider {
+    width: 84px;
+    margin: 0 4px 0 12px;
+    opacity: 1;
+}
+.stream-volume-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #fff;
+    border: none;
+    box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.35);
+}
+.stream-volume-slider::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #fff;
+    border: none;
+    box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.35);
 }
 
 /* ── On-screen keyboard toggle (touch devices) ─────────────────────────── */
