@@ -179,6 +179,8 @@ def table(args):
                 host = f.read()
         pres = re.search(r"(\d+) presents in ([\d.]+) s", host)
         held = re.search(r"decode credit: (\d+) presents held back \((\d+)/s\)", host)
+        aimed = re.search(r"deadline: (\d+) client refreshes aimed at \((\d+)/s\)", host)
+        grid = d.get("grid") or {}
         rows.setdefault((int(m.group(1)), m.group(2)), []).append({
             "shown": (d.get("shown") or {}).get("medianMs"),
             "p99": (d.get("shown") or {}).get("p99Ms"),
@@ -188,19 +190,26 @@ def table(args):
             "draws": d.get("drawsPerSecond"),
             "pres": int(pres.group(1)) / float(pres.group(2)) if pres else None,
             "held": int(held.group(2)) if held else None,
+            "atRef": (d.get("atRefresh") or {}).get("medianMs"),
+            "aimed": int(aimed.group(2)) if aimed else None,
+            "miss": (100.0 * grid["missRate"]) if grid.get("missRate") is not None else None,
+            "lead": grid.get("leadMs"),
         })
-    order = {c: i for i, c in enumerate(["client", "host", "host-ceiling", "host-guarded"])}
+    order = {c: i for i, c in enumerate(["client", "host", "host-ceiling", "host-guarded",
+                                         "deadline"])}
     mean = lambda xs: (sum(xs) / len(xs)) if xs else None
     fmt = lambda v, w=6: ("%*.1f" % (w, v)) if isinstance(v, (int, float)) else " " * (w - 1) + "-"
-    print("%5s %-14s %2s %6s %6s %6s %6s %6s %6s %6s %5s" % (
-        "Hz", "cadence", "n", "shown", "p99", "since", "capt", "before", "draw/s", "pres/s", "held"))
+    print("%5s %-14s %2s %6s %6s %6s %6s %6s %6s %6s %6s %5s %5s %6s %5s" % (
+        "Hz", "cadence", "n", "shown", "p99", "atRef", "since", "capt", "before", "draw/s",
+        "pres/s", "held", "aim/s", "miss%", "lead"))
     for (rate, cad) in sorted(rows, key=lambda k: (k[0], order.get(k[1], 9), k[1])):
         rs = rows[(rate, cad)]
         col = lambda k: mean([r[k] for r in rs if r[k] is not None])
-        print("%5d %-14s %2d %s %s %s %s %s %s %s %s" % (
-            rate, cad, len(rs), fmt(col("shown")), fmt(col("p99")), fmt(col("since")),
-            fmt(col("capture")), fmt(col("before")), fmt(col("draws")), fmt(col("pres")),
-            fmt(col("held"), 5)))
+        print("%5d %-14s %2d %s %s %s %s %s %s %s %s %s %s %s %s" % (
+            rate, cad, len(rs), fmt(col("shown")), fmt(col("p99")), fmt(col("atRef")),
+            fmt(col("since")), fmt(col("capture")), fmt(col("before")), fmt(col("draws")),
+            fmt(col("pres")), fmt(col("held"), 5), fmt(col("aimed"), 5), fmt(col("miss")),
+            fmt(col("lead"), 5)))
 
 
 def summary(args):

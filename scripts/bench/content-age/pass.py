@@ -35,6 +35,10 @@ from cadence import monitors  # noqa: E402
 CONTENT_PORT = 9334
 
 
+def _ms(v):
+    return "-" if v is None else "%.2f" % v
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fps", type=int, default=0, help="stream_fps; 0 = Auto")
@@ -120,12 +124,23 @@ def main():
         age.run(argparse.Namespace(client="localhost:%d" % (a.client_port or run.DEBUG_PORT),
                                    needle="", secs=a.secs, every=a.every, tag=a.tag,
                                    local=not remote))
+        # cadence=deadline: the client's side of the grid — whether the host
+        # followed it, the lead it asked for, and how many frames came late.
+        grid = d.eval("window.mwVsyncGrid && window.mwVsyncGrid.running ? "
+                      "window.mwVsyncGrid.summary : null")
         d.expand_latency_detail()
         stats = d.stats()
         path = os.path.join(age.OUT, a.tag + ".json")
         with open(path) as f:
             data = json.load(f)
         data["overlay"] = stats
+        data["grid"] = grid
+        if grid:
+            print("  grid: followed %s, lead %s ms, margin %s ms, %s misses in %s frames, "
+                  "slack median %s ms (p5 %s)" % (
+                      grid.get("followed"), _ms(grid.get("leadMs")), _ms(grid.get("marginMs")),
+                      grid.get("misses"), grid.get("frames"), _ms(grid.get("slackMedianMs")),
+                      _ms(grid.get("slackP5Ms"))), flush=True)
         data["args"] = vars(a)
         data["env"] = {k: os.environ.get(k, "") for k in ("MW_NATIVE_TUNING", "MW_VDD_REFRESH")}
         with open(path, "w") as f:

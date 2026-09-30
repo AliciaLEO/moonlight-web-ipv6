@@ -29,7 +29,7 @@ OUT = os.path.join(REPO, "bench-out", "content-age")
 WORKER_LOGS = os.path.join(os.environ["APPDATA"], "MoonlightWeb", "MoonlightWeb-dev", "logs")
 VDD_XML = r"C:\VirtualDisplayDriver\vdd_settings.xml"
 HOST_LINES = ("[native] cadence", "decode credit", "capture wake-ups", "capture loop",
-              "frames arrive at", "MW_NATIVE_TUNING")
+              "frames arrive at", "MW_NATIVE_TUNING", "[native] deadline")
 
 
 def monitors():
@@ -90,7 +90,7 @@ def host_lines(tag, since):
     with open(os.path.join(OUT, tag + ".host.txt"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     for l in lines:
-        if "cadence:" in l or "decode credit" in l:
+        if "cadence:" in l or "decode credit" in l or "deadline:" in l:
             print("   ", l[l.find("[native]"):][:240], flush=True)
 
 
