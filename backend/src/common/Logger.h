@@ -23,6 +23,8 @@
 #include <QStringList>
 #include <QTextStream>
 
+#include <atomic>
+
 class Logger : public QObject
 {
     Q_OBJECT
@@ -37,6 +39,11 @@ public:
     };
 
     static Logger* instance();
+    /// The browsers' own console, sent over while debug mode is on (client log
+    /// routes): its own file, moonlightweb-client.log, with the same rotation
+    /// and retention, and no console echo — those lines were printed where
+    /// they were written, in the browser.
+    static Logger* client();
 
     /**
      * What the host keeps, kept entirely by the host itself — there is no button
@@ -95,6 +102,19 @@ public:
     /// event protocol and must stay clean).
     void setConsoleToStderr(bool enable) { m_ForceStderr = enable; }
 
+    /// Lines below @p level are dropped, from the file and the console alike.
+    /// Info by default: DEBUG is what --verbose (or its box on the admin
+    /// page) brings back. Dropped at the source, so a worker's DEBUG never
+    /// reaches the server's log through the stderr relay either.
+    void setMinLevel(Level level) { m_MinLevel = level; }
+    Level minLevel() const { return Level(m_MinLevel.load()); }
+    /// Whether log() also prints to the console. On, except for client().
+    void setConsoleEcho(bool enable) { m_ConsoleEcho = enable; }
+    /// Whether setLogFile() has opened a file.
+    bool hasLogFile() const;
+    /// The file set by setLogFile(), empty when none was.
+    QString logFilePath() const;
+
     static void debug(const QString& msg) { instance()->log(Debug, msg); }
     static void info(const QString& msg) { instance()->log(Info, msg); }
     static void warning(const QString& msg) { instance()->log(Warning, msg); }
@@ -131,6 +151,8 @@ private:
     mutable QMutex m_Mutex;
     bool m_FileOpen;
     bool m_ForceStderr = false;
+    std::atomic<int> m_MinLevel{Info};
+    std::atomic<bool> m_ConsoleEcho{true};
     bool m_Rotating = false;
     qint64 m_MaxFileBytes = kMaxFileBytes;
     qint64 m_MaxTotalBytes = kMaxTotalBytes;

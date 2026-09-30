@@ -328,7 +328,8 @@ export class SettingsView {
         try {
             const data = await BackendClient.getStreamingSettings();
             this._mediaTrackOnlyH264 = data.media_track_only_h264 === true;
-            this._debugBuild = data.debug_build === true;
+            // A debug build, or debug mode (--debug, or Admin → Advanced).
+            this._debugBuild = data.debug_build === true || data.debug_mode === true;
 
             if (!stored) {
                 this._applySettings(data);

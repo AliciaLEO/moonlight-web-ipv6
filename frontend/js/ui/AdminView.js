@@ -32,6 +32,7 @@ import { BackendClient } from '../api/BackendClient.js';
 import { Toast } from './Toast.js';
 import { t } from '../i18n/i18n.js';
 import { escapeHtml } from '../util/escapeHtml.js';
+import { refreshClientLog } from '../util/ClientLog.js';
 import { GamepadDriverNotice } from './GamepadDriverNotice.js';
 
 export class AdminView {
@@ -150,6 +151,14 @@ export class AdminView {
         this._videoPipeline = 'auto';
         this._videoPipelineSupported = false;
         this._videoPipelineValues = ['auto', 'd3d11', 'd3d12'];
+        // Diagnostics (Advanced): the two modes in force, and whether the
+        // command line holds each on for this run — its box then cannot
+        // turn it off. The logs archive, while it is being built.
+        this._debugMode = false;
+        this._debugModeCli = false;
+        this._verboseLogs = false;
+        this._verboseLogsCli = false;
+        this._logsBusy = false;
 
         // Dirty tracking: snapshot of values at load time
         this._cleanState = {};
@@ -233,6 +242,10 @@ export class AdminView {
             this._instanceName = admin.instance_name || '';
             this._defaultInstanceName = admin.default_instance_name || '';
             this._instanceNameMax = admin.instance_name_max || 32;
+            this._debugMode = admin.debug_mode === true;
+            this._debugModeCli = admin.debug_mode_cli === true;
+            this._verboseLogs = admin.verbose_logs === true;
+            this._verboseLogsCli = admin.verbose_logs_cli === true;
         } catch (err) {
             console.warn('[Admin] Failed to load server settings:', err);
         }
@@ -1416,6 +1429,14 @@ export class AdminView {
             });
         }
 
+        // Diagnostics (Advanced): both modes saved at once, the archive on click.
+        for (const id of ['#chk-debug-mode', '#chk-verbose-logs']) {
+            const chk = /** @type {HTMLInputElement|null} */ (this.container.querySelector(id));
+            if (chk) chk.addEventListener('change', () => void this._saveDiagMode(chk));
+        }
+        const logsBtn = this.container.querySelector('#btn-download-logs');
+        if (logsBtn) logsBtn.addEventListener('click', () => void this._downloadLogs());
+
         // Port field dirty tracking
         const portInput = this.container.querySelector('#admin-https-port');
         if (portInput) {
@@ -2180,15 +2201,59 @@ export class AdminView {
         return this._videoPipelineValues.map((value) => [value, labels[value] || value]);
     }
 
-    // Only where the choice means something: the server says whether this
-    // machine has a GPU with a chain to choose, and a section with nothing to
-    // change is not shown.
+    // Always there, for the diagnostics. The picture chain only where the
+    // choice means something: the server says whether this machine has a GPU
+    // with a chain to choose.
     _renderAdvanced() {
-        if (!this._videoPipelineSupported) return '';
         return `
                 <!-- Advanced -->
                 <div class="settings-section" id="admin-section-advanced">
                     <h3 class="settings-section-title">${t('admin.advanced')}</h3>
+                    ${this._videoPipelineSupported ? this._renderVideoPipeline() : ''}
+                    ${this._renderDiagMode('chk-debug-mode', this._debugMode, this._debugModeCli, 'debugMode', '--debug')}
+                    ${this._renderDiagMode('chk-verbose-logs', this._verboseLogs, this._verboseLogsCli, 'verboseLogs', '--verbose')}
+                    <div class="settings-field">
+                        <span class="settings-label">${t('admin.logs')}</span>
+                        <p class="setting-desc">${t('admin.logsDesc')}</p>
+                        <div class="admin-logs-row">
+                            <button class="btn btn-secondary" id="btn-download-logs">
+                                ${t('admin.downloadLogs')}
+                            </button>
+                            <span class="admin-logs-progress" id="admin-logs-progress" role="progressbar"
+                                  aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden>
+                                <span class="admin-logs-progress-fill"></span>
+                            </span>
+                            <span class="settings-hint admin-logs-status" id="admin-logs-status"></span>
+                        </div>
+                    </div>
+                </div>
+        `;
+    }
+
+    /**
+     * One diagnostic mode's box. Locked on when the command line turned the
+     * mode on for this run: unticking it could not turn it off.
+     * @param {string} id
+     * @param {boolean} on
+     * @param {boolean} fromCli
+     * @param {'debugMode'|'verboseLogs'} key
+     * @param {string} flag
+     */
+    _renderDiagMode(id, on, fromCli, key, flag) {
+        return `
+                    <div class="settings-field">
+                        <label class="settings-checkbox-label">
+                            <input type="checkbox" id="${id}" ${on ? 'checked' : ''} ${fromCli ? 'disabled' : ''} />
+                            <span class="settings-checkbox-text">${t('admin.' + key)}</span>
+                        </label>
+                        <p class="setting-desc">${t('admin.' + key + 'Desc')}</p>
+                        ${fromCli ? `<p class="settings-hint">${t('admin.setByCommandLine', { flag })}</p>` : ''}
+                    </div>
+        `;
+    }
+
+    _renderVideoPipeline() {
+        return `
                     <div class="settings-field">
                         <label class="settings-label" for="select-video-pipeline">
                             ${t('admin.videoPipeline')}
@@ -2209,8 +2274,110 @@ export class AdminView {
                             )}
                         </p>
                     </div>
-                </div>
         `;
+    }
+
+    /**
+     * Save one diagnostic mode from its box. The server answers with the mode
+     * in force, which the box then shows. Debug mode reaches this page at
+     * once; other pages pick it up the next time they load.
+     * @param {HTMLInputElement} chk
+     */
+    async _saveDiagMode(chk) {
+        const debug = chk.id === 'chk-debug-mode';
+        const enabled = chk.checked;
+        try {
+            const resp = await BackendClient.saveAdminSettings(
+                debug ? { debug_mode: enabled } : { verbose_logs: enabled },
+            );
+            const inForce = (debug ? resp.debug_mode : resp.verbose_logs) === true;
+            if (debug) this._debugMode = inForce;
+            else this._verboseLogs = inForce;
+            chk.checked = inForce;
+            if (debug) void refreshClientLog();
+            let key;
+            if (debug) key = inForce ? 'admin.debugModeOn' : 'admin.debugModeOff';
+            else key = inForce ? 'admin.verboseLogsOn' : 'admin.verboseLogsOff';
+            Toast.success(t(key));
+        } catch (err) {
+            console.error('[Admin] Failed to save a diagnostic mode:', err);
+            Toast.error(t('admin.saveFailed', { message: /** @type {Error} */ (err).message }));
+            chk.checked = !enabled; // revert
+        }
+    }
+
+    /**
+     * Build the logs archive on the server, then download it, on one bar: the
+     * compression fills the first 80 %, the transfer the rest.
+     */
+    async _downloadLogs() {
+        if (this._logsBusy) return;
+        const btn = /** @type {HTMLButtonElement|null} */ (
+            this.container.querySelector('#btn-download-logs')
+        );
+        const bar = /** @type {HTMLElement|null} */ (
+            this.container.querySelector('#admin-logs-progress')
+        );
+        const status = this.container.querySelector('#admin-logs-status');
+        const fill = bar ? /** @type {HTMLElement|null} */ (bar.firstElementChild) : null;
+        const setProgress = (/** @type {number} */ f) => {
+            const pct = Math.round(Math.max(0, Math.min(1, f)) * 100);
+            if (fill) fill.style.width = pct + '%';
+            if (bar) bar.setAttribute('aria-valuenow', String(pct));
+        };
+        const say = (/** @type {string} */ text) => {
+            if (status) status.textContent = text;
+        };
+        this._logsBusy = true;
+        if (btn) btn.disabled = true;
+        if (bar) bar.hidden = false;
+        setProgress(0);
+        say(t('admin.logsCompressing'));
+        try {
+            let s;
+            try {
+                s = await BackendClient.startLogArchive();
+            } catch (err) {
+                // Already being built (another tab): follow that one.
+                if (/** @type {any} */ (err).statusCode !== 409) throw err;
+                s = await BackendClient.getLogArchiveStatus();
+            }
+            while (s.state === 'running') {
+                setProgress(s.total_bytes > 0 ? (0.8 * s.done_bytes) / s.total_bytes : 0);
+                await new Promise((r) => setTimeout(r, 150));
+                s = await BackendClient.getLogArchiveStatus();
+            }
+            if (s.state !== 'done') throw new Error(s.error || s.state);
+            setProgress(0.8);
+            say(t('admin.logsDownloading'));
+            const blob = await BackendClient.downloadLogArchive((got, total) =>
+                setProgress(0.8 + (0.2 * got) / total),
+            );
+            setProgress(1);
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = s.file_name || 'moonlightweb-logs.zip';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 10000);
+            const size =
+                blob.size >= 1024 * 1024
+                    ? (blob.size / (1024 * 1024)).toFixed(1) + ' MB'
+                    : Math.max(1, Math.round(blob.size / 1024)) + ' KB';
+            Toast.success(t('admin.logsReady', { size }));
+        } catch (err) {
+            console.error('[Admin] Logs archive failed:', err);
+            Toast.error(t('admin.logsFailed', { message: /** @type {Error} */ (err).message }));
+        } finally {
+            this._logsBusy = false;
+            if (btn) btn.disabled = false;
+            say('');
+            setTimeout(() => {
+                if (bar && !this._logsBusy) bar.hidden = true;
+            }, 600);
+        }
     }
 
     // Saved at once, like the transport mode. It applies to the next stream: a

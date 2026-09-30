@@ -17,6 +17,7 @@ void run_stream_config_tests();
 void run_input_crypto_tests();
 void run_rest_router_tests();
 void run_app_settings_tests();
+void run_log_archive_tests();
 void run_auth_manager_tests();
 void run_connection_guard_tests();
 void run_static_files_tests();
@@ -61,6 +62,7 @@ int main(int argc, char** argv)
     run_input_crypto_tests();
     run_rest_router_tests();
     run_app_settings_tests();
+    run_log_archive_tests();
     run_auth_manager_tests();
     run_connection_guard_tests();
     run_static_files_tests();

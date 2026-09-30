@@ -45,6 +45,9 @@
  *     /settings  → redirect to Hosts
  *     /streaming → redirect to Hosts
  */
+// First, before any module prints: the page's console for the client log in
+// debug mode (util/ClientLog.js).
+import './util/ClientLog.js';
 import { HostListView } from './ui/HostListView.js';
 import { StreamView } from './ui/StreamView.js';
 import { SettingsView } from './ui/SettingsView.js';

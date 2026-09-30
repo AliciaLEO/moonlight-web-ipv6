@@ -34,6 +34,7 @@
 #include "../../backend/NvHTTP.h"
 #include "../../backend/IdentityManager.h"
 #include "../../common/Types.h"
+#include "../../common/RunFlags.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -204,6 +205,12 @@ int runStreamWorker(QCoreApplication& app)
     // reads the same file the server does, whichever way it was started.
     const QString settingsFile = cfg[QStringLiteral("settingsFile")].toString();
     if (!settingsFile.isEmpty()) AppSettings::setFileOverride(settingsFile);
+    // The server's verbose mode, before the session builds its first
+    // PeerConnection: libdatachannel reads its log level as each one starts.
+    if (cfg[QStringLiteral("verbose")].toBool()) {
+        mw::run::setVerboseFromCli(true);
+        mw::run::applyVerboseLogging();
+    }
 
     // Keyboard diagnostics, armed HERE and not only in main(): a keystroke is
     // handled by the relays this process builds, and main() sets the flag well

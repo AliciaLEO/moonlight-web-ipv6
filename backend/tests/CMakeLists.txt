@@ -56,6 +56,7 @@ add_executable(run_tests
     test_input_crypto.cpp
     test_rest_router.cpp
     test_app_settings.cpp
+    test_log_archive.cpp
     test_auth_manager.cpp
     test_connection_guard.cpp
     test_static_files.cpp
@@ -136,6 +137,9 @@ add_executable(run_tests
     # The session census: what leaves the machine, and what must not.
     ${_src}/src/network/SessionMetrics.cpp
     ${_src}/src/common/Logger.cpp
+    # The "Download logs" archive: which files go in, and the .zip they go in.
+    ${_src}/src/common/ZipWriter.cpp
+    ${_src}/src/server/LogArchive.cpp
 )
 
 target_include_directories(run_tests PRIVATE

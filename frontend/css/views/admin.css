@@ -251,3 +251,35 @@
         opacity: 1;
     }
 }
+
+/* "Download logs" (Advanced): the button, then the bar while the archive is
+   built and fetched, then what it is doing. The bar is the update banner's. */
+.admin-logs-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+}
+.admin-logs-progress {
+    position: relative;
+    flex: 0 0 auto;
+    width: 160px;
+    height: 4px;
+    overflow: hidden;
+    background-color: var(--border-1);
+    border-radius: 2px;
+}
+.admin-logs-progress[hidden] {
+    display: none;
+}
+.admin-logs-progress-fill {
+    display: block;
+    width: 0;
+    height: 100%;
+    background-color: var(--accent-1);
+    border-radius: 2px;
+    transition: width 0.15s linear;
+}
+.admin-logs-status:empty {
+    display: none;
+}

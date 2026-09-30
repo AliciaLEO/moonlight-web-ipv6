@@ -30,10 +30,32 @@ Logger* Logger::instance()
     return &s_Instance;
 }
 
+Logger* Logger::client()
+{
+    static Logger* s_Client = [] {
+        static Logger logger;
+        logger.setConsoleEcho(false);
+        return &logger;
+    }();
+    return s_Client;
+}
+
 Logger::Logger(QObject* parent)
     : QObject(parent)
     , m_FileOpen(false)
 {}
+
+bool Logger::hasLogFile() const
+{
+    QMutexLocker lock(&m_Mutex);
+    return m_FileOpen;
+}
+
+QString Logger::logFilePath() const
+{
+    QMutexLocker lock(&m_Mutex);
+    return m_File.fileName();
+}
 
 void Logger::setLogFile(const QString& path, bool rotating)
 {
@@ -69,6 +91,7 @@ void Logger::setLogFile(const QString& path, bool rotating)
 
 void Logger::log(Level level, const QString& message)
 {
+    if (level < m_MinLevel) return;
     QString line = QString("[%1] [%2] %3\n")
                        .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss.zzz"))
                        .arg(levelString(level))
@@ -76,12 +99,14 @@ void Logger::log(Level level, const QString& message)
 
     QMutexLocker lock(&m_Mutex);
 
-    // Always print to console. In --stream-worker mode stdout carries the JSON
-    // event protocol, so every level is routed to stderr instead.
-    if (level >= Warning || m_ForceStderr)
-        std::cerr << line.toStdString();
-    else
-        std::cout << line.toStdString();
+    // Print to console (the client log excepted). In --stream-worker mode stdout
+    // carries the JSON event protocol, so every level is routed to stderr instead.
+    if (m_ConsoleEcho) {
+        if (level >= Warning || m_ForceStderr)
+            std::cerr << line.toStdString();
+        else
+            std::cout << line.toStdString();
+    }
 
     // Write to file if configured
     if (m_FileOpen) {

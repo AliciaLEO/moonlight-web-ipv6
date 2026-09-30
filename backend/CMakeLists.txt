@@ -232,7 +232,11 @@ add_executable(mw-server
     src/server/routes/HostRoutes.cpp
     src/server/routes/ShareRoutes.cpp
     src/server/routes/SystemRoutes.cpp
+    src/server/routes/LogRoutes.cpp
+    src/server/LogArchive.cpp
     src/common/Logger.cpp
+    src/common/RunFlags.cpp
+    src/common/ZipWriter.cpp
     src/common/CrashHandler.cpp
     src/common/DesktopSession.cpp
     src/common/Edition.cpp

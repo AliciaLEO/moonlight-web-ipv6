@@ -95,7 +95,7 @@ Runs the reachability consent as a state machine with a `phase` field driving th
 
 1. Qt app + icon, message handler → `Logger`, `CrashHandler::install` (Windows minidumps).
 2. `loadEnvFile()` (`.env` next to exe, else project root; supports multi-line PEM values) then `applyEmbeddedEnvDefaults()` (CI-baked `MW_*` fallbacks).
-3. CLI parse (`--port`, `--log`, `--ws-port`, `--autostart`, `--config` — the settings file, applied before anything reads it, see [Settings §7.1](07-Settings-Reference.md#71-settingsjson-location) — and `--stream-worker`, which re-enters as a stream child process and skips everything below).
+3. CLI parse (`--port`, `--log`, `--ws-port`, `--autostart`, `--config` — the settings file, applied before anything reads it, see [Settings §7.1](07-Settings-Reference.md#71-settingsjson-location) — `--debug` and `--verbose` (§3.8), and `--stream-worker`, which re-enters as a stream child process and skips everything below).
 4. **Force Qt TLS backend to OpenSSL** (Windows Schannel cannot import PEM keys → a user-supplied certificate would silently be dropped in favour of the self-signed one).
 5. `AppSettings` + `seedDocumentedDefaults()`; **single-instance `QLockFile`** — a second launch asks the running instance to focus the admin page (`/api/local/focus`) and exits 0, *or* stays alive as a **tray-only client** when the instance holding the lock has no desktop to draw on (Windows service in session 0, systemd unit) — see [Installers §9.4](09-Installers-and-Packaging.md#94-shared-runtime-behaviors).
 6. `HttpServer` + domain/cert config; `ComputerManager.init()`; `IdentityManager` (RSA identity); eager OpenSSL init (avoids a libdatachannel DTLS init race).
@@ -117,6 +117,7 @@ All under `QStandardPaths::AppDataLocation` (e.g. `%APPDATA%\MoonlightWeb\Moonli
 | `sessions.json` | Persisted auth sessions (SHA-256 token hashes only) |
 | `logs/moonlightweb.log` | Rolling log (all Qt messages captured) |
 | `logs/moonlightweb-worker-<pid>.log` | One per `--stream-worker` child (a shared file would interleave and race on rotation) |
+| `logs/moonlightweb-client.log` | The browsers' consoles, in debug mode (§3.8), rolled like the server log |
 | `crashes/*.dmp` | Windows minidumps |
 | `provisioning.status.json` | The live checklist the installer and the `/setup` wizard both drive, plus the `admin_url` the installer's post-install action opens |
 | `moonlightweb.lock` | Single-instance lock |
@@ -133,6 +134,15 @@ On a server there is no browser on the machine, and the admin API is localhost-o
 | `--enable-internet [--yes]` | `POST /api/internet/enable` | Prints the consent text, requires `yes` on a TTY (or `--yes`), sends that exact text as `consent_message` so the consent record keeps what was shown, then the router verdict |
 
 The loopback port is read from this user's `settings.json` (or from the `--config` file given to the command), then falls back to 443 — running the CLI as a different user than the service (a `sudo`-less `moonlightweb --status` against a root-owned unit) reads a different file, or none. Peer verification is off for these calls: the certificate on 127.0.0.1 is the self-signed LAN one, and no certificate authenticates a loopback socket better than the kernel already does.
+
+## 3.8 Diagnostics: debug mode, verbose logs, the logs archive
+
+Two modes, each switched on from **Admin → Advanced** (kept in `settings.json`: `debug_mode`, `verbose_logs`) or for one run from the command line (`--debug`, `--verbose`, which leave the file alone and lock the box on). State and switches live in `common/RunFlags`.
+
+- **Normal log.** The Logger drops DEBUG lines (`Logger::setMinLevel`, Info by default), in the server and in every stream worker, so a worker's DEBUG never reaches the server's log through the stderr relay either. What used to fill the log moved to DEBUG: the per-host `poll serverinfo` trace and `TLS connection established` (about 80 % of a server log). A host coming and going is one INFO line instead (`[NETWORK] <host> is online (<address>)`, once at startup, then on each change). The few DEBUG lines that explained a problem moved up to INFO: the Sunshine REST probe verdict, the native console probe's own account when it fails, the address a launch goes to.
+- **Verbose logs.** DEBUG comes back, plus libdatachannel's own log (`[rtc]`, ICE/DTLS/SCTP, installed only when asked) and Qt's network categories. The worker is told through its config line. Pages learn it from `/api/health` and turn on their pipeline diagnostics (`[perf]` lines, as `mw_perf_diag` does). The launch URL's `rikey`, the session's input key, is hidden in the log.
+- **Debug mode.** The options a debug build shows (`debug_mode` beside `debug_build` in `GET /api/settings/streaming`: the VE shader list, the stream aspect, the gamepad profile). Every page's console is captured from its first module (`util/ClientLog.js`) and sent every 5 s, when a stream ends and as the page goes away (a beacon) — `POST /api/logs/client` for a session, `POST /api/share/player/log` for a guest, 404 when debug mode is off — into `logs/moonlightweb-client.log`, one line per console line with the page's id, the kind of user, the address and the page's own clock.
+- **Logs archive.** Always offered (Advanced → *Download logs*), admin only: `POST /api/logs/archive` builds a .zip on a thread of its own (`LogArchive`, `ZipWriter`), `GET /api/logs/archive` reports its progress, `GET /api/logs/archive/download` hands it over. It holds the **latest non-empty file of each kind** — the server log (the `--log` file when there is one), the last worker's, the client log, the probe's… — never the whole directory, plus an `about.txt` (version, OS, Qt, modes). Zip because every OS opens it without installing anything and GitHub accepts it as an attachment; names are UTF-8-flagged.
 
 ---
 

@@ -247,6 +247,17 @@ public:
     bool streamNotifications() const;
     void setStreamNotifications(bool enabled);
 
+    // ── Diagnostic modes (admin page → Advanced) ────────────────────────────
+    //
+    // "debug_mode" and "verbose_logs", JSON bools, default false. What they do
+    // is described in common/RunFlags.h; --debug and --verbose switch the same
+    // modes on for one run without writing here.
+
+    bool debugMode() const;
+    void setDebugMode(bool enabled);
+    bool verboseLogs() const;
+    void setVerboseLogs(bool enabled);
+
     // ── Chroma 4:4:4 ───────────────────────────────────────────────────────────
     //
     // Whether full-resolution YUV 4:4:4 chroma is requested (vs the default

@@ -105,6 +105,7 @@ import { ShareMenu } from './ShareMenu.js';
 import { StreamViewKeyboard } from './StreamViewKeyboard.js';
 import { StreamViewTouch } from './StreamViewTouch.js';
 import { StreamViewFullscreen } from './StreamViewFullscreen.js';
+import { flushClientLog, serverDiag } from '../util/ClientLog.js';
 
 /**
  * Lane name → the i18n key the card already uses for that value. The graph
@@ -1145,11 +1146,12 @@ export class StreamView {
         this._dropsPerSec = 0;
         this._lastDiagLogMs = 0;
         // The raw observation line (and its 1/s console trace) is a debugging
-        // aid, not a user-facing readout: off unless mw_perf_diag = '1'. The
-        // counters themselves keep running — the enhancer ladder feeds on them.
-        this._perfDiag = false;
+        // aid, not a user-facing readout: off unless mw_perf_diag = '1' or the
+        // server runs with verbose logs. The counters themselves keep running
+        // — the enhancer ladder feeds on them.
+        this._perfDiag = serverDiag.verbose;
         try {
-            this._perfDiag = localStorage.getItem('mw_perf_diag') === '1';
+            if (localStorage.getItem('mw_perf_diag') === '1') this._perfDiag = true;
         } catch (e) {}
         // What the main thread does besides streaming — input sent, event-loop
         // lag, long tasks. Exists only under the same flag: it runs a timer.
@@ -10889,6 +10891,9 @@ export class StreamView {
         }
 
         this.destroy();
+        // In debug mode, what the stream printed goes to the client log now,
+        // not at the next tick: the page may be closed next.
+        void flushClientLog();
 
         // Notify MoonlightApp that streaming ended (restores apps/hosts view).
         if (this.onQuit) {

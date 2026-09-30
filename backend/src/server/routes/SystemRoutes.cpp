@@ -41,6 +41,7 @@
 #include "common/DesktopSession.h"
 #include "common/Edition.h"
 #include "common/Logger.h"
+#include "common/RunFlags.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -1080,6 +1081,12 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
         obj["instance_name"] = appSettings.instanceName();
         obj["default_instance_name"] = AppSettings::machineName();
         obj["instance_name_max"] = AppSettings::kInstanceNameMaxLength;
+        // The diagnostic modes (Advanced): each box shows the mode in force,
+        // and is locked on when the command line turned it on for this run.
+        obj["debug_mode"] = mw::run::debug();
+        obj["debug_mode_cli"] = mw::run::debugFromCli();
+        obj["verbose_logs"] = mw::run::verbose();
+        obj["verbose_logs_cli"] = mw::run::verboseFromCli();
         // Host machine only: the current host key, so the
         // admin page can carry its session over to the
         // public-domain URL after Internet activation. Not
@@ -1117,6 +1124,29 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
             bool enabled = body["stream_notifications"].toBool();
             appSettings.setStreamNotifications(enabled);
             obj["stream_notifications"] = enabled;
+            hadChange = true;
+        }
+
+        // ── Diagnostic modes ─────────────────────────────────────────────
+        // In force at once: pages read debug from /api/health when they load,
+        // the log switches level on the spot, and the next stream worker is
+        // told through its config line. Echoed back as the mode in force,
+        // which --debug / --verbose may be holding on whatever the box says.
+        if (body.contains("debug_mode")) {
+            const bool enabled = body["debug_mode"].toBool();
+            appSettings.setDebugMode(enabled);
+            mw::run::setDebugSetting(enabled);
+            Logger::info(QStringLiteral("Debug mode %1 from the admin page")
+                             .arg(enabled ? QStringLiteral("on") : QStringLiteral("off")));
+            obj["debug_mode"] = mw::run::debug();
+            hadChange = true;
+        }
+        if (body.contains("verbose_logs")) {
+            const bool enabled = body["verbose_logs"].toBool();
+            appSettings.setVerboseLogs(enabled);
+            mw::run::setVerboseSetting(enabled);
+            mw::run::applyVerboseLogging();
+            obj["verbose_logs"] = mw::run::verbose();
             hadChange = true;
         }
 
@@ -1257,6 +1287,9 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
 #else
         obj["debug_build"] = false;
 #endif
+        // Debug mode (--debug, or its box in the admin page) shows the same
+        // options on any build.
+        obj["debug_mode"] = mw::run::debug();
         return HttpResponse::json(obj);
     });
 

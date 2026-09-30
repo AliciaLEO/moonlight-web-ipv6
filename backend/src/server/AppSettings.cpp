@@ -561,6 +561,30 @@ void AppSettings::setStreamNotifications(bool enabled)
     writeAll(obj);
 }
 
+bool AppSettings::debugMode() const
+{
+    return readAll().value("debug_mode").toBool(false);
+}
+
+void AppSettings::setDebugMode(bool enabled)
+{
+    QJsonObject obj = readAll();
+    obj["debug_mode"] = enabled;
+    writeAll(obj);
+}
+
+bool AppSettings::verboseLogs() const
+{
+    return readAll().value("verbose_logs").toBool(false);
+}
+
+void AppSettings::setVerboseLogs(bool enabled)
+{
+    QJsonObject obj = readAll();
+    obj["verbose_logs"] = enabled;
+    writeAll(obj);
+}
+
 // ── Chroma 4:4:4 ───────────────────────────────────────────────────────────────
 
 bool AppSettings::chroma444Enabled() const

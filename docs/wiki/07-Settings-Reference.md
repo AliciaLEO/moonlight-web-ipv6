@@ -101,6 +101,13 @@ The consent is the master switch: `internet_access_enabled` gates the per-sessio
 |---|---|---|---|
 | `setup_completed` | bool | `false` | First-run wizard done. Windows: set by the installer's provisioning flow; macOS/Linux: by the in-app `/setup` wizard. While false on a GUI launch, the browser opens `/setup`. |
 
+### Diagnostics
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `debug_mode` | bool | `false` | **Admin → Advanced**. The options of a debug build on any build, and every browser's console sent to `logs/moonlightweb-client.log` ([Backend §3.8](03-Backend.md#38-diagnostics-debug-mode-verbose-logs-the-logs-archive)). `--debug` turns it on for one run without writing here. |
+| `verbose_logs` | bool | `false` | **Admin → Advanced**. The log keeps its DEBUG lines and gains libdatachannel's and Qt's network diagnostics; browsers print their pipeline diagnostics. Applies at once, and to the next stream worker. `--verbose` turns it on for one run without writing here. |
+
 ## 7.3 `.env` — environment configuration
 
 Loaded at startup by `loadEnvFile()` (`.env` next to the executable, else the project root; values quoted or multi-line PEM blocks supported). Reference: `.env.example` at the repo root. All values are optional — without them the server runs LAN-only with a self-signed cert.

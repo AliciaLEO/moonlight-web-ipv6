@@ -825,6 +825,41 @@ export class BackendClient {
         return this.post('/api/admin/settings', settings);
     }
 
+    // ── Logs archive (Admin → Advanced) ─────────────────────────────────────────
+
+    /** Start building the .zip; answers with its progress. 409 while one runs. */
+    static async startLogArchive() {
+        return this.post('/api/logs/archive');
+    }
+    static async getLogArchiveStatus() {
+        return this.get('/api/logs/archive');
+    }
+    /**
+     * The finished .zip, read as it arrives so the page can show how far it is.
+     * @param {(received: number, total: number) => void} onProgress
+     * @returns {Promise<Blob>}
+     */
+    static async downloadLogArchive(onProgress) {
+        const path = '/api/logs/archive/download';
+        const resp = await fetch(path, { cache: 'no-store' });
+        if (!resp.ok) return this._handleError(resp, path);
+        const total = Number(resp.headers.get('Content-Length')) || 0;
+        // No length (a proxy that re-chunks it) or no stream: all at once.
+        if (!total || !resp.body) return resp.blob();
+        const reader = resp.body.getReader();
+        /** @type {Uint8Array[]} */
+        const parts = [];
+        let received = 0;
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            parts.push(value);
+            received += value.length;
+            onProgress(received, total);
+        }
+        return new Blob(parts, { type: 'application/zip' });
+    }
+
     // ── Streaming Settings ───────────────────────────────────────────────────────
 
     static async getStreamingSettings() {

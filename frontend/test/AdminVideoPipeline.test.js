@@ -58,7 +58,11 @@ describe('AdminView — video pipeline (Advanced)', () => {
         await view._loadStreamingState();
         expect(view._videoPipeline).toBe('auto');
         expect(view._videoPipelineSupported).toBe(false);
-        expect(view._renderAdvanced()).toBe('');
+        // The section stays for the diagnostics; the chain's menu does not.
+        const html = view._renderAdvanced();
+        expect(html).not.toContain('select-video-pipeline');
+        expect(html).toContain('btn-download-logs');
+        expect(html).toContain('chk-debug-mode');
     });
 
     it('keeps its defaults when the settings cannot be read', async () => {

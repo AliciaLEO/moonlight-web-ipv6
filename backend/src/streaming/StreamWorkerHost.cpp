@@ -20,6 +20,7 @@
 #include "WorkerService.h"
 #include "common/Edition.h"
 #include "common/LinuxCapabilities.h"
+#include "common/RunFlags.h"
 #include "server/AppSettings.h"
 
 #include <QCoreApplication>
@@ -58,6 +59,9 @@ bool StreamWorkerHost::start(const QJsonObject& config)
     QJsonObject withSettings = config;
     if (!AppSettings::fileOverride().isEmpty())
         withSettings[QStringLiteral("settingsFile")] = AppSettings::fileOverride();
+    // Same road for verbose logs: this process's DEBUG threshold is the one
+    // the worker's own lines have to pass before they are relayed here.
+    if (mw::run::verbose()) withSettings[QStringLiteral("verbose")] = true;
     const QByteArray configLine = QJsonDocument(withSettings).toJson(QJsonDocument::Compact) + "\n";
 
     // The native engine captures the desktop, and a service has none: its

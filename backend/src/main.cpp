@@ -62,6 +62,9 @@
 #include <memory>
 #include <utility>
 #include "server/AppSettings.h"
+#include "server/LogArchive.h"
+#include "server/routes/LogRoutes.h"
+#include "common/RunFlags.h"
 #include "server/CertManager.h"
 #include "server/Provisioning.h"
 #include "server/HttpServer.h"
@@ -1731,7 +1734,20 @@ int main(int argc, char* argv[])
         "path");
     parser.addOption(configOption);
 
+    // Diagnostic modes for this run (common/RunFlags.h). The admin page's
+    // boxes turn the same ones on for good; these leave settings.json alone.
+    QCommandLineOption debugOption(
+        "debug", "Debug mode for this run: the options of a debug build, the browsers' "
+                 "console sent to the client log");
+    parser.addOption(debugOption);
+    QCommandLineOption verboseOption(
+        "verbose", "Verbose logs for this run: DEBUG lines, libdatachannel and Qt network "
+                   "diagnostics, and the browsers' pipeline diagnostics");
+    parser.addOption(verboseOption);
+
     parser.process(app);
+    mw::run::setDebugFromCli(parser.isSet(debugOption));
+    mw::run::setVerboseFromCli(parser.isSet(verboseOption));
 
     // Before anything builds an AppSettings — every branch below reads it.
     if (parser.isSet(configOption)) {
@@ -1862,6 +1878,15 @@ int main(int argc, char* argv[])
                                         parser.isSet(yesOption));
 
     appSettings.seedDocumentedDefaults(); // write documented file-only keys if absent
+
+    // The admin page's diagnostic boxes, on top of this run's flags.
+    mw::run::setDebugSetting(appSettings.debugMode());
+    mw::run::setVerboseSetting(appSettings.verboseLogs());
+    mw::run::applyVerboseLogging();
+    if (mw::run::debug())
+        Logger::info(mw::run::debugFromCli() ? "Debug mode on (--debug)"
+                                             : "Debug mode on (admin page)");
+
     quint16 httpPort = appSettings.httpPort(devMode ? kDevHttpPort : 80);
     if (parser.isSet("port")) httpPort = parser.value("port").toUShort();
 
@@ -2438,6 +2463,12 @@ int main(int argc, char* argv[])
         // the rest of this route and like /api/server/hostname next door, which
         // has always answered the same question to anyone who asked.
         obj["name"] = appSettings.displayName();
+        // The diagnostic modes, for every page including a guest's, which can
+        // reach nothing else before it joins: a page in debug mode sends its
+        // console to the client log, one in verbose mode prints its pipeline
+        // diagnostics.
+        obj["debug"] = mw::run::debug();
+        obj["verbose"] = mw::run::verbose();
         return HttpResponse::json(obj);
     });
 
@@ -4978,6 +5009,12 @@ int main(int argc, char* argv[])
     };
 
     registerShareRoutes(server, shareManager, shareDeps);
+
+    // Diagnostics: the browsers' console (debug mode) and the "Download logs"
+    // archive. Static: its thread must be joined after the event loop, and
+    // before the Logger it reads the path of goes away.
+    static LogArchive logArchive;
+    registerLogRoutes(server, logArchive);
 
     // /ws2../ws4 carry a player's video and input. Only the mw_player cookie
     // that matches THAT slot's live activation opens them — the session-cookie
