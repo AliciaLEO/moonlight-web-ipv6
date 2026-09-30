@@ -245,14 +245,22 @@ void run_log_scrubber_tests()
     SECTION("LogScrubber");
 
     LogScrubber::Names names;
-    names.hosts = {"DualRTX", "Luka-MacBook-Pro", "leos-macbook-pro2.home", "Wolf", "UM790Pro"};
-    names.thisMachine = "DUALRTX";
+    // This PC: its LAN card, VirtualBox, Tailscale (v4 and v6) and a Hyper-V
+    // switch; one host with its LAN address.
+    names.thisMachine = {{"DUALRTX"},
+                         {"192.168.1.66", "192.168.56.1", "100.116.41.43", "172.24.208.1",
+                          "fd7a:115c:a1e0::c036:292d"}};
+    names.hosts = {{{"DualRTX"}, {}},
+                   {{"Luka-MacBook-Pro"}, {}},
+                   {{"leos-macbook-pro2.home"}, {}},
+                   {{"Wolf"}, {}},
+                   {{"UM790Pro"}, {"192.168.1.9"}}};
     names.instance = "Salon";
     names.user = "bruno";
     LogScrubber s(names);
 
     // Secrets: rikey and the client id through Qt's error string, which quotes
-    // the whole URL (the LAN address stays); the pairing handshake.
+    // the whole URL; the pairing handshake.
     {
         const QString out = s.scrubLine(
             R"~([Session] Launch failed: "Error transferring https://192.168.1.5:47984/launch?appid=1&uniqueid=0123456789ABCDEF&uuid=a1b2&mode=1920x1080x60&rikey=00112233445566778899aabbccddeeff&rikeyid=12345 - server replied: Service Unavailable" kind= 3)~");
@@ -260,7 +268,7 @@ void run_log_scrubber_tests()
         CHECK(!out.contains("0123456789ABCDEF"));
         CHECK(!out.contains("12345 "));
         CHECK(out.contains("rikey=(hidden)&rikeyid=(hidden)"));
-        CHECK(out.contains("https://192.168.x.{A1}:47984/launch?appid=1&uniqueid=(hidden)"));
+        CHECK(out.contains("https://192.168.x.{a1}:47984/launch?appid=1&uniqueid=(hidden)"));
         CHECK(out.contains("mode=1920x1080x60"));
         const QString pair = s.scrubLine(
             "Pairing request failed: http pair → Error transferring http://10.0.0.2:47989/"
@@ -314,30 +322,45 @@ void run_log_scrubber_tests()
     CHECK_EQ(s.scrubLine("  From the internet: https://stream.dev.moonlightweb.top/wwj7jmmpb"),
              QString("  From the internet: https://stream.dev.moonlightweb.top/(link)"));
     CHECK_EQ(s.scrubLine("[k3j4 guest 2@192.168.1.20] page /p/Zx81-abcdefgh — Mozilla/5.0"),
-             QString("[k3j4 guest 2@192.168.x.{A3}] page /p/(link) — Mozilla/5.0"));
+             QString("[k3j4 guest 2@192.168.x.{a2}] page /p/(link) — Mozilla/5.0"));
     CHECK_EQ(s.scrubLine("[k3j4 owner@192.168.1.20] page /41zvnyqjdnybgwhw8f20martz4 — x"),
-             QString("[k3j4 owner@192.168.x.{A3}] page /(link) — x"));
+             QString("[k3j4 owner@192.168.x.{a2}] page /(link) — x"));
     CHECK_EQ(s.scrubLine("SSL certificate loaded from source: CN=8f3b2aa.moonlightweb.top"),
              QString("SSL certificate loaded from source: CN=instance.moonlightweb.top"));
     CHECK_EQ(s.scrubLine("Untrusted Host 'dualrtx.tailbea5b3.ts.net' refused"),
-             QString("Untrusted Host 'tailnet-1.ts.net' refused"));
+             QString("Untrusted Host '{A}.tailnet.ts.net' refused"));
 
-    // Names: the same stand-in every time, this PC before the host list,
-    // generic words left alone, home paths in both of the log's spellings.
+    // Machines: one capital letter each, by name and by address, {A} being
+    // this PC; letters given in order of appearance (UM790Pro's address came
+    // first, in the candidate line: {B}); generic words left alone.
     CHECK_EQ(s.scrubLine("[NETWORK] DualRTX is online (192.168.1.12:47989)"),
-             QString("[NETWORK] this-pc is online (192.168.x.{A4}:47989)"));
+             QString("[NETWORK] {A} is online (192.168.x.{a3}:47989)"));
+    CHECK_EQ(s.scrubLine("[NETWORK] UM790Pro is online (192.168.1.9:47989)"),
+             QString("[NETWORK] {B} is online (192.168.x.{B}:47989)"));
     CHECK_EQ(s.scrubLine("Host updated: Luka-MacBook-Pro, then luka-macbook-pro again"),
-             QString("Host updated: host-1, then host-1 again"));
+             QString("Host updated: {C}, then {C} again"));
     CHECK_EQ(s.scrubLine("mDNS host discovered: leos-macbook-pro2.local."),
-             QString("mDNS host discovered: host-2.local."));
+             QString("mDNS host discovered: {D}.local."));
     CHECK_EQ(s.scrubLine("[WolfApi] Wolf answered; UM790Pro did not"),
-             QString("[WolfApi] Wolf answered; host-3 did not"));
-    // A machine the host list does not know, by its LAN name; Chrome's random
-    // mDNS names and the stand-ins stay.
+             QString("[WolfApi] Wolf answered; {B} did not"));
+    // A machine the host list does not know, by its LAN name, is a machine
+    // too; Chrome's random mDNS names stay.
     CHECK_EQ(s.scrubLine("mDNS host discovered: Kids-iPad.local. (and kids-ipad.lan) "
-                         "f6636672-ff76-4595-8733-2a171e4fcb18.local host-1.local"),
-             QString("mDNS host discovered: host-4.local. (and host-4.lan) "
-                     "f6636672-ff76-4595-8733-2a171e4fcb18.local host-1.local"));
+                         "f6636672-ff76-4595-8733-2a171e4fcb18.local"),
+             QString("mDNS host discovered: {E}.local. (and {E}.lan) "
+                     "f6636672-ff76-4595-8733-2a171e4fcb18.local"));
+    // This PC's own interfaces are {A}, a second one under the same prefix
+    // {A2}; an address of no known machine is a small letter and a number.
+    CHECK_EQ(
+        s.scrubLine(
+            R"~([InternetAccess] Local LAN IP: "192.168.1.66" — all reachable: QList("192.168.1.66", "100.116.41.43", "192.168.56.1", "172.24.208.1", "172.29.128.1"))~"),
+        QString(
+            R"~([InternetAccess] Local LAN IP: "192.168.x.{A}" — all reachable: QList("192.168.x.{A}", "100.x.x.{A}", "192.168.x.{A2}", "172.24.x.{A}", "172.29.x.{c1}"))~"));
+    CHECK_EQ(
+        s.scrubLine(
+            R"~(Selected candidate pair: local "host fd7a:115c:a1e0::c036:292d:48550/UDP" -> remote "prflx 192.168.1.20:50000/UDP")~"),
+        QString(
+            R"~(Selected candidate pair: local "host fd::{A}:48550/UDP" -> remote "prflx 192.168.x.{a2}:50000/UDP")~"));
     CHECK_EQ(s.scrubLine("[Settings] instance name: Salon"),
              QString("[Settings] instance name: instance-name"));
     CHECK_EQ(s.scrubLine("[CERT] Found private key: file=C:/Users/bruno/AppData/cert/key.pem"),
@@ -347,46 +370,44 @@ void run_log_scrubber_tests()
     CHECK_EQ(s.scrubLine("Worker spawned in the console session as \"bruno (elevated)\""),
              QString("Worker spawned in the console session as \"user (elevated)\""));
 
-    // Addresses: public ones by documentation ones; LAN, CGNAT, link-local
-    // and ULA ones by a letter per subnet and a number per machine, under
-    // the range's prefix; loopback kept; versions and clocks are not
-    // addresses. 192.168.1.x is A and 10.0.0.x is B since the lines above.
+    // Addresses: public ones by a number under a prefix no address has; LAN,
+    // CGNAT, link-local and ULA ones of no known machine by a small letter
+    // per subnet and a number, under the range's own octets; loopback kept;
+    // versions and clocks are not addresses. Subnets a (192.168.1), b
+    // (10.0.0) and c (172.29.128) come from the lines above.
     CHECK_EQ(s.scrubLine("[UPNP] External IP address: 88.12.34.56"),
-             QString("[UPNP] External IP address: 203.0.113.1"));
+             QString("[UPNP] External IP address: 256.x.x.{1}"));
     CHECK_EQ(s.scrubLine(R"~(Public IP changed from "88.12.34.56" to "90.1.2.3")~"),
-             QString(R"~(Public IP changed from "203.0.113.1" to "203.0.113.2")~"));
+             QString(R"~(Public IP changed from "256.x.x.{1}" to "256.x.x.{2}")~"));
     CHECK_EQ(
         s.scrubLine("peers 10.0.0.1 172.20.1.1 127.0.0.1 100.101.1.2 169.254.3.4 0.3.1.22"),
-        QString("peers 10.x.x.{B2} 172.20.x.{C1} 127.0.0.1 100.x.x.{D1} 169.254.x.{E1} 0.3.1.22"));
+        QString("peers 10.x.x.{b2} 172.20.x.{d1} 127.0.0.1 100.x.x.{e1} 169.254.x.{f1} 0.3.1.22"));
     CHECK_EQ(s.scrubLine("[2026-09-30 10:00:00.123] [INFO] Chrome/153.0.0.0 Safari/537.36"),
              QString("[2026-09-30 10:00:00.123] [INFO] Chrome/153.0.0.0 Safari/537.36"));
     CHECK_EQ(
         s.scrubLine(R"~(candidate:1 1 UDP 2122 2a01:e0a:ac5:df0:5d3a:b3cb:1:2 5000 typ host)~"),
-        QString(R"~(candidate:1 1 UDP 2122 2001:db8::1 5000 typ host)~"));
+        QString(R"~(candidate:1 1 UDP 2122 2xxx::{3} 5000 typ host)~"));
     CHECK_EQ(s.scrubLine("from [2a01:e0a:ac5:df0:5d3a:b3cb:1:2]:443 and fd12:3456::c1 fe80::1 ::1"),
-             QString("from [2001:db8::1]:443 and fd::{F1} fe80::{G1} ::1"));
+             QString("from [2xxx::{3}]:443 and fd::{g1} fe80::{h1} ::1"));
     CHECK_EQ(s.scrubLine("mapped ::ffff:88.12.34.56 at 12:34:56"),
-             QString("mapped ::ffff:203.0.113.1 at 12:34:56"));
+             QString("mapped ::ffff:256.x.x.{1} at 12:34:56"));
 
-    // Who talks to whom stays readable: one letter per subnet, one number
-    // per machine, the network and the broadcast keeping theirs; past Z the
-    // letters go on as AA, AB...
+    // With no machine known, who talks to whom still reads: a small letter
+    // per subnet, a number per address, the network and the broadcast keeping
+    // theirs; past z the letters go on as aa, ab...
     {
         LogScrubber lan;
         CHECK_EQ(lan.scrubLine("192.168.1.66 -> 192.168.1.9, then 192.168.1.66 again"),
-                 QString("192.168.x.{A1} -> 192.168.x.{A2}, then 192.168.x.{A1} again"));
+                 QString("192.168.x.{a1} -> 192.168.x.{a2}, then 192.168.x.{a1} again"));
         CHECK_EQ(lan.scrubLine("SSDP 192.168.1.255 on 192.168.1.0/24 via 239.255.255.250"),
-                 QString("SSDP 192.168.x.{A255} on 192.168.x.{A0}/24 via 239.255.255.250"));
-        CHECK_EQ(
-            lan.scrubLine(
-                R"~([InternetAccess] Local LAN IP: "192.168.1.66" — all reachable: QList("192.168.1.66", "100.116.41.43", "192.168.56.1", "172.24.208.1", "172.29.128.1"))~"),
-            QString(
-                R"~([InternetAccess] Local LAN IP: "192.168.x.{A1}" — all reachable: QList("192.168.x.{A1}", "100.x.x.{B1}", "192.168.x.{C1}", "172.24.x.{D1}", "172.29.x.{E1}"))~"));
+                 QString("SSDP 192.168.x.{a255} on 192.168.x.{a0}/24 via 239.255.255.250"));
+        CHECK_EQ(lan.scrubLine("100.116.41.43 192.168.56.1 172.24.208.1 172.29.128.1"),
+                 QString("100.x.x.{b1} 192.168.x.{c1} 172.24.x.{d1} 172.29.x.{e1}"));
         QString last;
-        for (int i = 0; i < 21; ++i) // F to Z
+        for (int i = 0; i < 21; ++i) // f to z
             last = lan.scrubLine(QStringLiteral("10.0.%1.7").arg(i));
-        CHECK_EQ(last, QString("10.x.x.{Z1}"));
-        CHECK_EQ(lan.scrubLine("10.0.21.7 10.0.22.7"), QString("10.x.x.{AA1} 10.x.x.{AB1}"));
+        CHECK_EQ(last, QString("10.x.x.{z1}"));
+        CHECK_EQ(lan.scrubLine("10.0.21.7 10.0.22.7"), QString("10.x.x.{aa1} 10.x.x.{ab1}"));
     }
     // IPv6 with its port and no brackets, the way libdatachannel writes a pair.
     {
@@ -395,9 +416,9 @@ void run_log_scrubber_tests()
             pair.scrubLine(
                 R"~(Selected candidate pair: local "host fd7a:115c:a1e0::c036:292d:48550/UDP" -> remote "prflx fd7a:115c:a1e0::c036:292d:63433/UDP")~"),
             QString(
-                R"~(Selected candidate pair: local "host fd::{A1}:48550/UDP" -> remote "prflx fd::{A1}:63433/UDP")~"));
+                R"~(Selected candidate pair: local "host fd::{a1}:48550/UDP" -> remote "prflx fd::{a1}:63433/UDP")~"));
         CHECK_EQ(pair.scrubLine("srflx 2a01:e0a:ac5:df0:5d3a:b3cb:1:2:5000/UDP at 10:00:00.123"),
-                 QString("srflx 2001:db8::1:5000/UDP at 10:00:00.123"));
+                 QString("srflx 2xxx::{1}:5000/UDP at 10:00:00.123"));
     }
 
     // Whole files: PEM blocks go, line endings stay.
@@ -423,8 +444,8 @@ void run_log_scrubber_tests()
         CHECK_EQ(archive.status().state, QString("done"));
         const QMap<QString, Entry> entries = readZip(archive.result());
         const QByteArray expected = "[Auth] PIN changed: (hidden)\n"
-                                    "[UPNP] External IP address: 203.0.113.1\n"
-                                    "[NETWORK] host-1 is online (192.168.x.{A1}:47989)\n";
+                                    "[UPNP] External IP address: 256.x.x.{1}\n"
+                                    "[NETWORK] {B} is online (192.168.x.{B}:47989)\n";
         CHECK(holds(entries.value("moonlightweb.log"), expected));
         CHECK(holds(entries.value("about.txt"), "Settings file: /home/user/s.json\n"));
     }

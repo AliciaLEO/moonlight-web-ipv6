@@ -43,6 +43,8 @@
 #include <QDateTime>
 #include <QHostInfo>
 #include <QHostAddress>
+#include <QNetworkInterface>
+#include <QSysInfo>
 #include <QJsonArray>
 #include <QRandomGenerator>
 
@@ -5020,9 +5022,28 @@ int main(int argc, char* argv[])
     // instance and the account the server runs as.
     registerLogRoutes(server, logArchive, [&computerManager, &appSettings]() {
         LogScrubber::Names names;
-        for (const QJsonValue& h : computerManager.getHostsJson())
-            names.hosts << h.toObject().value(QStringLiteral("name")).toString();
-        names.thisMachine = AppSettings::machineName();
+        // This PC: its names, and every interface's address, so its own LAN,
+        // Tailscale and virtual adapters read as {A}.
+        names.thisMachine.names << AppSettings::machineName() << QSysInfo::machineHostName();
+        for (const QHostAddress& a : QNetworkInterface::allAddresses())
+            names.thisMachine.addresses << a.toString();
+        for (const QJsonValue& h : computerManager.getHostsJson()) {
+            const NvComputer* c =
+                computerManager.getHost(h.toObject().value(QStringLiteral("uuid")).toString());
+            if (!c) continue;
+            LogScrubber::Machine m;
+            m.names << c->name << c->customName;
+            for (const NvAddress* a :
+                 {&c->activeAddress, &c->localAddress, &c->remoteAddress, &c->manualAddress})
+                if (!a->isNull()) m.addresses << a->address();
+            // The host that is this PC is {A} too.
+            if (c->isLocalMachine()) {
+                names.thisMachine.names << m.names;
+                names.thisMachine.addresses << m.addresses;
+            } else {
+                names.hosts << m;
+            }
+        }
         names.instance = appSettings.instanceName();
         names.user = qEnvironmentVariable("USERNAME", qEnvironmentVariable("USER"));
         return names;

@@ -121,87 +121,108 @@ const QSet<QString>& projectLabels()
 
 } // namespace
 
+LogScrubber::LogScrubber()
+{
+    m_MachineLetters.insert(0, QStringLiteral("A"));
+}
+
 LogScrubber::LogScrubber(const Names& names)
+    : LogScrubber()
 {
     QSet<QString> seen;
-    auto add = [&](const QString& raw, const QString& kind, const QString& of = QString()) {
+    auto addName = [&](const QString& raw, int machine, const QString& word) {
         const QString name = raw.trimmed();
         const QString key = name.toLower();
         if (name.size() < 3 || seen.contains(key) || genericNames().contains(key)) return;
         seen.insert(key);
-        m_Names.append({name, kind, of.isEmpty() ? name : of,
+        if (machine >= 0) m_NameMachine.insert(key, machine);
+        m_Names.append({name, machine, word,
                         QRegularExpression(QStringLiteral("(?<![A-Za-z0-9])%1(?![A-Za-z0-9])")
                                                .arg(QRegularExpression::escape(name)),
                                            QRegularExpression::CaseInsensitiveOption)});
     };
-    // This PC first: it is often in the host list too, and this-pc says more.
-    add(names.thisMachine, QStringLiteral("this-pc"));
-    add(names.instance, QStringLiteral("instance-name"));
-    add(names.user, QStringLiteral("user"));
-    for (const QString& h : names.hosts) {
-        add(h, QStringLiteral("host"));
-        // "leos-macbook-pro2.home" is also written without its domain.
-        const qsizetype dot = h.indexOf(QLatin1Char('.'));
-        if (dot > 0) add(h.left(dot), QStringLiteral("host"), h.trimmed());
-    }
+    auto addMachine = [&](const Machine& m, int machine) {
+        for (const QString& n : m.names) {
+            addName(n, machine, QString());
+            // "leos-macbook-pro2.home" is also written without its domain.
+            const qsizetype dot = n.indexOf(QLatin1Char('.'));
+            if (dot > 0) addName(n.left(dot), machine, QString());
+        }
+        for (const QString& a : m.addresses) {
+            QHostAddress addr(a);
+            if (addr.isNull()) continue;
+            addr.setScopeId(QString());
+            bool v4 = false;
+            const quint32 ip4 = addr.toIPv4Address(&v4); // also "::ffff:a.b.c.d"
+            const QString key = v4 ? QHostAddress(ip4).toString() : addr.toString();
+            if (!m_AddressMachine.contains(key)) m_AddressMachine.insert(key, machine);
+        }
+    };
+    // This PC first: it is often in the host list too.
+    addMachine(names.thisMachine, 0);
+    for (const Machine& h : names.hosts)
+        addMachine(h, m_Machines++);
+    addName(names.instance, -1, QStringLiteral("instance-name"));
+    addName(names.user, -1, QStringLiteral("user"));
     std::sort(m_Names.begin(), m_Names.end(),
               [](const NameRule& a, const NameRule& b) { return a.name.size() > b.name.size(); });
 }
 
-QString LogScrubber::nameFor(const QString& key, const QString& kind)
+QString LogScrubber::machineTag(int machine)
 {
-    const QString k = kind + QLatin1Char('|') + key.toLower();
-    auto it = m_Stand.constFind(k);
-    if (it != m_Stand.constEnd()) return *it;
-    QString stand;
-    if (kind == QLatin1String("host"))
-        stand = QStringLiteral("host-%1").arg(++m_Hosts);
-    else if (kind == QLatin1String("tailnet"))
-        stand = QStringLiteral("tailnet-%1.ts.net").arg(++m_Tailnet);
-    else
-        stand = kind;
-    m_Stand.insert(k, stand);
-    return stand;
+    QString& letters = m_MachineLetters[machine];
+    if (letters.isEmpty()) letters = subnetLetters(++m_Lettered);
+    return QLatin1Char('{') + letters + QLatin1Char('}');
 }
 
-QString LogScrubber::publicV4(const QString& ip)
+int LogScrubber::machineNamed(const QString& name)
 {
-    const QString k = QStringLiteral("v4|") + ip;
-    auto it = m_Stand.constFind(k);
-    if (it != m_Stand.constEnd()) return *it;
-    const int n = m_V4++;
-    // The three documentation ranges, one after the other.
-    const QString stand = n < 254   ? QStringLiteral("203.0.113.%1").arg(n + 1)
-                          : n < 508 ? QStringLiteral("198.51.100.%1").arg(n - 253)
-                                    : QStringLiteral("192.0.2.%1").arg((n - 508) % 254 + 1);
-    m_Stand.insert(k, stand);
-    return stand;
+    const QString key = name.toLower();
+    auto it = m_NameMachine.constFind(key);
+    if (it != m_NameMachine.constEnd()) return *it;
+    const int machine = m_Machines++;
+    m_NameMachine.insert(key, machine);
+    return machine;
 }
 
-QString LogScrubber::publicV6(const QString& ip)
+QString LogScrubber::machineAddress(int machine, const QString& prefix, const QString& address)
 {
-    const QString k = QStringLiteral("v6|") + QHostAddress(ip).toString();
+    const QString k = QStringLiteral("m|") + address;
     auto it = m_Stand.constFind(k);
     if (it != m_Stand.constEnd()) return *it;
-    const QString stand = QStringLiteral("2001:db8::%1").arg(++m_V6, 0, 16);
-    m_Stand.insert(k, stand);
-    return stand;
+    QStringList& seen = m_PrefixAddresses[QString::number(machine) + QLatin1Char('|') + prefix];
+    seen.append(address);
+    QString tag = machineTag(machine);
+    // Two addresses of one machine under one prefix (the LAN card and a
+    // VirtualBox adapter) must still be told apart: {A}, then {A2}.
+    if (seen.size() > 1) tag.insert(tag.size() - 1, QString::number(seen.size()));
+    m_Stand.insert(k, tag);
+    return tag;
 }
 
-QString LogScrubber::lanHost(const QString& subnet, const QString& host, int fixed)
+QString LogScrubber::unknownLan(const QString& subnet, const QString& host, int fixed)
 {
     const QString k = QStringLiteral("lan|") + subnet + QLatin1Char('|') + host;
     auto it = m_Stand.constFind(k);
     if (it != m_Stand.constEnd()) return *it;
     QString& letters = m_SubnetLetters[subnet];
-    if (letters.isEmpty()) letters = subnetLetters(++m_Subnets);
+    if (letters.isEmpty()) letters = subnetLetters(++m_Subnets).toLower();
     int n = fixed;
     if (n < 0) {
         n = ++m_SubnetHosts[subnet];
         if (n == 255) n = ++m_SubnetHosts[subnet]; // .255 is the broadcast's
     }
-    // In braces: a label, not a number of the address.
     const QString stand = QLatin1Char('{') + letters + QString::number(n) + QLatin1Char('}');
+    m_Stand.insert(k, stand);
+    return stand;
+}
+
+QString LogScrubber::publicAddress(const QString& key)
+{
+    const QString k = QStringLiteral("pub|") + key;
+    auto it = m_Stand.constFind(k);
+    if (it != m_Stand.constEnd()) return *it;
+    const QString stand = QStringLiteral("{%1}").arg(++m_Public);
     m_Stand.insert(k, stand);
     return stand;
 }
@@ -210,8 +231,8 @@ void LogScrubber::replaceNames(QString& line)
 {
     for (const NameRule& rule : m_Names) {
         if (!line.contains(rule.name, Qt::CaseInsensitive)) continue;
-        line = replaceEach(line, rule.word, [&](const QRegularExpressionMatch& m) {
-            return nameFor(rule.key, rule.kind);
+        line = replaceEach(line, rule.match, [&](const QRegularExpressionMatch&) {
+            return rule.machine >= 0 ? machineTag(rule.machine) : rule.word;
         });
     }
 }
@@ -230,21 +251,25 @@ void LogScrubber::replaceAddresses(QString& line)
             int o[4];
             switch (classifyV4(ip, o)) {
             case V4Kind::Keep: return ip;
-            case V4Kind::Public: return publicV4(ip);
+            // 256: a first number no address has.
+            case V4Kind::Public: return QStringLiteral("256.x.x.") + publicAddress(ip);
             case V4Kind::Lan: break;
             }
             // Still four parts, so it reads as an address: the range's own
             // octets, x for the hidden ones, the stand-in last —
-            // 192.168.x.{A1}, 10.x.x.{B2}, 172.24.x.{C1}, 100.x.x.{D1}.
+            // 192.168.x.{B}, 10.x.x.{a1}, 172.24.x.{A2}, 100.x.x.{c1}.
             QString prefix;
             if (o[0] == 192 || o[0] == 169 || o[0] == 172)
                 prefix = QStringLiteral("%1.%2.x.").arg(o[0]).arg(o[1]);
             else
                 prefix = QStringLiteral("%1.x.x.").arg(o[0]);
+            auto known = m_AddressMachine.constFind(ip);
+            if (known != m_AddressMachine.constEnd())
+                return prefix + machineAddress(*known, prefix, ip);
             // The network and the broadcast keep their number.
             const int fixed = o[3] == 0 ? 0 : o[3] == 255 ? 255 : -1;
-            return prefix + lanHost(QStringLiteral("%1.%2.%3").arg(o[0]).arg(o[1]).arg(o[2]),
-                                    QString::number(o[3]), fixed);
+            return prefix + unknownLan(QStringLiteral("%1.%2.%3").arg(o[0]).arg(o[1]).arg(o[2]),
+                                       QString::number(o[3]), fixed);
         });
     }
 
@@ -273,15 +298,22 @@ void LogScrubber::replaceAddresses(QString& line)
             if (a.isLoopback() || a.isMulticast() || a == QHostAddress(QHostAddress::AnyIPv6) ||
                 a.isInSubnet(doc) || a.isInSubnet(mapped))
                 return text + port;
-            if (!a.isLinkLocal() && !a.isUniqueLocalUnicast()) return publicV6(text) + port;
-            if (!a.isLinkLocal() && !a.isUniqueLocalUnicast()) return publicV6(text);
+            const QString key = a.toString();
+            // A global address: its first digit says so (2 or 3), x the rest.
+            if (!a.isLinkLocal() && !a.isUniqueLocalUnicast())
+                return key.left(1) + QStringLiteral("xxx::") + publicAddress(key) + port;
             // ULA (Tailscale's among them) and link-local, whose host part may
-            // be the card's MAC: a letter for the /64, a number for the host.
+            // be the card's MAC.
+            const QString prefix =
+                a.isLinkLocal() ? QStringLiteral("fe80::") : QStringLiteral("fd::");
+            auto known = m_AddressMachine.constFind(key);
+            if (known != m_AddressMachine.constEnd())
+                return prefix + machineAddress(*known, prefix, key) + port;
             const Q_IPV6ADDR b = a.toIPv6Address();
             const QByteArray bytes(reinterpret_cast<const char*>(b.c), 16);
-            return (a.isLinkLocal() ? QStringLiteral("fe80::") : QStringLiteral("fd::")) +
-                   lanHost(QString::fromLatin1(bytes.left(8).toHex()),
-                           QString::fromLatin1(bytes.mid(8).toHex()), -1) +
+            return prefix +
+                   unknownLan(QString::fromLatin1(bytes.left(8).toHex()),
+                              QString::fromLatin1(bytes.mid(8).toHex()), -1) +
                    port;
         });
     }
@@ -378,9 +410,11 @@ QString LogScrubber::scrubLine(QString line)
     }
     static const QRegularExpression tailnet = re(R"(\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.ts\.net\b)");
     if (line.contains(QLatin1String(".ts.net"), Qt::CaseInsensitive)) {
+        // "dualrtx.tail1234.ts.net": the machine's tag, and the tailnet's
+        // name gone.
         line = replaceEach(line, tailnet, [&](const QRegularExpressionMatch& m) {
-            if (m.captured(0).startsWith(QLatin1String("tailnet-"))) return m.captured(0);
-            return nameFor(m.captured(0), QStringLiteral("tailnet"));
+            const QString host = m.captured(0).section(QLatin1Char('.'), 0, 0);
+            return machineTag(machineNamed(host)) + QStringLiteral(".tailnet.ts.net");
         });
     }
 
@@ -397,20 +431,20 @@ QString LogScrubber::scrubLine(QString line)
     });
     replaceNames(line);
     // A machine the host list does not know, by its LAN name (mDNS, DHCP):
-    // "Leos-MacBook-Pro.local". Chrome's random mDNS candidates (a UUID) stay,
-    // and so do the stand-ins put in above.
+    // "Leos-MacBook-Pro.local" becomes a machine of its own. Chrome's random
+    // mDNS candidates (a UUID) stay; the tags put in above have braces, which
+    // this does not match.
     static const QRegularExpression lanName =
         re(R"((?<![\w.-])([a-z0-9][a-z0-9-]*)\.(local|lan|home|localdomain|internal)\b)");
     static const QRegularExpression uuidLike(
         QStringLiteral(R"(^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$)"),
         QRegularExpression::CaseInsensitiveOption);
-    static const QRegularExpression standIn(
-        QStringLiteral(R"(^(host-\d+|this-pc|instance-name|user|tailnet-\d+)$)"));
     line = replaceEach(line, lanName, [&](const QRegularExpressionMatch& m) {
         const QString label = m.captured(1);
-        if (uuidLike.match(label).hasMatch() || standIn.match(label).hasMatch())
+        if (uuidLike.match(label).hasMatch() || label == QLatin1String("user") ||
+            label == QLatin1String("instance-name"))
             return m.captured(0);
-        return nameFor(label, QStringLiteral("host")) + QLatin1Char('.') + m.captured(2);
+        return machineTag(machineNamed(label)) + QLatin1Char('.') + m.captured(2);
     });
 
     replaceAddresses(line);
@@ -442,9 +476,13 @@ QString LogScrubber::notice()
         "Before these logs were archived, what they held of the machine and its owner was\n"
         "taken out: PINs, passwords, keys and tokens, cookies, the links that open this\n"
         "instance, typed keys, window titles, e-mail and MAC addresses show as \"(hidden)\".\n"
-        "Public IP addresses are replaced by documentation ones (203.0.113.x, 2001:db8::x),\n"
-        "LAN ones by a letter for their network and a number for the machine\n"
-        "(192.168.x.{A1}, 10.x.x.{B2}, 100.x.x.{C1}, fd::{D1}), machine and user names by\n"
-        "host-N, this-pc, instance-name\n"
-        "and user: the same value always by the same stand-in.\n");
+        "\n"
+        "Names and addresses are replaced, the same value always by the same stand-in:\n"
+        "  {A}, {B}...      a machine, by name and by LAN address; {A} is this PC.\n"
+        "                   {A2} is a second address of {A} under the same prefix.\n"
+        "  {a1}, {b2}...    a LAN address of no known machine: a letter for its\n"
+        "                   network, a number for the address.\n"
+        "  256.x.x.{1}      a public address (2xxx::{1} in IPv6).\n"
+        "  x                a part of the address left out.\n"
+        "  instance-name, user   this instance's name, the account it runs as.\n");
 }
