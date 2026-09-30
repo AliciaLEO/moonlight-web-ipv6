@@ -6844,3 +6844,161 @@ la composition 4,2 ms au plus, au lieu d'une période du flux.
   le journal de session dit la fréquence et pourquoi.
 - Reste : les i/s d'un vrai jeu à 240 Hz (RE9 n'a pas pu être piloté ce
   soir-là) et le ressenti de Bruno.
+
+## 34. Le flux commun des invités (plan du 28/09 au 01/10/2026)
+
+Plan « flux commun des invités » (`non-je-veux-que-jazzy-sutherland.md`).
+Hôte natif seulement : Sunshine, Wolf et MultiSeat gardent une session et un
+encodeur par invité, leurs chemins n'ont pas changé.
+
+### 34.1 Pourquoi
+
+Chaque invité d'un hôte natif avait son worker complet : sa capture, sa
+conversion, son encodeur. Les encodages des invités et celui du owner voyaient
+la même image au même instant et passaient ensemble, et celui du owner attendait
+derrière les autres. Sur la RTX, trois invités doublaient le total hôte du owner
+(3,58/4,07 → 6,78/10,69 ms au p50/p99, banc §8q.1). Le owner garde maintenant sa
+session telle quelle, et ses invités regardent un seul flux, encodé une fois :
+**deux encodages au plus**, quel que soit le nombre d'invités.
+
+### 34.2 Un producteur, des abonnés
+
+```
+worker « feed » : capture ─ conversion ─ HEVC (IR) ─────────► FeedPublisher ─┬─► pipe ─► worker invité 2 ─► WebRTC
+                                         ▲ idr, link, evict                    ├─► pipe ─► worker invité 3 ─► …
+                                         └─────────────────────────────────────┴─► pipe ─► worker invité 4 ─► …
+worker owner (slots 0/1) : inchangé, son propre encodeur
+```
+
+- **Le producteur** est un `--stream-worker` de rôle `feed` : un
+  `NativeMediaEngine` sans session, sans relais ni signalisation, qui publie
+  ses images au lieu de les donner à un pair. Son profil est fixe :
+  - 60 i/s, SDR, 4:2:0 ;
+  - la hauteur choisie par le owner et la forme de l'écran, sans agrandissement ;
+  - **l'intra-refresh sur la route que la machine choisit pour ce GPU**, comme
+    le stream du owner le demande. La route n'est jamais changée pour lui :
+    le flux a d'abord exigé l'intra-refresh (`intraRefreshRequired`, S1), et
+    sur l'Arc, cela le mettait sur oneVPL en D3D11 à côté du D3D12 VE du owner.
+    Au banc S9, avec un seul invité, le p99 du owner est passé de 7,8 à 27 ms,
+    et le flux encodait en 12 ms au lieu de 4. Là où la route n'a pas de vague
+    (le D3D12 VE de l'Arc et du N95), le flux se répare par images clés,
+    regroupées et rationnées (§34.4). `intraRefreshRequired` reste une clé de
+    banc (`intra=2`) ;
+  - un plancher du gouverneur à 60 % (`governorFloorPercent`, 20 ailleurs).
+- **Chaque invité garde son worker** : ses ports, son chemin WS, son échelon de
+  transport. Seule sa source vidéo change : `videoSource = External` fait une
+  session sans capture ni encodeur. Elle garde l'entrée, l'audio (sa propre
+  boucle WASAPI), `inputPolicy` et les manettes. Le rectangle du bureau
+  (`SessionInfo::desktop*`) et le curseur arrivent par le pipe.
+- **Pourquoi pas un seul processus à N relais** : `Session` et
+  `SignalingServer` ne portent qu'un relais chacun, un échelon qui échoue ne
+  relance que son invité, et un crash de libdatachannel emporterait tous les
+  invités.
+
+### 34.3 Le pipe
+
+- `QLocalServer` : un pipe nommé sous Windows, nommé `mw-feed-<édition>-<nonce>`
+  et réservé à l'utilisateur. Le premier message est `hello`, avec un jeton de
+  128 bits comparé en temps constant. Rien ne part avant ; après 3 s de silence,
+  la connexion est fermée.
+- Les abonnés sont lancés dans le même contexte que le flux
+  (`StreamWorkerHost::startAs`) : le SYSTEM du service, une tâche élevée ou un
+  simple enfant. C'est ce qui permet au pipe de rester réservé à l'utilisateur.
+- **Trame** (`FeedWire.h`) : un en-tête de 64 octets, puis le flux. L'en-tête
+  porte le numéro de l'image, le drapeau clé et ses horodatages (`presentUs`,
+  `capturedUs`, `submittedUs`, `convertedUs`, `encodedUs`). L'horloge est celle
+  de la machine, commune aux deux processus : l'E2E et les étapes de l'overlay
+  d'un invité restent justes, et le passage par le pipe compte dans « Queue ».
+- **Aucun invité ne fait attendre la capture.** `publishFrame` ne fait que
+  copier dans une `FreshestQueue` par abonné, où un delta peut être remplacé et
+  une image clé jamais. L'écriture a son propre fil, et elle s'arrête pour un
+  abonné dont le pipe retient plus de 4 Mo.
+- **Messages de contrôle** :
+  - du flux vers les invités : `info` (le `SessionInfo` du flux : codec,
+    taille, intra-refresh, encodeur ; `FeedInfo`), `cursor`, `displayFormat`,
+    `codec`, `bye` ;
+  - des invités vers le flux : `idr`, `link`, `evict`.
+- L'abonné ne livre rien à son navigateur avant une image clé. Si le flux
+  disparaît, il attend 10 s qu'il revienne sous le même nom.
+
+### 34.4 L'arbitrage (`FeedArbiter`)
+
+- **Images clés** : les demandes des invités (une arrivée, un décodeur perdu)
+  sont regroupées sur 250 ms, avec une par seconde au plus pour tous. Avec
+  intra-refresh, une image clé ne fait que hâter la réparation ; sans, elle
+  est la réparation. Le relais d'un invité ne traverse les pertes
+  (`ridingOutLoss`) que si l'`info` du flux annonce l'intra-refresh.
+- **Débit** : les rapports de lien sont fusionnés au pire (plus forte montée
+  d'OWD, plus fort taux de trous), un `reportLink` toutes les 500 ms au plus.
+  Le débit suit donc l'invité le plus lent, sans descendre sous 60 % de la
+  cible. En dessous, seul cet invité saute des images, réparées par la vague
+  ou, sans elle, par l'image clé rationnée.
+- **Cadence fixe** : un abonné ne commande pas le flux. `clientfpscap`,
+  `clientrefresh`, `framefloor`, la file de décodage et la grille vsync des
+  invités sont ignorés.
+- L'invalidation de référence ne s'applique pas à un flux commun
+  (`ref_invalidation = false` dans l'`info`).
+
+### 34.5 La vie du flux (`SharedFeed`, côté serveur)
+
+- **Lancement et arrêt** : le flux démarre au premier invité et s'arrête 10 s
+  après le départ du dernier. Un invité qui revient plus tôt ne coûte rien.
+- **Partage** : deux invités partagent un flux quand il montre le même écran
+  (même hôte, même appli) à la même hauteur. Le codec n'est pas une raison d'en
+  faire deux.
+- **Mort du worker** : il est relancé sous le même pipe après 250 ms, puis
+  500 ms, etc. Ses invités l'attendent et demandent une image clé. Au troisième
+  échec d'affilée, ce partage revient aux encodeurs par invité : les invités
+  quittent et rejoignent. Un flux qui a tenu une minute remet le compte à zéro.
+- **Hauteur** : le owner choisit l'image des invités (720, 1080 ou 1440p,
+  1080p par défaut), une fois pour toute la fenêtre de partage. Le choix est
+  gardé dans `share.json` et exposé par `POST /api/share/feed`.
+  - Le flux est reconstruit sous le même pipe. La largeur suit la forme, et le
+    débit suit le nombre de pixels.
+  - Les invités attendent comme après une mort, et leurs décodeurs prennent la
+    nouvelle taille à l'image clé.
+  - Un invité qui arrive pendant une relance attend avec les autres.
+- **H.264** : la page d'un invité teste le HEVC avant de rejoindre
+  (`hevcClientDecodes`). S'il ne le décode pas, tout le flux passe en H.264
+  jusqu'à son arrêt, sans jamais faire deux flux.
+  - Le worker du flux prévient ses invités (`codec`), puis s'arrête.
+  - Leurs pages reviennent en H.264 par le repli de codec existant (avis
+    `feedcodec`).
+- **Interrupteur** : `MW_SHARED_FEED=0`, ou `shared_feed_enabled: false` dans
+  `settings.json`, et chaque invité encode de nouveau seul, comme avant.
+  Windows seulement pour l'instant : la session `External` n'existe pas encore
+  sous Linux.
+
+### 34.6 Les manettes des invités
+
+Sur un hôte natif, chaque worker a sa propre table de quatre pads ViGEm. Le
+décalage par slot de GameStream (`gamepadOffset`) n'y séparait donc rien, et
+faisait perdre le deuxième pad de l'invité du slot 4. Le moteur garde
+maintenant la numérotation du navigateur (`padNumber`) : la vibration revient
+au bon numéro, et le masque des manettes reste cohérent. Sunshine décale
+toujours (`MoonlightShim`).
+
+### 34.7 L'écran virtuel allumé par un invité
+
+Un invité qui ouvre à froid une invitation sur « MoonlightWeb Virtual
+Display », sans stream du owner, l'allume (`VirtualDisplayJob::activateIfOff`).
+L'écran est fait à la taille de l'image des invités, avant que le flux ne le
+cherche. S'il est déjà allumé (owner, autre invité, grâce en cours), il reste
+tel quel : un nouveau mode l'enlèverait à ceux qui le regardent.
+
+### 34.8 Mesuré (banc §8q.3-§8q.5)
+
+- **RTX, trois invités** : total hôte du owner 6,78/10,69 → **3,84/6,19 ms**
+  (p50/p99), sessions NVENC 4 → 2, moteur d'encodage 45 → 29 %. C'est la
+  ligne « un invité » de S0.
+- **Arc et iGPU AMD** payaient peu en S0 et paient autant ou moins : Arc
+  +1,2 ms de p99 à trois invités (S0 +1,6), AMD +1,3 (S0 +2,4), p50 inchangé.
+- **Cas durs** : le flux tué revient en 1,3 s ; un changement de mode de
+  l'écran fait une reconstruction ; un invité seul qui part et revient ne
+  relance rien ; un invité sans HEVC fait une bascule. Un invité bridé à
+  3 Mb/s tombe seul à 28 i/s peintes, pendant que les autres gardent 61 et que
+  le flux s'arrête à son plancher de 6 Mb/s.
+- **N95** (quatre cœurs, Wi-Fi) : un invité le met toujours à genoux, puisque
+  le owner et le flux font deux captures et deux encodages comme avant. Le
+  deuxième invité rejoint désormais (impossible en S0), le troisième non.
+- **Sunshine et Wolf** : inchangés (un encodeur par invité, trois qualités).

@@ -4976,12 +4976,153 @@ millisecondes à 2,4 s. Le flux commun ne retire que la part de l'hôte (un
 encodage pour tous les invités) : chaque invité reçoit toujours son propre
 exemplaire sur le lien montant.
 
-### 8q.3 Ce que S9 devra montrer
+### 8q.3 En cours de route : S5 à S7 (30/09/2026)
 
-- 2 sessions d'encodage au plus, quel que soit le nombre d'invités (ici 1 + N).
-- Sur la RTX, le total hôte du owner à 3 invités revenu vers 3,6 / 4-6 ms (celui
-  d'un seul encodage de plus, soit la ligne « 1 invité »).
-- Sur le N95, un deuxième et un troisième invité qui rejoignent.
+Flux commun branché, même banc, sur la RTX. Ce que S9 devait montrer :
+2 sessions d'encodage au plus, quel que soit le nombre d'invités ; sur la RTX,
+le total hôte du owner à 3 invités revenu vers la ligne « 1 invité » ; sur le
+N95, un deuxième et un troisième invité qui rejoignent.
+
+- **S5, le flux commun** (`171c7988`) :
+  - à 3 invités, owner à 3,84/6,06 ms (p50/p99) contre 6,78/10,69 ;
+  - **2 sessions NVENC au lieu de 4**, moteur d'encodage à 23 % au lieu de 45 ;
+  - worker du flux tué : l'invité revient en 1,8 s, sous le même pipe ;
+  - interrupteur à 0 : un encodeur par invité, comme avant.
+- **S6, l'arbitrage et la bascule H.264** (`13a41c7a`) :
+  - 2 invités HEVC, puis un 3ᵉ qui ne décode pas le HEVC : une seule bascule,
+    les trois pages en H.264, toujours 2 sessions NVENC, owner à 4,10/6,59 ms ;
+  - les mêmes trois invités H.264 sans flux commun : 8,19/11,73 ms, 4 sessions,
+    moteur à 49 % ;
+  - trois Chrome sur la même Arc débordent leur file de décodage en H.264
+    (6 à 10 fois en 12 s avec le flux, 14 à 73 sans) : capacité du client.
+- **S7, la hauteur choisie par le owner** (`2346bcea`) :
+  - changée en direct, 1080 → 720 → 1440 avec 2 invités : flux reconstruit en
+    1280×720 à 4 444 kb/s, puis en 2560×1440 à 17 776 kb/s ;
+  - invités revenus en ~1,5 s ; owner à 3,88/6,13 ms sur les trois fenêtres,
+    2 sessions NVENC ;
+  - un navigateur sans HEVC rejoint directement en H.264 (un seul join),
+    l'autre invité suit par un avis `feedcodec`.
+
+### 8q.4 Mesure finale (S9, 01/10/2026)
+
+Le montage de S0 : trois écrans, trois GPU, les mêmes fenêtres (0, 1, 3, 0, 3,
+1, 0 invités, 30 s chacune). Deux différences de la machine :
+- l'écran de la RTX avait quitté le bureau : un écran virtuel (VDD by MTT,
+  rendu par la RTX) l'a remplacé, en 2560×1440 à 120 Hz ;
+- l'écran de l'Arc était à 60 Hz (120 en S0).
+
+Build `43896423` : le flux reste sur la route que la machine choisit (voir
+plus bas). La mesure RTX a tourné avec `f9b47174`, dont le flux prenait déjà
+cette route : NVENC en D3D11, qui a l'intra-refresh.
+
+| Encodeur | Invités | Total hôte du owner, S0 (p50 / p99, ms) | S9 | Sessions d'encodage S0 → S9 | Moteur S0 → S9 | i/s des invités |
+|---|---|---|---|---|---|---|
+| RTX 5060 Ti, NVENC (D3D11) | 0 | 3,58 / 4,07 | 3,67 / 4,02 | 1 → 1 | 16 → 17 % | |
+| | 1 | 3,84 / 6,16 | 3,71 / 5,96 | 2 → 2 | 25 → 27 % | 60 |
+| | 3 | 6,78 / 10,69 | **3,84 / 6,19** | **4 → 2** | **45 → 29 %** | 52-54 (décodés sur l'Arc) |
+| Arc A380, D3D12 VE | 0 | 5,12 / 7,68 | 4,86 / 8,45 | 1 → 1 | – → 16 % | |
+| | 1 | 4,86 / 7,81 | 5,12 / 9,06 | 2 → 2 | – → 26 % | 61 |
+| | 3 | 5,12 / 9,24 | 5,12 / 9,65 | 4 → 2 | – → 29 % | 61 |
+| iGPU AMD (9900X), AMF | 0 | 9,22 / 9,72 | 10,24 / 10,99 | 1 → 1 | | |
+| | 1 | 9,22 / 9,73 | 10,24 / 12,10 | 2 → 2 | | 61 |
+| | 3 | **11,26 / 12,13** | **10,24 / 12,33** | 4 → 2 | | 61 |
+
+La mesure AMD s'est arrêtée à sa cinquième fenêtre : la page d'un invité
+relancé n'a pas chargé dans les 60 s (banc, pas l'hôte). Ses fenêtres 0, 1,
+3 et 0 sont complètes.
+
+**N95** (UHD, D3D12 VE, Wi-Fi ; édition dev `0.3.1-43896423` ; fenêtres 0, 1,
+2, 3, 0 comme en S0) :
+
+| Invités | Total hôte du owner, S0 (p50 / p99, ms) | S9 | i/s envoyées au owner, S0 → S9 | E2E de l'overlay, S0 → S9 | i/s des invités |
+|---|---|---|---|---|---|
+| 0 | 7,68 / 23,46 | 7,42 / 14,62 | 57 → 58 | 38 → 28 ms | |
+| 1 | 22,53 / 75,94 | 22,53 / 83,94 | 28 → 39 | 2,4 s → 82 ms | 34 → 35 |
+| 2 | page du 2ᵉ invité jamais chargée | **24,58 / 94,46** | → 35 | → 67 ms | 30, 32 |
+| 3 | – | page du 3ᵉ invité jamais chargée en 120 s | | | |
+
+- Avec un invité, le N95 fait deux captures et deux encodages avant comme
+  après : le flux commun n'y change rien, et le owner reste à genoux. L'E2E
+  sans file de ce soir tient au Wi-Fi autant qu'au code.
+- Le **deuxième invité rejoint** (impossible en S0), sans que le owner perde
+  plus d'1 ms au p50. Le troisième bute encore : l'hôte ne sert plus sa page.
+  Ce qui reste par invité (son worker, son WebRTC, sa propre capture audio)
+  et les deux captures au même 1080p suffisent à saturer quatre cœurs.
+- Piste pour un hôte faible, hors de ce plan (« owner intouché ») : quand
+  l'image des invités serait celle du owner (même taille, même codec), les
+  invités pourraient suivre son encodage au lieu d'un second.
+
+- **La RTX**, la plus touchée en S0, retrouve à 3 invités la ligne « 1
+  invité » : −2,9 ms au p50, −4,5 ms au p99, pire seconde 7,6 ms au lieu de
+  13,0. Deux sessions NVENC au lieu de quatre, moteur à 29 % au lieu de 45.
+- **L'Arc** ne payait presque rien en S0 et paie la même chose : +0,6 ms de
+  p99 avec un invité, +1,2 avec trois (S0 : +0,1 et +1,6). Sa base est plus
+  haute ce soir (8,45 ms de p99 au lieu de 7,68) : il envoie 61 i/s au lieu de
+  53, son écran étant à 60 Hz.
+- **L'iGPU AMD** prenait 2 ms au p50 et 2,4 au p99 à trois invités en S0.
+  Avec le flux commun, son p50 ne bouge plus et son p99 prend 1,3 ms, sur une
+  base plus haute ce soir (10,24 ms au p50 au lieu de 9,22, à 61 i/s).
+- **Les invités de la mesure RTX** décodaient à trois sur l'Arc, qui mène un
+  écran à 60 Hz. Chaque page y débordait sa file de décodage 12 à 14 fois par
+  fenêtre de 30 s et demandait une image clé : 52-54 i/s. Dans les mesures Arc
+  et AMD, les invités décodent sur la RTX : 61 i/s, aucun débordement. S0
+  avait déjà deux invités à 49 i/s sur cet Arc : c'est la capacité du client.
+- **Le défaut trouvé en route** (`s9-arc-ir.json`) : le flux exigeait
+  l'intra-refresh, et sur l'Arc il quittait pour cela le D3D12 VE pour oneVPL
+  en D3D11. Les deux routes se gênaient sur le même moteur :
+  - avec un seul invité, le flux encodait en 12,3 ms au p50 (35 au p95) ;
+  - le p99 du owner passait de 7,8 à 27 ms.
+  Corrigé par `43896423` : le flux demande l'intra-refresh sur la route de la
+  machine, et s'en passe là où elle ne l'a pas. Les images clés des invités
+  sont alors regroupées et rationnées. Le flux de l'Arc encode ensuite en
+  4,1-4,6 ms.
+
+### 8q.5 Les cas durs (S9, 01/10/2026)
+
+Même instance, owner sur l'écran virtuel de la RTX (sauf mention), invités sur
+DualRTX. Scripts dans `scripts/bench/shared-feed` : `hard_cases.py`,
+`throttled_guest.py`, `share_nonreg.py`, `vd_cold.py` (README).
+
+- **Un invité seul qui part et revient** (bouton Quitter, puis Rejoindre) :
+  parti en 2,0 s, revenu en 4,2 s, sur le même worker de flux. Ni relance ni
+  arrêt : le flux attend 10 s avant de s'arrêter.
+- **Changement de mode de l'écran capturé** sous deux invités (écran virtuel,
+  2560×1440 → 2224×1440 → 2560×1440) : une reconstruction du flux par
+  changement, et les deux invités suivent sa forme (1920×1080 → 1668×1080 →
+  1920×1080), sur le même worker.
+- **Worker du flux tué** : mort vue, relance 250 ms plus tard sous le même
+  pipe, flux prêt et les deux invités de retour 1,3 s après la mort. Leurs
+  pages ont manqué au plus une seconde de statistiques.
+- **Un invité qui ne décode pas le HEVC arrive** (troisième) : il rejoint
+  directement en H.264, le flux passe en H.264 une seule fois, et les deux
+  autres reviennent en H.264 après un avis `feedcodec` chacun.
+- **Un invité bridé sous le plancher** : flux sur l'Arc, deux invités locaux
+  et un sur le N95 en Wi-Fi, dont le lien descendant passe par le shaper
+  WinDivert à 3 Mb/s pendant 25 s (la cible du flux est 10 Mb/s, son
+  plancher 6).
+
+  | Images peintes par seconde | Invité 2 (local) | Invité 3 (local) | N95 |
+  |---|---|---|---|
+  | Avant | 61,9 | 61,9 | 61,7 |
+  | Bridé | 61,3 | 61,3 | **28,3** (12 lignes de réparation) |
+  | Après | 61,8 | 61,7 | 61,3 |
+
+  - Le débit du flux est descendu à 8 000, 6 400, puis 6 000 kb/s en 2 s, et
+    il est resté au plancher tout le bridage. Il est remonté 4,5 s après la fin
+    du bridage, et était à 10 000 kb/s 9,5 s après.
+  - Les invités locaux n'ont écrit aucune ligne de réparation.
+  - Seul le N95 a été bridé (le shaper n'a rien retenu d'autre) : 58 paquets
+    jetés en queue de file.
+- **Non-régression** : un partage depuis Sunshine (`mw-debian`, H.264) et depuis
+  Wolf (`wolf2` sur l'UM790Pro, HEVC). Les deux sont inchangés : la page de
+  l'invité propose ses trois qualités, l'invité a sa propre session, image en
+  8,6 et 11,5 s, et aucune ligne du flux commun au journal.
+- **Écran virtuel ouvert à froid par un invité** (`f9b47174`) : allumé en
+  1,4 s, image en 5,5 s ; le deuxième invité arrive en 2,4 s sans nouvelle
+  opération ; l'écran s'éteint 4 s après leur départ, même quand le owner
+  streame une autre appli de l'hôte. Idem avec `MW_SHARED_FEED=0`.
+- **Interrupteur à 0** : l'invité a de nouveau son encodeur (S5, S6, et
+  l'écran virtuel ci-dessus).
 
 ## 9. Pour l'A/B
 
