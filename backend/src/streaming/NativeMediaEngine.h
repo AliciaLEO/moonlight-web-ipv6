@@ -245,7 +245,12 @@ public:
                              short leftStickX, short leftStickY, short rightStickX,
                              short rightStickY) override;
     void sendControllerRemoval(uint8_t controllerNumber, uint16_t activeGamepadMask) override;
-    void setControllerOffset(int offset) override { m_ControllerOffset = offset; }
+    /// Kept at the browser's own numbering. A native session owns its virtual
+    /// pads — one table per worker, see VigemGamepad — so concurrent sessions
+    /// never meet on one pad; the shift that keeps GameStream sessions apart
+    /// only pushed a guest's second pad past that table, and sent its
+    /// vibration back under a number its page does not have.
+    void setControllerOffset(int) override {}
     void syncLockKeys(bool numLock, bool capsLock, bool scrollLock) override;
     void syncHeldInputs(const QVector<HeldKey>& keys, quint32 buttonMask,
                         bool buttonsHold) override;
@@ -453,11 +458,6 @@ private:
     InputWatchdog* m_Watchdog = nullptr;
 
     std::atomic<bool> m_Connected{false};
-
-    /// Shifts this session's controller numbering so concurrent sessions do not
-    /// collapse onto the host's controller 0. Written once before the session
-    /// starts, read from the input path afterwards.
-    int m_ControllerOffset = 0;
 
     /// Producer→consumer bookkeeping, mirroring MoonlightShim's so the relays'
     /// existing drop diagnostics keep working unchanged.

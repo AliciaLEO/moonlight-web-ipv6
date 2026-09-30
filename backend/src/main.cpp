@@ -4909,7 +4909,9 @@ int main(int argc, char* argv[])
         // The machine's bench knobs too, as the owner path.
         cfg["nativeTuning"] = appSettings.nativeTuning();
         // Gamepads from different sessions would all arrive as controller 0;
-        // offset each player so they land on distinct virtual pads.
+        // offset each player so they land on distinct virtual pads. A native
+        // host's session owns its pads and keeps the browser's numbers
+        // (NativeMediaEngine::setControllerOffset).
         cfg["gamepadOffset"] = slot - kOwnerSlots + 1;
         QJsonArray chainArr;
         for (const QString& m : chain)

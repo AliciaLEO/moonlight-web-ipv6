@@ -175,7 +175,7 @@ NativeMediaEngine::NativeMediaEngine(QObject* parent)
     };
     sink.neutralizePad = [this](short controller, short mask) {
         if (!m_Session) return;
-        // Already shifted when it was noted: goes on the wire as it is.
+        // Noted as the input path sent it: goes on the wire as it is.
         mw::native::InputEvent event;
         event.type = mw::native::InputEvent::Type::ControllerState;
         event.controllerNumber = static_cast<uint8_t>(controller);
@@ -1200,12 +1200,13 @@ namespace {
 /// byte the engine reads it from. Saturated rather than wrapped: an offset that
 /// carries the number past 255 must land on "no such slot", never back on 0 —
 /// which is the owner's own pad.
-uint8_t shiftedController(int controllerNumber, int offset)
+/// The browser's controller number, as this engine keeps it (see
+/// setControllerOffset), on the wire's byte.
+uint8_t padNumber(int controllerNumber)
 {
-    const int shifted = controllerNumber + offset;
-    if (shifted < 0) return 0;
-    if (shifted > 255) return 255;
-    return static_cast<uint8_t>(shifted);
+    if (controllerNumber < 0) return 0;
+    if (controllerNumber > 255) return 255;
+    return static_cast<uint8_t>(controllerNumber);
 }
 
 } // namespace
@@ -1216,7 +1217,7 @@ void NativeMediaEngine::sendControllerArrival(uint8_t controllerNumber, uint16_t
     if (!m_Session) return;
     mw::native::InputEvent event;
     event.type = mw::native::InputEvent::Type::ControllerArrival;
-    event.controllerNumber = shiftedController(controllerNumber, m_ControllerOffset);
+    event.controllerNumber = padNumber(controllerNumber);
     event.activeGamepadMask = activeGamepadMask;
     event.controllerType = type;
     event.hasRumble = hasRumble;
@@ -1231,7 +1232,7 @@ void NativeMediaEngine::sendControllerState(short controllerNumber, short active
     if (!m_Session) return;
     mw::native::InputEvent event;
     event.type = mw::native::InputEvent::Type::ControllerState;
-    event.controllerNumber = shiftedController(controllerNumber, m_ControllerOffset);
+    event.controllerNumber = padNumber(controllerNumber);
     event.activeGamepadMask = static_cast<uint16_t>(activeGamepadMask);
     event.buttonFlags = buttonFlags;
     event.leftTrigger = leftTrigger;
@@ -1257,7 +1258,7 @@ void NativeMediaEngine::sendControllerRemoval(uint8_t controllerNumber, uint16_t
     // a pad that was never there in order to unplug it.
     mw::native::InputEvent event;
     event.type = mw::native::InputEvent::Type::ControllerRemoval;
-    event.controllerNumber = shiftedController(controllerNumber, m_ControllerOffset);
+    event.controllerNumber = padNumber(controllerNumber);
     event.activeGamepadMask = activeGamepadMask;
     m_Session->sendInput(event);
 }
