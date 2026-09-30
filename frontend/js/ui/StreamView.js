@@ -94,6 +94,7 @@ import {
 } from '../stream/EnhancerGovernor.js';
 import { drawCapFor } from '../stream/RenderPacing.js';
 import { ContentAgeProbe } from '../stream/ContentAgeProbe.js';
+import { VsyncGrid } from '../stream/VsyncGrid.js';
 import { LatencyProbe } from '../stream/LatencyProbe.js';
 import { t } from '../i18n/i18n.js';
 
@@ -856,6 +857,18 @@ export class StreamView {
         });
         // Standby views measure nothing; the visible one owns the console handle.
         if (!this._standby) window.mwContentAge = this._contentAge;
+        // This screen's refresh grid, for a native host that aims each frame at
+        // one refresh (cadence=deadline, plan framerate-hote §13) — see
+        // stream/VsyncGrid.js. Idle until a pong says the host wants it.
+        this._vsyncGrid = new VsyncGrid({
+            send: (msg) => {
+                if (this.webrtc) this.webrtc.send(msg);
+            },
+            sendPing: (seq, ts) => {
+                if (this.webrtc) this.webrtc.send({ type: 'ping', seq, ts });
+            },
+        });
+        if (!this._standby) window.mwVsyncGrid = this._vsyncGrid;
         // Native host: mouse motion goes out on `pointerrawupdate` — every
         // report the device makes, not the one-per-display-frame sum that
         // `mousemove` delivers. Decided in _bindPointerRaw; while it is on, the
@@ -3538,6 +3551,11 @@ export class StreamView {
             backendTs = submit.backendTs;
         }
         if (this._contentAge.running) this._contentAge.onDecoded(frame, backendTs);
+        // The vsync grid's ready time: decoded, on vsync — the render loop
+        // draws the freshest frame at the refresh. Drawn, when tearing (below).
+        frame._mwBackendTs = backendTs;
+        if (!this._immediateRender && this._vsyncGrid.running)
+            this._vsyncGrid.noteReady(backendTs, outPerf);
 
         // Presentation deadline (see FramePacer). Timed from the decoder output
         // rather than network arrival on purpose: decode time varies too, and it
@@ -3666,6 +3684,7 @@ export class StreamView {
         // The console handle follows the visible view.
         if (this._latencyProbe) window.mwLatency = this._latencyProbe;
         window.mwContentAge = this._contentAge;
+        window.mwVsyncGrid = this._vsyncGrid;
         if (this._rootEl) this._rootEl.style.visibility = '';
         // This leg is the live stream now, so it needs the full header — the
         // owner's Share menu above all: the retiring view takes its own away
@@ -4195,8 +4214,16 @@ export class StreamView {
         // trimmed to its memory bound — a queued frame is early, not stale — and
         // the head is held until it comes due. That subsumes the fixed reserve
         // below, including the framerate-near-refresh case it costs latency in.
+        //
+        // A host that aims its frames at this screen's refreshes (VsyncGrid)
+        // never lands one on the boundary the reserve is there to absorb: no
+        // reserve then, on any path.
         const paced = !!this._framePacer;
-        const useReserve = !paced && SUPPORTS_CANVAS_TEARING && !this._immediateRender;
+        const useReserve =
+            !paced &&
+            SUPPORTS_CANVAS_TEARING &&
+            !this._immediateRender &&
+            !this._vsyncGrid.followed;
         const maxQueued = paced ? 6 : useReserve ? 2 : 1;
 
         // Queue depth BEFORE any trim: a depth above the reserve means the draw
@@ -4234,6 +4261,7 @@ export class StreamView {
         // draws and closes it; stats stay here. Read the decode time before the
         // draw — the renderer closes the VideoFrame.
         const decodedPerf = frame._mwDecodedPerf;
+        const frameBackendTs = frame._mwBackendTs;
         const drawStart = performance.now();
         // Queue stage: how long the decoded frame waited for its turn to draw
         // (vsync pacing in rAF mode, renderer busy in immediate mode).
@@ -4247,6 +4275,10 @@ export class StreamView {
                 this.stats.rendered++;
                 // Render stage: the GPU/canvas draw itself, same clock.
                 const renderMs = performance.now() - drawStart;
+                // A canvas that tears shows the frame as it is drawn: that is
+                // when it is ready, for the vsync grid.
+                if (this._immediateRender && this._vsyncGrid.running)
+                    this._vsyncGrid.noteReady(frameBackendTs, drawStart + renderMs);
                 if (renderMs >= 0 && renderMs < 5000) this._clientRenderStats.addSample(renderMs);
                 // …and how that time splits between our work and waiting on the
                 // GPU/compositor, which is what tells back-pressure from cost.
@@ -6475,6 +6507,11 @@ export class StreamView {
         }
         if (msg.type === 'pong') {
             this._contentAge.notePong(msg, performance.now());
+            this._vsyncGrid.notePong(msg, performance.now());
+            // The host would aim its frames at this screen's refreshes: tell it
+            // when they are (native host, cadence=deadline).
+            if (msg.grid === true && this._nativeHost && !this._vsyncGrid.running)
+                this._vsyncGrid.start();
             const browserRtt = performance.now() - msg.ts;
             if (browserRtt > 0 && browserRtt < 10000) {
                 this._browserRttStats.addSample(browserRtt);
@@ -10916,6 +10953,8 @@ export class StreamView {
         }
         if (this._contentAge.running) this._contentAge.stop();
         if (window.mwContentAge === this._contentAge) window.mwContentAge = null;
+        this._vsyncGrid.stop();
+        if (window.mwVsyncGrid === this._vsyncGrid) window.mwVsyncGrid = null;
         if (this._mainThreadProbe) {
             this._mainThreadProbe.stop();
             this._mainThreadProbe = null;
