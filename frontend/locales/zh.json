@@ -600,7 +600,7 @@
         "verboseLogsOff": "详细日志已关闭",
         "setByCommandLine": "本次运行已开启：服务器以 {{flag}} 启动。",
         "logs": "日志",
-        "logsDesc": "每种日志中最新的一份（服务器、最近一次串流、浏览器……）打包成一个 .zip，可附加到电子邮件或 GitHub issue。其中包含 IP 地址和计算机名称。",
+        "logsDesc": "每种日志中最新的一份（服务器、最近一次串流、浏览器……）打包成一个 .zip，可附加到电子邮件或 GitHub issue。打包前会先移除 PIN、密钥、指向此实例的链接和公网 IP 地址，并替换计算机名和用户名。",
         "downloadLogs": "下载日志",
         "logsCompressing": "正在压缩…",
         "logsDownloading": "正在下载…",

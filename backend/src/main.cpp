@@ -1997,7 +1997,9 @@ int main(int argc, char* argv[])
     });
 
     QObject::connect(&authManager, &AuthManager::pinChanged, [](const QString& pin) {
-        Logger::info(QString("[Auth] PIN changed: %1").arg(pin));
+        // Never the PIN itself: it opens the instance, and logs get shared.
+        Logger::info(pin.isEmpty() ? QStringLiteral("[Auth] PIN cleared")
+                                   : QStringLiteral("[Auth] PIN changed"));
     });
 
     // Phase 5b: WebRTC DataChannel relay + signaling tracking
@@ -5014,7 +5016,17 @@ int main(int argc, char* argv[])
     // archive. Static: its thread must be joined after the event loop, and
     // before the Logger it reads the path of goes away.
     static LogArchive logArchive;
-    registerLogRoutes(server, logArchive);
+    // The names the archive replaces (LogScrubber): the hosts, this PC, the
+    // instance and the account the server runs as.
+    registerLogRoutes(server, logArchive, [&computerManager, &appSettings]() {
+        LogScrubber::Names names;
+        for (const QJsonValue& h : computerManager.getHostsJson())
+            names.hosts << h.toObject().value(QStringLiteral("name")).toString();
+        names.thisMachine = AppSettings::machineName();
+        names.instance = appSettings.instanceName();
+        names.user = qEnvironmentVariable("USERNAME", qEnvironmentVariable("USER"));
+        return names;
+    });
 
     // /ws2../ws4 carry a player's video and input. Only the mw_player cookie
     // that matches THAT slot's live activation opens them — the session-cookie

@@ -24,6 +24,8 @@
 #include <QMutex>
 #include <QString>
 
+#include "server/LogScrubber.h"
+
 #include <atomic>
 
 class QThread;
@@ -36,6 +38,9 @@ class QThread;
  * stream worker's, the browsers', the probe's... — never the whole directory:
  * a busy host keeps a week of them, and what explains a problem is what was
  * written last. An about.txt says which build and which system wrote them.
+ * Every file, about.txt included, goes through one LogScrubber first: the
+ * archive is made to be posted, and what is secret or personal in a log is
+ * taken out before it goes in.
  *
  * Built on a thread of its own (the HTTP server is single-threaded, and a
  * large worker log takes a moment to deflate), polled for its progress, then
@@ -58,9 +63,10 @@ public:
     ~LogArchive();
 
     /// Start building from @p logDir, plus @p extraFile (the server's own log
-    /// when --log put it elsewhere; may be empty). False while one is running.
+    /// when --log put it elsewhere; may be empty), every file and @p about
+    /// through @p scrubber. False while one is running.
     bool start(const QString& logDir, const QString& extraFile, const QByteArray& about,
-               const QString& fileName);
+               const QString& fileName, const LogScrubber& scrubber = LogScrubber());
     Status status() const;
     /// The finished archive; empty unless status().state is "done".
     QByteArray result() const;

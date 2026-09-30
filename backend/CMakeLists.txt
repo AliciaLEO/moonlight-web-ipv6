@@ -234,6 +234,7 @@ add_executable(mw-server
     src/server/routes/SystemRoutes.cpp
     src/server/routes/LogRoutes.cpp
     src/server/LogArchive.cpp
+    src/server/LogScrubber.cpp
     src/common/Logger.cpp
     src/common/RunFlags.cpp
     src/common/ZipWriter.cpp

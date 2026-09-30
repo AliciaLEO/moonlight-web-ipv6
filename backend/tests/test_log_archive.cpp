@@ -5,6 +5,7 @@
 #include "common/Logger.h"
 #include "common/ZipWriter.h"
 #include "server/LogArchive.h"
+#include "server/LogScrubber.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -111,6 +112,8 @@ void touch(const QString& path, const QByteArray& data, const QDateTime& when)
 }
 
 } // namespace
+
+void run_log_scrubber_tests();
 
 void run_log_archive_tests()
 {
@@ -230,5 +233,165 @@ void run_log_archive_tests()
         CHECK(text.contains("shown line"));
         CHECK(text.contains("verbose line"));
         CHECK_EQ(Logger::instance()->minLevel(), Logger::Info); // the default
+    }
+
+    run_log_scrubber_tests();
+}
+
+// What the archive must never carry to a public issue, in the log's own
+// formats, and what it must leave readable.
+void run_log_scrubber_tests()
+{
+    SECTION("LogScrubber");
+
+    LogScrubber::Names names;
+    names.hosts = {"DualRTX", "Luka-MacBook-Pro", "leos-macbook-pro2.home", "Wolf", "UM790Pro"};
+    names.thisMachine = "DUALRTX";
+    names.instance = "Salon";
+    names.user = "bruno";
+    LogScrubber s(names);
+
+    // Secrets: rikey and the client id through Qt's error string, which quotes
+    // the whole URL (the LAN address stays); the pairing handshake.
+    {
+        const QString out = s.scrubLine(
+            R"~([Session] Launch failed: "Error transferring https://192.168.1.5:47984/launch?appid=1&uniqueid=0123456789ABCDEF&uuid=a1b2&mode=1920x1080x60&rikey=00112233445566778899aabbccddeeff&rikeyid=12345 - server replied: Service Unavailable" kind= 3)~");
+        CHECK(!out.contains("00112233445566778899aabbccddeeff"));
+        CHECK(!out.contains("0123456789ABCDEF"));
+        CHECK(!out.contains("12345 "));
+        CHECK(out.contains("rikey=(hidden)&rikeyid=(hidden)"));
+        CHECK(out.contains("https://192.168.1.5:47984/launch?appid=1&uniqueid=(hidden)"));
+        CHECK(out.contains("mode=1920x1080x60"));
+        const QString pair = s.scrubLine(
+            "Pairing request failed: http pair → Error transferring http://10.0.0.2:47989/"
+            "pair?devicename=roth&updateState=1&phrase=getservercert&salt=a1b2c3d4&clientcert="
+            "2d2d2d2d2d424547 - server replied: Bad Request");
+        CHECK(!pair.contains("a1b2c3d4"));
+        CHECK(!pair.contains("2d2d2d2d2d424547"));
+        CHECK(!pair.contains("roth"));
+        CHECK(pair.contains("phrase=getservercert"));
+        CHECK_EQ(s.scrubLine("<root><pairingsecret>ABCDEF0123</pairingsecret><paired>1</paired>"),
+                 QString("<root><pairingsecret>(hidden)</pairingsecret><paired>1</paired>"));
+    }
+    CHECK_EQ(s.scrubLine("[Auth] PIN changed: 482913"), QString("[Auth] PIN changed: (hidden)"));
+    CHECK_EQ(s.scrubLine("Pairing initiated for BCA1-22, PIN: 0427"),
+             QString("Pairing initiated for BCA1-22, PIN: (hidden)"));
+    CHECK_EQ(s.scrubLine("[Auth] Revoke request — token='AbC_dEf-123', size=43"),
+             QString("[Auth] Revoke request — token='(hidden)', size=43"));
+    CHECK_EQ(s.scrubLine("[IdentityManager] Using Moonlight common unique ID: 0123ABCD4567"),
+             QString("[IdentityManager] Using Moonlight common unique ID: (hidden)"));
+    CHECK_EQ(s.scrubLine(R"~([main] Revoke teardown (uid= "F1E2D3C4B5" ))~"),
+             QString(R"~([main] Revoke teardown (uid= "(hidden)" ))~"));
+    // ICE credentials, from libjuice in verbose mode and from a candidate.
+    CHECK_EQ(s.scrubLine(R"~([rtc] juice: STUN integrity check failed, password="s3cr3tpwd")~"),
+             QString(R"~([rtc] juice: STUN integrity check failed, password="(hidden)")~"));
+    CHECK_EQ(s.scrubLine(R"~(STUN local ufrag check failed, expected="abcd", actual="efgh")~"),
+             QString(R"~(STUN local ufrag check failed, expected="(hidden)", actual="(hidden)")~"));
+    CHECK(!s.scrubLine("candidate:1 1 udp 2122 192.168.1.9 5000 typ host ufrag Xy12 network-id 1")
+               .contains("Xy12"));
+    CHECK_EQ(s.scrubLine("a=ice-pwd:abcdefghijklmnop"), QString("a=ice-pwd:(hidden)"));
+    CHECK_EQ(s.scrubLine("Cookie: mw_session=abc; mw_player=def"), QString("Cookie: (hidden)"));
+    CHECK_EQ(s.scrubLine("[Tunnel] Ready — host key C1:EC:02:3F:44:BE:05:AC:66:7A:C8:E9:E0"),
+             QString("[Tunnel] Ready — host key (hidden)"));
+    // Keystrokes: hidden, the line kept; the switch's own line stays.
+    CHECK_EQ(s.scrubLine("[KBD] KeyA client 'a' (non-US) -> position VK 0x41 | Notepad: a"),
+             QString("[KBD] (keystroke hidden)"));
+    CHECK_EQ(s.scrubLine("[KBD] keyboard diagnostics on — one line per printable key press"),
+             QString("[KBD] keyboard diagnostics on — one line per printable key press"));
+    CHECK_EQ(s.scrubLine("[StreamView] Input gate closed (focus): Bank statement.pdf - Viewer"),
+             QString("[StreamView] Input gate closed (focus): (hidden)"));
+    CHECK_EQ(s.scrubLine("[Auth] Geo data stored for session abcd1234: Lyon, France"),
+             QString("[Auth] Geo data stored for session abcd1234: (hidden)"));
+    CHECK_EQ(s.scrubLine("Wake-on-LAN sent to host (aa:bb:cc:dd:ee:ff)"),
+             QString("Wake-on-LAN sent to host ((hidden MAC))"));
+    CHECK(!s.scrubLine("contact: someone.else@example.org").contains("example.org"));
+
+    // Links that open the instance; the project's own names stay.
+    CHECK_EQ(
+        s.scrubLine(
+            R"~([RDV] line up — "https://stream.moonlightweb.top/41zvnyqjdnybgwhw8f20martz4")~"),
+        QString(R"~([RDV] line up — "https://stream.moonlightweb.top/(link)")~"));
+    CHECK_EQ(s.scrubLine("  From the internet: https://stream.dev.moonlightweb.top/wwj7jmmpb"),
+             QString("  From the internet: https://stream.dev.moonlightweb.top/(link)"));
+    CHECK_EQ(s.scrubLine("[k3j4 guest 2@192.168.1.20] page /p/Zx81-abcdefgh — Mozilla/5.0"),
+             QString("[k3j4 guest 2@192.168.1.20] page /p/(link) — Mozilla/5.0"));
+    CHECK_EQ(s.scrubLine("[k3j4 owner@192.168.1.20] page /41zvnyqjdnybgwhw8f20martz4 — x"),
+             QString("[k3j4 owner@192.168.1.20] page /(link) — x"));
+    CHECK_EQ(s.scrubLine("SSL certificate loaded from source: CN=8f3b2aa.moonlightweb.top"),
+             QString("SSL certificate loaded from source: CN=instance.moonlightweb.top"));
+    CHECK_EQ(s.scrubLine("Untrusted Host 'dualrtx.tailbea5b3.ts.net' refused"),
+             QString("Untrusted Host 'tailnet-1.ts.net' refused"));
+
+    // Names: the same stand-in every time, this PC before the host list,
+    // generic words left alone, home paths in both of the log's spellings.
+    CHECK_EQ(s.scrubLine("[NETWORK] DualRTX is online (192.168.1.12:47989)"),
+             QString("[NETWORK] this-pc is online (192.168.1.12:47989)"));
+    CHECK_EQ(s.scrubLine("Host updated: Luka-MacBook-Pro, then luka-macbook-pro again"),
+             QString("Host updated: host-1, then host-1 again"));
+    CHECK_EQ(s.scrubLine("mDNS host discovered: leos-macbook-pro2.local."),
+             QString("mDNS host discovered: host-2.local."));
+    CHECK_EQ(s.scrubLine("[WolfApi] Wolf answered; UM790Pro did not"),
+             QString("[WolfApi] Wolf answered; host-3 did not"));
+    // A machine the host list does not know, by its LAN name; Chrome's random
+    // mDNS names and the stand-ins stay.
+    CHECK_EQ(s.scrubLine("mDNS host discovered: Kids-iPad.local. (and kids-ipad.lan) "
+                         "f6636672-ff76-4595-8733-2a171e4fcb18.local host-1.local"),
+             QString("mDNS host discovered: host-4.local. (and host-4.lan) "
+                     "f6636672-ff76-4595-8733-2a171e4fcb18.local host-1.local"));
+    CHECK_EQ(s.scrubLine("[Settings] instance name: Salon"),
+             QString("[Settings] instance name: instance-name"));
+    CHECK_EQ(s.scrubLine("[CERT] Found private key: file=C:/Users/bruno/AppData/cert/key.pem"),
+             QString("[CERT] Found private key: file=C:/Users/user/AppData/cert/key.pem"));
+    CHECK_EQ(s.scrubLine(R"~(dir "C:\\Users\\Mimi\\AppData" and /home/minis/x and /Users/leo/y)~"),
+             QString(R"~(dir "C:\\Users\\user\\AppData" and /home/user/x and /Users/user/y)~"));
+    CHECK_EQ(s.scrubLine("Worker spawned in the console session as \"bruno (elevated)\""),
+             QString("Worker spawned in the console session as \"user (elevated)\""));
+
+    // Addresses: public ones replaced, each by its own and always the same;
+    // LAN, loopback, CGNAT, ULA and link-local kept; versions and clocks
+    // are not addresses.
+    CHECK_EQ(s.scrubLine("[UPNP] External IP address: 88.12.34.56"),
+             QString("[UPNP] External IP address: 203.0.113.1"));
+    CHECK_EQ(s.scrubLine(R"~(Public IP changed from "88.12.34.56" to "90.1.2.3")~"),
+             QString(R"~(Public IP changed from "203.0.113.1" to "203.0.113.2")~"));
+    CHECK_EQ(s.scrubLine("peers 10.0.0.1 172.20.1.1 127.0.0.1 100.101.1.2 169.254.3.4 0.3.1.22"),
+             QString("peers 10.0.0.1 172.20.1.1 127.0.0.1 100.101.1.2 169.254.3.4 0.3.1.22"));
+    CHECK_EQ(s.scrubLine("[2026-09-30 10:00:00.123] [INFO] Chrome/153.0.0.0 Safari/537.36"),
+             QString("[2026-09-30 10:00:00.123] [INFO] Chrome/153.0.0.0 Safari/537.36"));
+    CHECK_EQ(
+        s.scrubLine(R"~(candidate:1 1 UDP 2122 2a01:e0a:ac5:df0:5d3a:b3cb:1:2 5000 typ host)~"),
+        QString(R"~(candidate:1 1 UDP 2122 2001:db8::1 5000 typ host)~"));
+    CHECK_EQ(s.scrubLine("from [2a01:e0a:ac5:df0:5d3a:b3cb:1:2]:443 and fd12:3456::c1 fe80::1 ::1"),
+             QString("from [2001:db8::1]:443 and fd12:3456::c1 fe80::1 ::1"));
+    CHECK_EQ(s.scrubLine("mapped ::ffff:88.12.34.56 at 12:34:56"),
+             QString("mapped ::ffff:203.0.113.1 at 12:34:56"));
+
+    // Whole files: PEM blocks go, line endings stay.
+    CHECK_EQ(LogScrubber().scrub("a\r\n-----BEGIN PRIVATE KEY-----\r\nMIIE\r\n-----END PRIVATE "
+                                 "KEY-----\r\nb\n"),
+             QByteArray("a\r\n-----BEGIN PRIVATE KEY----- (hidden) -----END PRIVATE KEY-----"
+                        "\r\nb\n"));
+
+    // In the archive: every file and about.txt, one scrubber for all of them.
+    {
+        QTemporaryDir tmp;
+        const QByteArray log = "[Auth] PIN changed: 482913\n"
+                               "[UPNP] External IP address: 88.12.34.56\n"
+                               "[NETWORK] UM790Pro is online (192.168.1.9:47989)\n";
+        touch(tmp.path() + "/moonlightweb.log", log, QDateTime::currentDateTime());
+        LogArchive archive;
+        CHECK(archive.start(tmp.path(), QString(), "Settings file: /home/bruno/s.json\n",
+                            "logs.zip", LogScrubber(names)));
+        QElapsedTimer t;
+        t.start();
+        while (archive.status().state == QLatin1String("running") && t.elapsed() < 10000)
+            QThread::msleep(10);
+        CHECK_EQ(archive.status().state, QString("done"));
+        const QMap<QString, Entry> entries = readZip(archive.result());
+        const QByteArray expected = "[Auth] PIN changed: (hidden)\n"
+                                    "[UPNP] External IP address: 203.0.113.1\n"
+                                    "[NETWORK] host-1 is online (192.168.1.9:47989)\n";
+        CHECK(holds(entries.value("moonlightweb.log"), expected));
+        CHECK(holds(entries.value("about.txt"), "Settings file: /home/user/s.json\n"));
     }
 }

@@ -81,17 +81,16 @@ QByteArray aboutText()
     if (!AppSettings::fileOverride().isEmpty())
         s += QStringLiteral("Settings file: %1 (--config)\n")
                  .arg(QDir::toNativeSeparators(AppSettings::fileOverride()));
-    s += QStringLiteral("\nEach log is the latest non-empty one of its kind.\n");
+    s += QStringLiteral("\nEach log is the latest non-empty one of its kind.\n\n");
+    s += LogScrubber::notice();
     return s.toUtf8();
 }
 
+// No machine name in it: a file's name shows wherever it is attached.
 QString archiveName()
 {
-    QString host = QSysInfo::machineHostName();
-    host.remove(QRegularExpression(QStringLiteral("[^A-Za-z0-9-]")));
-    return QStringLiteral("moonlightweb-logs-%1%2.zip")
-        .arg(host.isEmpty() ? QString() : host + QLatin1Char('-'),
-             QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")));
+    return QStringLiteral("moonlightweb-logs-%1.zip")
+        .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss")));
 }
 
 QJsonObject statusJson(const LogArchive::Status& s)
@@ -162,7 +161,8 @@ HttpResponse writeClientLog(const HttpRequest& req, const QString& who)
     return HttpResponse::json(obj);
 }
 
-void registerLogRoutes(HttpServer& server, LogArchive& archive)
+void registerLogRoutes(HttpServer& server, LogArchive& archive,
+                       std::function<LogScrubber::Names()> names)
 {
     RestRouter* router = server.router();
 
@@ -178,9 +178,10 @@ void registerLogRoutes(HttpServer& server, LogArchive& archive)
         return HttpResponse::json(statusJson(archive.status()));
     });
 
-    router->post(QStringLiteral("/api/logs/archive"), [&archive](const HttpRequest& req) {
+    router->post(QStringLiteral("/api/logs/archive"), [&archive, names](const HttpRequest& req) {
         if (!req.isLocal) return HttpResponse::error(403, "Admin only");
-        if (!archive.start(logDir(), Logger::instance()->logFilePath(), aboutText(), archiveName()))
+        if (!archive.start(logDir(), Logger::instance()->logFilePath(), aboutText(), archiveName(),
+                           LogScrubber(names ? names() : LogScrubber::Names())))
             return HttpResponse::error(409, "An archive is already being built");
         Logger::info(QStringLiteral("[Logs] Archive requested from %1").arg(req.clientAddress));
         return HttpResponse::json(statusJson(archive.status()));

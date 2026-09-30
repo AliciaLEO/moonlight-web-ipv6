@@ -140,6 +140,7 @@ add_executable(run_tests
     # The "Download logs" archive: which files go in, and the .zip they go in.
     ${_src}/src/common/ZipWriter.cpp
     ${_src}/src/server/LogArchive.cpp
+    ${_src}/src/server/LogScrubber.cpp
 )
 
 target_include_directories(run_tests PRIVATE

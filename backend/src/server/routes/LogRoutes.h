@@ -18,6 +18,9 @@
 #pragma once
 
 #include "common/Types.h"
+#include "server/LogScrubber.h"
+
+#include <functional>
 
 class HttpServer;
 class LogArchive;
@@ -38,5 +41,9 @@ HttpResponse writeClientLog(const HttpRequest& req, const QString& who);
  * GET  /api/logs/archive                 the archive's progress (admin)
  * POST /api/logs/archive                 start building it (admin)
  * GET  /api/logs/archive/download        the finished .zip (admin)
+ *
+ * @p names gives the names to replace in the archive (LogScrubber), asked for
+ * each time one is built: hosts come and go.
  */
-void registerLogRoutes(HttpServer& server, LogArchive& archive);
+void registerLogRoutes(HttpServer& server, LogArchive& archive,
+                       std::function<LogScrubber::Names()> names);

@@ -26,6 +26,7 @@
 #include <QThread>
 
 #include <algorithm>
+#include <memory>
 
 LogArchive::~LogArchive()
 {
@@ -64,7 +65,7 @@ QList<QFileInfo> LogArchive::latestPerKind(const QList<QFileInfo>& files)
 }
 
 bool LogArchive::start(const QString& logDir, const QString& extraFile, const QByteArray& about,
-                       const QString& fileName)
+                       const QString& fileName, const LogScrubber& scrubber)
 {
     QMutexLocker lock(&m_Mutex);
     if (m_Status.state == QLatin1String("running")) return false;
@@ -99,10 +100,14 @@ bool LogArchive::start(const QString& logDir, const QString& extraFile, const QB
     m_Result.clear();
     m_Done = 0;
 
-    m_Thread = QThread::create([this, files, about]() {
+    // Shared, because the thread's callable is const and scrubbing keeps state.
+    auto scrub = std::make_shared<LogScrubber>(scrubber);
+    m_Thread = QThread::create([this, files, about, scrub]() {
         ZipWriter zip;
         QString error;
-        zip.addFile(QStringLiteral("about.txt"), about, QDateTime::currentDateTime());
+        // One scrubber for the whole archive: an address or a name gets the
+        // same stand-in in every file.
+        zip.addFile(QStringLiteral("about.txt"), scrub->scrub(about), QDateTime::currentDateTime());
         for (const QFileInfo& f : files) {
             QFile in(f.absoluteFilePath());
             // Shared read: the live logs are open for writing, by this process
@@ -111,7 +116,7 @@ bool LogArchive::start(const QString& logDir, const QString& extraFile, const QB
                 error = QStringLiteral("cannot read %1: %2").arg(f.fileName(), in.errorString());
                 break;
             }
-            const QByteArray data = in.readAll();
+            const QByteArray data = scrub->scrub(in.readAll());
             if (!zip.addFile(f.fileName(), data, f.lastModified())) {
                 error = QStringLiteral("%1 is too large for the archive").arg(f.fileName());
                 break;

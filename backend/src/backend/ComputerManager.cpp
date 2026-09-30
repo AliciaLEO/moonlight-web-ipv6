@@ -1369,7 +1369,8 @@ std::pair<int, QJsonObject> ComputerManager::handleStartPairing(const QString& u
                              host->activeHttpsPort > 0 ? host->activeHttpsPort : MW_HTTPS_PORT);
     m_ActivePairings[uuid] = pm;
 
-    Logger::info(QString("Pairing initiated for %1, PIN: %2").arg(uuid, pin));
+    // Not the PIN: it is on the page, and a log gets shared.
+    Logger::info(QString("Pairing initiated for %1").arg(uuid));
 
     QJsonObject obj;
     obj["status"] = "initiated";
