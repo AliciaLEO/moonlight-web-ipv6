@@ -4744,6 +4744,35 @@ ratées ; Auto à 500 Hz 67,2 (144), 50,5/s.
   à 49-53 i/s seule, en plein écran sur l'écran AMD) a été mis en place, sa
   lecture n'a pas été rapportée.
 
+### 8p.8 Décision A : clic → drapeau, RE9, la mise en produit (30/09, soir)
+
+Client N95 (Wi-Fi, écran à 60 Hz, tearing), hôte Arc, cadence d'aujourd'hui ;
+deux passes alternées par fréquence, 60 clics par passe (`pass.py --clicks`,
+`ef5bb517`) :
+
+| Écran virtuel | Âge affiché, ms (2 passes) | Clic → drapeau, médiane (p90), ~117 clics |
+|---|---|---|
+| 60 Hz (aujourd'hui pour ce client) | 61,2 / 54,4 | 139,3 (189) |
+| 240 Hz (A) | 69,6 / 71,0 | 133,8 (174) |
+
+- Le clic → drapeau gagne 5,5 ms en médiane et 15 au p90 : l'image qu'un clic
+  fait apparaître attend le rafraîchissement suivant de l'écran virtuel, 8 ms
+  en moyenne à 60 Hz, 2 à 240.
+- L'âge affiché va dans l'autre sens sur ces passes, après la capture (+10 ms :
+  file du lien, décodage). Le débit demandé est le même (20 Mbit/s) ; c'est le
+  régulateur de lien qui a réagi au Wi-Fi autrement d'une passe à l'autre. La
+  nuit précédente, sur le même client, 240 Hz gagnait 13 ms (§8p.4 bis) : le
+  Wi-Fi du N95 ne tranche pas l'âge affiché.
+- **Mise en produit** (`03c189ea`), vérifiée sur une vraie session sans clé :
+  « virtual display at 240 Hz for a 59 fps stream (faster than the stream) »,
+  flux à 59 i/s ; N95 : 53,5 ms d'âge affiché, clic → drapeau 128 ms (40 clics).
+- **RE9 non mesuré.** Piloté par script (copie propre ; préférence GPU et
+  `config.ini` rendus, empreinte vérifiée) sur l'écran virtuel rendu par la
+  RTX : le jeu tourne (scène sous la pluie, RTX à 98 %), mais la capture de
+  l'hôte n'en voit que 3 à 7 présentations par seconde et un `ddagrab`
+  d'ffmpeg une image en 20 s — avec et sans le réglage VRR de Windows. À
+  refaire avec Bruno (H3.2), le jeu lancé à la main.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session

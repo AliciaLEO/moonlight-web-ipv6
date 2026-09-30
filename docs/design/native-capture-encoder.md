@@ -6764,3 +6764,19 @@ pendant le stream est une cause possible, à écarter par un contrôle sans lui.
 **Reste** : un client en Ethernet (UM790Pro sous Windows, Mac au calme), là où
 la visée peut tenir — âge au rafraîchissement en vsync contre Auto, avec les
 mêmes décodages et ≤ 0,5 % de ratées ; le contrôle VRR sans écran virtuel.
+
+### 33.9 Décision A en produit : l'écran virtuel à 240 Hz (30/09/2026)
+
+Sous Windows, l'écran virtuel du produit tourne à 240 Hz (`kRateMax`) quelle
+que soit la fréquence du client (`refreshForStream(…, faster)`, `03c189ea`).
+Le flux garde la sienne — celle de l'écran du client sous Auto — et encode la
+première présentation de chaque intervalle : rien de plus n'est encodé ni
+envoyé, le débit automatique ne bouge pas. Une image que l'hôte dessine attend
+la composition 4,2 ms au plus, au lieu d'une période du flux.
+- Mesuré : −6 à −17 ms d'âge affiché derrière un Arc ou un iGPU, neutre
+  derrière la RTX (§33.7, banc §8p.4 sexies) ; clic → drapeau sur le N95,
+  −5,5 ms en médiane et −15 au p90 (banc §8p.8).
+- macOS garde la fréquence du flux ; `MW_VDD_REFRESH` reste la clé de banc ;
+  le journal de session dit la fréquence et pourquoi.
+- Reste : les i/s d'un vrai jeu à 240 Hz (RE9 n'a pas pu être piloté ce
+  soir-là) et le ressenti de Bruno.
