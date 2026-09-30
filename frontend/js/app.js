@@ -168,6 +168,18 @@ const SIDE_KEYS_STORE = 'mw-hs-side-keys';
 const linkHtml = (u) =>
     `<a href="${encodeURI(u)}" target="_blank" rel="noopener">${escapeHtml(u)}</a>`;
 
+/** Set by "Don't show this again" in the "Streaming your own PC?" dialog (issue
+ *  #25): someone testing on the host itself meets it on every launch. Same
+ *  'off' convention as the notice popins' mute keys. */
+const SELF_STREAM_WARN_KEY = 'mw_self_stream_warn';
+function selfStreamWarnMuted() {
+    try {
+        return localStorage.getItem(SELF_STREAM_WARN_KEY) === 'off';
+    } catch {
+        return false;
+    }
+}
+
 const MoonlightApp = {
     // ── View instances persisted across overlays ─────────────────────────────
     state: 'loading',
@@ -1763,7 +1775,8 @@ const MoonlightApp = {
             !(opts && opts.skipSelfStreamWarn) &&
             host &&
             host.isLocalHost &&
-            this._isHostMachine()
+            this._isHostMachine() &&
+            !selfStreamWarnMuted()
         ) {
             this._showSelfStreamWarning(host, app);
             return;
@@ -2388,6 +2401,10 @@ const MoonlightApp = {
                 <h3>${escapeHtml(t('selfStream.title'))}</h3>
                 <p class="pairing-instruction">${escapeHtml(t('selfStream.body'))}</p>
                 <div class="self-stream-url-slot"></div>
+                <label class="self-stream-mute">
+                    <input type="checkbox" class="self-stream-mute-check">
+                    <span>${escapeHtml(t('selfStream.dontShowAgain'))}</span>
+                </label>
                 <div class="pairing-actions">
                     <button class="btn btn-secondary self-stream-cancel">${escapeHtml(
                         t('common.cancel'),
@@ -2417,6 +2434,16 @@ const MoonlightApp = {
             }
         };
         const proceed = () => {
+            // Kept only on the way in: Cancel says this launch was a mistake,
+            // and the warning is what catches the next one.
+            const mute = /** @type {HTMLInputElement} */ (
+                overlay.querySelector('.self-stream-mute-check')
+            );
+            if (mute && mute.checked) {
+                try {
+                    localStorage.setItem(SELF_STREAM_WARN_KEY, 'off');
+                } catch {}
+            }
             cleanup();
             this.launchApp(host, app, undefined, undefined, { skipSelfStreamWarn: true });
         };

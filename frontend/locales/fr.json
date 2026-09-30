@@ -138,7 +138,8 @@
         "title": "Streamer ton propre PC ?",
         "body": "Tu t'apprêtes à streamer le PC devant lequel tu es assis. L'effet Inception est fun et rigolo, mais MoonlightWeb est bien plus utile quand tu streames ce PC depuis un autre appareil. Petit rappel : MoonlightWeb s'installe sur le PC à streamer, pas sur celui où tu joues 😉",
         "useUrl": "Ouvre MoonlightWeb depuis un autre ordinateur à cette adresse :",
-        "streamAnyway": "Streamer quand même 🚀"
+        "streamAnyway": "Streamer quand même 🚀",
+        "dontShowAgain": "Ne plus afficher"
     },
     "update": {
         "available": "MoonlightWeb {{version}} est disponible",

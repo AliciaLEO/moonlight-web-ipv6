@@ -1032,6 +1032,23 @@ body.ios .settings-checkbox-label input[type='checkbox']:checked::before {
     word-break: break-all;
     user-select: all;
 }
+/* "Don't show this again": quiet, just above the buttons it qualifies. Same
+   checkbox as the login's "Keep me signed in". */
+.self-stream-mute {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--fs-sm);
+    color: var(--text-2);
+    cursor: pointer;
+}
+.self-stream-mute input {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent-1);
+    cursor: pointer;
+}
 .pairing-status-text {
     font-size: var(--fs-sm);
     margin-bottom: var(--space-3);
