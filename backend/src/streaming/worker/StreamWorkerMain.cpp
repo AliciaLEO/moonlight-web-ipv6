@@ -282,8 +282,13 @@ int runFeedWorker(const QJsonObject& cfg)
     });
 
     // Every guest's session is carried by its own worker; this one only
-    // encodes: fixed cadence, no audio, intra-refresh it cannot do without,
-    // and a rate the slowest guest pulls down to 60 % of the setting at most.
+    // encodes: fixed cadence, no audio, and a rate the slowest guest pulls
+    // down to 60 % of the setting at most. Intra-refresh where the route the
+    // machine picks for this GPU grants it, as the owner's own stream asks it
+    // — never a route of its own for it: on an Arc, the D3D11 oneVPL one beside
+    // the owner's D3D12 Video Encode took the owner's p99 from 7.8 to 27 ms
+    // with a single guest (S9, 01/10/2026). Where it is not granted, the
+    // guests' keyframes are grouped and rationed (FeedArbiter).
     NativeMediaEngine::StartParams p;
     p.displayId = displayId;
     p.width = cfg["width"].toInt();
@@ -295,7 +300,6 @@ int runFeedWorker(const QJsonObject& cfg)
     // decodes nothing else (VIDEO_FORMAT_* masks, as the owner's /start).
     p.clientVideoFormats = cfg["h264"].toBool() ? 0x000F : (0x0F00 | 0x000F);
     p.intraRefresh = true;
-    p.intraRefreshRequired = true;
     p.governorFloorPercent = cfg["governorFloorPercent"].toInt(60);
     p.followDisplayShape = true;
     p.viewerAdmin = false;

@@ -69,7 +69,7 @@ struct VideoPipelineFacts
     /// (d3d12DriverExcluded).
     std::string driverExcluded;
     /// The stream must refresh by intra-refresh (SessionConfig::
-    /// intraRefreshRequired: the guests' shared feed), and whether the D3D12
+    /// intraRefreshRequired: the bench's intra=2), and whether the D3D12
     /// route grants it on this GPU — taken for granted until a build finds
     /// out, like videoEncode12: the Arc's D3D12 Video Encode sweeps one frame
     /// at most, which is no wave at all, while its D3D11 oneVPL sweeps a real

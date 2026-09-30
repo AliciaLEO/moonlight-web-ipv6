@@ -37,14 +37,17 @@ namespace mw::native {
 ///
 ///  - **Keyframes**: the first request opens a window of kGatherMs, and every
 ///    request inside it is served by the one keyframe that closes it; and no
-///    two keyframes come closer than kMinGapMs, whoever asks. A guest that
-///    lost a frame is repaired by the feed's intra-refresh anyway: a keyframe
-///    only makes it sooner, for everyone, and so it is rationed.
+///    two keyframes come closer than kMinGapMs, whoever asks. Where the feed's
+///    encoder refreshes by intra-refresh, a guest that lost a frame is
+///    repaired by the wave anyway and a keyframe only makes it sooner; where
+///    it does not (an Arc's D3D12 Video Encode), the keyframe is the repair.
+///    Either way it is everyone's, and so it is rationed.
 ///  - **Links**: the reports that came in over kLinkPeriodMs fold into one —
 ///    the worst rise of delay, the most gaps, the most evictions, the fewest
 ///    frames received — handed to the feed's governor, which then follows the
 ///    slowest guest down to its floor (60 % of the setting for the feed).
-///    Below it, that guest drops frames on its own and its wave repairs them.
+///    Below it, that guest drops frames on its own, repaired by the wave or,
+///    without one, by the rationed keyframe.
 ///    A report that says its page was hidden (`resumed`) is kept only when
 ///    every report of the period says so: one guest back from the background
 ///    is not every guest's link recovering.

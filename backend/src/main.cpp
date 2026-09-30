@@ -4923,11 +4923,12 @@ int main(int argc, char* argv[])
         // The guests' shared feed (plan « flux commun des invités »): on this
         // machine's native host every guest watches one stream, encoded once
         // by a worker of its own, instead of a capture and an encoder each.
-        // The guest's worker carries its pictures, and rides out a loss
-        // (the feed refreshes by intra-refresh: nobody's loss costs everyone a
-        // keyframe). Every other host, and a switch turned off, keeps the
-        // encoder per guest exactly as it was. Joined once the display is
-        // there (below): the feed's worker looks for it as it starts.
+        // The guest's worker carries its pictures, and rides out a loss where
+        // the feed refreshes by intra-refresh (nobody's loss costs everyone a
+        // keyframe; elsewhere the keyframes are grouped and rationed). Every
+        // other host, and a switch turned off, keeps the encoder per guest
+        // exactly as it was. Joined once the display is there (below): the
+        // feed's worker looks for it as it starts.
         const bool feedWanted = host->backendType == NativeHostBackend::typeName() &&
                                 SharedFeed::enabled(appSettings.sharedFeedEnabled());
         SharedFeed::Spec feedSpec;

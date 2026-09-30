@@ -49,8 +49,8 @@ struct BenchSpec
     bool yuv444 = false;
     bool hdr = false;
     bool intraRefresh = false;
-    /// intra=2: the stream must refresh by intra-refresh, as the guests'
-    /// shared feed does (SessionConfig::intraRefreshRequired).
+    /// intra=2: the stream must refresh by intra-refresh, whatever the route
+    /// (SessionConfig::intraRefreshRequired).
     bool intraRefreshRequired = false;
     /// The GPU to encode on, -1 for the display's own. See SessionConfig.
     int gpu = -1;

@@ -118,14 +118,18 @@ struct SessionConfig
     /// actually granted.
     bool intraRefresh = false;
 
-    /// Intra-refresh is not a wish here but the point: a stream several
-    /// receivers share (the guests' feed of a native host), where one
-    /// receiver's loss must not cost every other one a keyframe. A route that
-    /// would run without it is passed over for one that grants it, where the
-    /// GPU has one (VideoPipelineChoice.h: the D3D12 route of an Arc sweeps a
-    /// single frame, D3D11 oneVPL sweeps a real wave). Implies `intraRefresh`.
+    /// Intra-refresh is not a wish here but the point: a route that would run
+    /// without it is passed over for one that grants it, where the GPU has one
+    /// (VideoPipelineChoice.h: the D3D12 route of an Arc sweeps a single frame,
+    /// D3D11 oneVPL sweeps a real wave). Implies `intraRefresh`.
     /// SessionInfo::intraRefresh still says what was granted: an encoder that
     /// has no intra-refresh at all streams keyframes on demand.
+    ///
+    /// The bench's intra=2 only. The guests' shared feed of a native host was
+    /// built with it and no longer is: on an Arc, its D3D11 oneVPL encoder
+    /// beside the owner's D3D12 Video Encode took the owner's p99 from 7.8 to
+    /// 27 ms (S9, 01/10/2026). The feed asks `intraRefresh` on the machine's
+    /// own route, and rations keyframes where that route has none.
     bool intraRefreshRequired = false;
 
     /// The rate governor's floor, as a share of the setting (encode::
