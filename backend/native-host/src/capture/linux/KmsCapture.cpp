@@ -523,6 +523,8 @@ bool KmsCapture::start(std::string& error)
 
     m_LastFbId = 0;
     m_WindowSaid = false;
+    m_InPlaceSaid = false;
+    m_InPlaceFrames = 0;
     m_CursorFbId = 0;
     m_Cursor = CursorState{};
     m_SteadyOriginUs = steadyNowUs();
@@ -792,7 +794,13 @@ AcquireStatus KmsCapture::acquire(int timeoutMs, KmsFrame& frame)
         drmModeFreePlane(p);
         if (!fbId || crtc != m_CrtcId) return AcquireStatus::Lost;
 
-        if (fbId != m_LastFbId) {
+        // The same buffer with a new picture in it: an X server that draws into
+        // the buffer it scans out instead of flipping says so by its damage
+        // (X11Damage) — read again, exactly as a new buffer is.
+        const bool redrawn = fbId == m_LastFbId && !m_Polled && m_InPlace && m_InPlace();
+        if (fbId != m_LastFbId || redrawn) {
+            // A flip shows whatever was drawn before it: the flag goes with it.
+            if (!redrawn && m_InPlace) m_InPlace();
             // The previous buffer's fds go now, with a new one about to replace
             // it — see the note at the top.
             closeFrameFds();
@@ -842,6 +850,14 @@ AcquireStatus KmsCapture::acquire(int timeoutMs, KmsFrame& frame)
             // client's one-way delay off (arrival − present) — a present in the
             // future has it cut the bitrate on a healthy link.
             if (frame.presentUs > frame.capturedUs) frame.presentUs = frame.capturedUs;
+            if (redrawn) {
+                ++m_InPlaceFrames;
+                if (!m_InPlaceSaid) {
+                    m_InPlaceSaid = true;
+                    log::info("[native] KMS: the X server draws into the scanned-out buffer "
+                              "without flipping — the same buffer is read again on its damage");
+                }
+            }
             m_LastFrame = frame;
             if (m_Polled) {
                 // Map the held buffer once for the hold, and remember what it

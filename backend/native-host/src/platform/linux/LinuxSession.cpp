@@ -16,6 +16,7 @@
  */
 
 #include "../../capture/linux/KmsCapture.h"
+#include "../../capture/linux/X11Damage.h"
 #if defined(MW_NATIVE_LINUX_PORTAL)
 #include "../../capture/linux/PortalCapture.h"
 #endif
@@ -896,8 +897,31 @@ private:
             return true;
         }
 #endif
-        m_Capture = std::make_unique<capture::KmsCapture>(m_CardPath, m_ConnectorId);
-        return m_Capture->start(error);
+        auto kms = std::make_unique<capture::KmsCapture>(m_CardPath, m_ConnectorId);
+        capture::KmsCapture& scanout = *kms;
+        m_Capture = std::move(kms);
+        if (!m_Capture->start(error)) return false;
+        watchInPlaceDrawing(scanout);
+        return true;
+    }
+
+    /// An X server does not always flip: it draws into the buffer it scans out
+    /// when a flip cannot show the picture — a game presenting with its sync
+    /// off, any window of a desktop over several screens — and the scanout then
+    /// shows one buffer while its content changes. Its damage events say when;
+    /// the capture reads the same buffer again then (X11Damage). A Wayland
+    /// compositor and a headless host flip, and have none of this to ask.
+    void watchInPlaceDrawing(capture::KmsCapture& scanout)
+    {
+        const capture::DesktopRect r = scanout.desktopRect();
+        if (!m_Damage) m_Damage = std::make_shared<capture::X11Damage>();
+        std::string why;
+        if (!m_Damage->watch(r.left, r.top, r.right, r.bottom, why)) {
+            log::debug("[native] KMS: no X damage to watch (" + why + ")");
+            m_Damage.reset();
+            return;
+        }
+        scanout.setInPlaceChanges([damage = m_Damage] { return damage->takeChanged(); });
     }
 
 #if defined(MW_NATIVE_LINUX_PORTAL)
@@ -2180,6 +2204,9 @@ private:
     /// portal on a machine that may not read it (IScreenCapture.h).
     std::unique_ptr<capture::IScreenCapture> m_Capture;
     std::unique_ptr<VideoPipeline> m_Pipeline;
+    /// An X server's damage on the captured display, for the scanout reader
+    /// (X11Damage): shared with the capture, which asks it at each vblank.
+    std::shared_ptr<capture::X11Damage> m_Damage;
 
     std::mutex m_InputMutex;
     std::unique_ptr<input::UinputInput> m_Input;

@@ -22,6 +22,7 @@
 #include "IScreenCapture.h"
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -150,6 +151,18 @@ public:
 
     const CursorState& cursor() const override { return m_Cursor; }
 
+    /// Where the display server can say that the picture changed inside the
+    /// same buffer — an X server drawing into the one it scans out (X11Damage)
+    /// — the question to ask at a vblank that brought no new buffer: true, and
+    /// that buffer is read again as a new frame. Takes the answer (the flag is
+    /// cleared by asking). Unset: a new buffer is the only new picture.
+    void setInPlaceChanges(std::function<bool()> takeChanged)
+    {
+        m_InPlace = std::move(takeChanged);
+    }
+    /// Frames read again that way since start().
+    uint64_t inPlaceFrames() const { return m_InPlaceFrames; }
+
 private:
     /// Resolve connector → encoder → CRTC → the primary and cursor planes
     /// attached to that CRTC. Re-run on every start(), because a mode change
@@ -189,6 +202,10 @@ private:
     uint32_t m_PropSrcH = 0;
     /// The windowed buffer said once per start, not at every flip.
     bool m_WindowSaid = false;
+    /// See setInPlaceChanges().
+    std::function<bool()> m_InPlace;
+    uint64_t m_InPlaceFrames = 0;
+    bool m_InPlaceSaid = false;
 
     int m_Width = 0;
     int m_Height = 0;

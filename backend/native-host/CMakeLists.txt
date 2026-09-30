@@ -210,6 +210,7 @@ else()
                 src/platform/linux/LinuxSession.cpp
                 src/platform/linux/SleepInhibit.cpp
                 src/capture/linux/KmsCapture.cpp
+                src/capture/linux/X11Damage.cpp
                 src/convert/linux/GlConvert.cpp
                 src/convert/linux/CpuConvert.cpp
                 src/encode/linux/VaapiEncoder.cpp
