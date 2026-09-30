@@ -35,3 +35,21 @@ python summary.py ../../../bench-out/shared-feed/s0-*.json
 
 The overlay's end-to-end is a rolling figure and moves with the client; the
 host's own stages are the measure of what a guest costs the owner on the host.
+
+`--feed-heights 1080,720,1440` has the owner pick the guests' picture before
+each window (a feed with guests on it is rebuilt under them), and
+`--no-hevc-slots 4` gives that guest a Chrome without HEVC (the whole feed goes
+H.264).
+
+## The hard cases (S9, bench §8q.5)
+
+| script | what it checks |
+|---|---|
+| `hard_cases.py --server-log <log> --vdd DISPLAYn` | a lone guest leaving and coming back (no relaunch), the captured virtual display changing mode (one rebuild, the guests follow its shape — `display-mode.ps1`, never a physical screen), the feed's worker killed (elevated), a guest without HEVC (one switch to H.264) |
+| `throttled_guest.py --shaper-dir <dir>` | a guest on the N95, in Wi-Fi, shaped below the feed's floor (WinDivert, elevated): it alone drops pictures, the feed stays at its floor, the local guests keep 60 per second — counted where the page draws them |
+| `share_nonreg.py --server-log <log> --host <uuid>` | a share from a Sunshine or Wolf host as before: the three quality buttons, the guest's own session, no shared feed |
+| `vd_cold.py [--second] [--owner-other]` | a guest opening an invitation on "MoonlightWeb Virtual Display" with nobody streaming: the display comes on, and goes off after them |
+
+Each of them switches the primary screen or elevates something: say so to
+whoever sits at the machine first. After a pass on a virtual display,
+`monitors.ps1` and `vdd_settings.xml` must be as they were.
