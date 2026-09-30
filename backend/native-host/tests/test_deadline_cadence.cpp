@@ -43,13 +43,13 @@ void run_deadline_cadence_tests()
     {
         DeadlineCadence d;
         const int64_t now = 50000000;
-        CHECK(!d.note(1000.0, now, 10000, false, 0, now));      // 1000 Hz
-        CHECK(!d.note(200000.0, now, 10000, false, 0, now));    // 5 Hz
-        CHECK(!d.note(kPeriod120, now, 0, false, 0, now));      // no lead
-        CHECK(!d.note(kPeriod120, now, 600000, false, 0, now)); // over half a second
-        CHECK(!d.note(kPeriod120, now + 20000000, 10000, false, 0, now));
+        CHECK(!d.note(1000.0, now, 10000, false, true, 0, now));      // 1000 Hz
+        CHECK(!d.note(200000.0, now, 10000, false, true, 0, now));    // 5 Hz
+        CHECK(!d.note(kPeriod120, now, 0, false, true, 0, now));      // no lead
+        CHECK(!d.note(kPeriod120, now, 600000, false, true, 0, now)); // over half a second
+        CHECK(!d.note(kPeriod120, now + 20000000, 10000, false, true, 0, now));
         CHECK(!d.fresh(now));
-        CHECK(d.note(kPeriod120, now, 10000, false, 0, now));
+        CHECK(d.note(kPeriod120, now, 10000, false, true, 0, now));
         CHECK(d.fresh(now));
         CHECK_EQ(d.grids(), 1);
     }
@@ -57,7 +57,7 @@ void run_deadline_cadence_tests()
     SECTION("DeadlineCadence — the picture is taken one lead before the refresh");
     {
         DeadlineCadence d;
-        d.note(kPeriod120, 1000000, 12000, false, 0, 1000000);
+        d.note(kPeriod120, 1000000, 12000, false, true, 0, 1000000);
         // The first refresh whose instant is not behind: 1 016 667, taken at
         // 1 004 667 — 12 ms before it.
         const DeadlineCadence::Aim a = d.next(1000000);
@@ -69,7 +69,7 @@ void run_deadline_cadence_tests()
     SECTION("DeadlineCadence — each refresh is served once");
     {
         DeadlineCadence d;
-        d.note(kPeriod120, 1000000, 12000, false, 0, 1000000);
+        d.note(kPeriod120, 1000000, 12000, false, true, 0, 1000000);
         const DeadlineCadence::Aim a = d.next(1000000);
         d.served(a);
         // Asked again at the same instant: the refresh after.
@@ -81,7 +81,7 @@ void run_deadline_cadence_tests()
     SECTION("DeadlineCadence — a late wake-up keeps its refresh within kLateUs");
     {
         DeadlineCadence d;
-        d.note(kPeriod120, 1000000, 12000, false, 0, 1000000);
+        d.note(kPeriod120, 1000000, 12000, false, true, 0, 1000000);
         const DeadlineCadence::Aim a = d.next(1000000);
         CHECK_EQ(d.next(a.captureUs + DeadlineCadence::kLateUs / 2).refreshUs, a.refreshUs);
         // Later than that: the refresh is given up for the next one.
@@ -91,7 +91,7 @@ void run_deadline_cadence_tests()
     SECTION("DeadlineCadence — a grid not heard again goes stale");
     {
         DeadlineCadence d;
-        d.note(kPeriod120, 1000000, 12000, false, 0, 1000000);
+        d.note(kPeriod120, 1000000, 12000, false, true, 0, 1000000);
         CHECK(d.fresh(1000000 + DeadlineCadence::kStaleUs - 1));
         CHECK(!d.fresh(1000000 + DeadlineCadence::kStaleUs));
         CHECK(!d.next(1000000 + DeadlineCadence::kStaleUs).valid());
@@ -100,12 +100,12 @@ void run_deadline_cadence_tests()
     SECTION("DeadlineCadence — a grid anchored on a later refresh serves nothing twice");
     {
         DeadlineCadence d;
-        d.note(kPeriod120, 1000000, 12000, false, 0, 1000000);
+        d.note(kPeriod120, 1000000, 12000, false, true, 0, 1000000);
         const DeadlineCadence::Aim a = d.next(1000000);
         d.served(a);
         // The next grid names a refresh 60 periods on, with a µs of rounding:
         // the refresh just served is still told apart from the next one.
-        d.note(kPeriod120, 1000000 + 500001, 12000, false, 0, 1004000);
+        d.note(kPeriod120, 1000000 + 500001, 12000, false, true, 0, 1004000);
         const DeadlineCadence::Aim b = d.next(a.captureUs);
         CHECK(b.refreshUs > a.refreshUs + 8000);
         CHECK(b.refreshUs < a.refreshUs + 8700);
@@ -114,19 +114,33 @@ void run_deadline_cadence_tests()
     SECTION("DeadlineCadence — a canvas that tears is not aimed at");
     {
         DeadlineCadence d;
-        CHECK(d.note(kPeriod120, 1000000, 12000, true, 240.0, 1000000));
+        CHECK(d.note(kPeriod120, 1000000, 12000, true, true, 240.0, 1000000));
         CHECK(d.fresh(1000000));
-        CHECK(d.tearing(1000000));
+        CHECK(d.asItComes(1000000));
         CHECK(!d.next(1000000).valid());
         CHECK(d.budgetFps() > 239.9 && d.budgetFps() < 240.1);
         // Stale: neither aimed nor tearing.
-        CHECK(!d.tearing(1000000 + DeadlineCadence::kStaleUs));
+        CHECK(!d.asItComes(1000000 + DeadlineCadence::kStaleUs));
         // No budget said: one frame per refresh.
-        CHECK(d.note(kPeriod120, 1000000, 12000, true, 0, 1000000));
+        CHECK(d.note(kPeriod120, 1000000, 12000, true, true, 0, 1000000));
         CHECK(d.budgetFps() > 119.9 && d.budgetFps() < 120.1);
         // Back on vsync: aimed again.
-        CHECK(d.note(kPeriod120, 1000000, 12000, false, 0, 1000000));
-        CHECK(!d.tearing(1000000));
+        CHECK(d.note(kPeriod120, 1000000, 12000, false, true, 0, 1000000));
+        CHECK(!d.asItComes(1000000));
+        CHECK(d.next(1000000).valid());
+    }
+
+    SECTION("DeadlineCadence — a link too uneven to aim through is not aimed at");
+    {
+        DeadlineCadence d;
+        CHECK(d.note(kPeriod120, 1000000, 12000, false, false, 0, 1000000));
+        CHECK(d.asItComes(1000000));
+        CHECK(!d.tearing());
+        CHECK(!d.next(1000000).valid());
+        CHECK(d.budgetFps() > 119.9 && d.budgetFps() < 120.1);
+        // Steady again: aimed again.
+        CHECK(d.note(kPeriod120, 1000000, 12000, false, true, 0, 1000000));
+        CHECK(!d.asItComes(1000000));
         CHECK(d.next(1000000).valid());
     }
 
@@ -136,7 +150,7 @@ void run_deadline_cadence_tests()
         // serves: 120 pictures for a 120 Hz client, one period apart.
         DeadlineCadence d;
         int64_t now = 5000000;
-        d.note(kPeriod120, now, 15000, false, 0, now);
+        d.note(kPeriod120, now, 15000, false, true, 0, now);
         int served = 0;
         int64_t lastRefresh = 0;
         bool evenlySpaced = true;
@@ -146,7 +160,8 @@ void run_deadline_cadence_tests()
             // the latest before now: the same grid, a later phase.
             if (served % 60 == 0) {
                 const int64_t k = static_cast<int64_t>((now - 5000000) / kPeriod120);
-                d.note(kPeriod120, 5000000 + std::llround(k * kPeriod120), 15000, false, 0, now);
+                d.note(kPeriod120, 5000000 + std::llround(k * kPeriod120), 15000, false, true, 0,
+                       now);
             }
             const DeadlineCadence::Aim a = d.next(now);
             if (a.captureUs > now) now = a.captureUs;

@@ -303,7 +303,7 @@ public:
     /// When the client's screen refreshes (a `vsyncgrid` message): forwarded
     /// to Session::setClientVsyncGrid. Safe from any thread.
     void setClientVsyncGrid(double periodUs, int64_t phaseUs, int64_t leadUs, bool tearing,
-                            double budgetFps);
+                            bool steady, double budgetFps);
 
     /// What the session says about the client's grid, for the pong (see
     /// Session::vsyncGridStatus): whether it wants one, whether it follows

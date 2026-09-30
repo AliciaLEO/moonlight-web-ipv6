@@ -63,6 +63,17 @@ namespace mw::native {
 /// then sends each new picture as it comes, through a gate at that budget
 /// that skips and never holds.
 ///
+/// ── A link too uneven to aim through ────────────────────────────────────────
+///
+/// Aiming needs the frames to arrive when the lead says. Over a link whose
+/// capture → ready wanders by more than half a refresh (an N95 on Wi-Fi at
+/// 60 Hz: 40 to 60 ms, 11 to 22 % of the refreshes missed, 35 drawn a second
+/// instead of 50 — plan §13, P3), no margin holds, and the frames aimed one
+/// per refresh pile up two in one and none in the next. The client then says
+/// its link is not `steady`, and the loop sends each picture as it comes, as
+/// for a canvas that tears — today's cadence, and the client keeps the
+/// reserve it would drop for aimed frames.
+///
 /// ── Staleness ───────────────────────────────────────────────────────────────
 ///
 /// A grid not heard for kStaleUs is dropped and the loop goes back to the
@@ -96,11 +107,12 @@ public:
 
     /// The client refreshes every @p periodUs, one refresh at @p phaseUs (this
     /// host's steady clock), a frame needing @p leadUs to be ready; its canvas
-    /// @p tearing or not, taking @p budgetFps frames a second when it does (0:
-    /// one per refresh) — heard at @p nowUs. False, and nothing kept, for a
-    /// grid that makes no sense.
-    bool note(double periodUs, int64_t phaseUs, int64_t leadUs, bool tearing, double budgetFps,
-              int64_t nowUs)
+    /// @p tearing or not, its link @p steady enough to aim through or not,
+    /// taking @p budgetFps frames a second when frames go as they come (0: one
+    /// per refresh) — heard at @p nowUs. False, and nothing kept, for a grid
+    /// that makes no sense.
+    bool note(double periodUs, int64_t phaseUs, int64_t leadUs, bool tearing, bool steady,
+              double budgetFps, int64_t nowUs)
     {
         if (!(periodUs >= kMinPeriodUs && periodUs <= kMaxPeriodUs)) return false;
         if (leadUs <= 0 || leadUs > kMaxLeadUs) return false;
@@ -111,6 +123,7 @@ public:
         m_PhaseUs = phaseUs;
         m_LeadUs = leadUs;
         m_Tearing = tearing;
+        m_Steady = steady;
         m_BudgetFps = budgetFps;
         m_HeardUs = nowUs;
         m_Heard = true;
@@ -125,15 +138,23 @@ public:
         return freshLocked(nowUs);
     }
 
-    /// True while the last grid, fresh, is a canvas that tears: nothing is
-    /// aimed, each new picture goes at once under budgetFps().
-    bool tearing(int64_t nowUs) const
+    /// True while the last grid, fresh, is a canvas that tears or a link too
+    /// uneven to aim through: nothing is aimed, each new picture goes at once
+    /// under budgetFps().
+    bool asItComes(int64_t nowUs) const
     {
         std::lock_guard<std::mutex> lock(m_Mutex);
-        return freshLocked(nowUs) && m_Tearing;
+        return freshLocked(nowUs) && (m_Tearing || !m_Steady);
     }
 
-    /// The frames a second a client that tears takes.
+    /// Why, of the last grid: its canvas tears (else its link is uneven).
+    bool tearing() const
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        return m_Tearing;
+    }
+
+    /// The frames a second a client takes when frames go as they come.
     double budgetFps() const
     {
         std::lock_guard<std::mutex> lock(m_Mutex);
@@ -142,11 +163,11 @@ public:
 
     /// The refresh to aim at next from @p nowUs: the first whose instant is
     /// no more than kLateUs behind, after the one served last. Invalid while
-    /// the grid is not fresh, or is a canvas that tears.
+    /// the grid is not fresh, or frames go as they come.
     Aim next(int64_t nowUs) const
     {
         std::lock_guard<std::mutex> lock(m_Mutex);
-        if (!freshLocked(nowUs) || m_Tearing) return {};
+        if (!freshLocked(nowUs) || m_Tearing || !m_Steady) return {};
         const double from =
             static_cast<double>(nowUs - kLateUs + m_LeadUs - m_PhaseUs) / m_PeriodUs;
         auto refreshAt = [this](int64_t n) {
@@ -198,6 +219,7 @@ private:
     int64_t m_HeardUs = 0;
     bool m_Heard = false;
     bool m_Tearing = false;
+    bool m_Steady = true;
     double m_BudgetFps = 0;
     int64_t m_ServedUs = 0;
     int64_t m_Grids = 0;

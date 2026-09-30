@@ -1402,10 +1402,11 @@ void DataChannelRelay::onInputMessage(const std::string& message)
         //
         // Native host only: a GameStream host sends what it captures.
         if (auto* native = qobject_cast<NativeMediaEngine*>(m_Shim))
-            native->setClientVsyncGrid(msg["periodUs"].toDouble(0),
-                                       static_cast<int64_t>(msg["phaseUs"].toDouble(0)),
-                                       static_cast<int64_t>(msg["leadUs"].toDouble(0)),
-                                       msg["tearing"].toBool(false), msg["budgetFps"].toDouble(0));
+            native->setClientVsyncGrid(
+                msg["periodUs"].toDouble(0), static_cast<int64_t>(msg["phaseUs"].toDouble(0)),
+                static_cast<int64_t>(msg["leadUs"].toDouble(0)), msg["tearing"].toBool(false),
+                // A page from before the field aims.
+                msg["steady"].toBool(true), msg["budgetFps"].toDouble(0));
         return;
     }
 

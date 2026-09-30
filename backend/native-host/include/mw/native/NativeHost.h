@@ -372,14 +372,15 @@ public:
     /// When the client's screen refreshes (a `vsyncgrid` message, frontend
     /// VsyncGrid.js): every @p periodUs, one refresh at @p phaseUs on this
     /// host's steady clock, a frame needing @p leadUs from being taken here to
-    /// being ready there; whether its canvas is @p tearing, and the frames a
-    /// second it then takes (@p budgetFps). Read only under the bench's
+    /// being ready there; whether its canvas is @p tearing, whether its link
+    /// is @p steady enough to aim through, and the frames a second it takes
+    /// when frames go as they come (@p budgetFps). Read only under the bench's
     /// cadence=deadline, which takes one picture per refresh that lead before
-    /// it, or sends a canvas that tears each picture as it comes
-    /// (DeadlineCadence.h); every other cadence, and every platform but
-    /// Windows, ignores it. Safe from any thread.
+    /// it, or sends each picture as it comes to a canvas that tears or over an
+    /// uneven link (DeadlineCadence.h); every other cadence, and every platform
+    /// but Windows, ignores it. Safe from any thread.
     virtual void setClientVsyncGrid(double /*periodUs*/, int64_t /*phaseUs*/, int64_t /*leadUs*/,
-                                    bool /*tearing*/, double /*budgetFps*/)
+                                    bool /*tearing*/, bool /*steady*/, double /*budgetFps*/)
     {}
 
     /// What each pong tells the client about its grid.
@@ -390,7 +391,7 @@ public:
         /// The client's grid is being followed right now.
         bool followed = false;
         /// ...by aiming each picture at a refresh (vsync), not by sending each
-        /// as it comes (a canvas that tears).
+        /// as it comes (a canvas that tears, an uneven link).
         bool aimed = false;
         /// The host display's refresh period, µs; 0 when unknown.
         int presentUs = 0;

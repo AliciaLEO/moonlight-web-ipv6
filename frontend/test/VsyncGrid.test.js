@@ -21,6 +21,8 @@ import {
     MARGIN_FLOOR_MS,
     MARGIN_UP_MS,
     SEND_EVERY_MS,
+    STEADY_FOR_MS,
+    TRANSIT_WINDOW_MS,
 } from '../js/stream/VsyncGrid.js';
 
 /** Deterministic noise. */
@@ -280,6 +282,50 @@ describe('VsyncGrid', () => {
         expect(followed).toBe(true);
         expect(frames).toBeGreaterThan(2000);
         expect(missRate).toBeLessThanOrEqual(0.005);
+        // A 4 ms tail at 120 Hz is still steady enough to aim through.
+        expect(grid.steady).toBe(true);
+        grid.stop();
+    });
+
+    it('says the link is uneven when capture → ready wanders by over half a refresh', () => {
+        const rand = rng(5);
+        // Anywhere within 20 ms more: an N95 on Wi-Fi.
+        const { grid, sent, run } = setup({ jitter: () => rand() * 20 });
+        run(4000, true);
+        expect(grid.steady).toBe(false);
+        expect(grid.unsteadySpells).toBe(1);
+        expect(sent[sent.length - 1].steady).toBe(false);
+        expect(grid.summary.spreadMs).toBeGreaterThan(PERIOD / 2);
+        grid.stop();
+    });
+
+    it('aims again once the link has held steady for a while', () => {
+        const rand = rng(9);
+        let wide = true;
+        const { grid, sent, run } = setup({ jitter: () => (wide ? rand() * 20 : rand() * 0.5) });
+        run(4000, true);
+        expect(grid.steady).toBe(false);
+        wide = false;
+        // The wide samples leave the window, then the calm has to last.
+        run(4000 + TRANSIT_WINDOW_MS + STEADY_FOR_MS / 2, true);
+        expect(grid.steady).toBe(false);
+        run(4000 + TRANSIT_WINDOW_MS + STEADY_FOR_MS + 2 * SEND_EVERY_MS, true);
+        expect(grid.steady).toBe(true);
+        expect(sent[sent.length - 1].steady).toBe(true);
+        // The margin started afresh from the calm link: its tail and a
+        // quarter period.
+        expect(grid.marginMs).toBeLessThan(PERIOD / 4 + 1);
+        grid.stop();
+    });
+
+    it('says the link is uneven once the margin has grown to a whole refresh', () => {
+        const { grid, sent, run } = setup();
+        run(3000, true);
+        expect(grid.steady).toBe(true);
+        for (let i = 0; i < 10; i++) aimed(grid, sent, 2 + i, 0.5);
+        expect(grid.marginMs).toBeCloseTo(PERIOD, 3);
+        run(3000 + 2 * SEND_EVERY_MS, true);
+        expect(grid.steady).toBe(false);
         grid.stop();
     });
 });

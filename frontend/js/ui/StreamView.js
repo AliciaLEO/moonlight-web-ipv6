@@ -4233,13 +4233,11 @@ export class StreamView {
         //
         // A host that aims its frames at this screen's refreshes (VsyncGrid)
         // never lands one on the boundary the reserve is there to absorb: no
-        // reserve then, on any path.
+        // reserve then, on any path. One that sends them as they come — the
+        // link too uneven to aim through — leaves it in place.
         const paced = !!this._framePacer;
         const useReserve =
-            !paced &&
-            SUPPORTS_CANVAS_TEARING &&
-            !this._immediateRender &&
-            !this._vsyncGrid.followed;
+            !paced && SUPPORTS_CANVAS_TEARING && !this._immediateRender && !this._vsyncGrid.aimed;
         const maxQueued = paced ? 6 : useReserve ? 2 : 1;
 
         // Queue depth BEFORE any trim: a depth above the reserve means the draw

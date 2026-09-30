@@ -71,15 +71,28 @@
  * The clock estimate's own error cancels out: the refresh and the ready time
  * both go through it, and the host only subtracts one from the other.
  *
+ * ── A link too uneven to aim through ─────────────────────────────────────────
+ *
+ * Aiming needs frames to be ready when the lead says. When capture → ready
+ * wanders by more than half a refresh — its 95th percentile past the median,
+ * over TRANSIT_WINDOW_MS — or the margin has grown to a whole refresh, no
+ * margin holds: an N95 on Wi-Fi at 60 Hz missed 11 to 22 % of its refreshes
+ * and drew 35 frames a second instead of 50, two frames landing in one
+ * refresh and none in the next (plan §13, P3, 30/09/2026). The grid then says
+ * `steady: false`; the host sends each picture as it comes, and the render
+ * loop keeps its reserve, which is what such a link needs. Aiming comes back
+ * after STEADY_FOR_MS with the spread under a third of a refresh, the margin
+ * started afresh.
+ *
  * ── The host's side ──────────────────────────────────────────────────────────
  *
  * A pong carries `grid: true` while the host would use a grid (it is asked
  * for, nothing is sent otherwise), and `deadline: {presentUs, aimed}` while it
  * is following this one — presentUs its own display's refresh period, aimed
  * whether its frames are aimed at refreshes (vsync) or sent as they come
- * (tearing). While it follows, the render loop drops its reserve: frames
- * aimed at a refresh never arrive on its edge, which is all the reserve was
- * for. Misses are counted only while they are aimed.
+ * (tearing, an uneven link). While it aims, the render loop drops its
+ * reserve: frames aimed at a refresh never arrive on its edge, which is all
+ * the reserve was for. Misses are counted only while frames are aimed.
  */
 
 import { ClockEstimator } from '../util/ClockEstimator.js';
@@ -105,6 +118,14 @@ export const MARGIN_FLOOR_MS = 0.5;
 export const FOLLOWED_FOR_MS = 3000;
 /** The budget when tearing, in refreshes' worth of frames, without the switch. */
 export const BUDGET_FACTOR = 1;
+/**
+ * The link is too uneven to aim through above this spread of capture → ready
+ * (p95 − median), in refreshes; steady again under STEADY_BELOW held for
+ * STEADY_FOR_MS.
+ */
+export const UNSTEADY_ABOVE = 0.5;
+export const STEADY_BELOW = 1 / 3;
+export const STEADY_FOR_MS = 5000;
 
 const WRAP_MS = 2 ** 32;
 
@@ -212,6 +233,11 @@ export class VsyncGrid {
         this._calmSlack = [];
         this._followedUntil = 0;
         this._aimed = false;
+        this._steady = true;
+        this._quietSince = null; // since when an uneven link has looked steady
+        this._capped = false; // the margin reached a whole refresh
+        this.unsteadySpells = 0;
+        this._spreadMs = null;
         this.hostPresentUs = 0;
         /** What went up last, as the host holds it: the grid on both clocks, the lead. */
         this._sent = null;
@@ -240,6 +266,11 @@ export class VsyncGrid {
     /** The margin in use, ms (null before the first fit). */
     get marginMs() {
         return this._marginMs;
+    }
+
+    /** False while the link is too uneven to aim through. */
+    get steady() {
+        return this._steady;
     }
 
     start() {
@@ -316,6 +347,7 @@ export class VsyncGrid {
         if (slack < 0) {
             this.misses++;
             this._marginMs = Math.min(this._marginMs + MARGIN_UP_MS, s.periodUs / 1000);
+            if (this._marginMs >= s.periodUs / 1000) this._capped = true;
             this._calmSince = readyMs;
             this._calmSlack = [];
             return;
@@ -351,10 +383,13 @@ export class VsyncGrid {
         const fit = fitGrid(this._ticks);
         if (!fit) return;
         this._grid = fit;
+        if (this._transit.length >= TRANSIT_MIN) {
+            this._spreadMs = (this._transitAt(0.95) - this._transitAt(0.5)) / 1000;
+            this._judgeSteady(t, fit.periodMs);
+        }
         if (this._marginMs === null && this._transit.length >= TRANSIT_MIN) {
             // Wide to begin with: the tail past the median, a quarter period more.
-            const tailMs = (this._transitAt(0.95) - this._transitAt(0.5)) / 1000;
-            this._marginMs = Math.max(MARGIN_FLOOR_MS, tailMs + fit.periodMs / 4);
+            this._marginMs = Math.max(MARGIN_FLOOR_MS, this._spreadMs + fit.periodMs / 4);
             this._calmSince = t;
         }
         const leadUs = this.leadUs;
@@ -368,11 +403,41 @@ export class VsyncGrid {
             phaseUs: Math.round(phaseUs),
             leadUs: Math.round(leadUs),
             tearing,
+            steady: this._steady,
             budgetFps: Math.round((this._budgetFactor * 100000) / fit.periodMs) / 100,
         });
         this._sent = { periodUs, phaseUs, phaseMs: fit.phaseMs, leadUs };
         this._lastSendAt = t;
         this.sent++;
+    }
+
+    /**
+     * Whether the link is steady enough to aim through, from the spread of
+     * capture → ready and the margin (see the header). Going uneven drops the
+     * margin, to be started afresh when aiming comes back.
+     */
+    _judgeSteady(t, periodMs) {
+        if (this._steady) {
+            if (this._spreadMs > periodMs * UNSTEADY_ABOVE || this._capped) {
+                this._steady = false;
+                this.unsteadySpells++;
+                this._quietSince = null;
+                this._capped = false;
+                this._marginMs = null;
+            }
+            return;
+        }
+        // Started afresh at every grid while uneven, so that aiming comes
+        // back with the margin of the link as it is then.
+        this._marginMs = null;
+        if (this._spreadMs >= periodMs * STEADY_BELOW) {
+            this._quietSince = null;
+        } else if (this._quietSince === null) {
+            this._quietSince = t;
+        } else if (t - this._quietSince >= STEADY_FOR_MS) {
+            this._steady = true;
+            this._capped = false;
+        }
     }
 
     /** What the grid has been doing, for the bench. */
@@ -383,6 +448,9 @@ export class VsyncGrid {
             followed: this.followed,
             aimed: this.aimed,
             tearing: this._tearing() === true,
+            steady: this._steady,
+            spreadMs: this._spreadMs,
+            unsteadySpells: this.unsteadySpells,
             hostPresentMs: this.hostPresentUs ? this.hostPresentUs / 1000 : null,
             periodMs: this._grid ? this._grid.periodMs : null,
             leadMs: lead === null ? null : lead / 1000,

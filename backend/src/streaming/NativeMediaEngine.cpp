@@ -666,9 +666,10 @@ void NativeMediaEngine::setClientDecodeQueue(int depth)
 }
 
 void NativeMediaEngine::setClientVsyncGrid(double periodUs, int64_t phaseUs, int64_t leadUs,
-                                           bool tearing, double budgetFps)
+                                           bool tearing, bool steady, double budgetFps)
 {
-    if (m_Session) m_Session->setClientVsyncGrid(periodUs, phaseUs, leadUs, tearing, budgetFps);
+    if (m_Session)
+        m_Session->setClientVsyncGrid(periodUs, phaseUs, leadUs, tearing, steady, budgetFps);
 }
 
 NativeMediaEngine::VsyncGridStatus NativeMediaEngine::vsyncGridStatus() const
