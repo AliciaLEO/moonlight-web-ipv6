@@ -111,6 +111,7 @@ def main():
                     help="a client on another machine (pass.py --client-port)")
     ap.add_argument("--client-url", default="")
     ap.add_argument("--local-storage", action="append", default=[], metavar="KEY=VALUE")
+    ap.add_argument("--game-fps", default="", help="the page at a game's rate (pass.py --game-fps)")
     ap.add_argument("--vdd-gpu", default="",
                     help="the GPU that renders the virtual display (the XML's <friendlyname>), "
                          "e.g. \"NVIDIA GeForce RTX 5060 Ti\"; put back at the end")
@@ -119,6 +120,8 @@ def main():
               if a.client_port else [])
     for kv in a.local_storage:
         client += ["--local-storage", kv]
+    if a.game_fps:
+        client += ["--game-fps", a.game_fps]
     os.makedirs(OUT, exist_ok=True)
     scratch = os.path.join(OUT, "vdd_settings.saved.xml")
     shutil.copyfile(VDD_XML, scratch)

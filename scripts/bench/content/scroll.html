@@ -34,6 +34,18 @@ const speed = Number(params.get("px") ?? 600); // px/s
 // page is refined to its sharpest by the host; the scroll that follows is
 // the picture a rate control deciding frame by frame gets wrong first (G3).
 const pause = Number(params.get("pause") ?? 0);
+// ?fps=<lo>-<hi> (or one number): a game's rate. The page changes only at
+// frames that far apart, each interval drawn at random between the two — 49-53
+// is a game that cannot hold 60 on a 60 Hz screen, 75-83 one above it (plan
+// framerate-hote §13, Bruno's cases). The host's display then presents at the
+// game's rate, each frame on the next of its own refreshes. The scroll keeps
+// its speed: a frame moves the text by the time since the last one.
+const fpsRange = (params.get("fps") || "").split("-").map(Number).filter((v) => v > 0);
+let nextFrameAt = 0;
+function gameInterval() {
+  const lo = fpsRange[0], hi = fpsRange[1] ?? fpsRange[0];
+  return 1000 / (lo + Math.random() * (hi - lo));
+}
 
 // ?band=1: this frame's number, coded in a band at the top-left corner and
 // another at the bottom-left, so the host can tell which frame it read and
@@ -124,6 +136,14 @@ function drawTimeBand(t) {
 
 let y = 0, last = 0;
 function frame(t) {
+  if (fpsRange.length) {
+    if (t < nextFrameAt) {
+      requestAnimationFrame(frame);
+      return;
+    }
+    // On the game's own clock, unless the page was held back (a hidden tab).
+    nextFrameAt = (nextFrameAt && t - nextFrameAt < 100 ? nextFrameAt : t) + gameInterval();
+  }
   const moving = !(pause > 0) || Math.floor(t / 1000 / pause) % 2 === 0;
   if (last && moving) y = (y + speed * (t - last) / 1000) % (col.scrollHeight || 1);
   last = t;

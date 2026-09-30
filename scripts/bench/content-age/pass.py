@@ -51,6 +51,8 @@ def main():
     ap.add_argument("--target", default="display", help="display | vdisplay")
     ap.add_argument("--display-index", default="0")
     ap.add_argument("--px", type=int, default=600, help="the page's scroll speed")
+    ap.add_argument("--game-fps", default="",
+                    help="the page's rate, like a game's: 50, or 49-53 drawn at random")
     ap.add_argument("--client-port", type=int, default=0,
                     help="a client Chrome on another machine, its debugging port tunnelled here")
     ap.add_argument("--client-url", default="", help="the address that client reaches this host at")
@@ -115,7 +117,8 @@ def main():
             print("virtual display", " ".join(vdd[0]), flush=True)
         if d.eval("typeof (window.mwContentAge && window.mwContentAge.onDecoded)") != "function":
             raise SystemExit("the page runs an older content-age probe")
-        run.content_start("scroll.html?band=time&px=%d" % a.px, probe=False,
+        run.content_start("scroll.html?band=time&px=%d%s" % (
+                              a.px, "&fps=" + a.game_fps if a.game_fps else ""), probe=False,
                           debug_port=CONTENT_PORT)
         shown = True
         time.sleep(4)
