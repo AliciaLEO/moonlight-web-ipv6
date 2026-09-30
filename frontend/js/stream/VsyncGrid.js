@@ -31,6 +31,15 @@
  * The host can only do it if it knows when this screen refreshes, on its own
  * clock, and how long a frame takes to get ready here.
  *
+ * A canvas that tears is another matter (Bruno's cases, 30/09): it shows a
+ * frame the moment it is drawn, on the part of the screen the scan has not
+ * reached yet, so any wait on the host is lost on every line — a game at 50
+ * frames a second on a 60 Hz screen would pay half a refresh for nothing.
+ * There the host sends each new picture at once and the grid only caps how
+ * many: `budgetFps`, this screen's refresh times the bench switch
+ * `mw_vsyncgrid_budget` (1 by default). A picture over the budget is skipped,
+ * never held.
+ *
  * ── What goes up ─────────────────────────────────────────────────────────────
  *
  * Every SEND_EVERY_MS, a `vsyncgrid` message:
@@ -39,8 +48,10 @@
  *   - phaseUs: the latest refresh, on the host's steady clock (ClockEstimator,
  *     fed by pongs that carry it);
  *   - leadUs: how long before a refresh the host must have captured a frame
- *     for it to be ready here in time.
- * The host aims each frame at the refresh R where capture + leadUs ≤ R.
+ *     for it to be ready here in time;
+ *   - tearing, and budgetFps: see above.
+ * On vsync, the host aims each frame at the refresh R where capture + leadUs
+ * ≤ R.
  * Ready means drawn when the canvas tears (the picture reaches the screen as
  * it is drawn, so it must be there before the scan starts), and decoded on
  * vsync (the render loop draws the freshest frame at the refresh).
@@ -63,10 +74,12 @@
  * ── The host's side ──────────────────────────────────────────────────────────
  *
  * A pong carries `grid: true` while the host would use a grid (it is asked
- * for, nothing is sent otherwise), and `deadline: {presentUs}` while it is
- * following this one — presentUs its own display's refresh period. Only then
- * are misses counted, and the render loop drops its reserve: frames aimed at
- * a refresh never arrive on its edge, which is all the reserve was for.
+ * for, nothing is sent otherwise), and `deadline: {presentUs, aimed}` while it
+ * is following this one — presentUs its own display's refresh period, aimed
+ * whether its frames are aimed at refreshes (vsync) or sent as they come
+ * (tearing). While it follows, the render loop drops its reserve: frames
+ * aimed at a refresh never arrive on its edge, which is all the reserve was
+ * for. Misses are counted only while they are aimed.
  */
 
 import { ClockEstimator } from '../util/ClockEstimator.js';
@@ -90,6 +103,8 @@ export const MARGIN_CALM_MS = 5000;
 export const MARGIN_FLOOR_MS = 0.5;
 /** A pong saying the host follows the grid counts for this long. */
 export const FOLLOWED_FOR_MS = 3000;
+/** The budget when tearing, in refreshes' worth of frames, without the switch. */
+export const BUDGET_FACTOR = 1;
 
 const WRAP_MS = 2 ** 32;
 
@@ -169,10 +184,15 @@ export class VsyncGrid {
      * @param {() => number} [deps.now] this client's clock, ms
      * @param {(cb: (t: number) => void) => void} [deps.onFrame]
      *        requestAnimationFrame, or a stand-in
+     * @param {() => boolean} [deps.tearing] whether the canvas tears
+     * @param {number} [deps.budgetFactor] frames per refresh the host may
+     *        send a canvas that tears
      */
-    constructor({ send, sendPing, now, onFrame }) {
+    constructor({ send, sendPing, now, onFrame, tearing, budgetFactor = BUDGET_FACTOR }) {
         this._send = send;
         this._sendPing = sendPing;
+        this._tearing = tearing || (() => false);
+        this._budgetFactor = budgetFactor > 0 ? budgetFactor : BUDGET_FACTOR;
         this._now = now || (() => performance.now());
         this._onFrame =
             onFrame ||
@@ -191,6 +211,7 @@ export class VsyncGrid {
         /** @type {number[]} slack of the frames since the last miss or step */
         this._calmSlack = [];
         this._followedUntil = 0;
+        this._aimed = false;
         this.hostPresentUs = 0;
         /** What went up last, as the host holds it: the grid on both clocks, the lead. */
         this._sent = null;
@@ -206,9 +227,14 @@ export class VsyncGrid {
         return this._running;
     }
 
-    /** True while the host says it aims its frames at this grid. */
+    /** True while the host says it follows this grid. */
     get followed() {
         return this._running && this._now() < this._followedUntil;
+    }
+
+    /** True while it aims its frames at refreshes (vsync), not as they come. */
+    get aimed() {
+        return this.followed && this._aimed;
     }
 
     /** The margin in use, ms (null before the first fit). */
@@ -247,6 +273,7 @@ export class VsyncGrid {
             this._clock.note(msg.ts, msg.host, recvMs);
         if (msg.deadline && typeof msg.deadline === 'object') {
             this._followedUntil = recvMs + FOLLOWED_FOR_MS;
+            this._aimed = msg.deadline.aimed === true;
             if (msg.deadline.presentUs > 0) this.hostPresentUs = msg.deadline.presentUs;
         }
     }
@@ -274,7 +301,7 @@ export class VsyncGrid {
         this._transit.push({ at: readyMs, us });
         while (this._transit.length && this._transit[0].at < readyMs - TRANSIT_WINDOW_MS)
             this._transit.shift();
-        if (!this.followed || !this._sent) return;
+        if (!this.aimed || !this._sent) return;
 
         // The refresh the host aimed this frame at: the first on the grid it
         // holds at or after capture + lead. Its own clock throughout, then back
@@ -334,11 +361,14 @@ export class VsyncGrid {
         if (!this._clock.ready || leadUs === null) return;
         const periodUs = fit.periodMs * 1000;
         const phaseUs = this._clock.toHostUs(fit.phaseMs);
+        const tearing = this._tearing() === true;
         this._send({
             type: 'vsyncgrid',
             periodUs: Math.round(periodUs * 100) / 100,
             phaseUs: Math.round(phaseUs),
             leadUs: Math.round(leadUs),
+            tearing,
+            budgetFps: Math.round((this._budgetFactor * 100000) / fit.periodMs) / 100,
         });
         this._sent = { periodUs, phaseUs, phaseMs: fit.phaseMs, leadUs };
         this._lastSendAt = t;
@@ -351,6 +381,8 @@ export class VsyncGrid {
         const lead = this.leadUs;
         return {
             followed: this.followed,
+            aimed: this.aimed,
+            tearing: this._tearing() === true,
             hostPresentMs: this.hostPresentUs ? this.hostPresentUs / 1000 : null,
             periodMs: this._grid ? this._grid.periodMs : null,
             leadMs: lead === null ? null : lead / 1000,

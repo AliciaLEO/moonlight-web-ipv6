@@ -647,10 +647,11 @@ public:
 
     void setClientDecodeQueue(int depth) override { m_DecodeCredit.note(depth, steadyNowUs()); }
 
-    void setClientVsyncGrid(double periodUs, int64_t phaseUs, int64_t leadUs) override
+    void setClientVsyncGrid(double periodUs, int64_t phaseUs, int64_t leadUs, bool tearing,
+                            double budgetFps) override
     {
         if (m_Config.tuning.cadence != EncoderTuning::Cadence::Deadline) return;
-        if (!m_Deadline.note(periodUs, phaseUs, leadUs, steadyNowUs()))
+        if (!m_Deadline.note(periodUs, phaseUs, leadUs, tearing, budgetFps, steadyNowUs()))
             m_DeadlineRefused.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -659,9 +660,10 @@ public:
         VsyncGridStatus status;
         if (m_Config.tuning.cadence != EncoderTuning::Cadence::Deadline) return status;
         status.wanted = true;
-        // Aimed within the last half second: the loop is following the grid.
+        // Followed within the last half second: the loop is following the grid.
         status.followed =
             steadyNowUs() - m_DeadlineAimedAtUs.load(std::memory_order_relaxed) < 500 * 1000;
+        status.aimed = status.followed && !m_DeadlineTearing.load(std::memory_order_relaxed);
         status.presentUs = m_DisplayPeriodUs.load(std::memory_order_relaxed);
         return status;
     }
@@ -1910,6 +1912,12 @@ private:
         // refresh — the gate has nothing to say about it.
         const bool deadlineMode = m_Config.tuning.cadence == EncoderTuning::Cadence::Deadline;
         bool aimedNow = false;
+        // A client that tears is sent each picture as it comes, through a gate
+        // at its budget (DeadlineCadence.h) that skips and never holds. It
+        // stands in for the stream's gate while that client's grid is fresh.
+        FrameCadence tearGate{0};
+        double tearGateFps = 0;
+        FrameCadence* gateNow = &m_Cadence;
         struct TimerHandle
         {
             HANDLE h = nullptr;
@@ -1929,7 +1937,7 @@ private:
             return true;
         };
         auto emitPicture = [&](const FrameStamps& stamps) -> bool {
-            if (!aimedNow && !m_Cadence.admit(stamps.convertedUs)) return true;
+            if (!aimedNow && !gateNow->admit(stamps.convertedUs)) return true;
             if (withheld(stamps)) return true;
             creditHeld = false;
             if (!emit(frameNumber, stamps, error)) return false;
@@ -1941,7 +1949,7 @@ private:
         // thread and the loop goes back to the capture; the cadence counts it
         // once it went out (absorbDelivered), the refinement window starts now.
         auto emitPictureLater = [&](const FrameStamps& stamps) {
-            if (!aimedNow && !m_Cadence.admit(stamps.convertedUs)) return;
+            if (!aimedNow && !gateNow->admit(stamps.convertedUs)) return;
             if (withheld(stamps)) return;
             creditHeld = false;
             emitLater(frameNumber, stamps);
@@ -2111,8 +2119,32 @@ private:
             // into it, unconverted. Nothing new, nothing sent. See
             // DeadlineCadence.h.
             aimedNow = false;
+            gateNow = &m_Cadence;
             int acquireTimeoutMs = timeoutMs;
-            if (deadlineMode && !leaveDda && !leaveWgc) {
+            if (deadlineMode && m_Deadline.tearing(steadyNowUs())) {
+                // A canvas that tears: no aim, no wait; the budget's gate.
+                const double budget = m_Deadline.budgetFps();
+                // Rebuilt when the budget really moves: the client's refresh is
+                // re-measured every grid and wanders by hundredths of a hertz.
+                if (std::abs(budget - tearGateFps) > tearGateFps * 0.005) {
+                    tearGateFps = budget;
+                    const int displayHz = (m_DisplayMilliHz + 500) / 1000;
+                    const auto intervalNs = static_cast<int64_t>(1e9 / budget);
+                    tearGate = budget < displayHz
+                                   ? FrameCadence::fromIntervalNs(intervalNs, displayHz)
+                                   : FrameCadence::ceiling(intervalNs, displayHz);
+                    log::info("[native] deadline: the client tears — each picture as it comes, at "
+                              "most " +
+                              std::to_string(static_cast<int>(budget + 0.5)) + " a second");
+                }
+                gateNow = &tearGate;
+                m_DeadlineTearing.store(true, std::memory_order_relaxed);
+                m_DeadlineAimedAtUs.store(steadyNowUs(), std::memory_order_relaxed);
+                m_DisplayPeriodUs.store(
+                    m_DisplayMilliHz > 0 ? static_cast<int>(1000000000LL / m_DisplayMilliHz) : 0,
+                    std::memory_order_relaxed);
+            } else if (deadlineMode && !leaveDda && !leaveWgc) {
+                m_DeadlineTearing.store(false, std::memory_order_relaxed);
                 const DeadlineCadence::Aim aim = m_Deadline.next(steadyNowUs());
                 if (aim.valid()) {
                     const int64_t sleepStartUs = steadyNowUs();
@@ -3108,7 +3140,12 @@ private:
                       " client refreshes aimed at (" + perSecond(m_DeadlineAims) + "/s), " +
                       std::to_string(m_DeadlineNothingNew) + " with nothing new; " + late + "; " +
                       std::to_string(m_Deadline.grids()) + " grids heard (" +
-                      std::to_string(m_DeadlineRefused.load()) + " refused), " + grid);
+                      std::to_string(m_DeadlineRefused.load()) + " refused), " + grid +
+                      (m_Deadline.budgetFps() > 0 && m_DeadlineTearing.load()
+                           ? "; the client tears, budget " +
+                                 std::to_string(static_cast<int>(m_Deadline.budgetFps() + 0.5)) +
+                                 " fps"
+                           : std::string()));
         }
 
         // cadence=host-guarded: what the client's decode queue held back.
@@ -3176,6 +3213,7 @@ private:
     DeadlineCadence m_Deadline;
     std::atomic<int64_t> m_DeadlineRefused{0};
     std::atomic<int64_t> m_DeadlineAimedAtUs{0};
+    std::atomic<bool> m_DeadlineTearing{false};
     std::atomic<int> m_DisplayPeriodUs{0};
     int64_t m_DeadlineAims = 0;
     int64_t m_DeadlineNothingNew = 0;

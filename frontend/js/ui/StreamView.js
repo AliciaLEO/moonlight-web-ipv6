@@ -164,6 +164,20 @@ const CURSOR_USES_CLIENT_STYLE = false;
 const E2E_SHIFT = 2 ** 32;
 
 /**
+ * Frames per refresh a native host under cadence=deadline may send a canvas
+ * that tears (VsyncGrid budgetFps) — the bench switch `mw_vsyncgrid_budget`,
+ * 1 without it.
+ */
+function vsyncGridBudget() {
+    try {
+        const v = Number(localStorage.getItem('mw_vsyncgrid_budget'));
+        return v > 0 && v <= 8 ? v : 1;
+    } catch {
+        return 1;
+    }
+}
+
+/**
  * How wide the host's pointer should end up on a phone, in CSS pixels.
  *
  * A touch screen has no pointer of its own, so there the host draws the pointer
@@ -867,6 +881,8 @@ export class StreamView {
             sendPing: (seq, ts) => {
                 if (this.webrtc) this.webrtc.send({ type: 'ping', seq, ts });
             },
+            tearing: () => this._tearing,
+            budgetFactor: vsyncGridBudget(),
         });
         if (!this._standby) window.mwVsyncGrid = this._vsyncGrid;
         // Native host: mouse motion goes out on `pointerrawupdate` — every

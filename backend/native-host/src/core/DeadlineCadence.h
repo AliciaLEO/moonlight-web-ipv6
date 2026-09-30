@@ -53,6 +53,16 @@ namespace mw::native {
 /// up to 16 ms behind the instant, and a lead that counted it would move
 /// every instant earlier for nothing.
 ///
+/// ── A client that tears ─────────────────────────────────────────────────────
+///
+/// A canvas that tears shows a frame the moment it is drawn, on the lines the
+/// scan has not reached yet: there is no refresh to aim at, and any wait here
+/// is lost on every line — a game at 50 frames a second on a 60 Hz screen
+/// would pay half a refresh for nothing (Bruno's cases, 30/09). Such a client
+/// says so (`tearing`) with a budget, the frames a second it takes; the loop
+/// then sends each new picture as it comes, through a gate at that budget
+/// that skips and never holds.
+///
 /// ── Staleness ───────────────────────────────────────────────────────────────
 ///
 /// A grid not heard for kStaleUs is dropped and the loop goes back to the
@@ -74,6 +84,7 @@ public:
     static constexpr double kMaxPeriodUs = 100000.0;
     static constexpr int64_t kMaxLeadUs = 500 * 1000;
     static constexpr int64_t kMaxPhaseAwayUs = 10 * 1000 * 1000;
+    static constexpr double kMaxBudgetFps = 1000.0;
 
     /// The refresh aimed at, and the instant its picture is taken.
     struct Aim
@@ -84,17 +95,23 @@ public:
     };
 
     /// The client refreshes every @p periodUs, one refresh at @p phaseUs (this
-    /// host's steady clock), a frame needing @p leadUs to be ready — heard at
-    /// @p nowUs. False, and nothing kept, for a grid that makes no sense.
-    bool note(double periodUs, int64_t phaseUs, int64_t leadUs, int64_t nowUs)
+    /// host's steady clock), a frame needing @p leadUs to be ready; its canvas
+    /// @p tearing or not, taking @p budgetFps frames a second when it does (0:
+    /// one per refresh) — heard at @p nowUs. False, and nothing kept, for a
+    /// grid that makes no sense.
+    bool note(double periodUs, int64_t phaseUs, int64_t leadUs, bool tearing, double budgetFps,
+              int64_t nowUs)
     {
         if (!(periodUs >= kMinPeriodUs && periodUs <= kMaxPeriodUs)) return false;
         if (leadUs <= 0 || leadUs > kMaxLeadUs) return false;
         if (phaseUs < nowUs - kMaxPhaseAwayUs || phaseUs > nowUs + kMaxPhaseAwayUs) return false;
+        if (!(budgetFps > 0 && budgetFps <= kMaxBudgetFps)) budgetFps = 1000000.0 / periodUs;
         std::lock_guard<std::mutex> lock(m_Mutex);
         m_PeriodUs = periodUs;
         m_PhaseUs = phaseUs;
         m_LeadUs = leadUs;
+        m_Tearing = tearing;
+        m_BudgetFps = budgetFps;
         m_HeardUs = nowUs;
         m_Heard = true;
         m_Grids++;
@@ -108,13 +125,28 @@ public:
         return freshLocked(nowUs);
     }
 
+    /// True while the last grid, fresh, is a canvas that tears: nothing is
+    /// aimed, each new picture goes at once under budgetFps().
+    bool tearing(int64_t nowUs) const
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        return freshLocked(nowUs) && m_Tearing;
+    }
+
+    /// The frames a second a client that tears takes.
+    double budgetFps() const
+    {
+        std::lock_guard<std::mutex> lock(m_Mutex);
+        return m_BudgetFps;
+    }
+
     /// The refresh to aim at next from @p nowUs: the first whose instant is
     /// no more than kLateUs behind, after the one served last. Invalid while
-    /// the grid is not fresh.
+    /// the grid is not fresh, or is a canvas that tears.
     Aim next(int64_t nowUs) const
     {
         std::lock_guard<std::mutex> lock(m_Mutex);
-        if (!freshLocked(nowUs)) return {};
+        if (!freshLocked(nowUs) || m_Tearing) return {};
         const double from =
             static_cast<double>(nowUs - kLateUs + m_LeadUs - m_PhaseUs) / m_PeriodUs;
         auto refreshAt = [this](int64_t n) {
@@ -165,6 +197,8 @@ private:
     int64_t m_LeadUs = 0;
     int64_t m_HeardUs = 0;
     bool m_Heard = false;
+    bool m_Tearing = false;
+    double m_BudgetFps = 0;
     int64_t m_ServedUs = 0;
     int64_t m_Grids = 0;
 };

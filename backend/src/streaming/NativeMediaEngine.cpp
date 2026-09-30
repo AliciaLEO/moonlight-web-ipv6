@@ -665,9 +665,10 @@ void NativeMediaEngine::setClientDecodeQueue(int depth)
     if (m_Session) m_Session->setClientDecodeQueue(depth);
 }
 
-void NativeMediaEngine::setClientVsyncGrid(double periodUs, int64_t phaseUs, int64_t leadUs)
+void NativeMediaEngine::setClientVsyncGrid(double periodUs, int64_t phaseUs, int64_t leadUs,
+                                           bool tearing, double budgetFps)
 {
-    if (m_Session) m_Session->setClientVsyncGrid(periodUs, phaseUs, leadUs);
+    if (m_Session) m_Session->setClientVsyncGrid(periodUs, phaseUs, leadUs, tearing, budgetFps);
 }
 
 NativeMediaEngine::VsyncGridStatus NativeMediaEngine::vsyncGridStatus() const
@@ -677,6 +678,7 @@ NativeMediaEngine::VsyncGridStatus NativeMediaEngine::vsyncGridStatus() const
     const mw::native::Session::VsyncGridStatus s = m_Session->vsyncGridStatus();
     out.wanted = s.wanted;
     out.followed = s.followed;
+    out.aimed = s.aimed;
     out.presentUs = s.presentUs;
     return out;
 }

@@ -90,7 +90,7 @@ function setup({ transitMs = 10, jitter = () => 0, seed = 7 } = {}) {
     grid.start();
     const pong = (deadline) => {
         const msg = { type: 'pong', ts: now, host: hostUs(now + 0.5) };
-        if (deadline) msg.deadline = { presentUs: HOST_TICK_US };
+        if (deadline) msg.deadline = { presentUs: HOST_TICK_US, aimed: deadline !== 'tearing' };
         grid.notePong(msg, now + 1);
     };
     /** Refreshes up to @p untilMs, a pong every 100 ms, a frame per refresh. */
@@ -159,6 +159,42 @@ describe('VsyncGrid', () => {
         expect(last.leadUs / 1000).toBeCloseTo(10 + PERIOD / 4, 1);
         // No more than one every SEND_EVERY_MS.
         expect(sent.length).toBeLessThanOrEqual(Math.ceil(3000 / SEND_EVERY_MS));
+        grid.stop();
+    });
+
+    it('says whether the canvas tears, and how many frames it takes', () => {
+        vi.useFakeTimers();
+        const sent = [];
+        let now = 0;
+        const grid = new VsyncGrid({
+            send: (msg) => sent.push(msg),
+            sendPing: () => {},
+            now: () => now,
+            onFrame: () => {},
+            tearing: () => true,
+            budgetFactor: 2,
+        });
+        grid.start();
+        for (let k = 0; k * PERIOD < 3000; k++) {
+            now = k * PERIOD;
+            if (k % 12 === 0)
+                grid.notePong({ type: 'pong', ts: now, host: hostUs(now + 0.5) }, now + 1);
+            grid.noteRefresh(now);
+            const captureMs = Math.floor(hostUs(now - 10) / 1000);
+            grid.noteReady(captureMs % 2 ** 32, (captureMs * 1000 - OFFSET_US) / 1000 + 10);
+        }
+        const last = sent[sent.length - 1];
+        expect(last.tearing).toBe(true);
+        expect(last.budgetFps).toBeCloseTo(240, 1);
+        grid.stop();
+    });
+
+    it('counts no miss while the host sends frames as they come', () => {
+        const { grid, run } = setup();
+        run(3000, 'tearing');
+        expect(grid.followed).toBe(true);
+        expect(grid.aimed).toBe(false);
+        expect(grid.frames).toBe(0);
         grid.stop();
     });
 

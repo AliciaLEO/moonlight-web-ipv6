@@ -1404,7 +1404,8 @@ void DataChannelRelay::onInputMessage(const std::string& message)
         if (auto* native = qobject_cast<NativeMediaEngine*>(m_Shim))
             native->setClientVsyncGrid(msg["periodUs"].toDouble(0),
                                        static_cast<int64_t>(msg["phaseUs"].toDouble(0)),
-                                       static_cast<int64_t>(msg["leadUs"].toDouble(0)));
+                                       static_cast<int64_t>(msg["leadUs"].toDouble(0)),
+                                       msg["tearing"].toBool(false), msg["budgetFps"].toDouble(0));
         return;
     }
 
@@ -1603,6 +1604,7 @@ void DataChannelRelay::onInputMessage(const std::string& message)
             if (grid.followed) {
                 QJsonObject deadline;
                 deadline["presentUs"] = grid.presentUs;
+                deadline["aimed"] = grid.aimed;
                 pong["deadline"] = deadline;
             }
         }

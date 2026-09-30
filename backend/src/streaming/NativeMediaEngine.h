@@ -302,15 +302,18 @@ public:
 
     /// When the client's screen refreshes (a `vsyncgrid` message): forwarded
     /// to Session::setClientVsyncGrid. Safe from any thread.
-    void setClientVsyncGrid(double periodUs, int64_t phaseUs, int64_t leadUs);
+    void setClientVsyncGrid(double periodUs, int64_t phaseUs, int64_t leadUs, bool tearing,
+                            double budgetFps);
 
     /// What the session says about the client's grid, for the pong (see
     /// Session::vsyncGridStatus): whether it wants one, whether it follows
-    /// it, the host display's period in µs. Safe from any thread.
+    /// it and aims at it, the host display's period in µs. Safe from any
+    /// thread.
     struct VsyncGridStatus
     {
         bool wanted = false;
         bool followed = false;
+        bool aimed = false;
         int presentUs = 0;
     };
     VsyncGridStatus vsyncGridStatus() const;
