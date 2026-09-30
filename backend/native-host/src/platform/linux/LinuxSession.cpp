@@ -1224,7 +1224,7 @@ private:
             // it always has — never a stream refused for want of Vulkan.
             if (m_Pipeline && m_Pipeline->conversionGivenUp()) {
                 m_VulkanConvertRefusal = "the Vulkan conversion could not start (" + error + ")";
-                log::warning("[native] " + m_VulkanConvertRefusal + " — converting through EGL");
+                log::warning("[native] " + m_VulkanConvertRefusal + " — " + convertingNext(false));
                 continue;
             }
             // ⚠️ The one hardware failure worth surviving: a driver that encodes
@@ -1250,6 +1250,16 @@ private:
         m_PipelineCaptureWidth = m_Capture->width();
         m_PipelineCaptureHeight = m_Capture->height();
         return true;
+    }
+
+    /// Where the picture goes once the Vulkan conversion is out: GL — but GL
+    /// cannot read the portal's shared memory, and the CPU pair takes it then.
+    std::string convertingNext(bool fromHere) const
+    {
+        const std::string when = fromHere ? " from here" : "";
+        return m_Target.capture == CaptureApi::PipeWire && !m_PortalDmabuf
+                   ? "the CPU pair" + when + ", as GL cannot read the portal's shared memory"
+                   : "converting through EGL" + when;
     }
 
     /// What this build of the session knows when it picks its chain.
@@ -1339,8 +1349,7 @@ private:
         } else if (m_Pipeline->conversionGivenUp()) {
             m_VulkanConvertRefusal =
                 "the Vulkan conversion gave up while streaming (" + error + ")";
-            log::warning("[native] " + m_VulkanConvertRefusal +
-                         " — converting through EGL from here");
+            log::warning("[native] " + m_VulkanConvertRefusal + " — " + convertingNext(true));
         } else {
             return false;
         }

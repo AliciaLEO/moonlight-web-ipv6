@@ -571,6 +571,11 @@ void run_linux_session_tests()
     // VK_DRIVER_FILES: the loader reads it with secure_getenv, which a binary
     // carrying file capabilities — this one, for the scanout — never sees.
 #if defined(MW_NATIVE_LINUX_VULKAN)
+    // Whether the portal handed over shared memory rather than a DMA-BUF — GNOME
+    // does under X11 (the UM790Pro, 30/09/2026). GL cannot read it, so where
+    // Vulkan gives up the next pair down is the CPU's, not GL's. Learnt from the
+    // split route's first fall below, whose reason names it.
+    bool portalSharedMemory = false;
     if (!h264Only) {
         SECTION("Linux — the split route: Vulkan compute into VA-API, AMD's own, GL when Vulkan "
                 "gives up");
@@ -652,7 +657,15 @@ void run_linux_session_tests()
                 CHECK_EQ(splitInfo.videoRoute, std::string("EGL → VA-API"));
                 CHECK(!splitInfo.videoPipelineRefused);
             } else {
-                CHECK_EQ(splitInfo.videoRoute, std::string("EGL → VA-API"));
+                // Vulkan gone, the pair a step down: GL's — or, on the portal's
+                // shared memory, which GL cannot read, the CPU's; the route's
+                // reason says which, and only the portal can give it.
+                const bool shm =
+                    splitInfo.videoPipelineReason.find("shared memory") != std::string::npos;
+                if (shm) portalSharedMemory = true;
+                CHECK(!shm || viaPortal);
+                CHECK_EQ(splitInfo.videoRoute,
+                         std::string(shm ? "CPU → OpenH264" : "EGL → VA-API"));
                 CHECK(splitInfo.videoPipelineRefused);
                 CHECK(splitInfo.videoPipelineReason.find(
                           failAt == "0" ? "could not start" : "gave up while streaming") !=
@@ -728,7 +741,14 @@ void run_linux_session_tests()
                 CHECK(false);
                 continue;
             }
-            CHECK(vkSession->start(vkError));
+            // This client decodes HEVC and nothing else. On the portal's shared
+            // memory, with Vulkan gone, the only pair left is the CPU's, which
+            // is H.264's alone: the client is refused — at the start, or when
+            // the chain falls mid-stream — and told why (LinuxSession::buildPair)
+            // rather than sent a stream it cannot decode.
+            const bool refusedForCodec = portalSharedMemory && run.failAt;
+            const bool started = vkSession->start(vkError);
+            if (!refusedForCodec) CHECK(started);
             std::this_thread::sleep_for(std::chrono::milliseconds(1500));
             vkSession->requestKeyframe();
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -746,6 +766,12 @@ void run_linux_session_tests()
                          n ? encodeSumUs.load() / 1000.0 / n : 0.0,
                          vkEnded.empty() ? "" : (", ended: " + vkEnded).c_str(),
                          vkInfo.videoPipelineReason.c_str());
+            if (refusedForCodec) {
+                const std::string& why = started ? vkEnded : vkError;
+                std::fprintf(stderr, "    refused, as it must be: %s\n", why.c_str());
+                CHECK(why.find("can only produce H.264") != std::string::npos);
+                continue;
+            }
             // Whatever Vulkan did, the stream went on: that is the rule.
             CHECK(vkEnded.empty());
             CHECK(n >= 2);
