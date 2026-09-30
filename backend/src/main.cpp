@@ -106,6 +106,7 @@
 #include "streaming/StreamRelay.h"
 #include "streaming/TransportPriorities.h"
 #include "streaming/ConsoleSession.h"
+#include "streaming/SharedFeed.h"
 #include "streaming/StreamWorkerHost.h"
 #include "streaming/WorkerService.h"
 #include "streaming/worker/StreamWorkerMain.h"
@@ -2203,6 +2204,12 @@ int main(int argc, char* argv[])
     // Owns the share state machine (link + PIN + permissions per player slot);
     // the stream side of it lives here because only main.cpp drives workers.
     ShareManager shareManager;
+    // The guests' shared feed of the native host (plan « flux commun des
+    // invités »): one worker encodes the owner's display once for every guest.
+    // Named per instance, so a --dev instance and the installed one never
+    // meet on a pipe.
+    SharedFeed sharedFeed(mw::edition::productName() +
+                          (mw::edition::devFlag() ? QStringLiteral("-dev") : QString()));
 
     // ── Who is watching this screen ────────────────────────────────────────
     //
@@ -2245,12 +2252,23 @@ int main(int argc, char* argv[])
 
     // Tear every player worker down and revoke their shares. Called when the
     // owner really stops — their session is the one the players resumed into.
-    auto endPlayerSessions = [&g_Pool, &detachWorkerSlot,
-                              &shareManager](ShareManager::EndReason reason) {
+    auto endPlayerSessions = [&g_Pool, &detachWorkerSlot, &shareManager,
+                              &sharedFeed](ShareManager::EndReason reason) {
         for (int i = kOwnerSlots; i < kTotalSlots; ++i)
             if (g_Pool.at(i).worker) detachWorkerSlot(i, false, true);
         shareManager.deactivateAll(reason);
+        sharedFeed.reset();
     };
+
+    // The feed died three times running: its guests leave, and rejoin on
+    // encoders of their own (their page's Join).
+    QObject::connect(&sharedFeed, &SharedFeed::failedForGood, qApp,
+                     [&g_Pool, &detachWorkerSlot](const QSet<int>& guestSlots) {
+                         for (int slot : guestSlots)
+                             if (slot >= kOwnerSlots && slot < kTotalSlots &&
+                                 g_Pool.at(slot).worker)
+                                 detachWorkerSlot(slot, false, false);
+                     });
 
     // The share manager decided a player's stream must end (the eight hours ran
     // out, or too many wrong PINs). It knows nothing about workers — this does.
@@ -4608,9 +4626,10 @@ int main(int argc, char* argv[])
         timer->start(graceMs);
     };
     shareDeps.stopPlayerStream = [&g_Pool, &detachWorkerSlot, &shareManager, &g_PlayerRetiring,
-                                  &g_PlayerUids, &reapCoopSession,
-                                  &cancelGuestHostSessionSoon](int slot, bool notifyEnded) {
+                                  &g_PlayerUids, &reapCoopSession, &cancelGuestHostSessionSoon,
+                                  &sharedFeed](int slot, bool notifyEnded) {
         if (slot < kOwnerSlots || slot >= kTotalSlots) return;
+        sharedFeed.release(slot);
         if (!g_Pool.at(slot).worker) return;
         // Read before the detach clears the slot. Leaving by this door skips
         // the worker's ended handler, so what it would have closed on the
@@ -4633,11 +4652,11 @@ int main(int argc, char* argv[])
                                    &sessionMetrics, signalingPort, stunServer, &g_HostAspect,
                                    &routerPorts, &g_PlayerUids, &cancelGuestHostSessionSoon,
                                    &dropPendingHostCancel, &releaseGuestHoleSoon, &keepGuestHole,
-                                   &g_PlayerRetiring](int slot, int height, QString aspect,
-                                                      ShareManager::Permissions perms,
-                                                      QString serverHost, int transportIndex,
-                                                      const HttpRequest& req,
-                                                      ResponseCallback respond) {
+                                   &g_PlayerRetiring,
+                                   &sharedFeed](int slot, int height, QString aspect,
+                                                ShareManager::Permissions perms, QString serverHost,
+                                                int transportIndex, const HttpRequest& req,
+                                                ResponseCallback respond) {
         // The share is bound to ONE host at activation (ShareManager::activate).
         // A player is routed there and nowhere else — never to "whichever owner
         // slot is up", which is what let a link minted on one host reach a
@@ -4883,6 +4902,36 @@ int main(int argc, char* argv[])
         cfg["transportChain"] = chainArr;
         cfg["transportIndex"] = transportIndex;
 
+        // The guests' shared feed (plan « flux commun des invités »): on this
+        // machine's native host every guest watches one stream, encoded once
+        // by a worker of its own, instead of a capture and an encoder each.
+        // The guest's worker carries its pictures, and rides out a loss
+        // (the feed refreshes by intra-refresh: nobody's loss costs everyone a
+        // keyframe). Every other host, and a switch turned off, keeps the
+        // encoder per guest exactly as it was.
+        auto feedTicket = std::make_shared<SharedFeed::Ticket>();
+        bool onFeed = false;
+        if (host->backendType == NativeHostBackend::typeName() &&
+            SharedFeed::enabled(appSettings.sharedFeedEnabled())) {
+            SharedFeed::Spec spec;
+            spec.hostUuid = hostUuid;
+            spec.appId = appId;
+            spec.height = height;
+            spec.width = width;
+            spec.bitrateKbps = bitrateKbps;
+            spec.h264 = h264;
+            spec.videoPipeline = appSettings.nativeVideoPipeline();
+            spec.tuning = appSettings.nativeTuning();
+            spec.portalToken = appSettings.portalRestoreToken(portalVirtual);
+            onFeed = sharedFeed.acquire(spec, slot, *feedTicket);
+        }
+        if (onFeed) {
+            cfg["feedPipe"] = feedTicket->pipe;
+            cfg["feedToken"] = QString::fromLatin1(feedTicket->token);
+            cfg["feedSlot"] = slot;
+            cfg["rideOutLoss"] = true;
+        }
+
         auto* worker = new StreamWorkerHost(qApp);
         QObject::connect(worker, &StreamWorkerHost::exited, worker, &QObject::deleteLater);
 
@@ -4935,8 +4984,8 @@ int main(int argc, char* argv[])
         QObject::connect(
             worker, &StreamWorkerHost::ended, qApp,
             [worker, &g_Pool, &shareManager, &anyOtherSlotLive, &reapCoopSession, &sessionMetrics,
-             &cancelGuestHostSessionSoon, sessionFacts, sessionStartedAt, slot, host, uid,
-             coopSessionId]() {
+             &cancelGuestHostSessionSoon, &sharedFeed, sessionFacts, sessionStartedAt, slot, host,
+             uid, coopSessionId]() {
                 qInfo() << "[main] Player worker ended (slot" << slot << ")";
                 if (*sessionStartedAt > 0) {
                     const qint64 ms = QDateTime::currentMSecsSinceEpoch() - *sessionStartedAt;
@@ -4963,6 +5012,9 @@ int main(int argc, char* argv[])
                     sl.sessionToken.clear();
                     sl.coopSessionId.clear();
                     sl.appId = 0;
+                    // Off the shared feed — this slot's, not a newer join's
+                    // on it: the last guest leaving stops the feed soon.
+                    sharedFeed.release(slot);
                 }
                 if (onVirtualDisplay && !anyOtherSlotLive(slot, host->uuid))
                     VirtualDisplayJob::instance().releaseSoon();
@@ -4974,9 +5026,27 @@ int main(int argc, char* argv[])
                          [slot, &releaseGuestHoleSoon]() { releaseGuestHoleSoon(slot); });
 
         const QString hostUuidCopy = host->uuid;
-        auto startWorker = [worker, respond, slot, appId, &g_Pool, hostUuidCopy,
-                            uid](const QJsonObject& withHole) {
-            if (!worker->start(withHole)) {
+        auto startWorker = [worker, respond, slot, appId, &g_Pool, hostUuidCopy, uid, onFeed,
+                            feedTicket, &sharedFeed](const QJsonObject& withHole) {
+            // On the shared feed, the guest's worker runs exactly as the feed's
+            // does, or its pipe would not let it in; a guest that cannot be
+            // started that way encodes on its own.
+            bool started = false;
+            if (onFeed) {
+                started = worker->startAs(withHole, feedTicket->launch);
+                if (!started) {
+                    qWarning() << "[Session] Player slot" << slot
+                               << "could not start as the shared feed runs — encoding on its own";
+                    sharedFeed.release(slot);
+                    QJsonObject own = withHole;
+                    for (const char* key : {"feedPipe", "feedToken", "feedSlot", "rideOutLoss"})
+                        own.remove(QLatin1String(key));
+                    started = worker->start(own);
+                }
+            } else {
+                started = worker->start(withHole);
+            }
+            if (!started) {
                 worker->deleteLater();
                 respond(HttpResponse::error(500, "Failed to spawn stream worker"));
                 return;

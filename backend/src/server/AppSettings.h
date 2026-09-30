@@ -96,6 +96,18 @@ public:
 
     bool latencyFlagEnabled() const;
 
+    // ── The guests' shared feed ───────────────────────────────────────────────
+    //
+    // Whether the guests of this machine's native host watch ONE stream encoded
+    // once for all of them (plan « flux commun des invités »), rather than each
+    // a stream of their own. File-only (no UI, no write route): stored as JSON
+    // bool "shared_feed_enabled", DEFAULT true, read at each guest's join. The
+    // safety net beside the MW_SHARED_FEED=0 variable: false puts back the
+    // encoder per guest exactly as it was. Windows only for now, whatever it
+    // says (SharedFeed::enabled).
+
+    bool sharedFeedEnabled() const;
+
     // ── Keyboard layout fidelity ──────────────────────────────────────────────
     //
     // On: what the host types is the character the CLIENT's keyboard layout

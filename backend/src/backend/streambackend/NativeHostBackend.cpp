@@ -69,6 +69,25 @@ int appIdToDisplayId(int appId)
 /// of monitors, never a thousand.
 constexpr int kVirtualDisplayAppId = 1000;
 
+/// The display @p appId stands for among @p caps, or -1 with @p why.
+int displayOf(const mw::native::Capabilities& caps, int appId, QString* why)
+{
+    if (appId == kVirtualDisplayAppId) {
+        // Our virtual display, turned on by the server before this launch
+        // (main.cpp's /start): whichever display index it came up under.
+        for (const mw::native::DisplayInfo& display : caps.displays)
+            if (VirtualDisplay::isOurs(display)) return display.id;
+        if (why) *why = QStringLiteral("The virtual display is not on");
+        return -1;
+    }
+    const int displayId = appIdToDisplayId(appId);
+    for (const mw::native::DisplayInfo& display : caps.displays)
+        if (display.id == displayId) return displayId;
+    // Almost always a display unplugged since the app list was fetched.
+    if (why) *why = QStringLiteral("That display is no longer connected");
+    return -1;
+}
+
 NvApp virtualDisplayApp(const mw::native::Capabilities& caps)
 {
     NvApp app(kVirtualDisplayAppId, VirtualDisplay::displayName(), /*hdr=*/false);
@@ -91,6 +110,18 @@ NvApp virtualDisplayApp(const mw::native::Capabilities& caps)
 int NativeHostBackend::virtualDisplayAppId()
 {
     return kVirtualDisplayAppId;
+}
+
+int NativeHostBackend::displayForApp(int appId, QString* error)
+{
+    const mw::native::Capabilities caps = probeEngine();
+    if (!caps.available) {
+        if (error)
+            *error = caps.diagnostic.empty() ? QString::fromUtf8(mw::native::toString(caps.reason))
+                                             : QString::fromStdString(caps.diagnostic);
+        return -1;
+    }
+    return displayOf(caps, appId, error);
 }
 
 bool NativeHostBackend::isEnabled()
@@ -335,38 +366,10 @@ void NativeHostBackend::launch(const QString& seatId, const LaunchRequest& req,
         return;
     }
 
-    int displayId = appIdToDisplayId(req.appId);
-    bool known = false;
-    if (req.appId == kVirtualDisplayAppId) {
-        // Our virtual display, turned on by the server before this launch
-        // (main.cpp's /start): whichever display index it came up under.
-        for (const mw::native::DisplayInfo& display : caps.displays) {
-            if (VirtualDisplay::isOurs(display)) {
-                displayId = display.id;
-                known = true;
-                break;
-            }
-        }
-        if (!known) {
-            cb(false,
-               BackendError::make(BackendError::NotFound,
-                                  QStringLiteral("The virtual display is not on")),
-               MediaDescriptor{});
-            return;
-        }
-    }
-    for (const mw::native::DisplayInfo& display : caps.displays) {
-        if (display.id == displayId) {
-            known = true;
-            break;
-        }
-    }
-    if (!known) {
-        // Almost always a display unplugged since the app list was fetched.
-        cb(false,
-           BackendError::make(BackendError::NotFound,
-                              QStringLiteral("That display is no longer connected")),
-           MediaDescriptor{});
+    QString why;
+    const int displayId = displayOf(caps, req.appId, &why);
+    if (displayId < 0) {
+        cb(false, BackendError::make(BackendError::NotFound, why), MediaDescriptor{});
         return;
     }
 

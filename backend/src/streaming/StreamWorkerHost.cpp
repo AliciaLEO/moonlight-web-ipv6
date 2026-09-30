@@ -44,10 +44,10 @@ StreamWorkerHost::~StreamWorkerHost()
     // QObject child), so nothing more is needed here.
 }
 
-bool StreamWorkerHost::start(const QJsonObject& config)
+void StreamWorkerHost::prepare(const QJsonObject& config, QStringList& args,
+                               QByteArray& configLine) const
 {
-    Q_ASSERT(!m_Proc && !m_Console);
-    QStringList args{QStringLiteral("--stream-worker")};
+    args = QStringList{QStringLiteral("--stream-worker")};
     // Carry --dev into the child. The flag drives the application name, which
     // is what moves the settings, logs and — the part that matters here — the
     // client identity the worker presents to the host. Without it a dev run
@@ -62,7 +62,34 @@ bool StreamWorkerHost::start(const QJsonObject& config)
     // Same road for verbose logs: this process's DEBUG threshold is the one
     // the worker's own lines have to pass before they are relayed here.
     if (mw::run::verbose()) withSettings[QStringLiteral("verbose")] = true;
-    const QByteArray configLine = QJsonDocument(withSettings).toJson(QJsonDocument::Compact) + "\n";
+    configLine = QJsonDocument(withSettings).toJson(QJsonDocument::Compact) + "\n";
+}
+
+bool StreamWorkerHost::startAs(const QJsonObject& config, Launch how)
+{
+    Q_ASSERT(!m_Proc && !m_Console);
+    QStringList args;
+    QByteArray configLine;
+    prepare(config, args, configLine);
+    const bool native = config["backendType"].toString() == QLatin1String("native");
+    switch (how) {
+    case Launch::ConsoleAsUser: return startInConsoleSession(args, configLine, how);
+    case Launch::ServiceAsSystem:
+        return WorkerService::available() && startInConsoleSession(args, configLine, how);
+    case Launch::TaskElevated:
+        return ConsoleSession::elevatedWorkerAvailable() &&
+               startInConsoleSession(args, configLine, how);
+    case Launch::Plain: break;
+    }
+    return startInProcess(args, configLine, native);
+}
+
+bool StreamWorkerHost::start(const QJsonObject& config)
+{
+    Q_ASSERT(!m_Proc && !m_Console);
+    QStringList args;
+    QByteArray configLine;
+    prepare(config, args, configLine);
 
     // The native engine captures the desktop, and a service has none: its
     // worker goes to the console session, as the user sitting there. Every
@@ -126,6 +153,7 @@ bool StreamWorkerHost::startInProcess(const QStringList& args, const QByteArray&
     }
 
     m_Proc->write(configLine);
+    m_Launch = Launch::Plain;
     qInfo() << "[StreamWorkerHost] Worker spawned, pid=" << m_Proc->processId();
     return true;
 }
@@ -166,6 +194,7 @@ bool StreamWorkerHost::startInConsoleSession(const QStringList& args, const QByt
     }
 
     m_Console->write(configLine);
+    m_Launch = how;
     qInfo() << "[StreamWorkerHost] Worker spawned"
             << (how == Launch::ConsoleAsUser ? "in the console session as"
                                              : "through its launcher as")

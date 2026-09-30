@@ -50,9 +50,35 @@ public:
     explicit StreamWorkerHost(QObject* parent = nullptr);
     ~StreamWorkerHost() override;
 
+    /// How far the native worker is raised. start() tries them top down, each
+    /// step reaching less of the desktop than the one above and none of them
+    /// changing what the stream itself does.
+    enum class Launch
+    {
+        /// A plain child of this process, as this process.
+        Plain,
+        /// From a service, into the console session, as the user sitting there.
+        ConsoleAsUser,
+        /// From the desktop, through the elevated scheduled task: the user's
+        /// full token, so administrator windows take input (§30, level 1).
+        TaskElevated,
+        /// From the desktop, through the LocalSystem launcher service: SYSTEM
+        /// on the console desktop, so the secure desktop does too (level 2).
+        ServiceAsSystem,
+    };
+
     /// Spawn the worker and hand it the session config. Returns false when the
     /// process could not be started (caller falls back to in-process mode).
     bool start(const QJsonObject& config);
+
+    /// Spawn it exactly as @p how, or not at all. The guests' shared feed
+    /// lives on a pipe only its own user may open, so a guest's worker has to
+    /// run as the feed's does — a guest that could only start some other way
+    /// encodes on its own instead.
+    bool startAs(const QJsonObject& config, Launch how);
+
+    /// The way the running child was started (Plain until one was).
+    Launch launch() const { return m_Launch; }
 
     /// Graceful local teardown ({"cmd":"quit"}), hard-kill after 5s.
     void requestQuit();
@@ -97,20 +123,8 @@ signals:
     void exited();
 
 private:
-    /// How far the native worker is raised. Tried top down in start(), each
-    /// step reaching less of the desktop than the one above and none of them
-    /// changing what the stream itself does.
-    enum class Launch
-    {
-        /// From a service, into the console session, as the user sitting there.
-        ConsoleAsUser,
-        /// From the desktop, through the elevated scheduled task: the user's
-        /// full token, so administrator windows take input (§30, level 1).
-        TaskElevated,
-        /// From the desktop, through the LocalSystem launcher service: SYSTEM
-        /// on the console desktop, so the secure desktop does too (level 2).
-        ServiceAsSystem,
-    };
+    /// The arguments and the configuration line every way of starting shares.
+    void prepare(const QJsonObject& config, QStringList& args, QByteArray& configLine) const;
 
     bool startInProcess(const QStringList& args, const QByteArray& configLine, bool native);
     /// Through ConsoleProcess, in one of the three ways above.
@@ -128,6 +142,7 @@ private:
 
     QProcess* m_Proc = nullptr;
     ConsoleProcess* m_Console = nullptr;
+    Launch m_Launch = Launch::Plain;
     QByteArray m_Buf;
     bool m_ResponseEmitted = false;
     bool m_EndedEmitted = false;

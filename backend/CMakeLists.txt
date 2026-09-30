@@ -295,6 +295,7 @@ add_executable(mw-server
     src/streaming/FeedInfo.cpp
     src/streaming/FeedPublisher.cpp
     src/streaming/FeedSubscriber.cpp
+    src/streaming/SharedFeed.cpp
     src/streaming/NativeBench.cpp
     src/streaming/ClipboardBridge.cpp
     src/streaming/HostAudioSink.cpp

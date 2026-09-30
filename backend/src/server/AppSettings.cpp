@@ -623,6 +623,12 @@ bool AppSettings::latencyFlagEnabled() const
     return obj.value("latency_flag_enabled").toBool(false);
 }
 
+bool AppSettings::sharedFeedEnabled() const
+{
+    QJsonObject obj = readAll();
+    return obj.value("shared_feed_enabled").toBool(true);
+}
+
 bool AppSettings::keyboardLayoutFidelity() const
 {
     QJsonObject obj = readAll();

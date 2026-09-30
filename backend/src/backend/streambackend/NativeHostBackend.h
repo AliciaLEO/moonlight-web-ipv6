@@ -107,6 +107,13 @@ public:
     /// turns it off.
     static int virtualDisplayAppId();
 
+    /// The display an app id stands for, on this machine now: the display id
+    /// the engine streams, or -1 with @p error saying why (the virtual display
+    /// is off, the display was unplugged, native streaming is unavailable).
+    /// What launch() does, for the one worker that launches nothing: the
+    /// guests' shared feed, which shows the owner's display.
+    static int displayForApp(int appId, QString* error);
+
     NativeHostBackend() = default;
 
     QString type() const override { return typeName(); }

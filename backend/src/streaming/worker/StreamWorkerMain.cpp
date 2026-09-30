@@ -25,6 +25,9 @@
 #include "../../backend/streambackend/StreamBackendRegistry.h"
 #include "../../backend/streambackend/StreamBackendSetup.h"
 #include "../DataChannelRelay.h"
+#include "../FeedPublisher.h"
+#include "../NativeMediaEngine.h"
+#include "../../backend/streambackend/NativeHostBackend.h"
 #include "../MediaTrackRelay.h"
 #include "../StreamRelay.h"
 #include "../SignalingServer.h"
@@ -46,6 +49,7 @@
 
 #include <cstdio>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <thread>
 
@@ -168,6 +172,144 @@ void teardownAndExit(int notify /*0=none, 1=takenOver, 2=revoked, 3=sessionEnded
     QTimer::singleShot(3000, qApp, &QCoreApplication::quit);
 }
 
+/// The guests' shared feed (plan « flux commun des invités »): a worker with no
+/// browser of its own. It captures the owner's display once, encodes it once
+/// for every guest of this native host, and publishes each frame on a local
+/// pipe their workers subscribe to. No session, no relay, no signaling: the
+/// engine and the pipe, and the server's commands on stdin.
+int runFeedWorker(const QJsonObject& cfg)
+{
+    const int appId = cfg["appId"].toInt();
+    QString why;
+    const int displayId = NativeHostBackend::displayForApp(appId, &why);
+    if (displayId < 0) {
+        qWarning() << "[StreamWorker] feed: no display for app" << appId << ":" << why;
+        emitEvent({{QStringLiteral("event"), QStringLiteral("response")},
+                   {QStringLiteral("code"), 404},
+                   {QStringLiteral("body"), QJsonObject{{QStringLiteral("error"), why}}}});
+        return 1;
+    }
+
+    auto* publisher =
+        new FeedPublisher(cfg["feedPipe"].toString(), cfg["feedToken"].toString().toLatin1(), qApp);
+    if (!publisher->start(&why)) {
+        emitEvent({{QStringLiteral("event"), QStringLiteral("response")},
+                   {QStringLiteral("code"), 500},
+                   {QStringLiteral("body"),
+                    QJsonObject{{QStringLiteral("error"), QStringLiteral("feed pipe: ") + why}}}});
+        return 1;
+    }
+
+    auto* engine = new NativeMediaEngine(qApp);
+    auto ended = std::make_shared<bool>(false);
+    auto finish = [engine, publisher, ended]() {
+        if (*ended) return;
+        *ended = true;
+        engine->stopConnection();
+        publisher->stop();
+        emitEvent({{QStringLiteral("event"), QStringLiteral("ended")}});
+        QTimer::singleShot(500, qApp, &QCoreApplication::quit);
+    };
+
+    // What the guests ask of the one encoder they share. Handed straight on
+    // for now; the arbitration between guests is its own step (S6).
+    QObject::connect(
+        publisher, &FeedPublisher::controlReceived, qApp,
+        [engine](int, const QJsonObject& msg) {
+            const QString type = msg.value(QStringLiteral("type")).toString();
+            if (type == QLatin1String("idr")) {
+                engine->requestIdrFrame();
+            } else if (type == QLatin1String("link")) {
+                mw::native::LinkFeedback fb;
+                fb.owdRiseMs = msg.value(QStringLiteral("owdRiseMs")).toInt();
+                fb.gaps = msg.value(QStringLiteral("gaps")).toInt();
+                fb.evictions = msg.value(QStringLiteral("evictions")).toInt();
+                fb.receivedFps = msg.value(QStringLiteral("fps")).toInt();
+                fb.resumed = msg.value(QStringLiteral("resumed")).toBool();
+                engine->reportLink(fb);
+            }
+        },
+        Qt::QueuedConnection);
+    QObject::connect(publisher, &FeedPublisher::subscriberJoined, qApp, [](int id, int slot) {
+        qInfo() << "[StreamWorker] feed: guest of slot" << slot << "in (" << id << ")";
+    });
+    QObject::connect(publisher, &FeedPublisher::subscriberLeft, qApp, [](int id, int slot) {
+        qInfo() << "[StreamWorker] feed: guest of slot" << slot << "gone (" << id << ")";
+    });
+
+    QObject::connect(engine, &IMediaEngine::connectionStarted, qApp, [engine]() {
+        mw::native::SessionInfo info;
+        engine->sessionInfo(info);
+        emitEvent({{QStringLiteral("event"), QStringLiteral("response")},
+                   {QStringLiteral("code"), 200},
+                   {QStringLiteral("body"),
+                    QJsonObject{{QStringLiteral("status"), QStringLiteral("streaming")},
+                                {QStringLiteral("feed"), engine->describeSession()},
+                                {QStringLiteral("stream_width"), info.width},
+                                {QStringLiteral("stream_height"), info.height},
+                                {QStringLiteral("intra_refresh"), info.intraRefresh}}}});
+    });
+    QObject::connect(engine, &IMediaEngine::connectionFailed, qApp, [finish](const QString& err) {
+        qWarning() << "[StreamWorker] feed: the engine did not start:" << err;
+        emitEvent({{QStringLiteral("event"), QStringLiteral("response")},
+                   {QStringLiteral("code"), 502},
+                   {QStringLiteral("body"), QJsonObject{{QStringLiteral("error"), err}}}});
+        finish();
+    });
+    QObject::connect(engine, &IMediaEngine::connectionTerminated, qApp, [finish](int) {
+        qWarning() << "[StreamWorker] feed: the session ended on its own";
+        finish();
+    });
+
+    // Every guest's session is carried by its own worker; this one only
+    // encodes: fixed cadence, no audio, intra-refresh it cannot do without,
+    // and a rate the slowest guest pulls down to 60 % of the setting at most.
+    NativeMediaEngine::StartParams p;
+    p.displayId = displayId;
+    p.width = cfg["width"].toInt();
+    p.height = cfg["height"].toInt();
+    p.fps = cfg["fps"].toInt(60);
+    p.maxFps = p.fps;
+    p.bitrateKbps = cfg["bitrateKbps"].toInt(10000);
+    // HEVC with H.264 behind it, or H.264 alone once a guest has said it
+    // decodes nothing else (VIDEO_FORMAT_* masks, as the owner's /start).
+    p.clientVideoFormats = cfg["h264"].toBool() ? 0x000F : (0x0F00 | 0x000F);
+    p.intraRefresh = true;
+    p.intraRefreshRequired = true;
+    p.governorFloorPercent = cfg["governorFloorPercent"].toInt(60);
+    p.followDisplayShape = true;
+    p.viewerAdmin = false;
+    p.muteHostAudio = false;
+    p.captureAudio = false;
+    p.portalRestoreToken = cfg["portalRestoreToken"].toString();
+    mw::native::parseVideoPipeline(cfg["nativeVideoPipeline"].toString().toStdString(),
+                                   p.videoPipeline);
+    p.tuningSpec = cfg["nativeTuning"].toString();
+    p.feedPublisher = publisher;
+    qInfo() << "[StreamWorker] feed: display" << displayId << "at" << p.width << "x" << p.height
+            << "@" << p.fps << "," << p.bitrateKbps << "kbps,"
+            << (cfg["h264"].toBool() ? "H.264" : "HEVC") << "— pipe" << publisher->name();
+
+    std::thread stdinThread([finish]() {
+        std::string line;
+        while (std::getline(std::cin, line)) {
+            const QJsonObject msg =
+                QJsonDocument::fromJson(QByteArray::fromStdString(line)).object();
+            const QString cmd = msg["cmd"].toString();
+            if (cmd == QLatin1String("quit") || cmd == QLatin1String("sessionEnded"))
+                QMetaObject::invokeMethod(qApp, finish, Qt::QueuedConnection);
+        }
+        // EOF: the server is gone — never encode without a supervisor.
+        QMetaObject::invokeMethod(qApp, finish, Qt::QueuedConnection);
+    });
+    stdinThread.detach();
+
+    engine->startCapture(p);
+    const int rc = qApp->exec();
+    qInfo() << "[StreamWorker] feed exiting rc=" << rc;
+    return rc;
+}
+
 } // namespace
 
 int runStreamWorker(QCoreApplication& app)
@@ -224,6 +366,9 @@ int runStreamWorker(QCoreApplication& app)
         mw::native::NativeHost::setKeyboardDiagnostics(true);
         qInfo() << "[KBD] keyboard diagnostics on in the worker (never on the secure desktop)";
     }
+
+    // The guests' shared feed: an engine and a pipe, nothing a browser meets.
+    if (cfg[QStringLiteral("role")].toString() == QLatin1String("feed")) return runFeedWorker(cfg);
 
     // Automatic storage is required: the relay callbacks below capture `state`
     // by reference, and a lambda can only capture a variable with automatic
@@ -322,6 +467,9 @@ int runStreamWorker(QCoreApplication& app)
     session->setNativeVideoPipeline(cfg["nativeVideoPipeline"].toString());
     // Absent (an older parent, or no knob) → empty: the engine's own settings.
     session->setNativeTuning(cfg["nativeTuning"].toString());
+    // A guest on the guests' shared feed: absent → this session captures.
+    session->setSharedFeed(cfg["feedPipe"].toString(), cfg["feedToken"].toString().toLatin1(),
+                           cfg["feedSlot"].toInt(-1));
     session->setClientPresentation(cfg["clientRefreshMilliHz"].toInt(0),
                                    cfg["clientVsync"].toBool(false));
     // Absent (an older parent, or a rate the viewer named) → no ceiling, and
