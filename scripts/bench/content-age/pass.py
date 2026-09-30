@@ -50,6 +50,8 @@ def main():
     ap.add_argument("--client-port", type=int, default=0,
                     help="a client Chrome on another machine, its debugging port tunnelled here")
     ap.add_argument("--client-url", default="", help="the address that client reaches this host at")
+    ap.add_argument("--bitrate", type=int, default=0,
+                    help="kbps; 0 = the automatic one, sized for the client's rate")
     ap.add_argument("--local-storage", action="append", default=[], metavar="KEY=VALUE",
                     help="a bench switch the page reads at launch (mw_decodequeue=pending)")
     a = ap.parse_args()
@@ -86,6 +88,8 @@ def main():
         settings = dict(run.load_matrix()["base"])
         settings.update({"stream_fps": a.fps, "tearing_default_v2": True,
                          "tearing_enabled": a.vsync == "off"})
+        if a.bitrate > 0:
+            settings.update({"stream_bitrate_auto": False, "stream_bitrate": a.bitrate})
         d.apply_settings(settings)
         d.wait_library(access.get("name", "bench"), access.get("pin", ""), tries=25)
         os.environ["MW_BENCH_DISPLAY"] = a.display_index

@@ -100,6 +100,7 @@ def main():
     ap.add_argument("--cadences", default="client,host,host-ceiling,host-guarded")
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--secs", type=float, default=30)
+    ap.add_argument("--bitrate", type=int, default=0, help="kbps (pass.py --bitrate)")
     ap.add_argument("--vsync", choices=["on", "off"], default="off",
                     help="on = tearing off: the client paints on its refresh (pass.py --vsync)")
     ap.add_argument("--every", type=int, default=1,
@@ -150,7 +151,8 @@ def main():
                     launch_dev(rate, cadence, os.path.join(OUT, tag + ".server.log"))
                     r = subprocess.run([sys.executable, os.path.join(HERE, "pass.py"), "--tag", tag,
                                         "--target", "vdisplay", "--secs", str(a.secs),
-                                        "--every", str(a.every), "--vsync", a.vsync] + client,
+                                        "--every", str(a.every), "--vsync", a.vsync,
+                                        "--bitrate", str(a.bitrate)] + client,
                                        capture_output=True, text=True)
                     tail = (r.stdout + r.stderr).strip().splitlines()
                     print("\n".join("   " + l for l in tail[-8:]), flush=True)
