@@ -316,9 +316,9 @@ void StreamSession::doResumeApp()
 
 void StreamSession::doLaunchApp()
 {
-    qDebug() << "[Session] Launching app" << m_AppId << "on" << m_Host->name;
-    qDebug() << "[Session]   address:" << m_Host->activeAddress.address()
-             << "port:" << m_Host->activeHttpsPort;
+    // INFO: the address a launch went to is in no other line.
+    qInfo() << "[Session] Launching app" << m_AppId << "on" << m_Host->name << "at"
+            << m_Host->activeAddress.address() << "port" << m_Host->activeHttpsPort;
     qDebug() << "[Session]   stream:" << m_StreamWidth << "x" << m_StreamHeight << "@"
              << m_StreamFps << "fps, bitrate:" << m_StreamBitrateKbps << "kbps,"
              << "hdr:" << m_Config.hdrEnabled;
@@ -1070,7 +1070,7 @@ void StreamSession::sampleHostIpTtl()
 
 void StreamSession::onShimConnectionStarted()
 {
-    qDebug() << "[Session] LiStartConnection succeeded — sending response to browser";
+    qInfo() << "[Session] LiStartConnection succeeded — sending response to browser";
 
     // The host's OS may still be unknown at this point — nothing on the control
     // plane names it. Now that its packets are arriving, the TTL they carry can

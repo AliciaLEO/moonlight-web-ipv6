@@ -257,6 +257,10 @@ private:
     // of staying offline forever. Absent uuid means 0.
     QHash<QString, int> m_PollAddrIndex;
 
+    // The state each host was last logged in ("[NETWORK] <host> is online"):
+    // one line when it changes, rather than one per poll.
+    QHash<QString, NvComputer::ComputerState> m_LoggedState;
+
     // Services seen since the current mDNS window opened — reported when it
     // closes, so a scan that found nothing says so.
     int m_MdnsSeenThisWindow = 0;

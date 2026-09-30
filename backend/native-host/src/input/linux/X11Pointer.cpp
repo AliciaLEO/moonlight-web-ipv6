@@ -73,9 +73,9 @@ bool X11Pointer::open()
     // than at the first pointer move.
     m_Lib = ::dlopen(kSoname, RTLD_NOW | RTLD_LOCAL);
     if (!m_Lib) {
-        log::debug(std::string("[native] input: ") + kSoname +
-                   " not available — relative motion will not be brought back onto the captured "
-                   "display");
+        log::info(std::string("[native] input: ") + kSoname +
+                  " not available — relative motion will not be brought back onto the captured "
+                  "display");
         return false;
     }
 

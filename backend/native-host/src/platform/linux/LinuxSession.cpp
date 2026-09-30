@@ -1061,8 +1061,8 @@ private:
                           " — pointer mapped on the KMS layout");
             }
         } else {
-            log::debug("[native] input: no Wayland layout: " + why +
-                       " — pointer mapped on the KMS layout");
+            log::info("[native] input: no Wayland layout: " + why +
+                      " — pointer mapped on the KMS layout");
         }
         return rects;
     }

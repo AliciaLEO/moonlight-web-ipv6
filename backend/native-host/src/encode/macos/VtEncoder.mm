@@ -231,10 +231,10 @@ bool VtEncoder::init(Codec codec, int width, int height, int fps, int bitrateKbp
         std::string soft;
         if (!setInt(session, kVTCompressionPropertyKey_MaxFrameDelayCount, 0, "zero frame delay",
                     soft))
-            log::debug("[native] " + soft);
+            log::info("[native] " + soft);
         if (!setBool(session, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, true,
                      "speed over quality", soft))
-            log::debug("[native] " + soft);
+            log::info("[native] " + soft);
     }
 
     const char* profileName = "";

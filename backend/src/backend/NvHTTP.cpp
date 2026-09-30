@@ -24,6 +24,7 @@
 #include <QSslKey>
 #include <QSslSocket>
 #include <QNetworkProxy>
+#include <QRegularExpression>
 
 #include "IdentityManager.h"
 #include <QUuid>
@@ -251,6 +252,14 @@ QVector<NvApp> NvHTTP::parseAppList(const QString& xml)
     return apps;
 }
 
+// A launch or resume URL fit for the log: rikey is the key every keystroke and
+// click of the session is encrypted with, and a log ends up attached to issues.
+static QString loggableUrl(const QUrl& url)
+{
+    static const QRegularExpression rikey(QStringLiteral("rikey=[0-9A-Fa-f]*"));
+    return url.toString().replace(rikey, QStringLiteral("rikey=(hidden)"));
+}
+
 QNetworkReply* NvHTTP::launchAppAsync(const NvAddress& address, quint16 httpsPort, int appId,
                                       const QString& uniqueId, const QByteArray& rikey, int rikeyid,
                                       int width, int height, int fps, int bitrate,
@@ -276,7 +285,7 @@ QNetworkReply* NvHTTP::launchAppAsync(const NvAddress& address, quint16 httpsPor
 
     QUrl url(QString("https://%1:%2/launch?%3").arg(address.address()).arg(httpsPort).arg(query));
 
-    qDebug() << "[NvHTTP] launchApp URL:" << url.toString();
+    qDebug() << "[NvHTTP] launchApp URL:" << loggableUrl(url);
 
     QNetworkRequest req(url);
     req.setTransferTimeout(timeoutMs > 0 ? timeoutMs : LAUNCH_TIMEOUT_MS);
@@ -316,7 +325,7 @@ QNetworkReply* NvHTTP::resumeAppAsync(const NvAddress& address, quint16 httpsPor
 
     QUrl url(QString("https://%1:%2/resume?%3").arg(address.address()).arg(httpsPort).arg(query));
 
-    qDebug() << "[NvHTTP] resumeApp URL:" << url.toString();
+    qDebug() << "[NvHTTP] resumeApp URL:" << loggableUrl(url);
 
     QNetworkRequest req(url);
     req.setTransferTimeout(timeoutMs > 0 ? timeoutMs

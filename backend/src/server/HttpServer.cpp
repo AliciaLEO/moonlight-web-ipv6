@@ -142,7 +142,9 @@ protected:
         ssl->setPeerVerifyMode(QSslSocket::VerifyNone);
 
         connect(ssl, &QSslSocket::encrypted, this, [this, ssl]() {
-            Logger::info("[HTTPS] TLS connection established");
+            // DEBUG: one per connection, a quarter of the log, and the ones
+            // that matter are the failures logged as warnings below.
+            Logger::debug("[HTTPS] TLS connection established");
             m_OnSslReady(ssl);
         });
 

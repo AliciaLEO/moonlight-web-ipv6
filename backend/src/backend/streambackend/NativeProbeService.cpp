@@ -148,17 +148,26 @@ void NativeProbeService::probeFinished(int exitCode, bool crashed)
     m_Probe = nullptr;
     if (probe) probe->deleteLater();
 
-    // The engine's own account of what it found, kept at debug: on success it
-    // is the same "[native] available: …" line the desktop build logs, and on
-    // failure it is the only clue there is.
-    for (const QByteArray& line : m_ProbeErr.split('\n')) {
-        if (!line.trimmed().isEmpty())
-            Logger::debug(QStringLiteral("[native-probe] %1").arg(QString::fromUtf8(line)));
-    }
-
     mw::native::Capabilities caps;
     const QJsonDocument doc = QJsonDocument::fromJson(m_ProbeOut);
-    if (crashed || !doc.isObject() || !NativeCapabilitiesJson::fromJson(doc.object(), caps)) {
+    const bool readable =
+        !crashed && doc.isObject() && NativeCapabilitiesJson::fromJson(doc.object(), caps);
+
+    // The engine's own account of what it found. On success it is the same
+    // "[native] available: …" line the desktop build logs, and it stays at
+    // DEBUG. When the probe failed, or found the engine unavailable, it is the
+    // only clue there is, and it is kept at INFO.
+    const bool clue = !readable || !caps.available;
+    for (const QByteArray& line : m_ProbeErr.split('\n')) {
+        if (line.trimmed().isEmpty()) continue;
+        const QString text = QStringLiteral("[native-probe] %1").arg(QString::fromUtf8(line));
+        if (clue)
+            Logger::info(text);
+        else
+            Logger::debug(text);
+    }
+
+    if (!readable) {
         caps = mw::native::Capabilities{};
         caps.available = false;
         caps.reason = mw::native::Unavailability::ProbeFailed;

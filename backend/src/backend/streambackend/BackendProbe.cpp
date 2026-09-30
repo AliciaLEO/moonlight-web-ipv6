@@ -203,14 +203,15 @@ void probeSunshineRest(const QString& address, quint16 httpPort,
         const SunshineRest verdict = classifySunshineRest(reach, status, auth);
         // The three outcomes are indistinguishable from outside, and which one
         // it is decides whether the host is offered a control-API setup. Without
-        // this line, "why does my host not offer it" has no answer.
-        Logger::debug(QStringLiteral("[Backend] Sunshine REST probe %1:%2 -> %3 (status %4)")
-                          .arg(address)
-                          .arg(port)
-                          .arg(reach == Reach::Refused    ? QStringLiteral("refused")
-                               : reach == Reach::Answered ? QStringLiteral("answered")
-                                                          : QStringLiteral("no answer"))
-                          .arg(status));
+        // this line, "why does my host not offer it" has no answer. INFO for
+        // that reason: once per host and per run.
+        Logger::info(QStringLiteral("[Backend] Sunshine REST probe %1:%2 -> %3 (status %4)")
+                         .arg(address)
+                         .arg(port)
+                         .arg(reach == Reach::Refused    ? QStringLiteral("refused")
+                              : reach == Reach::Answered ? QStringLiteral("answered")
+                                                         : QStringLiteral("no answer"))
+                         .arg(status));
         sock->disconnectFromHost();
         sock->deleteLater();
         if (cb) cb(verdict);

@@ -462,8 +462,8 @@ bool WaylandLayout::read(std::vector<WaylandOutput>& outputs, std::string& socke
             ok = false;
             why = "the compositor lists no output";
         } else if (!session.manager) {
-            log::debug("[native] input: the compositor has no xdg-output — the layout is read "
-                       "from wl_output, exact for integer scales only");
+            log::info("[native] input: the compositor has no xdg-output — the layout is read "
+                      "from wl_output, exact for integer scales only");
         }
     }
 

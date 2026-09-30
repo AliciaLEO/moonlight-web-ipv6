@@ -142,7 +142,7 @@ bool StunClient::queryServer(const StunServer& server, int timeoutMs, QString& p
         if (!found) {
             if (!v6Fallback.isNull()) {
                 addr = v6Fallback;
-                qDebug() << "[StunClient] No IPv4 for" << server.host << ", falling back to IPv6";
+                qInfo() << "[StunClient] No IPv4 for" << server.host << ", falling back to IPv6";
             } else {
                 qWarning() << "[StunClient] No usable address for" << server.host;
                 return false;
@@ -367,7 +367,7 @@ QString StunClient::parseXorMappedAddress(const QByteArray& response,
     }
 
     if (!ipv6Fallback.isEmpty()) {
-        qDebug() << "[StunClient] No IPv4 XOR-MAPPED-ADDRESS, using IPv6 fallback:" << ipv6Fallback;
+        qInfo() << "[StunClient] No IPv4 XOR-MAPPED-ADDRESS, using IPv6 fallback:" << ipv6Fallback;
         return ipv6Fallback;
     }
     qWarning() << "[StunClient] No XOR-MAPPED-ADDRESS found in STUN response";

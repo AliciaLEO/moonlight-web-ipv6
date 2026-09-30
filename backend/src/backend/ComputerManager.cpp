@@ -554,8 +554,11 @@ void ComputerManager::onPollTick()
         const NvAddress addr = pollAddressFor(host);
         if (addr.isNull()) continue;
 
-        // [NETWORK] diagnostic: trace every outbound serverinfo poll.
-        Logger::info(
+        // [NETWORK] diagnostic: trace every outbound serverinfo poll. DEBUG:
+        // one line per host every few seconds was half the log. What it showed
+        // at a glance, a host coming and going and at which address, is the
+        // INFO line at the end of onPollReplyFinished.
+        Logger::debug(
             QString("[NETWORK] poll serverinfo HTTP -> %1 (%2)").arg(addr.toString(), host->name));
 
         QNetworkReply* reply = m_Http->getServerInfoAsync(addr, clientUniqueId());
@@ -594,8 +597,8 @@ void ComputerManager::onBackupPollTick()
         if (addr.isNull()) continue;
 
         // [NETWORK] diagnostic: trace backup serverinfo poll (every 60s).
-        Logger::info(QString("[NETWORK] backup poll serverinfo HTTP -> %1 (%2)")
-                         .arg(addr.toString(), host->name));
+        Logger::debug(QString("[NETWORK] backup poll serverinfo HTTP -> %1 (%2)")
+                          .arg(addr.toString(), host->name));
 
         QNetworkReply* reply = m_Http->getServerInfoAsync(addr, clientUniqueId());
         m_PendingPolls[reply] = uuid;
@@ -756,6 +759,20 @@ void ComputerManager::onPollReplyFinished()
         } catch (const std::exception& e) {
             registerFailure(e.what());
         }
+    }
+
+    // A host coming and going, and the address that answered: what the
+    // per-poll trace (DEBUG now) was read for. Against what was last logged,
+    // not the state before this poll: discovery can bring a host online first,
+    // and its first poll still says so once.
+    if (host->state != NvComputer::CS_UNKNOWN &&
+        m_LoggedState.value(uuid, NvComputer::CS_UNKNOWN) != host->state) {
+        m_LoggedState[uuid] = host->state;
+        Logger::info(QString("[NETWORK] %1 is %2 (%3)")
+                         .arg(host->name,
+                              host->state == NvComputer::CS_ONLINE ? QStringLiteral("online")
+                                                                   : QStringLiteral("offline"),
+                              reply->url().authority()));
     }
 
     if (changed) {
