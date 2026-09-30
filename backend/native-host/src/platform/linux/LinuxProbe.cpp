@@ -297,6 +297,21 @@ Unavailability enumerate(Capabilities& caps)
         int indexOnCard = 0;
         for (const capture::KmsOutput& out : capture::KmsCapture::listOutputs(card, error)) {
             if (!out.connected) continue;
+            // Connected, but with nothing KMS shows on it: no card for it — a
+            // launch could only fail ("the display is disconnected", seen on
+            // the UM790Pro's GTX 1050 under X11, 30/09/2026). LinuxSession
+            // counts displays by this same rule, so the index it is handed
+            // still names the card that was picked.
+            if (!out.active) {
+                log::info("[native] " + out.name + " on " + card +
+                          " is connected but KMS shows nothing on it — not offered: " +
+                          (gpu.vendorId == 0x10DE
+                               ? "NVIDIA's own X driver sets its modes without KMS, and its "
+                                 "picture cannot be captured here"
+                               : "a screen switched off in the display settings, or one being "
+                                 "reconfigured"));
+                continue;
+            }
             DisplayInfo display;
             display.id = nextDisplayId++;
             display.gpuId = gpu.id;
@@ -309,13 +324,12 @@ Unavailability enumerate(Capabilities& caps)
             display.hdrActive = false;
             // KMS has no notion of a primary; the one at the desktop's origin
             // is what every compositor treats as such.
-            display.primary = !anyPrimary && out.x == 0 && out.y == 0 && out.active;
+            display.primary = !anyPrimary && out.x == 0 && out.y == 0;
             if (display.primary) anyPrimary = true;
             display.label = "Display " + std::to_string(display.id + 1);
             display.detail = out.name + " \xE2\x80\x94 " + std::to_string(out.width) + "\xC3\x97" +
                              std::to_string(out.height) + " \xC2\xB7 " +
-                             std::to_string((out.refreshMilliHz + 500) / 1000) + " Hz" +
-                             (out.active ? "" : " (off)");
+                             std::to_string((out.refreshMilliHz + 500) / 1000) + " Hz";
             display.kind = classifyConnectorName(out.name);
             display.key = cardStableId(card) + "/" + out.name;
             caps.displays.push_back(display);

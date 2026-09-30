@@ -539,7 +539,9 @@ public:
             bool found = false;
             for (const capture::KmsOutput& out :
                  capture::KmsCapture::listOutputs(m_CardPath, listError)) {
-                if (!out.connected) continue;
+                // The probe's rule (LinuxProbe.cpp): a display KMS shows
+                // nothing on is not offered, so it is not counted either.
+                if (!out.connected || !out.active) continue;
                 if (index == m_Target.outputIndex) {
                     m_ConnectorId = out.connectorId;
                     m_ConnectorName = out.name;
@@ -550,6 +552,7 @@ public:
             }
             if (!found) {
                 error = "the display is no longer connected to " + m_CardPath +
+                        ", or shows nothing any more" +
                         (listError.empty() ? "" : " (" + listError + ")");
                 return false;
             }
