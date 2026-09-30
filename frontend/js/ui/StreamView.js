@@ -3426,7 +3426,11 @@ export class StreamView {
         let depth = this.decoder.decodeQueueSize;
         if (this._queueSignalMode === 'pending') {
             depth = this._chunkSubmitTimes.size;
-        } else if (this._queueSignalMode === 'delay' || this._queueSignalMode === 'delay30') {
+        } else if (
+            this._queueSignalMode === 'delay' ||
+            this._queueSignalMode === 'delay30' ||
+            this._queueSignalMode === 'mixed'
+        ) {
             // The oldest frame still in the decoder: the map keeps decode()
             // order and loses each entry at its output. One gone for longer
             // than any decode takes was dropped by the decoder, not queued.
@@ -3439,6 +3443,11 @@ export class StreamView {
                 this._chunkSubmitTimes.delete(ts);
             }
             depth = this._decodeDelay.depth(oldestAge, this._diag.arrivalAvgMs);
+            // 'mixed': a delay, or three frames in the decoder — a count for a
+            // decoder that gives a picture back only when the next one comes,
+            // with one frame of room for one that keeps two in flight.
+            if (this._queueSignalMode === 'mixed')
+                depth = Math.max(depth, this._chunkSubmitTimes.size - 1);
         }
         const msg = this._queueSignal.observe(depth, now);
         if (msg) this._sendToHost(msg);
