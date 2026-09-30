@@ -164,8 +164,12 @@ struct PortalCapture::Impl
         spa_video_info_raw info{};
         if (spa_format_video_raw_parse(param, &info) < 0) return;
         // A modifier in the format: the compositor took one of the offer's,
-        // and hands DMA-BUF (offerDmabuf). None: shared memory.
-        const bool modifier = (info.flags & SPA_VIDEO_FLAG_MODIFIER) != 0;
+        // and hands DMA-BUF (offerDmabuf). None: shared memory. Read from the
+        // format itself: spa_video_info_raw::flags and SPA_VIDEO_FLAG_MODIFIER
+        // are not in the PipeWire of Ubuntu 22.04 (0.3.48), which builds the
+        // packages.
+        const bool modifier =
+            spa_pod_find_prop(param, nullptr, SPA_FORMAT_VIDEO_modifier) != nullptr;
 
         {
             std::lock_guard<std::mutex> lock(self->mutex);
