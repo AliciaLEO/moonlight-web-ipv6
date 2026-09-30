@@ -137,8 +137,8 @@ std::unique_ptr<Session> NativeHost::createSession(const SessionConfig& config,
     // the session died on a machine whose browser decodes H.264 perfectly well.
     resolved.clientCodecs = config.clientCodecs;
     // Carried through unchanged: whether the encoder can honour it is its own
-    // answer, reported back in SessionInfo::intraRefresh.
-    resolved.intraRefresh = config.intraRefresh;
+    // answer, reported back in SessionInfo::intraRefresh. Required is asked.
+    resolved.intraRefresh = config.intraRefresh || config.intraRefreshRequired;
 
     // A fallback session may have no GPU at all behind it (a Linux VM whose
     // display adapter exposes no render node); the name then says so rather

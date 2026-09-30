@@ -49,6 +49,9 @@ struct BenchSpec
     bool yuv444 = false;
     bool hdr = false;
     bool intraRefresh = false;
+    /// intra=2: the stream must refresh by intra-refresh, as the guests'
+    /// shared feed does (SessionConfig::intraRefreshRequired).
+    bool intraRefreshRequired = false;
     /// The GPU to encode on, -1 for the display's own. See SessionConfig.
     int gpu = -1;
     /// The encoder knobs under test; default = the engine's own choices.
@@ -111,7 +114,8 @@ const char* const kUsage =
     "  hdr=0|1          capture FP16 scRGB and encode BT.2020 PQ 10-bit (default 0).\n"
     "                   Needs Windows HDR ON for that display and HEVC or AV1;\n"
     "                   the session says so and runs SDR when it is not there.\n"
-    "  intra=0|1        intra-refresh instead of keyframes (default 0)\n"
+    "  intra=0|1|2      intra-refresh instead of keyframes (default 0); 2 = required, as\n"
+    "                   the guests' shared feed has it: a route that grants none gives way\n"
     "  gpu=<id>         encode on this GPU instead of the display's own (cross-GPU copy)\n"
     "  out=<path.csv>   one row per frame (default native-bench-<time>.csv here)\n"
     "encoder knobs, each defaulting to the engine's own choice:\n"
@@ -496,9 +500,12 @@ bool parseSpec(const QString& text, BenchSpec& spec, QString& error)
             spec.yuv444 = value.toInt(&ok) != 0;
         else if (key == "hdr")
             spec.hdr = value.toInt(&ok) != 0;
-        else if (key == "intra")
-            spec.intraRefresh = value.toInt(&ok) != 0;
-        else if (key == "out")
+        else if (key == "intra") {
+            const int intra = value.toInt(&ok);
+            ok = ok && intra >= 0 && intra <= 2;
+            spec.intraRefresh = intra != 0;
+            spec.intraRefreshRequired = intra == 2;
+        } else if (key == "out")
             spec.out = value;
         else if (key == "dump")
             spec.dump = value;
@@ -679,6 +686,7 @@ int runNativeBenchCommand(const QString& specText)
     config.yuv444 = spec.yuv444;
     config.hdr = spec.hdr;
     config.intraRefresh = spec.intraRefresh;
+    config.intraRefreshRequired = spec.intraRefreshRequired;
     config.encodeGpuId = spec.gpu;
     config.tuning = spec.tuning;
     // The portal route (Linux, a binary without the capability to read the

@@ -105,6 +105,23 @@ struct SessionConfig
     /// actually granted.
     bool intraRefresh = false;
 
+    /// Intra-refresh is not a wish here but the point: a stream several
+    /// receivers share (the guests' feed of a native host), where one
+    /// receiver's loss must not cost every other one a keyframe. A route that
+    /// would run without it is passed over for one that grants it, where the
+    /// GPU has one (VideoPipelineChoice.h: the D3D12 route of an Arc sweeps a
+    /// single frame, D3D11 oneVPL sweeps a real wave). Implies `intraRefresh`.
+    /// SessionInfo::intraRefresh still says what was granted: an encoder that
+    /// has no intra-refresh at all streams keyframes on demand.
+    bool intraRefreshRequired = false;
+
+    /// The rate governor's floor, as a share of the setting (encode::
+    /// RateGovernor). 20, the default, is every viewer's own stream: under a
+    /// fifth of the setting the picture is not worth sending. The guests'
+    /// shared feed holds 60, so that the slowest of them cannot drag the
+    /// picture of all the others down with it.
+    int governorFloorPercent = 20;
+
     /// Draw the mouse cursor into the captured frame. On by default: the remote
     /// user needs to see where they are pointing.
     bool captureCursor = true;

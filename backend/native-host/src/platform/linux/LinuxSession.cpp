@@ -1627,7 +1627,8 @@ private:
 
         encode::RateGovernor governor;
         governor.start(m_Config.bitrateKbps, steadyNowUs() / 1000,
-                       m_Config.tuning.linkGovernor == EncoderTuning::Choice::Off);
+                       m_Config.tuning.linkGovernor == EncoderTuning::Choice::Off,
+                       m_Config.governorFloorPercent);
         int baseKbps = governor.targetKbps();
         m_LinkKbps = baseKbps;
         bool boosted = false;

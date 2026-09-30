@@ -55,7 +55,12 @@ namespace mw::native::encode {
 ///    cut costs sharpness for a second and an overrun costs the viewer's hand.
 ///  - **Floor**: kFloorPercent of the setting, and never under kFloorKbps. Below
 ///    that the picture is not worth sending; the stream is better off letting
-///    the frontend's own ladder move resolution or transport.
+///    the frontend's own ladder move resolution or transport. A session may
+///    hold a higher floor (SessionConfig::governorFloorPercent): the guests'
+///    shared feed keeps ~60 % of its setting, so that one slow guest cannot
+///    pull the picture of every other one down to a fifth of it — below that
+///    floor the slow guest drops frames on its own, and the intra-refresh
+///    repairs what it lost.
 ///  - **Silence**: no report for kSilenceMs — the feedback channel itself is
 ///    stuck — reads as overuse once, then nothing until a report comes back.
 ///  - **Back from the background**: a report flagged `resumed` says the
@@ -107,10 +112,14 @@ public:
     static constexpr int64_t kProbeGraceMs = 5000;
 
     /// @p settingKbps the viewer's ceiling. Starts there. @p followSetting:
-    /// the bench's governor=off, above.
-    void start(int settingKbps, int64_t nowMs, bool followSetting = false)
+    /// the bench's governor=off, above. @p floorPercent: the floor as a share
+    /// of the setting (kFloorPercent unless the session holds a higher one),
+    /// clamped to 0..100; kFloorKbps stays the floor under it.
+    void start(int settingKbps, int64_t nowMs, bool followSetting = false,
+               int floorPercent = kFloorPercent)
     {
         m_Follow = followSetting;
+        m_FloorPercent = floorPercent < 0 ? 0 : floorPercent > 100 ? 100 : floorPercent;
         m_Setting = settingKbps > 0 ? settingKbps : 20000;
         m_Target = m_Setting;
         m_QuietSinceMs = nowMs;
@@ -217,9 +226,10 @@ public:
     int settingKbps() const { return m_Setting; }
     int floorKbps() const
     {
-        const int pct = m_Setting * kFloorPercent / 100;
+        const int pct = static_cast<int>(static_cast<int64_t>(m_Setting) * m_FloorPercent / 100);
         return pct > kFloorKbps ? pct : kFloorKbps;
     }
+    int floorPercent() const { return m_FloorPercent; }
     bool limiting() const { return m_Target < m_Setting; }
     int overuses() const { return m_Overuses; }
     int silences() const { return m_Silences; }
@@ -274,6 +284,7 @@ private:
     }
 
     bool m_Follow = false; ///< the bench's governor=off
+    int m_FloorPercent = kFloorPercent;
     int m_Setting = 20000;
     int m_Target = 20000;
     int64_t m_QuietSinceMs = 0;

@@ -1034,6 +1034,8 @@ private:
         f.amf12 = m_Target.encoder == EncoderApi::Amf && encode::AmfApi::instance()->available();
         f.driverExcluded =
             d3d12DriverExcluded(m_Target.encodeVendorId, m_Target.encodeDriverVersion);
+        f.intraRefreshRequired = m_Config.intraRefreshRequired;
+        f.d3d12IntraRefresh = !m_D3d12NoIntraRefresh;
         return f;
     }
 
@@ -1077,10 +1079,20 @@ private:
         }
         if (choice.pipeline == VideoPipeline::D3d12) {
             std::string why;
-            if (usePipeline(VideoPipeline::D3d12, choice.encoder12, why) &&
-                buildOn(outputWidth, outputHeight, why, keepHeld, choice.encoder12)) {
+            bool built = usePipeline(VideoPipeline::D3d12, choice.encoder12, why) &&
+                         buildOn(outputWidth, outputHeight, why, keepHeld, choice.encoder12);
+            // A stream that must refresh by intra-refresh does not settle for
+            // a D3D12 encoder that declined it: known from now on, and D3D11 is
+            // built instead, below.
+            const bool noWave =
+                built && m_Config.intraRefreshRequired && !m_Pipeline->intraRefreshEnabled();
+            if (built && !noWave) {
                 notePipeline(choice);
                 return true;
+            }
+            if (noWave) {
+                m_D3d12NoIntraRefresh = true;
+                why = "its encoder grants no intra-refresh, which this stream requires";
             }
             if (m_Config.tuning.strict12) {
                 error = "strict12: the D3D12 chain does not build: " + why;
@@ -1089,7 +1101,8 @@ private:
             choice.pipeline = VideoPipeline::D3d11;
             choice.route = "D3D11";
             choice.refused = true;
-            choice.reason += ", D3D11 runs: the D3D12 build failed (" + why + ")";
+            choice.reason += noWave ? ", D3D11 runs: " + why
+                                    : ", D3D11 runs: the D3D12 build failed (" + why + ")";
             // The held copy, if any, was the D3D12 chain's.
             keepHeld = false;
         } else if (choice.refused && m_Config.tuning.strict12) {
@@ -1778,7 +1791,8 @@ private:
         // about what the encoder holds.
         encode::RateGovernor governor;
         governor.start(m_Config.bitrateKbps, steadyNowUs() / 1000,
-                       m_Config.tuning.linkGovernor == EncoderTuning::Choice::Off);
+                       m_Config.tuning.linkGovernor == EncoderTuning::Choice::Off,
+                       m_Config.governorFloorPercent);
         int baseKbps = governor.targetKbps();
         m_LinkKbps = baseKbps;
         bool boosted = false;
@@ -3276,6 +3290,10 @@ private:
     /// and says why (plan pipeline-video-d3d12-v2 §3.3).
     bool m_D3d12Failed = false;
     std::string m_D3d12FailedWhy;
+    /// A D3D12 build came back without the intra-refresh the stream requires
+    /// (SessionConfig::intraRefreshRequired): the builds after it choose
+    /// D3D11 from the start (VideoPipelineFacts::d3d12IntraRefresh).
+    bool m_D3d12NoIntraRefresh = false;
     /// The chain answered Lost: the loop goes back to D3D11 before its next
     /// capture. Capture thread only.
     bool m_PipelineLost = false;

@@ -68,6 +68,15 @@ struct VideoPipelineFacts
     /// Why this GPU's driver is kept off the D3D12 route, "" when it is not
     /// (d3d12DriverExcluded).
     std::string driverExcluded;
+    /// The stream must refresh by intra-refresh (SessionConfig::
+    /// intraRefreshRequired: the guests' shared feed), and whether the D3D12
+    /// route grants it on this GPU — taken for granted until a build finds
+    /// out, like videoEncode12: the Arc's D3D12 Video Encode sweeps one frame
+    /// at most, which is no wave at all, while its D3D11 oneVPL sweeps a real
+    /// one. Once a build has seen it, the builds after it choose D3D11 from
+    /// the start.
+    bool intraRefreshRequired = false;
+    bool d3d12IntraRefresh = true;
 };
 
 struct VideoPipelineChoice
@@ -165,6 +174,9 @@ inline std::string refusal(const VideoPipelineFacts& f, EncoderTuning::Encoder12
     // which the encoder's negotiation asks.
     if (encoder == E::VideoEncode && !f.videoEncode12)
         return std::string("this GPU's D3D12 Video Encode does not take ") + toString(f.codec);
+    if (f.intraRefreshRequired && !f.d3d12IntraRefresh)
+        return "the stream must refresh by intra-refresh, which the D3D12 route does not grant "
+               "on this GPU";
     return {};
 }
 

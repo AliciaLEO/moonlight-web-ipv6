@@ -481,6 +481,39 @@ void run_rate_control_tests()
         CHECK_EQ(big.targetKbps(), 20000);
     }
 
+    SECTION("RateGovernor — a session's own floor: the guests' feed holds 60 % of its setting");
+    {
+        // The shared feed of a native host's guests (SessionConfig::
+        // governorFloorPercent): the slowest guest pulls the rate down, never
+        // under 60 %; under that it drops frames alone.
+        RateGovernor g;
+        g.start(10000, 0, false, 60);
+        CHECK_EQ(g.floorPercent(), 60);
+        CHECK_EQ(g.floorKbps(), 6000);
+        LinkFeedback bad;
+        bad.owdRiseMs = 200;
+        CHECK(g.report(bad, 500));
+        CHECK_EQ(g.targetKbps(), 8000);
+        CHECK(g.report(bad, 1000));
+        CHECK_EQ(g.targetKbps(), 6400);
+        CHECK(g.report(bad, 1500));
+        CHECK_EQ(g.targetKbps(), 6000); // 5 120 would be under the floor
+        CHECK(!g.report(bad, 2000));    // at the floor: nothing left to cut
+        CHECK_EQ(g.targetKbps(), 6000);
+        // kFloorKbps still under a small setting's share.
+        RateGovernor small;
+        small.start(3000, 0, false, 60);
+        CHECK_EQ(small.floorKbps(), RateGovernor::kFloorKbps);
+        // Out of range is clamped, and the default is unchanged.
+        RateGovernor odd;
+        odd.start(10000, 0, false, 150);
+        CHECK_EQ(odd.floorPercent(), 100);
+        CHECK_EQ(odd.floorKbps(), 10000);
+        RateGovernor plain;
+        plain.start(10000, 0);
+        CHECK_EQ(plain.floorPercent(), RateGovernor::kFloorPercent);
+    }
+
     SECTION("RateGovernor — a queue that is present but not growing holds");
     {
         RateGovernor g;

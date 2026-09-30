@@ -140,6 +140,46 @@ void run_video_pipeline_choice_tests()
                                  "this GPU's D3D12 Video Encode does not take HEVC"));
     }
 
+    SECTION("VideoPipeline — intra-refresh required: a D3D12 route that grants none gives way to "
+            "D3D11, whoever asked for it");
+    {
+        // The guests' shared feed of a native host (plan « flux commun des
+        // invités », S1): taken for granted until a build finds out.
+        VideoPipelineFacts f = arc();
+        f.intraRefreshRequired = true;
+        VideoPipelineChoice c = chooseVideoPipeline(f);
+        CHECK(c.pipeline == VideoPipeline::D3d12);
+        CHECK(!c.refused);
+        // The Arc's D3D12 Video Encode sweeps one frame at most, which is no
+        // wave: once a build has seen it, D3D11 (oneVPL) from the start.
+        f.d3d12IntraRefresh = false;
+        c = chooseVideoPipeline(f);
+        CHECK(c.pipeline == VideoPipeline::D3d11);
+        CHECK(c.refused); // the overlay reads "oneVPL (D3D11)"
+        CHECK(c.encoder.empty());
+        CHECK(contains(c.reason, "auto: the vendor table for oneVPL asks for D3D12, D3D11 runs: "
+                                 "the stream must refresh by intra-refresh, which the D3D12 "
+                                 "route does not grant on this GPU"));
+        // The setting's D3D12 as well: the feed cannot do without its wave.
+        f.setting = VideoPipeline::D3d12;
+        c = chooseVideoPipeline(f);
+        CHECK(c.pipeline == VideoPipeline::D3d11);
+        CHECK(contains(c.reason, "the setting (d3d12) asks for D3D12, D3D11 runs"));
+        // Any other stream: the same GPU keeps its D3D12.
+        f.intraRefreshRequired = false;
+        c = chooseVideoPipeline(f);
+        CHECK(c.pipeline == VideoPipeline::D3d12);
+        CHECK(!c.refused);
+        // And a GPU the table keeps on D3D11 is not touched either way.
+        VideoPipelineFacts rtx = arc();
+        rtx.encoder = EncoderApi::Nvenc;
+        rtx.intraRefreshRequired = true;
+        rtx.d3d12IntraRefresh = false;
+        c = chooseVideoPipeline(rtx);
+        CHECK(c.pipeline == VideoPipeline::D3d11);
+        CHECK(!c.refused);
+    }
+
     SECTION("VideoPipeline — the bench key over the setting over the table");
     {
         VideoPipelineFacts f = arc();
