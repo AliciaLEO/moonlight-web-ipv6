@@ -4622,6 +4622,23 @@ la capture sur l'hôte, 10 s), une image lue sur dix :
   par seconde, 44 images dessinées par seconde, moins qu'Auto ;
 - iGPU AMD local : 60,2 ms (une passe ; Auto 31,1, `pending` 42,2).
 
+### 8p.4 quinquies Client UM790Pro sous Windows, en **Ethernet** (30/09, ~02:00-03:00)
+
+Radeon 780M, Chrome 154 sur un écran à 120 Hz, câble 1 Gbit/s ; hôte Arc ; une
+image lue sur cinq ; deux passes par case. Âge affiché médian, ms :
+
+| Écran virtuel | Auto | host | host-guarded (`delay`) |
+|---|---|---|---|
+| 60 Hz, tearing | 43,0 | 43,2 | 43,6 |
+| **120 Hz, tearing (aujourd'hui)** | **35,6** | — | — |
+| 240 Hz, tearing | 26,4 | 23,8 | **21,8** |
+| 60 Hz, vsync | 54,6 | 49,6 | — |
+| **120 Hz, vsync (aujourd'hui)** | **39,0** | — | — |
+| 240 Hz, vsync | 33,4 | 30,7 | — |
+
+Les p99 restent à 31-49 ms (le Wi-Fi du Mac : 90 à 350). Le crédit ne retient
+presque rien (3 présentations par seconde) : le 780M suit 240 i/s.
+
 ### 8p.5 Ce que le banc a appris sur lui-même
 
 - La page de contenu a sa propre chaîne jusqu'à l'écran de l'hôte, qui varie

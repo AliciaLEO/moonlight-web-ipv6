@@ -6629,3 +6629,11 @@ aucun crédit, quel que soit ce qu'il compte, ne rend cette cadence meilleure
 qu'Auto. La cadence de l'hôte ne peut valoir que pour un client dont on sait
 d'avance qu'il suit ; c'est un choix à faire en amont, pas une file à
 rattraper.
+
+**Le premier client en Ethernet : l'UM790Pro sous Windows** (Radeon 780M,
+Chrome sur un écran à 120 Hz ; banc §8p.4 quinquies). Face à aujourd'hui
+(écran virtuel à 120 Hz, Auto : 35,6 ms en tearing, 39,0 en vsync), l'écran
+virtuel à 240 Hz donne −9,2 ms sous Auto, −11,8 sous `host`, **−13,8 ms sous
+`host-guarded` (21,8 ms, p99 31)** ; en vsync −5,6 (Auto) et −8,3 ms (`host`).
+Sur un client qui suit, en Ethernet, la cadence de l'hôte ajoute 2 à 5 ms à ce
+que l'écran virtuel rapide gagne seul.
