@@ -174,19 +174,6 @@ int runStreamWorker(QCoreApplication& app)
     Q_UNUSED(app);
     qInfo() << "[StreamWorker] Worker process started, waiting for config on stdin";
 
-    // Keyboard diagnostics, armed HERE and not only in main(): a keystroke is
-    // handled by the relays this process builds, and main() sets the flag well
-    // after `return runStreamWorker(app)` — so in worker mode, which is the
-    // default, the switch was on in the one process that never sees a key.
-    // Same trap, same shape as the latency flag: anything an input or capture
-    // path reads has to be read again on this side of the fork.
-    if (AppSettings().keyboardDebug()) {
-        InputMsg::setDebug(true);
-        InputMsg::setQuietProbe(&mw::native::NativeHost::secureDesktopHasInput);
-        mw::native::NativeHost::setKeyboardDiagnostics(true);
-        qInfo() << "[KBD] keyboard diagnostics on in the worker (never on the secure desktop)";
-    }
-
     // Ctrl+Alt+Suppr: Windows takes it from a service in session 0 only, and
     // this worker runs in the console session, SYSTEM as it may be. The
     // launcher service it came from presses it on its behalf (design §31.7).
@@ -211,6 +198,24 @@ int runStreamWorker(QCoreApplication& app)
                    {QStringLiteral("body"),
                     QJsonObject{{QStringLiteral("error"), QStringLiteral("bad worker config")}}}});
         return 1;
+    }
+
+    // The server's --config, before the first AppSettings below: this process
+    // reads the same file the server does, whichever way it was started.
+    const QString settingsFile = cfg[QStringLiteral("settingsFile")].toString();
+    if (!settingsFile.isEmpty()) AppSettings::setFileOverride(settingsFile);
+
+    // Keyboard diagnostics, armed HERE and not only in main(): a keystroke is
+    // handled by the relays this process builds, and main() sets the flag well
+    // after `return runStreamWorker(app)` — so in worker mode, which is the
+    // default, the switch was on in the one process that never sees a key.
+    // Same trap, same shape as the latency flag: anything an input or capture
+    // path reads has to be read again on this side of the fork.
+    if (AppSettings().keyboardDebug()) {
+        InputMsg::setDebug(true);
+        InputMsg::setQuietProbe(&mw::native::NativeHost::secureDesktopHasInput);
+        mw::native::NativeHost::setKeyboardDiagnostics(true);
+        qInfo() << "[KBD] keyboard diagnostics on in the worker (never on the secure desktop)";
     }
 
     // Automatic storage is required: the relay callbacks below capture `state`

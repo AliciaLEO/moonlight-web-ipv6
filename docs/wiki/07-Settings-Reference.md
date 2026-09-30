@@ -14,6 +14,10 @@ All server configuration lives in a single JSON file managed by `backend/src/ser
 | **macOS** | `~/Library/Application Support/MoonlightWeb/MoonlightWeb/settings.json` |
 | **Linux** | `~/.local/share/MoonlightWeb/MoonlightWeb/settings.json` |
 
+**A file of your own: `--config <path>`.** Started with `moonlightweb --config /path/to/settings.json`, the server reads and writes its settings there instead. A relative path is resolved against the working directory at launch. Only this file moves: sessions, certificates, logs and the single-instance lock stay in the directory above. A missing file is created with the documented defaults. A file that exists but is not a JSON object stops the server with the position of the error, and is left as it is.
+
+The flag carries over to the stream workers, to the login item the *Start at login* switch writes, and to the relaunch after an in-app update on Linux and macOS. The Windows and macOS installers rewrite their own login item on every update, without it: add it back there, or start the server from a unit of your own. The operator commands ([§3.7](03-Backend.md#37-headless-operator-cli)) read the HTTPS port from this file, so give them the same `--config`.
+
 Access is single-threaded, synchronous I/O. **Restart the server after a manual edit** (most keys are read at startup or on demand; the file is not watched). Documented file-only keys are seeded into the file at startup (`seedDocumentedDefaults()`) so they are discoverable.
 
 ## 7.2 Key reference

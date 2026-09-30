@@ -20,6 +20,7 @@
 #include "common/Edition.h"
 #include "common/Logger.h"
 #include "common/WinSystemPath.h"
+#include "server/AppSettings.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -629,8 +630,12 @@ void SelfUpdater::runInstaller()
     }
 #endif
     // Relaunching the binary directly (rather than `open -a` on macOS) keeps one
-    // code path and goes through the app's own single-instance logic.
-    const QString relaunch = shQuote(exe);
+    // code path and goes through the app's own single-instance logic. With the
+    // settings file it was started on: without --config the updated server
+    // would come back on the default one.
+    QString relaunch = shQuote(exe);
+    if (!AppSettings::fileOverride().isEmpty())
+        relaunch += QStringLiteral(" --config ") + shQuote(AppSettings::fileOverride());
 
     // The .deb/.rpm maintainer scripts already stop and relaunch the app; the
     // explicit kill+relaunch covers the paths that do not (AppImage, .pkg) and is

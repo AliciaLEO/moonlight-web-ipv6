@@ -8,6 +8,7 @@
 
 #include <QTemporaryDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 
@@ -385,4 +386,26 @@ void run_app_settings_tests()
     CHECK(!AppSettings::isValidFqdn(".leadingdot.com"));
     CHECK(!AppSettings::isValidFqdn("trailingdot."));
     CHECK(!AppSettings::isValidFqdn(""));
+
+    // --config: every instance built afterwards uses that file, made absolute,
+    // its directory created; an empty path goes back to the data directory.
+    {
+        const QString defaultPath = AppSettings().filePath();
+        const QString custom = tmp.path() + "/managed/conf/settings.json";
+        AppSettings::setFileOverride(custom);
+        CHECK_EQ(AppSettings::fileOverride(), QFileInfo(custom).absoluteFilePath());
+        AppSettings managed;
+        CHECK_EQ(managed.filePath(), QFileInfo(custom).absoluteFilePath());
+        CHECK(QFileInfo(tmp.path() + "/managed/conf").isDir());
+        managed.setHttpsPort(9443);
+        CHECK_EQ(AppSettings().httpsPort(1), quint16(9443));
+        CHECK_EQ(s.httpsPort(1), quint16(443)); // built before: its own file
+
+        AppSettings::setFileOverride("relative.json");
+        CHECK(QFileInfo(AppSettings::fileOverride()).isAbsolute());
+
+        AppSettings::setFileOverride(QString());
+        CHECK(AppSettings::fileOverride().isEmpty());
+        CHECK_EQ(AppSettings().filePath(), defaultPath);
+    }
 }

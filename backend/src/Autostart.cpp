@@ -20,12 +20,15 @@
 #include "common/DesktopSession.h"
 #include "common/Edition.h"
 #include "common/Logger.h"
+#include "server/AppSettings.h"
 
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QStandardPaths>
+
+#include <algorithm>
 
 #if defined(Q_OS_WIN)
 #ifndef NOMINMAX
@@ -60,10 +63,15 @@ QString devSuffix()
     return mw::edition::devFlag() ? QStringLiteral("-dev") : QString();
 }
 
-QString launchArguments()
+// --config too: a login item that forgot it would start the next session on
+// the default settings file, beside the one this instance was told to use.
+QStringList launchArguments()
 {
-    return mw::edition::devFlag() ? QStringLiteral("--autostart --dev")
-                                  : QStringLiteral("--autostart");
+    QStringList args{QStringLiteral("--autostart")};
+    if (mw::edition::devFlag()) args << QStringLiteral("--dev");
+    if (!AppSettings::fileOverride().isEmpty())
+        args << QStringLiteral("--config") << QDir::toNativeSeparators(AppSettings::fileOverride());
+    return args;
 }
 
 } // namespace
@@ -106,6 +114,11 @@ bool installLoginItem()
         QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/logs");
     QDir().mkpath(logDir);
     const QString log = logDir + QStringLiteral("/agent.log");
+    // One <string> per argument: launchd hands them over as they are, so a
+    // path with spaces needs no quoting, only XML escaping.
+    QString argStrings;
+    for (const QString& arg : launchArguments())
+        argStrings += QStringLiteral("<string>") + xmlEscape(arg) + QStringLiteral("</string>");
 
     // No MW_SERVICE here: this is a normal GUI launch (tray icon), mirroring the
     // Windows logon Scheduled Task. KeepAlive/SuccessfulExit=false → relaunch only
@@ -130,12 +143,7 @@ bool installLoginItem()
                                          "    <key>StandardErrorPath</key><string>%3</string>\n"
                                          "</dict>\n"
                                          "</plist>\n")
-                              .arg(xmlEscape(label()), xmlEscape(exe), xmlEscape(log),
-                                   QStringLiteral("<string>") +
-                                       launchArguments()
-                                           .split(QLatin1Char(' '))
-                                           .join(QStringLiteral("</string><string>")) +
-                                       QStringLiteral("</string>"));
+                              .arg(xmlEscape(label()), xmlEscape(exe), xmlEscape(log), argStrings);
 
     const QString path = plistPath();
     QDir().mkpath(QFileInfo(path).absolutePath());
@@ -190,6 +198,29 @@ QString entryPath()
            devSuffix() + QStringLiteral(".desktop");
 }
 
+// One argument of the Exec= line, per the Desktop Entry spec: quoted when it
+// holds a reserved character, the escapes inside the quotes doubled by the
+// string escaping the whole value goes through, and % doubled everywhere so it
+// is not read as a field code.
+QString execArgument(QString arg)
+{
+    arg.replace(QLatin1Char('%'), QStringLiteral("%%"));
+    static const QString reserved = QStringLiteral(" \t\n\"'\\><~|&;$*?#()`");
+    const bool quote =
+        std::any_of(arg.cbegin(), arg.cend(), [](QChar c) { return reserved.contains(c); });
+    if (!quote) return arg;
+    QString quoted;
+    for (const QChar c : arg) {
+        if (c == QLatin1Char('\\'))
+            quoted += QStringLiteral("\\\\\\\\");
+        else if (c == QLatin1Char('"') || c == QLatin1Char('`') || c == QLatin1Char('$'))
+            quoted += QStringLiteral("\\\\") + c;
+        else
+            quoted += c;
+    }
+    return QLatin1Char('"') + quoted + QLatin1Char('"');
+}
+
 } // namespace
 
 bool installLoginItem()
@@ -198,6 +229,9 @@ bool installLoginItem()
     // relaunch the .AppImage itself instead ($APPIMAGE is set by the runtime).
     QString exe = qEnvironmentVariable("APPIMAGE");
     if (exe.isEmpty()) exe = QCoreApplication::applicationFilePath();
+    QStringList args;
+    for (const QString& arg : launchArguments())
+        args << execArgument(arg);
 
     // The icon name is the one the package installed in the hicolor theme.
     const QString entry = QStringLiteral("[Desktop Entry]\n"
@@ -211,7 +245,7 @@ bool installLoginItem()
                               .arg(exe, mw::edition::displayName(),
                                    mw::edition::isDevBuild() ? QStringLiteral("moonlightweb-dev")
                                                              : QStringLiteral("moonlightweb"),
-                                   launchArguments());
+                                   args.join(QLatin1Char(' ')));
 
     const QString path = entryPath();
     QDir().mkpath(QFileInfo(path).absolutePath());
@@ -345,6 +379,17 @@ QString xmlEscape(QString s)
     return s;
 }
 
+// One argument of the task's command line, as CommandLineToArgvW splits it:
+// quoted when it holds a space or a tab. What we pass are flags and a path, and
+// a Windows path holds no '"' and does not end in the backslash that would
+// have to be doubled before the closing quote.
+QString commandLineArgument(const QString& arg)
+{
+    if (!arg.isEmpty() && !arg.contains(QLatin1Char(' ')) && !arg.contains(QLatin1Char('\t')))
+        return arg;
+    return QLatin1Char('"') + arg + QLatin1Char('"');
+}
+
 // DOMAIN\user for the principal, the way the installer writes it.
 QString currentUser()
 {
@@ -372,6 +417,9 @@ bool installLoginItem()
     const QString user = xmlEscape(currentUser());
     const QString exe =
         xmlEscape(QDir::toNativeSeparators(QCoreApplication::applicationFilePath()));
+    QStringList args;
+    for (const QString& arg : launchArguments())
+        args << commandLineArgument(arg);
     const QString xml =
         QStringLiteral(
             "<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">"
@@ -391,7 +439,7 @@ bool installLoginItem()
             "<Actions Context=\"Author\"><Exec><Command>\"%2\"</Command>"
             "<Arguments>%4</Arguments></Exec></Actions>"
             "</Task>")
-            .arg(user, exe, xmlEscape(taskName()), launchArguments());
+            .arg(user, exe, xmlEscape(taskName()), xmlEscape(args.join(QLatin1Char(' '))));
 
     Bstr name(taskName());
     Bstr definition(xml);

@@ -20,6 +20,7 @@
 #include "WorkerService.h"
 #include "common/Edition.h"
 #include "common/LinuxCapabilities.h"
+#include "server/AppSettings.h"
 
 #include <QCoreApplication>
 #include <QJsonDocument>
@@ -52,7 +53,12 @@ bool StreamWorkerHost::start(const QJsonObject& config)
     // would launch streams as the installed instance. (The DEV build needs
     // nothing here: the child is the same binary, its edition compiled in.)
     if (mw::edition::devFlag()) args << QStringLiteral("--dev");
-    const QByteArray configLine = QJsonDocument(config).toJson(QJsonDocument::Compact) + "\n";
+    // --config travels in the config line, not in the arguments: the service
+    // and the elevated task below start the worker with fixed ones.
+    QJsonObject withSettings = config;
+    if (!AppSettings::fileOverride().isEmpty())
+        withSettings[QStringLiteral("settingsFile")] = AppSettings::fileOverride();
+    const QByteArray configLine = QJsonDocument(withSettings).toJson(QJsonDocument::Compact) + "\n";
 
     // The native engine captures the desktop, and a service has none: its
     // worker goes to the console session, as the user sitting there. Every

@@ -95,7 +95,7 @@ Runs the reachability consent as a state machine with a `phase` field driving th
 
 1. Qt app + icon, message handler → `Logger`, `CrashHandler::install` (Windows minidumps).
 2. `loadEnvFile()` (`.env` next to exe, else project root; supports multi-line PEM values) then `applyEmbeddedEnvDefaults()` (CI-baked `MW_*` fallbacks).
-3. CLI parse (`--port`, `--log`, `--ws-port`, `--autostart`, `--stream-worker` — the last one re-enters as a stream child process and skips everything below).
+3. CLI parse (`--port`, `--log`, `--ws-port`, `--autostart`, `--config` — the settings file, applied before anything reads it, see [Settings §7.1](07-Settings-Reference.md#71-settingsjson-location) — and `--stream-worker`, which re-enters as a stream child process and skips everything below).
 4. **Force Qt TLS backend to OpenSSL** (Windows Schannel cannot import PEM keys → a user-supplied certificate would silently be dropped in favour of the self-signed one).
 5. `AppSettings` + `seedDocumentedDefaults()`; **single-instance `QLockFile`** — a second launch asks the running instance to focus the admin page (`/api/local/focus`) and exits 0, *or* stays alive as a **tray-only client** when the instance holding the lock has no desktop to draw on (Windows service in session 0, systemd unit) — see [Installers §9.4](09-Installers-and-Packaging.md#94-shared-runtime-behaviors).
 6. `HttpServer` + domain/cert config; `ComputerManager.init()`; `IdentityManager` (RSA identity); eager OpenSSL init (avoids a libdatachannel DTLS init race).
@@ -132,7 +132,7 @@ On a server there is no browser on the machine, and the admin API is localhost-o
 | `--new-pin` | `POST /api/admin/pin/generate` | A fresh access PIN. Deliberately the non-revoking endpoint (`/api/auth/regenerate` destroys every session) |
 | `--enable-internet [--yes]` | `POST /api/internet/enable` | Prints the consent text, requires `yes` on a TTY (or `--yes`), sends that exact text as `consent_message` so the consent record keeps what was shown, then the router verdict |
 
-The loopback port is read from this user's `settings.json`, then falls back to 443 — running the CLI as a different user than the service (a `sudo`-less `moonlightweb --status` against a root-owned unit) reads a different file, or none. Peer verification is off for these calls: the certificate on 127.0.0.1 is the self-signed LAN one, and no certificate authenticates a loopback socket better than the kernel already does.
+The loopback port is read from this user's `settings.json` (or from the `--config` file given to the command), then falls back to 443 — running the CLI as a different user than the service (a `sudo`-less `moonlightweb --status` against a root-owned unit) reads a different file, or none. Peer verification is off for these calls: the certificate on 127.0.0.1 is the self-signed LAN one, and no certificate authenticates a loopback socket better than the kernel already does.
 
 ---
 

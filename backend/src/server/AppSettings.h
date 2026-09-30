@@ -23,7 +23,8 @@
 
 #include "../streaming/StreamConfig.h"
 
-// Persistent settings stored in QStandardPaths::AppDataLocation/settings.json.
+// Persistent settings stored in QStandardPaths::AppDataLocation/settings.json,
+// or in the file named by --config.
 //
 // This class provides a type-safe interface over the JSON settings file
 // and handles read/write synchronisation (single-threaded, synchronous I/O).
@@ -31,6 +32,17 @@ class AppSettings
 {
 public:
     explicit AppSettings();
+
+    // ── Settings file location (--config) ───────────────────────────────────
+
+    /// Point every AppSettings built from now on at this file instead of the
+    /// one in the data directory. Set once, from the command line, before the
+    /// first instance is built; an empty path restores the default. The path
+    /// is made absolute here: the children and the relaunches it is handed to
+    /// do not all start in this process's working directory.
+    static void setFileOverride(const QString& path);
+    /// The --config file, absolute, or empty when the default one is in use.
+    static QString fileOverride();
 
     // ── HTTP port ────────────────────────────────────────────────────────────
 

@@ -21,6 +21,7 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QEventLoop>
@@ -1719,7 +1720,57 @@ int main(int argc, char* argv[])
                                         "alternate ports, no single-instance lock)");
     parser.addOption(devOption);
 
+    // Settings kept where configuration management wants them. Only the one
+    // file moves: sessions, certificates, logs and the lock stay in the data
+    // directory. The operator commands above need it too (--status reads the
+    // port from it).
+    QCommandLineOption configOption(
+        "config",
+        "Read and write the settings from this file instead of settings.json in the "
+        "data directory. Created if absent",
+        "path");
+    parser.addOption(configOption);
+
     parser.process(app);
+
+    // Before anything builds an AppSettings — every branch below reads it.
+    if (parser.isSet(configOption)) {
+        const QString path = parser.value(configOption);
+        const QFileInfo info(path);
+        if (path.isEmpty() || info.isDir()) {
+            Logger::error(QStringLiteral("--config needs a file path, got \"%1\"").arg(path));
+            return 1;
+        }
+        // A file that is there but does not parse would read as empty, and the
+        // first write — seedDocumentedDefaults at startup — would replace what
+        // someone wrote with the defaults. A managed file is written by hand or
+        // by a tool: say where it is broken and leave it alone.
+        if (info.exists()) {
+            QFile file(path);
+            if (!file.open(QIODevice::ReadOnly)) {
+                Logger::error(QStringLiteral("--config: cannot read %1: %2")
+                                  .arg(QDir::toNativeSeparators(info.absoluteFilePath()),
+                                       file.errorString()));
+                return 1;
+            }
+            const QByteArray raw = file.readAll();
+            QJsonParseError err;
+            const QJsonDocument doc = QJsonDocument::fromJson(raw, &err);
+            if (!raw.trimmed().isEmpty() &&
+                (err.error != QJsonParseError::NoError || !doc.isObject())) {
+                Logger::error(QStringLiteral("--config: %1 is not a JSON object (%2 at offset %3)")
+                                  .arg(QDir::toNativeSeparators(info.absoluteFilePath()),
+                                       err.error != QJsonParseError::NoError
+                                           ? err.errorString()
+                                           : QStringLiteral("not an object"))
+                                  .arg(err.offset));
+                return 1;
+            }
+        }
+        AppSettings::setFileOverride(path);
+        Logger::info("Settings file: " + QDir::toNativeSeparators(AppSettings::fileOverride()) +
+                     " (--config)");
+    }
 
     // Logging was configured from raw argv before the crash handler was
     // installed — see the block above main's parser. Nothing to do here.

@@ -23,6 +23,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QHostInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -36,11 +37,32 @@
 #include <windows.h>
 #endif
 
+namespace {
+QString g_FileOverride;
+}
+
 AppSettings::AppSettings()
 {
+    if (!g_FileOverride.isEmpty()) {
+        // Created on first write like the default one, so its directory has
+        // to exist too: QSaveFile does not make it.
+        QDir().mkpath(QFileInfo(g_FileOverride).absolutePath());
+        m_FilePath = g_FileOverride;
+        return;
+    }
     QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     QDir().mkpath(dir);
     m_FilePath = dir + "/settings.json";
+}
+
+void AppSettings::setFileOverride(const QString& path)
+{
+    g_FileOverride = path.isEmpty() ? QString() : QFileInfo(path).absoluteFilePath();
+}
+
+QString AppSettings::fileOverride()
+{
+    return g_FileOverride;
 }
 
 // ── Low-level helpers ──────────────────────────────────────────────────────────
