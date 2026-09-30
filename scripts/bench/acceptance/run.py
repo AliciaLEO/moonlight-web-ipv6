@@ -187,6 +187,13 @@ def kiosk_start(url, on_gpu=None):
                       "--user-data-dir=" + PROFILE,
                       "--no-first-run", "--no-default-browser-check",
                       "--disable-infobars",
+                      # Nothing of Chrome's own over the stream: the bar about
+                      # --ignore-certificate-errors and the "Restore pages?"
+                      # bubble of a kiosk killed last time both stayed over a
+                      # full-screen client, and a screen composed with them
+                      # never runs at the stream's rate (VRR, 30/09/2026).
+                      "--test-type",
+                      "--hide-crash-restore-bubble",
                       "--autoplay-policy=no-user-gesture-required",
                       "--remote-debugging-port=%d" % DEBUG_PORT,
                       "--ignore-certificate-errors",

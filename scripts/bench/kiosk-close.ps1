@@ -21,10 +21,12 @@ param(
     [switch] $Client
 )
 
+# The content page has a second profile when its DevTools port is open (the
+# content-age band is calibrated through it): .chrome-content-cdp.
 $tags = @()
-if ($Content) { $tags += '.chrome-bench' }
+if ($Content) { $tags += '.chrome-bench', '.chrome-content-cdp' }
 if ($Client) { $tags += '.chrome-client' }
-if (-not $tags) { $tags = @('.chrome-bench', '.chrome-client', '.chrome-guest') }
+if (-not $tags) { $tags = @('.chrome-bench', '.chrome-content-cdp', '.chrome-client', '.chrome-guest') }
 
 $killed = 0
 Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | ForEach-Object {
