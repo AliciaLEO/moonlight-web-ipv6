@@ -88,6 +88,7 @@ add_executable(run_tests
     test_router_port_core.cpp
     test_logger_rotation.cpp
     test_control_channel.cpp
+    test_feed_ipc.cpp
     # In-scope production units (+ their real deps)
     # The router-port allocation policy, behind its gateway seam: the rules
     # that keep two MoonlightWeb hosts on one LAN out of each other's holes.
@@ -136,6 +137,9 @@ add_executable(run_tests
     ${_src}/src/common/PairingCrypto.cpp
     # The session census: what leaves the machine, and what must not.
     ${_src}/src/network/SessionMetrics.cpp
+    # The guests' shared feed: the pipe between the feed worker and theirs.
+    ${_src}/src/streaming/FeedPublisher.cpp
+    ${_src}/src/streaming/FeedSubscriber.cpp
     ${_src}/src/common/Logger.cpp
     # The "Download logs" archive: which files go in, and the .zip they go in.
     ${_src}/src/common/ZipWriter.cpp
