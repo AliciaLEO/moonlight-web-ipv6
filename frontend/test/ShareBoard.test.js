@@ -27,6 +27,7 @@ vi.mock('../js/api/BackendClient.js', () => ({
         shareDeactivate: vi.fn(async () => ({})),
         shareTtl: vi.fn(async () => ({})),
         shareRename: vi.fn(async () => ({})),
+        shareFeedHeight: vi.fn(async (height) => ({ feed_height: height })),
     },
 }));
 // No locale is loaded in the TNR: render the key so the assertions can name it.
@@ -454,5 +455,51 @@ describe('ShareBoard', () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+    // A native host's guests watch one picture: its height is one choice for
+    // the whole board, never a row's (two rows, two heights, one stream).
+    it('offers one picture height for every guest on a native host', async () => {
+        await openBoard([slot(2), slot(3), slot(4)], undefined, {
+            feed_height: 1080,
+            owner_height: true,
+            shared_feed: true,
+        });
+        expect(BackendClient.getShareStatus).toHaveBeenCalledWith('h');
+        const buttons = document.querySelectorAll('.share-board-feed .share-feed-btn');
+        expect([...buttons].map((b) => b.textContent)).toEqual(['720p', '1080p', '1440p']);
+        expect(document.querySelector('.share-feed-btn.is-selected').textContent).toBe('1080p');
+        // Only one, above the rows: no row carries a height of its own.
+        expect(document.querySelectorAll('.share-board-feed').length).toBe(1);
+        expect(document.querySelector('.share-player .share-feed-btn')).toBeNull();
+        expect(document.querySelector('.share-board-feed').textContent).toContain(
+            'sharing.feedHintShared',
+        );
+
+        buttons[0].dispatchEvent(new Event('click'));
+        await vi.waitFor(() => expect(BackendClient.shareFeedHeight).toHaveBeenCalledWith(720));
+        await vi.waitFor(() =>
+            expect(document.querySelector('.share-feed-btn.is-selected').textContent).toBe('720p'),
+        );
+    });
+
+    it('puts the height back when the backend refuses it', async () => {
+        await openBoard([slot(2), slot(3), slot(4)], undefined, {
+            feed_height: 1080,
+            owner_height: true,
+        });
+        BackendClient.shareFeedHeight.mockRejectedValueOnce(new Error('400'));
+        document.querySelectorAll('.share-feed-btn')[2].dispatchEvent(new Event('click'));
+        await vi.waitFor(() => expect(BackendClient.shareFeedHeight).toHaveBeenCalledWith(1440));
+        await vi.waitFor(() =>
+            expect(document.querySelector('.share-feed-btn.is-selected').textContent).toBe('1080p'),
+        );
+    });
+
+    it('leaves the height to each guest elsewhere', async () => {
+        await openBoard([slot(2), slot(3), slot(4)], undefined, {
+            feed_height: 1080,
+            owner_height: false,
+        });
+        expect(document.querySelector('.share-board-feed')).toBeNull();
     });
 });

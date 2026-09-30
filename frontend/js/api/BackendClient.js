@@ -433,8 +433,27 @@ export class BackendClient {
     // Owner side: the rows of the sharing board. Any authenticated user may
     // share; no admin key involved.
 
-    static async getShareStatus() {
-        return this.get('/api/share/status');
+    /**
+     * The rows of the sharing board, and the guests' picture height for the
+     * host it was opened on (`feed_height`, with `owner_height` when that host
+     * is one whose guests get the owner's height, `shared_feed` when they share
+     * one stream of it). Without a host, the one being streamed.
+     * @param {string} [hostUuid]
+     */
+    static async getShareStatus(hostUuid) {
+        return this.get(
+            hostUuid
+                ? `/api/share/status?host=${encodeURIComponent(hostUuid)}`
+                : '/api/share/status',
+        );
+    }
+    /**
+     * The guests' picture height — 720, 1080 or 1440 — for every guest at once.
+     * A shared stream already running is resized; its guests follow.
+     * @param {number} height
+     */
+    static async shareFeedHeight(height) {
+        return this.post('/api/share/feed', { height });
     }
     /**
      * Open a player row: mint a fresh link + PIN, revoking the previous pair.

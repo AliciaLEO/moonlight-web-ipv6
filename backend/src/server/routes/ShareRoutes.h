@@ -98,6 +98,18 @@ struct ShareRoutesDeps
     /// A guest's own session is one of the things counted, so the join page
     /// says so — they cannot change the answer, but they get to know it.
     std::function<bool()> statsReporting;
+
+    /// How the guests of @p hostUuid get their picture. On a native host its
+    /// height is the owner's pick (ShareManager::feedHeight), not the guest's,
+    /// and — the shared feed switched on — they all watch one encode of it.
+    /// Every other host: neither, each guest picks and gets a stream of their
+    /// own.
+    struct GuestPicture
+    {
+        bool ownerHeight = false;
+        bool shared = false;
+    };
+    std::function<GuestPicture(const QString& hostUuid)> guestPicture;
 };
 
 /// Register the share API. A no-op when ShareManager::kSessionSharingEnabled is

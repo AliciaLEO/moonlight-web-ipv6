@@ -58,6 +58,23 @@ bool SharedFeed::enabled(bool setting)
 bool SharedFeed::acquire(const Spec& spec, int slot, Ticket& out)
 {
     if (m_Failed) return false;
+    // A relaunch is due under the same pipe, and the guests on the feed wait
+    // for it there. One arriving meanwhile waits with them when it wants that
+    // feed as it will come back; any other encodes on its own rather than
+    // start a second feed, or pull the pipe from under the waiting ones.
+    if (!m_Worker && relaunchDue()) {
+        if (!spec.sameFeed(m_Spec) || (spec.h264 && !m_Spec.h264)) {
+            qInfo() << "[SharedFeed] slot" << slot
+                    << "arrives while the feed relaunches, wanting another one — this guest "
+                       "encodes on its own";
+            return false;
+        }
+        m_Guests.insert(slot);
+        out.pipe = m_Pipe;
+        out.token = m_Token;
+        out.launch = m_Launch;
+        return true;
+    }
     QSet<int> others = m_Guests;
     others.remove(slot);
     if (m_Worker && !spec.sameFeed(m_Spec)) {
@@ -111,6 +128,7 @@ void SharedFeed::release(int slot)
 void SharedFeed::reset()
 {
     m_Guests.clear();
+    m_Resizing = false;
     m_IdleTimer.stop();
     m_RestartTimer.stop();
     m_Failed = false;
@@ -165,6 +183,42 @@ bool SharedFeed::launch(bool relaunch)
             << m_Spec.appId << "at" << m_Spec.width << "x" << m_Spec.height
             << (m_Spec.h264 ? "H.264" : "HEVC") << m_Spec.bitrateKbps << "kbps on" << m_Pipe;
     return true;
+}
+
+void SharedFeed::resize(int height)
+{
+    if (height <= 0 || height == m_Spec.height) return;
+    // The same shape, and the rate following the pixel count, as the guest
+    // profile's does (main.cpp: the auto estimate for the height, halved).
+    const qint64 was = m_Spec.height;
+    if (m_Spec.width > 0 && was > 0)
+        m_Spec.width = static_cast<int>(m_Spec.width * height / was) & ~1;
+    if (was > 0)
+        m_Spec.bitrateKbps = qMax(
+            1000, static_cast<int>(m_Spec.bitrateKbps * qint64(height) * height / (was * was)));
+    m_Spec.height = height;
+    // Not running, or a death's relaunch already due: that one takes the new
+    // spec. A feed nobody watches stops; the next guest starts it anew.
+    if (!m_Worker) return;
+    if (m_Guests.isEmpty()) {
+        stopWorker();
+        return;
+    }
+    qInfo() << "[SharedFeed] the owner picked" << height << "p — the feed is rebuilt at"
+            << m_Spec.width << "x" << height << "under the same pipe, its" << m_Guests.size()
+            << "guest(s) follow";
+    StreamWorkerHost* worker = m_Worker.data();
+    m_Worker.clear();
+    m_IdleTimer.stop();
+    // Its end is asked for: not a death to count.
+    disconnect(worker, &StreamWorkerHost::ended, this, nullptr);
+    m_Resizing = true;
+    // The pipe is the old worker's name until it is gone.
+    connect(worker, &StreamWorkerHost::exited, this, [this]() {
+        m_Resizing = false;
+        if (!m_Worker && !m_Guests.isEmpty() && !m_Failed) launch(true);
+    });
+    worker->requestQuit();
 }
 
 void SharedFeed::retireForCodec(const QString& codec)

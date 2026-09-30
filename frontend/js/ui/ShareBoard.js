@@ -48,6 +48,9 @@ const POLL_MS = 5000;
 /** The lifetimes the backend accepts, in the order the slider walks them. */
 const TTL_CHOICES = [3600, 4 * 3600, 8 * 3600, 24 * 3600, 48 * 3600, 0];
 
+/** The guests' picture heights the backend accepts (ShareManager::feedHeight). */
+const FEED_HEIGHTS = [720, 1080, 1440];
+
 const ROW_ICON = {
     off: Icons.userPlus,
     shared: Icons.link,
@@ -138,6 +141,15 @@ export class ShareBoard {
         this._remoteReachable = true;
         /** Last refusal worth showing the owner; cleared by the next success. */
         this._error = '';
+        /**
+         * The guests' picture height. Only the owner's to pick on a host whose
+         * guests all watch one picture (a native host: `_ownerHeight`), where
+         * it is one choice for the whole board rather than a row's own.
+         */
+        this._feedHeight = 1080;
+        this._ownerHeight = false;
+        /** Those guests share one stream of it: a change resizes it live. */
+        this._sharedFeed = false;
         /**
          * Called once the board is gone, so whoever opened it can refresh what
          * it was covering — a host card's kebab state, the header's guest count.
@@ -235,9 +247,14 @@ export class ShareBoard {
     // ── State ───────────────────────────────────────────────────────────────
 
     async _load() {
-        const data = await BackendClient.getShareStatus();
+        const data = await BackendClient.getShareStatus(this.ctx.hostUuid);
         this.slots = Array.isArray(data.slots) ? data.slots : [];
         this._remoteReachable = data.remote_reachable !== false;
+        if (FEED_HEIGHTS.includes(Number(data.feed_height))) {
+            this._feedHeight = Number(data.feed_height);
+        }
+        this._ownerHeight = data.owner_height === true;
+        this._sharedFeed = data.shared_feed === true;
 
         // Every live row shows its link and PIN, so every live row needs them.
         // Only ones we have never read: they do not change under us, and asking
@@ -263,6 +280,9 @@ export class ShareBoard {
         return JSON.stringify([
             this.appId,
             this._remoteReachable,
+            this._feedHeight,
+            this._ownerHeight,
+            this._sharedFeed,
             this.slots.map((s) => [
                 s.slot,
                 s.state,
@@ -369,6 +389,7 @@ export class ShareBoard {
                         aria-label="${escapeHtml(t('common.close'))}">✕</button>
             </div>
             ${this._appPickerHtml()}
+            ${this._feedHtml()}
             ${
                 this._error
                     ? `<p class="share-board-note is-warning">${escapeHtml(this._error)}</p>`
@@ -383,6 +404,7 @@ export class ShareBoard {
             .querySelector('.share-board-close')
             .addEventListener('click', () => this.close());
         this._wireAppPicker();
+        this._wireFeed();
         this.slots.forEach((s) => this._wirePlayerRow(s));
     }
 
@@ -415,6 +437,34 @@ export class ShareBoard {
                 )}</label>
                 <select class="share-app-select" id="share-app-select">${options}</select>
                 <p class="share-board-note">${escapeHtml(t('sharing.appHint'))}</p>
+            </div>
+        `;
+    }
+
+    /**
+     * The guests' picture height, on a host whose guests all watch one picture.
+     * One choice for the board, not a row's: a row of its own would mean two
+     * heights, and the guests' one stream cannot be both. It moves at any time
+     * — a stream already running is resized, and its guests follow.
+     */
+    _feedHtml() {
+        if (!this._ownerHeight) return '';
+        const buttons = FEED_HEIGHTS.map(
+            (h) =>
+                `<button class="btn share-feed-btn ${h === this._feedHeight ? 'is-selected' : ''}"
+                         type="button" data-height="${h}"
+                         aria-pressed="${h === this._feedHeight}">${h}p</button>`,
+        ).join('');
+        return `
+            <div class="share-board-feed">
+                <span class="share-field-label" id="share-feed-label">${escapeHtml(
+                    t('sharing.feedLabel'),
+                )}</span>
+                <div class="share-feed-choice" role="group"
+                     aria-labelledby="share-feed-label">${buttons}</div>
+                <p class="share-board-note">${escapeHtml(
+                    t(this._sharedFeed ? 'sharing.feedHintShared' : 'sharing.feedHint'),
+                )}</p>
             </div>
         `;
     }
@@ -705,6 +755,30 @@ export class ShareBoard {
                     .filter(Boolean)
                     .join(' · ');
             }
+        });
+    }
+
+    _wireFeed() {
+        this.board.querySelectorAll('.share-feed-btn').forEach((b) => {
+            b.addEventListener('click', async () => {
+                const height = Number(/** @type {HTMLElement} */ (b).dataset.height);
+                if (height === this._feedHeight) return;
+                const was = this._feedHeight;
+                // Shown at once: a round trip before the button moves reads as a
+                // click that did not register.
+                this._feedHeight = height;
+                this._paint();
+                try {
+                    const data = await this._write(() => BackendClient.shareFeedHeight(height));
+                    if (FEED_HEIGHTS.includes(Number(data?.feed_height))) {
+                        this._feedHeight = Number(data.feed_height);
+                    }
+                } catch (err) {
+                    console.warn('[ShareBoard] picture height refused:', err);
+                    this._feedHeight = was;
+                }
+                this._paint();
+            });
         });
     }
 

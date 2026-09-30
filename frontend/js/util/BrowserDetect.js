@@ -449,6 +449,46 @@ export function chroma444Codec(codec, cap) {
     return cap.decode ? c : null;
 }
 
+/** 8-bit HEVC (Main) at the sizes a guest's picture comes in. */
+const HEVC_DECODE_PROBES = ['hev1.1.6.L123.B0', 'hvc1.1.6.L123.B0', 'hvc1.1.6.L153.B0'];
+let hevcProbe = null;
+
+/**
+ * Whether THIS browser decodes HEVC. A guest of a native host watches the one
+ * stream its guests share, HEVC unless one of them cannot decode it — then the
+ * whole stream goes H.264. Asked before joining, so a browser without HEVC
+ * (Firefox, Chrome on Linux) asks for H.264 at once rather than failing its
+ * first picture and coming back. Probed once per page; a browser that cannot be
+ * asked is trusted, as for HDR and 4:4:4.
+ * @returns {Promise<boolean>}
+ */
+export async function hevcClientDecodes() {
+    if (!hevcProbe) {
+        hevcProbe = (async () => {
+            if (
+                typeof VideoDecoder === 'undefined' ||
+                typeof VideoDecoder.isConfigSupported !== 'function'
+            ) {
+                return true;
+            }
+            for (const codec of HEVC_DECODE_PROBES) {
+                try {
+                    const r = await VideoDecoder.isConfigSupported({
+                        codec,
+                        codedWidth: 1920,
+                        codedHeight: 1080,
+                    });
+                    if (r && r.supported) return true;
+                } catch (e) {
+                    // This string is refused outright — try the next one.
+                }
+            }
+            return false;
+        })();
+    }
+    return hevcProbe;
+}
+
 /** True when the app runs as an installed PWA (no browser chrome). */
 export const IS_STANDALONE =
     window.navigator.standalone === true ||

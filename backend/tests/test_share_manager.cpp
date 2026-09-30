@@ -594,6 +594,32 @@ void test_share_is_bound_to_its_host()
     delete restarted;
 }
 
+void test_guests_picture_height()
+{
+    SECTION("share: one picture height for every guest, the owner's pick, kept");
+    ShareManager* mgr = freshManager();
+    CHECK_EQ(mgr->feedHeight(), 1080); // the default
+
+    QVector<int> told;
+    QObject::connect(mgr, &ShareManager::feedHeightChanged, [&told](int h) { told.append(h); });
+    // Only the heights the board offers: it arrives from a browser.
+    CHECK(!mgr->setFeedHeight(2160));
+    CHECK(!mgr->setFeedHeight(0));
+    CHECK_EQ(mgr->feedHeight(), 1080);
+    CHECK(mgr->setFeedHeight(1080)); // the same: accepted, nothing to rebuild
+    CHECK(told.isEmpty());
+    CHECK(mgr->setFeedHeight(720));
+    CHECK_EQ(mgr->feedHeight(), 720);
+    CHECK_EQ(told.size(), 1);
+    CHECK_EQ(told.value(0), 720);
+    delete mgr;
+
+    // The owner's pick outlives a restart, like the rows' own labels.
+    auto* restarted = new ShareManager();
+    CHECK_EQ(restarted->feedHeight(), 720);
+    delete restarted;
+}
+
 } // namespace
 
 void run_share_manager_tests()
@@ -613,4 +639,5 @@ void run_share_manager_tests()
     test_persistence_survives_a_restart();
     test_clear_secrets_are_memory_only();
     test_share_is_bound_to_its_host();
+    test_guests_picture_height();
 }

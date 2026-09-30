@@ -143,6 +143,34 @@
     border-bottom: 1px solid var(--border-1);
 }
 
+/* The guests' picture height: one choice for the whole board — a native
+   host's guests watch one shared stream — under the app picker. */
+.share-board-feed {
+    padding: 4px 2px 10px;
+    border-bottom: 1px solid var(--border-1);
+}
+
+.share-feed-choice {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.share-feed-btn {
+    padding: 6px 14px;
+    font-size: 13px;
+    color: var(--text-2);
+    background: var(--surface-2);
+    border: 1px solid var(--border-1);
+    cursor: pointer;
+}
+
+.share-feed-btn.is-selected {
+    color: var(--on-accent);
+    background: var(--accent-1);
+    border-color: var(--accent-1);
+}
+
 .share-app-select {
     width: min(340px, 100%);
     padding: 8px 10px;
@@ -1058,6 +1086,11 @@ body.player-mode {
     align-items: center;
     gap: 5px;
     margin-bottom: 16px;
+}
+
+/* A native host's guests do not choose: the owner's height, said once. */
+.player-quality-fixed {
+    margin: 0 0 16px;
 }
 
 .player-quality-choice {

@@ -156,8 +156,10 @@ void registerShareRoutes(HttpServer& server, ShareManager& share, const ShareRou
     // in HttpServer::processRequest covers these paths); deliberately NOT
     // admin-only. Cross-site drive-by is already refused by RequestGuard.
 
-    // GET /api/share/status — the four rows of the sharing board.
-    router->get(QStringLiteral("/api/share/status"), [&share, &deps](const HttpRequest&) {
+    // GET /api/share/status[?host=<uuid>] — the rows of the sharing board, and
+    // the guests' picture height for the host it was opened on (the one being
+    // streamed when none is named).
+    router->get(QStringLiteral("/api/share/status"), [&share, &deps](const HttpRequest& req) {
         // Not named `slots`: Qt's moc keyword macro would eat it.
         QJsonArray slotArray;
         for (const ShareManager::SlotStatus& st : share.status())
@@ -171,6 +173,27 @@ void registerShareRoutes(HttpServer& server, ShareManager& share, const ShareRou
         // goes — it only lets the board say so instead of letting an owner hand
         // out an address believing it is being answered.
         obj[QStringLiteral("remote_reachable")] = deps.remoteReachable && deps.remoteReachable();
+        // One height for every guest: on a native host they share one feed.
+        QString hostUuid = req.queryParams.value(QStringLiteral("host"));
+        if (hostUuid.isEmpty() && deps.currentOwnerContext)
+            hostUuid = deps.currentOwnerContext().first;
+        const ShareRoutesDeps::GuestPicture picture = deps.guestPicture && !hostUuid.isEmpty()
+                                                          ? deps.guestPicture(hostUuid)
+                                                          : ShareRoutesDeps::GuestPicture{};
+        obj[QStringLiteral("feed_height")] = share.feedHeight();
+        obj[QStringLiteral("owner_height")] = picture.ownerHeight;
+        obj[QStringLiteral("shared_feed")] = picture.shared;
+        return HttpResponse::json(obj);
+    });
+
+    // POST /api/share/feed — {height}: the guests' picture height, for every
+    // guest at once; a feed already running is rebuilt at the new size.
+    router->post(QStringLiteral("/api/share/feed"), [&share](const HttpRequest& req) {
+        const QJsonObject body = QJsonDocument::fromJson(req.body).object();
+        if (!share.setFeedHeight(body.value(QStringLiteral("height")).toInt()))
+            return HttpResponse::error(400, "Unsupported height");
+        QJsonObject obj;
+        obj[QStringLiteral("feed_height")] = share.feedHeight();
         return HttpResponse::json(obj);
     });
 
@@ -402,6 +425,13 @@ void registerShareRoutes(HttpServer& server, ShareManager& share, const ShareRou
             deps.joinTarget ? deps.joinTarget(slot) : std::pair<QString, bool>{};
         obj[QStringLiteral("app_name")] = target.first;
         obj[QStringLiteral("cold_start")] = target.second;
+        // On a native host the picture's height is the owner's, one for every
+        // guest: the page shows it instead of offering a choice.
+        const ShareRoutesDeps::GuestPicture picture =
+            deps.guestPicture ? deps.guestPicture(share.hostForSlot(slot))
+                              : ShareRoutesDeps::GuestPicture{};
+        if (picture.ownerHeight) obj[QStringLiteral("feed_height")] = share.feedHeight();
+        obj[QStringLiteral("shared_feed")] = picture.shared;
         // Transparency, not a choice: the guest's session is counted (or not)
         // by the machine they are joining, and the privacy panel says which.
         obj[QStringLiteral("stats_reporting")] =
@@ -453,8 +483,12 @@ void registerShareRoutes(HttpServer& server, ShareManager& share, const ShareRou
             // Only the resolution comes from the player: the height from a fixed
             // set, plus their screen aspect ("W:H") so the stream fills their
             // display. Everything else — fps, codec, bitrate — is decided here.
+            // On a native host not even that: its guests watch one picture, at
+            // the height the owner picked.
             const int requested = body.value(QStringLiteral("height")).toInt(1080);
-            const int height = (requested == 720 || requested == 1440) ? requested : 1080;
+            int height = (requested == 720 || requested == 1440) ? requested : 1080;
+            if (deps.guestPicture && deps.guestPicture(share.hostForSlot(slot)).ownerHeight)
+                height = share.feedHeight();
             const QString aspect = body.value(QStringLiteral("aspect")).toString();
 
             if (!deps.startPlayerStream) {

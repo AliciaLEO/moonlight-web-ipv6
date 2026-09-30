@@ -844,6 +844,9 @@
         "refused": "另一台设备（{{device}}）在 {{time}} 用正确的 PIN 打开了此链接，已被拒绝。",
         "appLabel": "要共享的应用",
         "appHint": "当前没有运行任何内容，第一位输入 PIN 的访客将启动此应用。",
+        "feedLabel": "访客画面",
+        "feedHint": "所有访客使用同一画面高度，且不会超过主机屏幕。",
+        "feedHintShared": "你的访客以此高度观看同一路共享串流，且不会超过主机屏幕。更改后，正在观看的访客也会随之调整。",
         "noApps": "此主机暂无可共享的应用。",
         "unavailable": "此服务器不支持会话共享。",
         "openFailed": "无法开启此邀请。"
@@ -853,6 +856,7 @@
         "leave": "离开",
         "thisPc": "这台电脑",
         "quality": "串流分辨率",
+        "qualityFixed": "画面：{{height}}p，由主机设定",
         "mouseMode": "鼠标模式",
         "desktop": "桌面",
         "desktopHint": "适合办公：鼠标仍归你所有，可以移出画面去操作屏幕的其他部分。",

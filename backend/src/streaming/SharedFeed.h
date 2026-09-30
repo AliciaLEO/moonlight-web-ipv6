@@ -113,6 +113,13 @@ public:
     /// afresh (a feed given up on is tried again).
     void reset();
 
+    /// The owner picked another height for the guests' picture. A feed with
+    /// guests on it is rebuilt at it under the same pipe — they wait for it
+    /// as for a relaunch after a death, and their decoders take the new size
+    /// on its first keyframe — the width and the rate following, as the guest
+    /// profile's do. An idle feed simply stops: the next guest starts it anew.
+    void resize(int height);
+
     bool running() const { return !m_Worker.isNull(); }
 
 signals:
@@ -124,6 +131,9 @@ private:
     /// Start the worker for m_Spec on m_Pipe; @p how, the way the previous
     /// one ran, when it is a relaunch its guests are waiting for.
     bool launch(bool relaunch);
+    /// A relaunch under the same pipe is on its way (a death's, or a new
+    /// height's): the guests on the feed are waiting for it.
+    bool relaunchDue() const { return m_RestartTimer.isActive() || m_Resizing; }
     void stopWorker();
     /// The feed switches codec: its worker tells its guests (their pages
     /// rejoin the way a codec fallback does) and ends itself.
@@ -141,6 +151,9 @@ private:
     QTimer m_RestartTimer;
     QElapsedTimer m_RunningFor;
     int m_Failures = 0;
+    /// The feed is being rebuilt at a new height: the old worker is on its
+    /// way out, the new one starts once it is gone (the pipe is its name).
+    bool m_Resizing = false;
     /// Given up on for this share: its guests encode on their own until the
     /// owner stops (reset()).
     bool m_Failed = false;

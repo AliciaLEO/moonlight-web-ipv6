@@ -63,6 +63,11 @@ bool ShareManager::isValidTtl(qint64 secs)
     return false;
 }
 
+bool ShareManager::isValidFeedHeight(int height)
+{
+    return height == 720 || height == 1080 || height == 1440;
+}
+
 QString ShareManager::sanitizeName(const QString& name)
 {
     QString out = name.simplified();
@@ -365,6 +370,16 @@ bool ShareManager::setName(int slot, const QString& name)
     s->name = clean;
     save();
     emit slotChanged(slot);
+    return true;
+}
+
+bool ShareManager::setFeedHeight(int height)
+{
+    if (!isValidFeedHeight(height)) return false;
+    if (m_FeedHeight == height) return true;
+    m_FeedHeight = height;
+    save();
+    emit feedHeightChanged(height);
     return true;
 }
 
@@ -708,6 +723,7 @@ void ShareManager::save()
 
     QJsonObject root;
     root[QStringLiteral("slots")] = slotArray;
+    root[QStringLiteral("feedHeight")] = m_FeedHeight;
 
     QFile file(sharePath());
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -728,6 +744,8 @@ void ShareManager::load()
 
     const qint64 now = QDateTime::currentSecsSinceEpoch();
     const QJsonObject root = doc.object();
+    const int feedHeight = root.value(QStringLiteral("feedHeight")).toInt(kFeedHeight);
+    m_FeedHeight = isValidFeedHeight(feedHeight) ? feedHeight : kFeedHeight;
     const QJsonArray slotArray = root.value(QStringLiteral("slots")).toArray();
     for (const QJsonValue& v : slotArray) {
         const QJsonObject obj = v.toObject();

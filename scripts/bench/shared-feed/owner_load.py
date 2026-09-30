@@ -347,6 +347,10 @@ def main():
     ap.add_argument("--ssh", default="", help="SSH alias of the remote host (PIN, worker count)")
     ap.add_argument("--fleet-id", default="", help="its id in hosts.local.json, for fleet.probe")
     ap.add_argument("--display-index", default="0", help="remote host: which physical display")
+    ap.add_argument("--feed-heights", default="",
+                    help="the guests' picture height the owner picks before each window, in "
+                         "order (\"1080,720,1440\"; empty keeps it): a feed with guests on it is "
+                         "resized under them")
     ap.add_argument("--no-hevc-slots", default="",
                     help="guests whose Chrome decodes no HEVC, by slot (\"4\"): the shared feed "
                          "goes H.264 when one joins")
@@ -356,6 +360,7 @@ def main():
     a = ap.parse_args()
     schedule = [int(x) for x in a.guests.split(",")]
     no_hevc = {int(x) for x in a.no_hevc_slots.split(",") if x.strip()}
+    feed_heights = [int(x) if x.strip() else 0 for x in a.feed_heights.split(",")]         if a.feed_heights else []
     remote = bool(a.host_url)
     os.makedirs(OUT, exist_ok=True)
 
@@ -436,7 +441,17 @@ def main():
         gx, gy, _gw, _gh = guest_rect
         slots = [2, 3, 4]
         spots = [(gx, gy), (gx + GUEST_W, gy), (gx, gy + GUEST_H)]
-        for want in schedule:
+        for w_index, want in enumerate(schedule):
+            height = feed_heights[w_index] if w_index < len(feed_heights) else 0
+            if height:
+                # The owner's pick on the board, as its button sends it.
+                got = d.json_eval("""(async () => {
+                    const r = await fetch('/api/share/feed', {method: 'POST',
+                        credentials: 'same-origin', headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({height: %d})});
+                    return JSON.stringify(Object.assign({status: r.status}, await r.json()));
+                })()""" % height)
+                print("  guests' picture -> %dp (%s)" % (height, got.get("status")), flush=True)
             # Guests arrive and leave in slot order: 1 = slot 2, 3 = slots 2-4.
             for slot in slots[want:]:
                 if slot in guests:
@@ -470,7 +485,7 @@ def main():
                 time.sleep(a.secs)
             owner_stats = d.json_eval("JSON.stringify(window.__mwS0.take())")
             win = {
-                "guests": want, "at": t0,
+                "guests": want, "at": t0, "feedHeight": height or None,
                 "owner": summarize(owner_stats),
                 "ownerOverlay": overlay(d),
                 "guestStages": {slot: summarize(g.take()) for slot, g in guests.items()},

@@ -26,7 +26,7 @@
 import { BackendClient } from '../api/BackendClient.js';
 import { t } from '../i18n/i18n.js';
 import { escapeHtml } from '../util/escapeHtml.js';
-import { IS_MOBILE_OR_TABLET, IS_TOUCH_DEVICE } from '../util/BrowserDetect.js';
+import { IS_MOBILE_OR_TABLET, IS_TOUCH_DEVICE, hevcClientDecodes } from '../util/BrowserDetect.js';
 import { PlayerArt } from './PlayerArt.js';
 import { noticeHtml } from './PrivacyNotice.js';
 import {
@@ -77,7 +77,7 @@ export class PlayerJoinView {
     /**
      * @param {HTMLElement} container
      * @param {string} token the share token from the URL
-     * @param {(info: {height: number, gaming: boolean, touchScreen: boolean, padKey: string|null}) => Promise<void>} onJoin
+     * @param {(info: {height: number, gaming: boolean, touchScreen: boolean, padKey: string|null}, transportIndex?: number, codec?: string) => Promise<void>} onJoin
      */
     constructor(container, token, onJoin) {
         this.container = container;
@@ -349,6 +349,12 @@ export class PlayerJoinView {
         // because pressing Join then wakes a machine nobody is sitting at.
         const app = this.info.app_name || '';
         const willLaunch = this.info.cold_start === true;
+        // A native host's guests watch one picture, at the height its owner
+        // picked: nothing to choose here, only to know.
+        const fixedHeight = [720, 1080, 1440].includes(Number(this.info.feed_height))
+            ? Number(this.info.feed_height)
+            : 0;
+        if (fixedHeight) this._height = fixedHeight;
 
         this._shell(`
             <h1>${escapeHtml(t('player.joinTitle', { machine }))}</h1>
@@ -365,6 +371,12 @@ export class PlayerJoinView {
                           )}</p>`
                         : ''
                 }
+                ${
+                    fixedHeight
+                        ? `<p class="player-hint player-quality-fixed">${escapeHtml(
+                              t('player.qualityFixed', { height: fixedHeight }),
+                          )}</p>`
+                        : `
                 <div class="player-quality">
                     <span class="player-field-label" id="player-quality-label"
                           >${escapeHtml(t('player.quality'))}</span>
@@ -377,7 +389,8 @@ export class PlayerJoinView {
                         `,
                         ).join('')}
                     </div>
-                </div>
+                </div>`
+                }
                 ${this._inputToggles()}
                 ${this._gamepadAllowed() ? '<div class="player-gamepad"></div>' : ''}
                 <button class="btn btn-open player-join-btn" type="button">
@@ -430,15 +443,28 @@ export class PlayerJoinView {
             joinBtn.textContent = t('player.joining');
             err.hidden = true;
             try {
-                await this.onJoin({
-                    height: this._height,
-                    // No aspect: a guest cannot know the host's format, and its
-                    // own monitor is irrelevant — the backend hands it the ratio
-                    // the owner's session already settled on for that host.
-                    gaming: this._prefs.gaming,
-                    touchScreen: this._prefs.touchScreen,
-                    padKey: this._gamepadAllowed() ? this._selectedPadKey() : null,
-                });
+                // The stream the guests share is HEVC unless one of them cannot
+                // decode it. A browser that cannot says so now: the stream goes
+                // H.264 for everyone once, instead of this guest failing its
+                // first picture and coming back.
+                const codec =
+                    this.info.shared_feed === true && !(await hevcClientDecodes())
+                        ? 'h264'
+                        : undefined;
+                await this.onJoin(
+                    {
+                        height: this._height,
+                        // No aspect: a guest cannot know the host's format, and
+                        // its own monitor is irrelevant — the backend hands it the
+                        // ratio the owner's session already settled on for that
+                        // host.
+                        gaming: this._prefs.gaming,
+                        touchScreen: this._prefs.touchScreen,
+                        padKey: this._gamepadAllowed() ? this._selectedPadKey() : null,
+                    },
+                    0,
+                    codec,
+                );
             } catch (ex) {
                 const code = ex && ex.responseBody && ex.responseBody.error;
                 if (code === 'session_ended') {

@@ -844,6 +844,9 @@
         "refused": "Another device ({{device}}) opened this link with the right PIN at {{time}}, and was turned away.",
         "appLabel": "App to share",
         "appHint": "Nothing is running, so the first guest to enter their PIN is what starts this app.",
+        "feedLabel": "Guests' picture",
+        "feedHint": "One height for every guest, never above the host's screen.",
+        "feedHintShared": "Your guests watch one shared stream at this height, never above the host's screen. Changing it resizes it for those already watching too.",
         "noApps": "This host has no apps to share yet.",
         "unavailable": "Session sharing is not available on this server.",
         "openFailed": "Could not open this invitation."
@@ -853,6 +856,7 @@
         "leave": "Leave",
         "thisPc": "this PC",
         "quality": "Streaming resolution",
+        "qualityFixed": "Picture: {{height}}p, set by the host",
         "mouseMode": "Mouse mode",
         "desktop": "Desktop",
         "desktopHint": "For desktop work: the mouse stays yours and can leave the stream to reach the rest of your screen.",

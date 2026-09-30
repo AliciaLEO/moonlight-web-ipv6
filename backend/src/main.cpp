@@ -2270,6 +2270,12 @@ int main(int argc, char* argv[])
                                  detachWorkerSlot(slot, false, false);
                      });
 
+    // The owner picked another height for the guests' picture: the feed they
+    // are watching is rebuilt at it, and they follow (a guest encoding on its
+    // own keeps its size until it rejoins).
+    QObject::connect(&shareManager, &ShareManager::feedHeightChanged, &sharedFeed,
+                     &SharedFeed::resize);
+
     // The share manager decided a player's stream must end (the eight hours ran
     // out, or too many wrong PINs). It knows nothing about workers — this does.
     QObject::connect(&shareManager, &ShareManager::playerMustDisconnect, qApp,
@@ -4482,6 +4488,15 @@ int main(int argc, char* argv[])
     ShareRoutesDeps shareDeps;
     shareDeps.joinTarget = joinTarget;
     shareDeps.statsReporting = [&appSettings]() { return appSettings.sessionMetricsAllowed(); };
+    shareDeps.guestPicture = [&computerManager, &appSettings](const QString& hostUuid) {
+        ShareRoutesDeps::GuestPicture picture;
+        NvComputer* host = computerManager.getHost(hostUuid);
+        if (host && host->backendType == NativeHostBackend::typeName()) {
+            picture.ownerHeight = true;
+            picture.shared = SharedFeed::enabled(appSettings.sharedFeedEnabled());
+        }
+        return picture;
+    };
     shareDeps.currentOwnerContext = ownerContext;
     shareDeps.hostAppExists = [&computerManager](const QString& hostUuid, int appId) {
         NvComputer* host = computerManager.getHost(hostUuid);

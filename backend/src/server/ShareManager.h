@@ -76,6 +76,13 @@ public:
     static constexpr qint64 kTtlSecs = 8 * 3600;
     static bool isValidTtl(qint64 secs);
 
+    /// The height of the picture a native host's guests watch, chosen by the
+    /// owner on the board: one for every guest, since they share one feed
+    /// (plan « flux commun des invités »). 720, 1080 or 1440 — never above the
+    /// host's own display, which the engine sees to (it never upscales).
+    static constexpr int kFeedHeight = 1080;
+    static bool isValidFeedHeight(int height);
+
     /// Wrong PINs before the activation is destroyed outright. Whoever holds a
     /// leaked link can therefore kill the share, never brute-force into it.
     static constexpr int kMaxPinFailures = 10;
@@ -198,6 +205,13 @@ public:
     /// Rename a player row. An empty name restores the default "Player N".
     /// False for a slot outside the player range.
     bool setName(int slot, const QString& name);
+
+    /// The guests' picture height (kFeedHeight until the owner picks one).
+    int feedHeight() const { return m_FeedHeight; }
+    /// Pick it, for every guest at once — those already watching included:
+    /// feedHeightChanged() rebuilds their feed at the new size. False for a
+    /// height not offered.
+    bool setFeedHeight(int height);
     QString name(int slot);
 
     /// Revoke the activation: token, PIN and cookies die, and any live stream
@@ -292,6 +306,9 @@ signals:
     /// keys held under the old policy are released on the way.
     void permissionsChanged(int slot, bool gamepad, bool keyboardMouse);
 
+    /// The owner picked another height for the guests' picture.
+    void feedHeightChanged(int height);
+
 private:
     struct Activation
     {
@@ -381,6 +398,7 @@ private:
     static QString sanitizeName(const QString& name);
 
     QHash<int, Slot> m_Slots;
+    int m_FeedHeight = kFeedHeight;
     QHash<QString, RateEntry> m_RateLimits;
     QTimer* m_SweepTimer = nullptr;
 
