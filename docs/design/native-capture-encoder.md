@@ -6645,3 +6645,70 @@ l'Arc, rien de sûr sur la RTX (23,7 → 22,9 ms, dans la variation de la page
 d'un lancement à l'autre). C'est là que l'écran virtuel à la fréquence du
 client coûte le plus : un GPU faible compose la page en une à deux images de
 l'écran, et chacune dure 8 ms à 120 Hz contre 4 à 240.
+
+### 33.8 L'émission calée sur l'affichage du client (`cadence=deadline`, 30/09/2026)
+
+L'idée est de Bruno (décision H4, 30/09) ; elle remplace la cadence de l'hôte
+comme candidat au produit. L'hôte capture vite (écran virtuel à 240 ou
+500 Hz), mais n'envoie **qu'une image par rafraîchissement du client** : la
+plus fraîche qui peut encore y arriver.
+
+**Pourquoi c'est mieux que les deux précédentes.**
+- La cadence d'aujourd'hui décode une image par rafraîchissement, mais sa
+  grille tombe n'importe où dans ce rafraîchissement : l'image attend en
+  moyenne une demi-période de trop.
+- La cadence de l'hôte rattrape cette demi-période (le client prend la plus
+  fraîche) au prix de tout décoder : sur un client qui ne suit pas, aucun
+  crédit ne la sauve (§33.7).
+- L'émission calée vise la latence de la seconde avec les décodages de la
+  première.
+
+**Ce qui est construit.**
+- **Côté client** (`frontend/js/stream/VsyncGrid.js`, `77dc627d`) : période et
+  dernier rafraîchissement ajustés sur les horodatages de
+  `requestAnimationFrame`, mis sur l'horloge de l'hôte par l'estimateur
+  ping/pong (sorti de la sonde d'âge vers `util/ClockEstimator.js`). Toutes les
+  500 ms, un message `vsyncgrid` : période, un rafraîchissement, et l'**avance**
+  = médiane de « prise → prête » sur 2 s + une marge. Prête = dessinée quand le
+  canvas déchire, décodée en vsync.
+- **La marge** se règle sur les ratées (une image prête après le
+  rafraîchissement visé) : +1 ms par ratée ; après 5 s sans ratée, −moitié de
+  ce que les images les plus serrées avaient de trop (1ᵉʳ centile), au moins
+  0,25 ms, plancher 0,5 ms. Cible : ≤ 0,5 % de ratées. L'erreur de l'horloge
+  s'annule : le rafraîchissement et l'instant « prête » passent par la même
+  estimation.
+- **Côté hôte** (`core/DeadlineCadence.h`, boucle Windows, `6f9a6bbc`) : pour
+  le rafraîchissement R, l'image est prise à R − avance. La boucle ne prend
+  rien entre deux rafraîchissements du client : elle dort jusqu'à cet instant
+  (minuterie haute résolution, puis attente active de 250 µs), prend ce que
+  l'écran a présenté en dernier et l'encode aussitôt. Desktop Duplication
+  replie toutes les présentations intermédiaires dans cette prise, sans les
+  convertir : une conversion par rafraîchissement du client, même à 500 Hz.
+  Rien de neuf, rien d'envoyé. Une grille muette depuis 2 s, ou absurde, rend
+  la main à la porte d'aujourd'hui.
+- **L'horodatage** d'une image visée est l'instant de sa prise, pas sa
+  présentation. Un jeu à 60 i/s sur un écran à 240 Hz laisse sa dernière
+  présentation jusqu'à 16 ms avant l'instant ; une avance qui la compterait
+  avancerait chaque prise pour rien.
+- **Chaque pong** dit si l'hôte veut une grille (`grid`) et s'il la suit
+  (`deadline`) : le client ne compte ses ratées et ne lâche sa réserve de rendu
+  (`useReserve`, Chromium sans tearing) que dans ce cas.
+
+**L'option C de Bruno** (convertir la dernière présentation convertible à
+temps, sans attendre l'échéance) choisit **la même image** que la prise à
+R − avance : la dernière présentation qui peut être prise, convertie, encodée
+et livrée à temps. Sa seule différence est de traiter plus tôt, ce qui laisse
+du temps en réserve sans rajeunir l'image ; la prise à l'échéance ne demande
+ni la grille de l'écran de l'hôte ni son délai de composition. Le « ~1 ms » de
+conversion annoncé le 30/09 pour la capture à l'échéance était une erreur : il
+est dans l'avance mesurée, pour les deux façons de faire.
+
+**Tearing** (décision de Bruno, 30/09) : la méthode vaut pour tous les
+clients, « autoriser le tearing » reste activé. Une image dessinée avant le
+début du balayage est montrée entière ; une image en retard déchire sur
+quelques lignes du haut, puis elle est entière au rafraîchissement suivant.
+
+**Reste** : le banc (plan §13, P3) — UM790Pro en vsync puis en tearing, un
+client à 60 Hz ; écran virtuel à 240 et 500 Hz ; Auto, `host`, `deadline`.
+Porte : l'âge au rafraîchissement de `host`, les décodages d'Auto, ≤ 0,5 % de
+ratées.
