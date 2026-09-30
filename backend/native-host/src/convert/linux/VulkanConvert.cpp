@@ -101,21 +101,27 @@ struct ScalePush
     int32_t origin[2];
     int32_t size[2];
     int32_t extent[2];
+    /// Where the picture starts in the input (KmsFrame::sourceX): the
+    /// horizontal pass only; the intermediate is the picture alone.
+    int32_t offset[2];
     float len;
     float fixedLen;
     float dilate;
     int32_t taps;
 };
-static_assert(sizeof(ScalePush) == 40, "vk_scale.comp's push constants");
+static_assert(sizeof(ScalePush) == 48, "vk_scale.comp's push constants");
 
 struct Nv12Push
 {
     float cursorRect[4];
+    /// The picture inside the sampled image, in its UV: (0,0,1,1) but for a
+    /// screen's window of an X11 root (GlConvert's SourceRect).
+    float sourceRect[4];
     int32_t size[2];
     float cursorEnabled;
     float pad;
 };
-static_assert(sizeof(Nv12Push) == 32, "vk_nv12.comp's push constants");
+static_assert(sizeof(Nv12Push) == 48, "vk_nv12.comp's push constants");
 
 VkImageMemoryBarrier2 imageBarrier(VkImage image, VkImageLayout from, VkImageLayout to,
                                    VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
@@ -1136,9 +1142,11 @@ bool VulkanConvert::convert(const capture::KmsFrame& frame, const capture::Curso
             log::info("[native] Vulkan conversion of the portal's shared memory: " + how);
         }
     } else {
+        // At the buffer's size: a screen of an X11 desktop over several reads
+        // its window of it (sourceRect and the scale pass's offset, below).
         const VkResult imported =
             importImage(*d->device, frame.fds[0], frame.modifier, frame.planeCount, frame.offsets,
-                        frame.pitches, format, frame.width, frame.height,
+                        frame.pitches, format, frame.importWidth(), frame.importHeight(),
                         VK_IMAGE_USAGE_SAMPLED_BIT, sourceImage);
         if (imported != VK_SUCCESS)
             return fail("Vulkan refused the scanout buffer: " + resultText(imported));
@@ -1195,6 +1203,18 @@ bool VulkanConvert::convert(const capture::KmsFrame& frame, const capture::Curso
                              push.cursorRect[1] * sy;
         push.cursorRect[2] *= sx;
         push.cursorRect[3] *= sy;
+    }
+    push.sourceRect[0] = push.sourceRect[1] = 0.0f;
+    push.sourceRect[2] = push.sourceRect[3] = 1.0f;
+    if (!resampled && !fromHost &&
+        (frame.sourceX || frame.sourceY || frame.importWidth() != frame.width ||
+         frame.importHeight() != frame.height)) {
+        const float bw = static_cast<float>(frame.importWidth());
+        const float bh = static_cast<float>(frame.importHeight());
+        push.sourceRect[0] = static_cast<float>(frame.sourceX) / bw;
+        push.sourceRect[1] = static_cast<float>(frame.sourceY) / bh;
+        push.sourceRect[2] = static_cast<float>(frame.width) / bw;
+        push.sourceRect[3] = static_cast<float>(frame.height) / bh;
     }
     push.size[0] = m_OutputWidth;
     push.size[1] = m_OutputHeight;
@@ -1328,6 +1348,10 @@ bool VulkanConvert::convert(const capture::KmsFrame& frame, const capture::Curso
         h.origin[0] = h.origin[1] = 0;
         h.size[0] = h.extent[0] = m_PictureWidth;
         h.size[1] = h.extent[1] = m_SourceHeight;
+        if (!fromHost) {
+            h.offset[0] = frame.sourceX;
+            h.offset[1] = frame.sourceY;
+        }
         h.len = static_cast<float>(m_SourceWidth);
         h.fixedLen = static_cast<float>(m_SourceHeight);
         // GlConvert writes the dilation as the ratio "(len.0 / out.0)" or

@@ -18,6 +18,7 @@
 #pragma once
 
 #include "../CaptureTypes.h"
+#include "../ScanoutWindow.h"
 #include "IScreenCapture.h"
 
 #include <cstdint>
@@ -156,6 +157,9 @@ private:
     bool resolveTopology(std::string& error);
     /// Export the primary plane's current buffer into @p frame.
     bool exportFramebuffer(uint32_t fbId, KmsFrame& frame, std::string& error);
+    /// Which window of a buffer of that size the primary plane scans out for
+    /// this display — the whole of it, or its part of an X11 root window.
+    ScanoutWindow primaryWindow(int bufferWidth, int bufferHeight);
     /// Read the cursor plane: position every time, image when its buffer changed.
     /// Returns true when anything visible about the pointer moved.
     bool updateCursor();
@@ -178,6 +182,13 @@ private:
     /// Zero where the plane has no hotspot properties (a real GPU).
     uint32_t m_PropHotspotX = 0;
     uint32_t m_PropHotspotY = 0;
+    /// The primary plane's source rectangle; zero where the driver has none.
+    uint32_t m_PropSrcX = 0;
+    uint32_t m_PropSrcY = 0;
+    uint32_t m_PropSrcW = 0;
+    uint32_t m_PropSrcH = 0;
+    /// The windowed buffer said once per start, not at every flip.
+    bool m_WindowSaid = false;
 
     int m_Width = 0;
     int m_Height = 0;

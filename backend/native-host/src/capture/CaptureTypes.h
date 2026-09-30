@@ -41,8 +41,27 @@ namespace mw::native::capture {
 /// lives here with the rest of the shared vocabulary.
 struct KmsFrame
 {
+    /// The picture: the display's size, whatever the buffer's.
     int width = 0;
     int height = 0;
+    /// The buffer's own size when the picture is a window of it; 0 when the
+    /// buffer IS the picture, as it is everywhere but here: an X11 desktop over
+    /// several screens scans every one of them out of ONE buffer, the root
+    /// window's. A 1920×1080 screen beside a 2560×1440 one reads a 4480×1440
+    /// buffer from (0,0), the other from (1920,0) — the primary plane's SRC_X/Y.
+    /// Measured on the UM790Pro on 30/09/2026 (fb 458, 4480×1440, SRC 0,0
+    /// 1920x1080). An importer takes the buffer at this size and samples the
+    /// picture's window inside it (see KmsCapture::acquire).
+    int bufferWidth = 0;
+    int bufferHeight = 0;
+    /// Where the picture starts in the buffer; 0,0 when it is the whole of it.
+    int sourceX = 0;
+    int sourceY = 0;
+
+    /// The size to import the buffer at.
+    int importWidth() const { return bufferWidth > 0 ? bufferWidth : width; }
+    int importHeight() const { return bufferHeight > 0 ? bufferHeight : height; }
+
     /// DRM fourcc of the buffer, e.g. DRM_FORMAT_XRGB8888.
     uint32_t fourcc = 0;
     /// Layout of the memory, DRM_FORMAT_MOD_*. Tiled on every real desktop, and

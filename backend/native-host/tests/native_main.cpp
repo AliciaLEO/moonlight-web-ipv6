@@ -38,6 +38,7 @@ void run_recentre_detector_tests();
 void run_xkb_text_map_tests();
 void run_absolute_map_tests();
 void run_wayland_layout_tests();
+void run_scanout_window_tests();
 void run_linux_pipeline_tests();
 void run_vulkan_convert_tests();
 void run_vulkan_hevc_tests();
@@ -184,6 +185,7 @@ int main(int argc, char** argv)
     RUN(xkb_text_map);
     RUN(absolute_map);
     RUN(wayland_layout);
+    RUN(scanout_window);
     RUN(mac_keymap);
     RUN(linux_pipeline);
     RUN(vulkan_convert);

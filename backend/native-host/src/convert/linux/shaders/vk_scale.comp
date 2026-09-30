@@ -25,6 +25,8 @@ layout(push_constant) uniform Push
     ivec2 origin;   // the picture's corner in the target (0,0 horizontally)
     ivec2 size;     // the picture: the viewport GL draws it through
     ivec2 extent;   // the whole target, bars included
+    ivec2 offset;   // where the picture starts in the input: a screen's window
+                    // of an X11 root horizontally (KmsFrame::sourceX), 0,0 after
     float len;      // MW_LEN: the length resampled along
     float fixedLen; // MW_FIXED: the other dimension of the input
     float dilate;   // MW_DILATE: max(1, len / output)
@@ -51,7 +53,7 @@ float lanczos2(float x)
 }
 vec3 fetch(int x, int y)
 {
-    vec3 c = texelFetch(Source, ivec2(x, y), 0).rgb;
+    vec3 c = texelFetch(Source, ivec2(x, y) + pc.offset, 0).rgb;
 #if MW_HORIZONTAL
     c = srgbToLinear(c);
 #endif

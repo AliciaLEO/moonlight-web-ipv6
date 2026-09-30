@@ -466,6 +466,7 @@ if(MW_BUILD_TESTS)
         tests/test_xkb_text_map.cpp
         tests/test_absolute_map.cpp
         tests/test_wayland_layout.cpp
+        tests/test_scanout_window.cpp
         tests/test_linux_pipeline.cpp
         tests/test_vulkan_convert.cpp
         tests/test_vulkan_hevc.cpp

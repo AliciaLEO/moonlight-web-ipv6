@@ -24,6 +24,7 @@
 #endif
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -289,6 +290,106 @@ void compareConversions(VADisplay display, const std::string& renderNode,
     }
 }
 
+/// @p frame through GlConvert at 1:1, read back: luma, and interleaved chroma.
+/// No pointer: a region cut out of one conversion is compared with another.
+bool convertOnce(VADisplay display, const std::string& renderNode, const capture::KmsFrame& frame,
+                 std::vector<uint8_t>& y, std::vector<uint8_t>& uv)
+{
+    Surface surface;
+    if (!makeSurface(display, frame.width, frame.height, surface)) {
+        freeSurface(display, surface);
+        return false;
+    }
+    convert::GlConvert gl;
+    std::string error;
+    const capture::CursorState none;
+    bool ok = gl.init(renderNode, frame.fourcc, frame.width, frame.height, frame.width,
+                      frame.height, convert::ScaleFilter::Bilinear, error) &&
+              gl.bindTarget(surface.target, error) &&
+              gl.convert(frame, none, convert::CursorDraw{}, error);
+    gl.detachThread();
+    if (ok) ok = readBack(display, surface, y, uv);
+    if (!error.empty()) std::fprintf(stderr, "  GL: %s\n", error.c_str());
+    gl.stop();
+    freeSurface(display, surface);
+    return ok;
+}
+
+/// A display that is a window of a bigger buffer — a screen of an X11 desktop
+/// over several, which KmsCapture hands out as its part of the root window's
+/// buffer (ScanoutWindow.h). Made here out of the display's own frame: its
+/// middle quarter as a window of the same buffer. Converted 1:1, the window
+/// must be that region of the whole frame's conversion — the same shaders at
+/// the same texel centres, a value apart at most where a texture coordinate
+/// rounds its own way — and GL and Vulkan must then agree on it, 1:1 and
+/// scaled, as they do on a whole frame.
+void windowTests(VADisplay display, const std::string& renderNode, const capture::KmsFrame& whole)
+{
+    SECTION("Linux — a display that is a window of a bigger buffer: that region, converted");
+    const int w = (whole.width / 2) & ~1;
+    const int h = (whole.height / 2) & ~1;
+    const int x0 = (whole.width / 4) & ~1;
+    const int y0 = (whole.height / 4) & ~1;
+    capture::KmsFrame window = whole;
+    window.bufferWidth = whole.importWidth();
+    window.bufferHeight = whole.importHeight();
+    window.sourceX = whole.sourceX + x0;
+    window.sourceY = whole.sourceY + y0;
+    window.width = w;
+    window.height = h;
+    std::fprintf(stderr, "  a %dx%d window at %d,%d of the %dx%d buffer\n", w, h, window.sourceX,
+                 window.sourceY, window.bufferWidth, window.bufferHeight);
+
+    // The whole frame before and after the window: a display that moved in
+    // between leaves the two comparing different pictures, made again then.
+    bool held = false;
+    Difference luma, chroma;
+    for (int attempt = 0; attempt < 3 && !held; ++attempt) {
+        std::vector<uint8_t> fullY, fullUv, winY, winUv, againY, againUv;
+        if (!convertOnce(display, renderNode, whole, fullY, fullUv) ||
+            !convertOnce(display, renderNode, window, winY, winUv) ||
+            !convertOnce(display, renderNode, whole, againY, againUv)) {
+            std::fprintf(stderr, "  a conversion failed\n");
+            CHECK(false);
+            return;
+        }
+        held = againY == fullY && againUv == fullUv;
+        if (!held) {
+            std::fprintf(stderr, "  the display changed under the comparison — again\n");
+            continue;
+        }
+        std::vector<uint8_t> regionY, regionUv;
+        for (int row = 0; row < h; ++row) {
+            const auto from =
+                fullY.begin() + static_cast<std::ptrdiff_t>(y0 + row) * whole.width + x0;
+            regionY.insert(regionY.end(), from, from + w);
+        }
+        // Interleaved chroma: a row is the picture's width in bytes, and an
+        // even x0 is the byte where its chroma sample starts.
+        for (int row = 0; row < h / 2; ++row) {
+            const auto from =
+                fullUv.begin() + static_cast<std::ptrdiff_t>(y0 / 2 + row) * whole.width + x0;
+            regionUv.insert(regionUv.end(), from, from + w);
+        }
+        luma = compare(regionY, winY);
+        chroma = compare(regionUv, winUv);
+    }
+    if (!held) {
+        std::fprintf(stderr, "  skipped: the display never held still for the comparison\n");
+        return;
+    }
+    std::fprintf(stderr,
+                 "  the window against its region of the whole: luma max %d, %zu over 1, mean "
+                 "%.4f; chroma max %d, %zu over 1, mean %.4f\n",
+                 luma.max, luma.overOne, luma.mean, chroma.max, chroma.overOne, chroma.mean);
+    CHECK(luma.max <= 1);
+    CHECK(chroma.max <= 1);
+    CHECK(luma.mean < 0.01);
+    CHECK(chroma.mean < 0.01);
+
+    compareConversions(display, renderNode, window, capture::CursorState{});
+}
+
 /// The card with a display scanned out, and that display — "" when none is.
 capture::KmsOutput activeOutput()
 {
@@ -324,9 +425,11 @@ void scanoutTests()
         std::fprintf(stderr, "  skipped: no frame (%s)\n", error.c_str());
         return;
     }
-    std::fprintf(stderr, "  frame %dx%d fourcc %.4s modifier 0x%llx, %d plane(s)\n", frame.width,
-                 frame.height, reinterpret_cast<const char*>(&frame.fourcc),
-                 static_cast<unsigned long long>(frame.modifier), frame.planeCount);
+    std::fprintf(
+        stderr, "  frame %dx%d fourcc %.4s modifier 0x%llx, %d plane(s), buffer %dx%d from %d,%d\n",
+        frame.width, frame.height, reinterpret_cast<const char*>(&frame.fourcc),
+        static_cast<unsigned long long>(frame.modifier), frame.planeCount, frame.importWidth(),
+        frame.importHeight(), frame.sourceX, frame.sourceY);
 
     const int render = ::open(kms.renderNodePath().c_str(), O_RDWR | O_CLOEXEC);
     VADisplay display = render >= 0 ? vaGetDisplayDRM(render) : nullptr;
@@ -341,6 +444,7 @@ void scanoutTests()
     // both converters.
     const capture::CursorState& cursor = kms.cursor();
     compareConversions(display, kms.renderNodePath(), frame, cursor);
+    windowTests(display, kms.renderNodePath(), frame);
 
     SECTION("Linux — a Vulkan conversion that cannot read a frame gives up, and says so");
     {

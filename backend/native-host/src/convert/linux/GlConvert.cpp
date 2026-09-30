@@ -83,12 +83,22 @@ uniform sampler2D CursorInvert;
 // xy: the cursor's top-left in source UV. zw: its size in source UV.
 uniform vec4 CursorRect;
 uniform float CursorEnabled;
+// xy: the picture's top-left in the texture's UV. zw: its size. (0,0,1,1) but
+// for a screen of an X11 desktop over several, which reads its window of the
+// root window's buffer (KmsFrame::sourceX).
+uniform vec4 SourceRect;
 
 // The desktop with the mouse pointer drawn on it. See ColorConvert.cpp: the
 // scanout buffer does not contain the pointer (it is on its own hardware
 // plane), so it is put back here, costing one fetch on the pixels it covers.
 vec3 Scene(vec2 p) {
-    vec3 rgb = texture(Source, p).rgb;
+    // Held half a texel inside the picture, so a bilinear read at its edge
+    // never takes a pixel of the screen beside it; for a whole texture that
+    // is the edge clamp the sampler already does.
+    vec2 texel = 1.0 / vec2(textureSize(Source, 0));
+    vec2 q = clamp(SourceRect.xy + p * SourceRect.zw, SourceRect.xy + 0.5 * texel,
+                   SourceRect.xy + SourceRect.zw - 0.5 * texel);
+    vec3 rgb = texture(Source, q).rgb;
     if (CursorEnabled < 0.5) return rgb;
     vec2 c = (p - CursorRect.xy) / CursorRect.zw;
     if (c.x < 0.0 || c.y < 0.0 || c.x > 1.0 || c.y > 1.0) return rgb;
@@ -134,6 +144,9 @@ constexpr char kScaleBody[] = R"GLSL(
 precision highp float;
 in vec2 uv;
 uniform sampler2D Source;
+// Where the picture starts in the input: a screen's window of an X11 root
+// (KmsFrame::sourceX) for the horizontal pass, 0,0 for the vertical one.
+uniform ivec2 Offset;
 out vec4 o;
 
 vec3 srgbToLinear(vec3 c) {
@@ -152,7 +165,7 @@ float lanczos2(float x) {
     return 2.0 * sin(px) * sin(px * 0.5) / (px * px);
 }
 vec3 fetch(int x, int y) {
-    vec3 c = texelFetch(Source, ivec2(x, y), 0).rgb;
+    vec3 c = texelFetch(Source, ivec2(x, y) + Offset, 0).rgb;
 #if MW_DECODE
     c = srgbToLinear(c);
 #endif
@@ -864,9 +877,11 @@ bool GlConvert::convert(const capture::KmsFrame& frame, const capture::CursorSta
     // or three buffers; an image per frame is a few microseconds, and caching
     // by fb_id is a refinement for when a measurement asks for it.
     if (d->sourceImage != EGL_NO_IMAGE_KHR) pDestroyImage(d->display, d->sourceImage);
+    // At the buffer's size, which is the picture's but for a screen of an X11
+    // desktop over several: sampled below through its window.
     d->sourceImage =
         importPlanes(d->display, frame.planeCount, frame.fds, frame.offsets, frame.pitches,
-                     frame.fourcc, frame.modifier, frame.width, frame.height);
+                     frame.fourcc, frame.modifier, frame.importWidth(), frame.importHeight());
     if (d->sourceImage == EGL_NO_IMAGE_KHR) {
         error = "EGL refused the scanout buffer (0x" + std::to_string(eglGetError()) + ")";
         return false;
@@ -889,18 +904,21 @@ bool GlConvert::convert(const capture::KmsFrame& frame, const capture::CursorSta
         glBeginQuery(GL_TIME_ELAPSED_EXT, d->resampleQuery);
     }
     if (resampled) {
-        const auto scale = [&](GLuint program, GLuint fbo, GLuint input, int x, int y, int w,
-                               int h) {
+        const auto scale = [&](GLuint program, GLuint fbo, GLuint input, int x, int y, int w, int h,
+                               int offsetX, int offsetY) {
             glBindFramebuffer(GL_FRAMEBUFFER, fbo);
             glViewport(x, y, w, h);
             glUseProgram(program);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, input);
             glUniform1i(glGetUniformLocation(program, "Source"), 0);
+            glUniform2i(glGetUniformLocation(program, "Offset"), offsetX, offsetY);
             glDrawArrays(GL_TRIANGLES, 0, 3);
         };
+        // The horizontal pass reads the picture where it sits in the scanout;
+        // the vertical one reads the intermediate, which is the picture alone.
         scale(d->scaleHProgram, d->scaledMidFbo, d->sourceTexture, 0, 0, m_PictureWidth,
-              m_SourceHeight);
+              m_SourceHeight, frame.sourceX, frame.sourceY);
         if (m_Letterboxed) {
             glBindFramebuffer(GL_FRAMEBUFFER, d->scaledFbo);
             glViewport(0, 0, m_OutputWidth, m_OutputHeight);
@@ -908,7 +926,7 @@ bool GlConvert::convert(const capture::KmsFrame& frame, const capture::CursorSta
             glClear(GL_COLOR_BUFFER_BIT);
         }
         scale(d->scaleVProgram, d->scaledFbo, d->scaledMidTexture, m_PictureX, m_PictureY,
-              m_PictureWidth, m_PictureHeight);
+              m_PictureWidth, m_PictureHeight, 0, 0);
     }
     if (timed) glEndQuery(GL_TIME_ELAPSED_EXT);
     const GLuint scene = resampled ? d->scaledTexture : d->sourceTexture;
@@ -936,6 +954,18 @@ bool GlConvert::convert(const capture::KmsFrame& frame, const capture::CursorSta
         rect[2] *= sx;
         rect[3] *= sy;
     }
+    // The picture inside what the conversion samples: the scaled picture is all
+    // picture; the scanout is too, but for a screen's window of an X11 root.
+    float sourceRect[4] = {0.0f, 0.0f, 1.0f, 1.0f};
+    if (!resampled && (frame.sourceX || frame.sourceY || frame.importWidth() != frame.width ||
+                       frame.importHeight() != frame.height)) {
+        const float bw = static_cast<float>(frame.importWidth());
+        const float bh = static_cast<float>(frame.importHeight());
+        sourceRect[0] = static_cast<float>(frame.sourceX) / bw;
+        sourceRect[1] = static_cast<float>(frame.sourceY) / bh;
+        sourceRect[2] = static_cast<float>(frame.width) / bw;
+        sourceRect[3] = static_cast<float>(frame.height) / bh;
+    }
 
     const auto pass = [&](GLuint program, GLuint fbo, int w, int h) {
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
@@ -952,6 +982,7 @@ bool GlConvert::convert(const capture::KmsFrame& frame, const capture::CursorSta
         glUniform1i(glGetUniformLocation(program, "CursorInvert"), 2);
         glUniform4fv(glGetUniformLocation(program, "CursorRect"), 1, rect);
         glUniform1f(glGetUniformLocation(program, "CursorEnabled"), drawCursor ? 1.0f : 0.0f);
+        glUniform4fv(glGetUniformLocation(program, "SourceRect"), 1, sourceRect);
         glDrawArrays(GL_TRIANGLES, 0, 3);
     };
     pass(d->lumaProgram, d->lumaFbo, m_OutputWidth, m_OutputHeight);

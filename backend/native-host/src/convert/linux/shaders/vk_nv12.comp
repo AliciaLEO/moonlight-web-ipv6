@@ -23,6 +23,10 @@ layout(push_constant) uniform Push
 {
     // xy: the cursor's top-left in source UV. zw: its size in source UV.
     vec4 CursorRect;
+    // xy: the picture's top-left in Source's UV. zw: its size. (0,0,1,1) but
+    // for a screen of an X11 desktop over several, which reads its window of
+    // the root window's buffer (KmsFrame::sourceX; GlConvert's SourceRect).
+    vec4 SourceRect;
     ivec2 size; // the luma plane
     float CursorEnabled;
 } pc;
@@ -32,7 +36,13 @@ layout(push_constant) uniform Push
 // costing one fetch on the pixels it covers.
 vec3 Scene(vec2 p)
 {
-    vec3 rgb = texture(Source, p).rgb;
+    // Held half a texel inside the picture, so a bilinear read at its edge
+    // never takes a pixel of the screen beside it; for a whole image that is
+    // the edge clamp the sampler already does.
+    vec2 texel = 1.0 / vec2(textureSize(Source, 0));
+    vec2 q = clamp(pc.SourceRect.xy + p * pc.SourceRect.zw, pc.SourceRect.xy + 0.5 * texel,
+                   pc.SourceRect.xy + pc.SourceRect.zw - 0.5 * texel);
+    vec3 rgb = texture(Source, q).rgb;
     if (pc.CursorEnabled < 0.5) return rgb;
     vec2 c = (p - pc.CursorRect.xy) / pc.CursorRect.zw;
     if (c.x < 0.0 || c.y < 0.0 || c.x > 1.0 || c.y > 1.0) return rgb;

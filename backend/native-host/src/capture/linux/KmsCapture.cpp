@@ -17,6 +17,7 @@
 
 #include "KmsCapture.h"
 
+#include "../ScanoutWindow.h"
 #include "../../core/Log.h"
 #include "../../platform/linux/ScopedCapability.h"
 
@@ -136,6 +137,11 @@ struct PlaneProps
     /// Only a virtualized adapter's cursor plane has these (see start()).
     uint32_t hotspotX = 0;
     uint32_t hotspotY = 0;
+    /// The window of its buffer the plane scans out (ScanoutWindow.h).
+    uint32_t srcX = 0;
+    uint32_t srcY = 0;
+    uint32_t srcW = 0;
+    uint32_t srcH = 0;
     uint64_t typeValue = 0;
 };
 
@@ -160,6 +166,14 @@ bool readPlaneProps(int card, uint32_t planeId, PlaneProps& out)
             out.hotspotX = p->prop_id;
         } else if (std::strcmp(p->name, "HOTSPOT_Y") == 0) {
             out.hotspotY = p->prop_id;
+        } else if (std::strcmp(p->name, "SRC_X") == 0) {
+            out.srcX = p->prop_id;
+        } else if (std::strcmp(p->name, "SRC_Y") == 0) {
+            out.srcY = p->prop_id;
+        } else if (std::strcmp(p->name, "SRC_W") == 0) {
+            out.srcW = p->prop_id;
+        } else if (std::strcmp(p->name, "SRC_H") == 0) {
+            out.srcH = p->prop_id;
         }
         drmModeFreeProperty(p);
     }
@@ -382,6 +396,7 @@ bool KmsCapture::resolveTopology(std::string& error)
     // A plane that is not lit costs nothing to watch: updateCursor() reads
     // FB_ID 0 and reports the pointer hidden until it appears.
     m_PrimaryPlane = m_CursorPlane = 0;
+    m_PropSrcX = m_PropSrcY = m_PropSrcW = m_PropSrcH = 0;
     const uint32_t crtcBit = 1u << static_cast<unsigned>(m_CrtcIndex);
     bool cursorAttached = false;
     drmModePlaneRes* planes = drmModeGetPlaneResources(m_Card);
@@ -394,7 +409,13 @@ bool KmsCapture::resolveTopology(std::string& error)
             PlaneProps props;
             if (readPlaneProps(m_Card, p->plane_id, props)) {
                 if (props.typeValue == DRM_PLANE_TYPE_PRIMARY) {
-                    if (attached) m_PrimaryPlane = p->plane_id;
+                    if (attached) {
+                        m_PrimaryPlane = p->plane_id;
+                        m_PropSrcX = props.srcX;
+                        m_PropSrcY = props.srcY;
+                        m_PropSrcW = props.srcW;
+                        m_PropSrcH = props.srcH;
+                    }
                 } else if (props.typeValue == DRM_PLANE_TYPE_CURSOR) {
                     // One attached to us beats one that merely could be: a
                     // card with several CRTCs has a cursor plane per CRTC,
@@ -501,6 +522,7 @@ bool KmsCapture::start(std::string& error)
     drmModeFreePlane(p);
 
     m_LastFbId = 0;
+    m_WindowSaid = false;
     m_CursorFbId = 0;
     m_Cursor = CursorState{};
     m_SteadyOriginUs = steadyNowUs();
@@ -576,6 +598,34 @@ bool KmsCapture::exportFramebuffer(uint32_t fbId, KmsFrame& frame, std::string& 
         }
     }
     return true;
+}
+
+ScanoutWindow KmsCapture::primaryWindow(int bufferWidth, int bufferHeight)
+{
+    uint64_t srcX = 0, srcY = 0, srcW = 0, srcH = 0;
+    if (m_PropSrcW && m_PropSrcH) {
+        // One read for the four: a buffer changes at every flip, and a name
+        // lookup per property would be a dozen ioctls each time.
+        drmModeObjectProperties* props =
+            drmModeObjectGetProperties(m_Card, m_PrimaryPlane, DRM_MODE_OBJECT_PLANE);
+        for (uint32_t i = 0; props && i < props->count_props; ++i) {
+            const uint32_t id = props->props[i];
+            const uint64_t value = props->prop_values[i];
+            if (id == m_PropSrcX)
+                srcX = value;
+            else if (id == m_PropSrcY)
+                srcY = value;
+            else if (id == m_PropSrcW)
+                srcW = value;
+            else if (id == m_PropSrcH)
+                srcH = value;
+        }
+        if (props) drmModeFreeObjectProperties(props);
+    }
+    // 16.16 fixed point; an X server places its screens on whole pixels.
+    return scanoutWindow(bufferWidth, bufferHeight, m_Width, m_Height,
+                         static_cast<int64_t>(srcX >> 16), static_cast<int64_t>(srcY >> 16),
+                         static_cast<int64_t>(srcW >> 16), static_cast<int64_t>(srcH >> 16));
 }
 
 bool KmsCapture::updateCursor()
@@ -751,10 +801,32 @@ AcquireStatus KmsCapture::acquire(int timeoutMs, KmsFrame& frame)
                 log::warning("[native] KMS: " + error);
                 return AcquireStatus::Lost;
             }
-            if (frame.width != m_Width || frame.height != m_Height) {
-                // The mode changed under us: the caller rebuilds everything.
+            // The picture's window of the buffer: all of it, or — an X11
+            // desktop over several screens — this display's part of the root
+            // window (ScanoutWindow.h). Anything else is the mode changing
+            // under us: the caller rebuilds everything.
+            const ScanoutWindow window = primaryWindow(frame.width, frame.height);
+            if (!window.usable) {
                 closeFrameFds();
                 return AcquireStatus::Lost;
+            }
+            if (window.windowed) {
+                frame.bufferWidth = frame.width;
+                frame.bufferHeight = frame.height;
+                frame.sourceX = window.x;
+                frame.sourceY = window.y;
+                frame.width = m_Width;
+                frame.height = m_Height;
+                if (!m_WindowSaid) {
+                    m_WindowSaid = true;
+                    log::info("[native] KMS: this display is a " + std::to_string(m_Width) + "x" +
+                              std::to_string(m_Height) + " window at " + std::to_string(window.x) +
+                              "," + std::to_string(window.y) + " of a " +
+                              std::to_string(frame.bufferWidth) + "x" +
+                              std::to_string(frame.bufferHeight) +
+                              " buffer (an X11 desktop over several screens) — converting that "
+                              "window");
+                }
             }
             m_LastFbId = fbId;
             // The vblank timestamp is CLOCK_MONOTONIC, which is what
@@ -774,9 +846,9 @@ AcquireStatus KmsCapture::acquire(int timeoutMs, KmsFrame& frame)
             if (m_Polled) {
                 // Map the held buffer once for the hold, and remember what it
                 // looks like now.
-                const size_t length =
-                    static_cast<size_t>(frame.offsets[0]) +
-                    static_cast<size_t>(frame.pitches[0]) * static_cast<size_t>(frame.height);
+                const size_t length = static_cast<size_t>(frame.offsets[0]) +
+                                      static_cast<size_t>(frame.pitches[0]) *
+                                          static_cast<size_t>(frame.importHeight());
                 void* map = ::mmap(nullptr, length, PROT_READ, MAP_SHARED, frame.fds[0], 0);
                 if (map != MAP_FAILED) {
                     m_HeldMap = map;
