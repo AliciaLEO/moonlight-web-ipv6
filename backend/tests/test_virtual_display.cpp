@@ -342,6 +342,12 @@ void run_virtual_display_tests()
         CHECK_EQ(refreshForStream(60, 240), 240);
         CHECK_EQ(refreshForStream(0, 165), 165);
         CHECK_EQ(refreshForStream(60, 900), kRateDriverMax);
+        // The product on Windows (decision A): kRateMax whatever the stream
+        // asks, measured or not; the bench still wins.
+        CHECK_EQ(refreshForStream(60, 0, true), kRateMax);
+        CHECK_EQ(refreshForStream(144, 0, true), kRateMax);
+        CHECK_EQ(refreshForStream(0, 0, true), kRateMax);
+        CHECK_EQ(refreshForStream(60, 500, true), 500);
         // 500 travels to the elevated helper and into the driver's list.
         const auto req = parseRequest("{\"action\":\"activate\",\"refresh\":500}", &err);
         CHECK(req.has_value());

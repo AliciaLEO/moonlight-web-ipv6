@@ -3896,24 +3896,37 @@ int main(int argc, char* argv[])
             // passes 0 and takes the mode that is there.
             const int vdWidth = reqMatchDisplay ? reqWidth : 0;
             const int vdHeight = reqMatchDisplay ? reqHeight : 0;
-            // Its refresh rate is the stream's own — the client's screen rate
-            // under "Auto", what the viewer named otherwise: a display nobody
-            // looks at has no reason to run at anything but the cadence of the
-            // frames it exists to produce. Not the raw measurement: a panel at
-            // 144 Hz streaming an Auto 120 would leave the compositor
-            // presenting 24 frames a second into the void.
-            // Unmeasured (0) leaves the display's default rate.
+            // Its refresh rate, on Windows, is 240 Hz whatever the stream's
+            // (decision A of plan framerate-hote, 30/09/2026). A picture the
+            // host renders waits for the compositor's next refresh before the
+            // capture sees it: up to a whole frame of a 60 Hz display, 4.2 ms
+            // at 240. The stream keeps its own cadence — the client's screen
+            // rate under "Auto" — and takes the first present of each of its
+            // intervals, so nothing more is encoded or sent. Measured: 6 to
+            // 17 ms off the age of what the client shows behind an Arc or an
+            // iGPU, neutral behind an RTX (bench §8p.4 sexies).
+            // Elsewhere (macOS), the stream's own rate: a display nobody looks
+            // at runs at the cadence of the frames it exists to produce;
+            // unmeasured (0) leaves the display's default rate.
             //
-            // MW_VDD_REFRESH (bench only, plan framerate-hote) sets it apart
-            // from the stream's, up to the driver's own 500 Hz: a display
-            // faster than the client, whose presents each wait less for the
-            // compositor. Never set by the product.
+            // MW_VDD_REFRESH (bench only) sets it apart from both, up to the
+            // driver's own 500 Hz. Never set by the product.
+#ifdef Q_OS_WIN
+            constexpr bool vdFaster = true;
+#else
+            constexpr bool vdFaster = false;
+#endif
             const int vdBenchRefresh = qEnvironmentVariableIntValue("MW_VDD_REFRESH");
-            const int vdRefresh = VirtualDisplay::refreshForStream(reqFps, vdBenchRefresh);
-            if (vdBenchRefresh > 0 && host->backendType == NativeHostBackend::typeName() &&
-                appId == NativeHostBackend::virtualDisplayAppId())
-                qInfo() << "[Session] virtual display at" << vdRefresh
-                        << "Hz (MW_VDD_REFRESH) for a" << reqFps << "fps stream";
+            const int vdRefresh =
+                VirtualDisplay::refreshForStream(reqFps, vdBenchRefresh, vdFaster);
+            if (host->backendType == NativeHostBackend::typeName() &&
+                appId == NativeHostBackend::virtualDisplayAppId()) {
+                const char* why = vdBenchRefresh > 0 ? "(MW_VDD_REFRESH)"
+                                  : vdFaster         ? "(faster than the stream)"
+                                                     : "";
+                qInfo() << "[Session] virtual display at" << vdRefresh << "Hz for a" << reqFps
+                        << "fps stream" << why;
+            }
             // HDR asked (the native host asks it whenever this screen can show
             // it): a Mac makes its display EDR-capable then, and only then.
             const bool vdHdr = reqHdr;

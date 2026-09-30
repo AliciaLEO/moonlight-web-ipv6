@@ -159,11 +159,11 @@ constexpr int kModeMin = 480;
 constexpr int kModeMax = 4096;
 
 /// What a requested refresh rate may be. The floor is a cadence a desktop is
-/// still usable at, the ceiling is the fastest panel a client can hold —
-/// the product never asks past it (refreshForStream). The driver itself goes
-/// to 500 Hz, which only the bench reaches (MW_VDD_REFRESH, plan
-/// framerate-hote): a request is guarded against the driver's ceiling, the
-/// product's is applied where the rate is chosen.
+/// still usable at, the ceiling is the product's own: the rate its display
+/// runs at on Windows whatever the client's (refreshForStream), and never
+/// past. The driver itself goes to 500 Hz, which only the bench reaches
+/// (MW_VDD_REFRESH, plan framerate-hote): a request is guarded against the
+/// driver's ceiling, the product's is applied where the rate is chosen.
 constexpr int kRateMin = 24;
 constexpr int kRateMax = 240;
 constexpr int kRateDriverMax = 500;
@@ -178,11 +178,16 @@ bool normaliseMode(int& width, int& height);
 /// which case kRefreshHz applies.
 bool normaliseRate(int& hz);
 
-/// The refresh rate a stream asks of the display: its own @p streamFps,
-/// under the product's ceiling kRateMax — or, when the bench names one
-/// (MW_VDD_REFRESH, @p benchHz > 0), that one, up to the driver's own
-/// ceiling. 0 leaves the display's default rate.
-int refreshForStream(int streamFps, int benchHz);
+/// The refresh rate a stream asks of the display.
+///   - @p faster (the product on Windows, decision A of plan framerate-hote,
+///     30/09/2026): kRateMax, whatever the stream's rate. The stream keeps
+///     its own cadence; a picture the host renders waits for the compositor
+///     at most 1/240 s instead of up to a whole frame of the stream.
+///   - Otherwise its own @p streamFps, under kRateMax; 0 leaves the display's
+///     default rate.
+/// The bench's MW_VDD_REFRESH (@p benchHz > 0) wins either way, up to the
+/// driver's own ceiling.
+int refreshForStream(int streamFps, int benchHz, bool faster = false);
 
 // ── The bundled driver (Windows x64) ───────────────────────────────────────
 //

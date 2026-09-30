@@ -154,9 +154,10 @@ bool normaliseRate(int& hz)
     return true;
 }
 
-int refreshForStream(int streamFps, int benchHz)
+int refreshForStream(int streamFps, int benchHz, bool faster)
 {
     if (benchHz > 0) return std::min(kRateDriverMax, std::max(kRateMin, benchHz));
+    if (faster) return kRateMax;
     if (streamFps <= 0) return 0;
     return std::min(kRateMax, std::max(kRateMin, streamFps));
 }
