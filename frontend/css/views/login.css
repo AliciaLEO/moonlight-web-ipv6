@@ -215,6 +215,60 @@
     animation: btnSpin 0.8s linear infinite;
 }
 
+/* Phone: the whole form, Unlock included, fits above the fold — and the part
+   that matters once the keyboard is up (PIN, then Unlock) fits above the
+   keyboard. The app header right above already reads MoonlightWeb, so the box
+   drops its own logo and title, and the spacing tightens. In the PIN form,
+   "Keep me signed in" moves above the PIN, so the code is the last thing typed
+   and Unlock sits directly under it. Desktop is untouched. */
+@media (max-width: 600px) {
+    #view-login {
+        min-height: 0;
+        padding: 0;
+    }
+    #view-login .login-box {
+        padding: var(--space-4);
+    }
+    #view-login .login-logo,
+    #view-login .login-title {
+        display: none;
+    }
+    #view-login .login-subtitle {
+        margin-bottom: var(--space-3);
+    }
+    #view-login .login-field {
+        margin-bottom: var(--space-3);
+    }
+    /* The hint is for a borrowed computer; this is somebody's own phone. */
+    #view-login .login-remember-hint {
+        display: none;
+    }
+    /* Empty message slots hold no room here: on a phone a line of blank is a
+       line the button is pushed down by. */
+    #view-login .login-error:empty,
+    #view-login .login-remaining:empty {
+        display: none;
+    }
+
+    .login-form--pin {
+        display: flex;
+        flex-direction: column;
+    }
+    .login-form--pin > .login-remember {
+        margin-bottom: var(--space-4);
+    }
+    .login-form--pin > .login-field--pin,
+    .login-form--pin > .login-error,
+    .login-form--pin > .login-remaining,
+    .login-form--pin > .login-lockout,
+    .login-form--pin > .login-submit {
+        order: 1;
+    }
+    .login-form--pin > .login-field--pin {
+        margin-bottom: var(--space-2);
+    }
+}
+
 /* ── First-run setup wizard ──────────────────────────────────────────────── */
 .setup-box {
     max-width: 460px;

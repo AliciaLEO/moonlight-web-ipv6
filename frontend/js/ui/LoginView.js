@@ -105,6 +105,7 @@ export class LoginView {
 
     destroy() {
         this._stopLockoutTimer();
+        this._releaseSubmitInView();
     }
 
     /**
@@ -228,7 +229,7 @@ export class LoginView {
 
     _renderPinForm() {
         return `
-            <div class="login-form">
+            <div class="login-form login-form--pin">
                 <p class="login-subtitle">${t('login.pinSubtitle')}</p>
 
                 ${this._renderServerField()}
@@ -244,7 +245,7 @@ export class LoginView {
                 </div>
 
                 <!-- PIN input -->
-                <div class="login-field">
+                <div class="login-field login-field--pin">
                     <label class="login-label" for="login-pin-input">${t('login.pinLabel')}</label>
                     <div class="login-pin-input-wrap">
                         <input type="text" id="login-pin-input" class="login-pin-input"
@@ -526,6 +527,64 @@ export class LoginView {
                 this._submitPin(input, machineInput, btn);
             }
         });
+
+        this._keepSubmitInView(input, btn);
+    }
+
+    /**
+     * Keep Unlock in sight while the PIN is typed on a phone.
+     *
+     * The soft keyboard covers the bottom of the screen and the browser only
+     * brings the focused field into view, so the button just under it stayed
+     * behind the keyboard: the code was typed, the keyboard put away, and the
+     * page scrolled by hand to find Unlock. While the field has focus, the
+     * scroll area gets the keyboard's height as room at the bottom and is
+     * scrolled just far enough for the button to clear it.
+     *
+     * Measured against the visual viewport, which is the part of the page the
+     * keyboard leaves visible, on iOS and Android alike. A no-op on desktop,
+     * where there is no keyboard to cover anything.
+     */
+    _keepSubmitInView(input, btn) {
+        this._releaseSubmitInView();
+        const vv = window.visualViewport;
+        const scroller = /** @type {HTMLElement|null} */ (this.container.closest('#main-content'));
+        if (!vv || !scroller || !window.matchMedia('(pointer: coarse)').matches) return;
+
+        const reveal = () => {
+            if (document.activeElement !== input || !btn.isConnected) return;
+            const covered = Math.max(0, document.documentElement.clientHeight - vv.height);
+            scroller.style.paddingBottom = covered > 0 ? `${covered}px` : '';
+            // Whichever ends first: the keyboard's top edge, or the scroll
+            // area's own (the footer sits under it).
+            const visibleBottom = Math.min(
+                vv.offsetTop + vv.height,
+                scroller.getBoundingClientRect().bottom,
+            );
+            const overflow = btn.getBoundingClientRect().bottom + 12 - visibleBottom;
+            if (overflow > 0) scroller.scrollTop += overflow;
+        };
+        const stop = () => {
+            vv.removeEventListener('resize', reveal);
+            vv.removeEventListener('scroll', reveal);
+            scroller.style.paddingBottom = '';
+        };
+        const onFocus = () => {
+            vv.addEventListener('resize', reveal);
+            vv.addEventListener('scroll', reveal);
+            // The keyboard slides in over ~300 ms, and not every browser
+            // reports the viewport change as it happens.
+            setTimeout(reveal, 350);
+        };
+        input.addEventListener('focus', onFocus);
+        input.addEventListener('blur', stop);
+        input.addEventListener('input', reveal);
+        this._submitInViewCleanup = stop;
+    }
+
+    _releaseSubmitInView() {
+        if (this._submitInViewCleanup) this._submitInViewCleanup();
+        this._submitInViewCleanup = null;
     }
 
     _bindCertEvents() {
