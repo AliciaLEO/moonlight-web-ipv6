@@ -4696,6 +4696,54 @@ caméra et clic → drapeau, avec Bruno) ; iPhone / iPad / Android et caméra
 instrument : la bande change à chaque image, donc toute page change à chaque
 image — seule la charge de l'encodeur diffère.
 
+### 8p.7 L'émission calée (`cadence=deadline`), client N95 (30/09, soir)
+
+Plan §13, P3 ; design §33.8. Hôte Arc (écran virtuel du produit), client N95
+(Chrome 154, écran à 60 Hz, **Wi-Fi**), une image lue sur dix, **une passe par
+case** (Bruno : aller au plus court vers la conclusion). Âge affiché médian
+(p99), ms, et images dessinées par seconde :
+
+| Contenu, peinture | Auto, écran virtuel à 240 Hz | `deadline`, 500 Hz | Ratées |
+|---|---|---|---|
+| Défilement, vsync | 72,7 (201), 49,8/s | 60,0 (174), 35,1/s | 22 % |
+| Jeu à 49-53 i/s, vsync | 71,7 (255), 46,2/s | 60,3 (112), 33,6/s | 11 % |
+| Jeu à 75-83 i/s, vsync | 68,7 (148), 42,5/s | 59,4 (206), 35,0/s | 15 % |
+| Jeu à 49-53 i/s, tearing | 48,5 (102), 50,6/s | 58,8 (103), 51,0/s | — |
+
+Aussi, défilement en vsync : `deadline` à 240 Hz 61,7 (174), 36,8/s, 22 % de
+ratées ; Auto à 500 Hz 67,2 (144), 50,5/s.
+
+- **Hôte** : réveil 90 à 100 µs en retard en moyenne (1 ms au pire), 53-54
+  rafraîchissements visés par seconde sur 59, 55 à 65 conversions par seconde
+  au lieu de 220 à 420.
+- **Client** : capture → prête s'étale de 40 à 60 ms (p95 − médiane) ; la
+  marge est au plafond (une période) et 11 à 22 % des rafraîchissements sont
+  ratés. Le lien : 16 ms de file en moyenne, des gels jusqu'à 615 ms.
+- Le gain de médiane (~11 ms) vient de la réserve retirée ; il se paie en
+  fluidité, 35 images dessinées par seconde au lieu de 43 à 50 (deux images
+  dans un rafraîchissement, aucune dans le suivant).
+- En tearing, les deux cadences envoient chaque image aussitôt ; les +10 ms de
+  cette passe unique sont dans le bruit du Wi-Fi (§8p.5).
+- **Garde-fou** (`26e6134a`), défilement en vsync à 500 Hz : 70,0 (157),
+  50,8/s. Le client juge son lien instable (56 ms d'étalement) et l'hôte
+  revient à la cadence d'aujourd'hui.
+- Pas de client en Ethernet ce soir-là (UM790Pro sous Ubuntu, Mac en visio) :
+  le gain là où la visée tient reste à mesurer.
+
+**VRR** (cas 3 de Bruno). Client Chrome sur DualRTX, flux à ~51 i/s en plein
+écran et au premier plan, compteur du M27Q lu par Bruno :
+- écran de l'iGPU AMD (FreeSync Premium activé, « Variable refresh rate :
+  supported 48-120 Hz ») : **60 fixe**, avec puis sans le réglage Windows
+  « Taux de rafraîchissement variable » (activé à 18:52 avec l'accord de
+  Bruno : `VRROptimizeEnable=1`) ;
+- écran de la RTX (G-SYNC Compatible en fenêtré et plein écran) : **144 fixe** ;
+- une ligne de déchirure se voit sur la photo : Chrome présente sans attendre,
+  mais l'écran garde sa fréquence.
+- Réserve sur le montage : l'écran virtuel à 500 Hz devient principal pendant
+  le stream et le rAF du client suit 500 Hz. Le contrôle sans stream (la page
+  à 49-53 i/s seule, en plein écran sur l'écran AMD) a été mis en place, sa
+  lecture n'a pas été rapportée.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session

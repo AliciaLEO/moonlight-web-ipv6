@@ -6736,8 +6736,31 @@ est composée entière au rafraîchissement suivant (≤ 2 ms, 1 en moyenne) et 
 capture la prend entière. Un jeu qui déchire sur un écran physique de l'hôte
 ne déchire que sur ce panneau : Desktop Duplication livre des images entières.
 
-**Reste** : le banc (plan §13, P3) — un client à 60 Hz (N95) et un à 120 Hz,
-en tearing et en vsync ; écran virtuel à 240 et 500 Hz ; la page défilante et
-les deux rythmes de jeu ; Auto contre `deadline`. Porte : en vsync, l'âge au
-rafraîchissement de `host` avec les décodages d'Auto et ≤ 0,5 % de ratées ; en
-tearing, pas plus que la cadence d'aujourd'hui à budget égal.
+**Le banc (P3, 30/09 au soir, banc §8p.7)** : client N95 en Wi-Fi à 60 Hz,
+une passe par case.
+- En vsync, l'âge affiché baisse de ~11 ms, mais surtout par la réserve
+  retirée, et le client ne dessine plus que ~35 images par seconde au lieu de
+  43 à 50. L'étalement capture → prête du Wi-Fi (40 à 60 ms) dépasse la
+  période (17 ms) : aucune marge ne tient, 11 à 22 % de ratées.
+- En tearing, le même envoi qu'Auto, par construction.
+- Côté hôte, la méthode tient : réveil à ~0,1 ms près, 55 à 65 conversions par
+  seconde au lieu de 220 à 420.
+
+**Le garde-fou** (`26e6134a`) : le client ne demande la visée que sur un lien
+qui peut la tenir. Si capture → prête s'étale de plus d'une demi-période (p95
+moins la médiane, sur 2 s) ou si la marge a atteint une période, la grille dit
+`steady: false` : l'hôte envoie chaque image aussitôt, comme à un canvas qui
+déchire (« the client's frames arrive too unevenly to aim »), et le client
+garde sa réserve. La visée revient après 5 s sous un tiers de période, la
+marge repartie de zéro. Sur le N95 : 50,8 images dessinées par seconde, la
+cadence d'aujourd'hui retrouvée.
+
+**VRR** : sur les M27Q de DualRTX (iGPU AMD en FreeSync, RTX en G-SYNC
+Compatible fenêtré), un flux à 51 i/s en plein écran laisse l'écran à sa
+fréquence (60 et 144 au compteur), même avec le réglage Windows du VRR des
+jeux fenêtrés. Le cas 3 reste théorique ; l'écran virtuel principal à 500 Hz
+pendant le stream est une cause possible, à écarter par un contrôle sans lui.
+
+**Reste** : un client en Ethernet (UM790Pro sous Windows, Mac au calme), là où
+la visée peut tenir — âge au rafraîchissement en vsync contre Auto, avec les
+mêmes décodages et ≤ 0,5 % de ratées ; le contrôle VRR sans écran virtuel.
