@@ -6708,7 +6708,36 @@ clients, « autoriser le tearing » reste activé. Une image dessinée avant le
 début du balayage est montrée entière ; une image en retard déchire sur
 quelques lignes du haut, puis elle est entière au rafraîchissement suivant.
 
-**Reste** : le banc (plan §13, P3) — UM790Pro en vsync puis en tearing, un
-client à 60 Hz ; écran virtuel à 240 et 500 Hz ; Auto, `host`, `deadline`.
-Porte : l'âge au rafraîchissement de `host`, les décodages d'Auto, ≤ 0,5 % de
-ratées.
+**Les cas de Bruno : un jeu plus lent, puis plus rapide que le client** (30/09,
+17:00 ; délais calculés, pas mesurés, client à 60 Hz, entre l'image du jeu et
+son apparition à mi-hauteur de l'écran).
+- Un jeu à 49-53 i/s : aucune image n'est jamais en concurrence pour un
+  rafraîchissement. En tearing, attendre l'échéance coûtait ~9 ms (~18 contre
+  ~8 ms pour l'envoi immédiat), puisque le canvas montre l'image dès qu'elle
+  est dessinée sur les lignes que le balayage n'a pas atteintes. En vsync,
+  l'échéance et l'envoi immédiat tombent sur le même rafraîchissement.
+- Un jeu à 75-83 i/s : en vsync, la visée prend la plus fraîche, pour un gain
+  faible (~1 ms : les images du jeu sont à 12,5 ms les unes des autres) ; en
+  tearing, envoyer les 80 images (~6 ms) bat une par rafraîchissement (~8) et
+  la visée (~16).
+- Un écran VRR côté client attend l'image : en tearing, l'envoi immédiat est
+  idéal (~3 ms, le temps du balayage à 170 Hz), si Chrome active le VRR pour
+  une page — à vérifier au compteur de l'écran.
+
+D'où la règle **ne jamais attendre pour rien** (`f2954fa4`) : la grille dit si
+le canvas déchire, avec un budget (son rafraîchissement × `mw_vsyncgrid_budget`,
+1 par défaut). Un canvas qui déchire reçoit chaque nouvelle image aussitôt, par
+une porte au budget qui saute et ne retient jamais ; seul un client en vsync
+est visé. La page de banc prend le rythme d'un jeu (`scroll.html?fps=49-53`,
+`--game-fps`, `672d84f6`).
+
+Côté hôte, l'écran virtuel n'a pas de balayage : à 500 Hz, une image du jeu
+est composée entière au rafraîchissement suivant (≤ 2 ms, 1 en moyenne) et la
+capture la prend entière. Un jeu qui déchire sur un écran physique de l'hôte
+ne déchire que sur ce panneau : Desktop Duplication livre des images entières.
+
+**Reste** : le banc (plan §13, P3) — un client à 60 Hz (N95) et un à 120 Hz,
+en tearing et en vsync ; écran virtuel à 240 et 500 Hz ; la page défilante et
+les deux rythmes de jeu ; Auto contre `deadline`. Porte : en vsync, l'âge au
+rafraîchissement de `host` avec les décodages d'Auto et ≤ 0,5 % de ratées ; en
+tearing, pas plus que la cadence d'aujourd'hui à budget égal.
