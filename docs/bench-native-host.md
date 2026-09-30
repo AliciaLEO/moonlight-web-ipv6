@@ -4614,6 +4614,14 @@ partie de la sonde. Mais à ce rythme chaque image passe plus longtemps dans le
 décodeur (57 ms de capture contre 20) : la cadence de l'hôte y **coûte** de la
 latence, crédit ou pas.
 
+### 8p.4 quater Le signal `e2e` (30/09, ~02:30)
+
+`host-guarded` à 240 Hz, signal `mw_decodequeue=e2e` (excès du retard depuis
+la capture sur l'hôte, 10 s), une image lue sur dix :
+- N95 : 141 ms affiché (deux passes ; Auto 53,0) — 180 présentations retenues
+  par seconde, 44 images dessinées par seconde, moins qu'Auto ;
+- iGPU AMD local : 60,2 ms (une passe ; Auto 31,1, `pending` 42,2).
+
 ### 8p.5 Ce que le banc a appris sur lui-même
 
 - La page de contenu a sa propre chaîne jusqu'à l'écran de l'hôte, qui varie

@@ -6615,3 +6615,17 @@ Auto 31,1 ms ; `host` 55,6 ms alors que l'iGPU décode ses 233 images par
 seconde — à ce rythme chaque image passe plus longtemps dans le décodeur (57 ms
 de capture contre 20). Sur ce client, la cadence de l'hôte coûte de la latence
 même quand il suit. Elle n'a gagné que sur le Mac.
+
+**Un dernier signal, `e2e`** (30/09, ~02:30) : l'excès du retard depuis la
+capture sur l'hôte (`backendTs`) jusqu'à la sortie du décodeur, sur 10 s, pour
+voir aussi une file dans le transport ou devant le fil principal. Sur le N95 à
+240 Hz : 141 ms affiché (Auto : 53) ; le crédit retient 180 présentations par
+seconde, l'hôte n'envoie plus que ~40 images par seconde — moins qu'Auto — et
+l'âge reste haut : les retenues rendent la livraison saccadée, chaque image
+reste plus longtemps à l'écran. Sur l'iGPU AMD : 60,2 ms (Auto : 31,1).
+
+**Ce que ça tranche** : sur un client qui ne décode pas la cadence de l'hôte,
+aucun crédit, quel que soit ce qu'il compte, ne rend cette cadence meilleure
+qu'Auto. La cadence de l'hôte ne peut valoir que pour un client dont on sait
+d'avance qu'il suit ; c'est un choix à faire en amont, pas une file à
+rattraper.

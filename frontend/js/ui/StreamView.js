@@ -154,6 +154,13 @@ const GRAPH_LABEL_KEYS = {
 const CURSOR_USES_CLIENT_STYLE = false;
 
 /**
+ * Keeps "client now − the frame's backendTs" positive for DecodeDelay: the
+ * backendTs is the host's steady clock in ms, far ahead of performance.now().
+ * Only the excess over the minimum is read, so the shift cancels.
+ */
+const E2E_SHIFT = 2 ** 32;
+
+/**
  * How wide the host's pointer should end up on a phone, in CSS pixels.
  *
  * A touch screen has no pointer of its own, so there the host draws the pointer
@@ -1513,6 +1520,12 @@ export class StreamView {
         // decoder that stays saturated makes a short window's minimum its
         // queue, and the credit then stops holding it back.
         this._decodeDelay = new DecodeDelay(this._queueSignalMode === 'delay30' ? 30000 : 2000);
+        // 'e2e': the same excess, counted from the frame's capture on the host
+        // (backendTs) rather than from decode(): it also sees a queue in the
+        // transport, or in front of the main thread — the N95's, which the
+        // decoder-side signals missed. The clocks' offset cancels in the
+        // excess over the minimum; 10 s of history.
+        this._e2eDelay = new DecodeDelay(10000);
         // Last config applied to the decoder, re-applied after a queue flush.
         this._activeDecoderCfg = null;
         // Last EncodedVideoChunk timestamp (µs) — enforces monotonicity.
@@ -3426,6 +3439,17 @@ export class StreamView {
         let depth = this.decoder.decodeQueueSize;
         if (this._queueSignalMode === 'pending') {
             depth = this._chunkSubmitTimes.size;
+        } else if (this._queueSignalMode === 'e2e') {
+            let oldestE2e = 0;
+            for (const [ts, e] of this._chunkSubmitTimes) {
+                if (now - e.perf >= 1000) {
+                    this._chunkSubmitTimes.delete(ts);
+                    continue;
+                }
+                if (e.backendTs > 0) oldestE2e = now - e.backendTs + E2E_SHIFT;
+                break;
+            }
+            depth = this._e2eDelay.depth(oldestE2e, this._diag.arrivalAvgMs);
         } else if (
             this._queueSignalMode === 'delay' ||
             this._queueSignalMode === 'delay30' ||
@@ -3499,6 +3523,8 @@ export class StreamView {
             const decodeMs = outPerf - submit.perf;
             if (decodeMs >= 0 && decodeMs < 5000) this._clientDecodeStats.addSample(decodeMs);
             this._decodeDelay.noteLatency(decodeMs, outPerf);
+            if (submit.backendTs > 0)
+                this._e2eDelay.noteLatency(outPerf - submit.backendTs + E2E_SHIFT, outPerf);
             frame._mwDecodedPerf = outPerf;
             backendTs = submit.backendTs;
         }
