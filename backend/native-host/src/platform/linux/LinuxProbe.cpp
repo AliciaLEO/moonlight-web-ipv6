@@ -81,6 +81,19 @@ std::string cardStableId(const std::string& cardPath)
     return cardPath;
 }
 
+/// An X11 session, as the session says: XDG_SESSION_TYPE, or — when it names
+/// neither (unset; "tty" for a process started over ssh) — a DISPLAY with no
+/// WAYLAND_DISPLAY beside it.
+[[maybe_unused]] bool isX11Session()
+{
+    const char* type = std::getenv("XDG_SESSION_TYPE");
+    if (type && std::strcmp(type, "wayland") == 0) return false;
+    if (type && std::strcmp(type, "x11") == 0) return true;
+    const char* display = std::getenv("DISPLAY");
+    const char* wayland = std::getenv("WAYLAND_DISPLAY");
+    return display && *display && !(wayland && *wayland);
+}
+
 /// Whether the machine has a battery of its own. A mouse or a UPS reports one
 /// too, with a "Device" scope; a laptop's has none or "System".
 bool hasSystemBattery()
@@ -347,8 +360,17 @@ Unavailability enumerate(Capabilities& caps)
     // in AvailableSourceTypes; GNOME 42 and KDE 5 do not). Listed whatever
     // route the real monitors take — it has only the one — and even with no
     // monitor at all, which is the headless machine it exists for.
+    //
+    // Not under X11: GNOME's portal says VIRTUAL there too (7 on the UM790Pro,
+    // 30/09/2026), but only its Wayland compositor can make such a monitor —
+    // under X11 the card would lead to a session that fails.
     const uint32_t sourceTypes = capture::PortalScreenCast::sourceTypes();
-    const bool portalVirtual = (sourceTypes & capture::PortalScreenCast::kSourceVirtual) != 0;
+    bool portalVirtual = (sourceTypes & capture::PortalScreenCast::kSourceVirtual) != 0;
+    if (portalVirtual && isX11Session()) {
+        portalVirtual = false;
+        log::info("[native] the portal offers a virtual display, but this is an X11 session, "
+                  "where GNOME cannot make one — not offered");
+    }
 #else
     const bool portalVirtual = false;
 #endif

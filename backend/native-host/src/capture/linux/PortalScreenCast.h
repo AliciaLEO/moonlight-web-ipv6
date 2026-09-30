@@ -63,6 +63,20 @@
 // The dialog is not a detail: it is why the portal is a fallback and not the
 // default. A host that asks permission at every launch is not the zero-setup
 // product the mission describes.
+//
+// ── ⚠️ Who may ask ──────────────────────────────────────────────────────────
+//
+// xdg-desktop-portal learns who is calling by opening /proc/<pid>/root of the
+// caller (1.18, Ubuntu 24.04), and the kernel lets it only if its own
+// capabilities cover the caller's: the package's worker holds CAP_SYS_ADMIN
+// and CAP_SYS_NICE (moonlightweb-launch), the portal holds none, so every call
+// came back "Portal operation not allowed: Unable to open /proc/<pid>/root"
+// (the .deb on the UM790Pro, 30/09/2026). A process that holds capabilities
+// therefore asks through a helper of its own making — the same binary, exec'd
+// with every capability dropped and none to regain — which holds the portal
+// session for the stream's length and hands the PipeWire descriptor back over
+// a socket. The capture keeps its capabilities (the queues at high priority);
+// a process without any (the AppImage, a test run by hand) asks directly.
 
 namespace mw::native::capture {
 
@@ -146,6 +160,13 @@ public:
     void stop();
 
 private:
+    /// The handshake in this process, or through the helper (see above).
+    bool startHere(const std::string& restoreToken, int timeoutMs, PortalStream& out,
+                   std::string& error);
+    bool startInHelper(const std::string& restoreToken, int timeoutMs, PortalStream& out,
+                       std::string& error);
+    void stopHelper();
+
     struct Impl;
     std::unique_ptr<Impl> d;
 };

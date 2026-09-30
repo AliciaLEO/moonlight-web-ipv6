@@ -19,11 +19,25 @@
 
 #include "../../core/Log.h"
 
+#include <fcntl.h>
+#include <linux/capability.h>
+#include <poll.h>
+#include <sys/prctl.h>
+#include <sys/socket.h>
+#include <sys/syscall.h>
+#include <sys/wait.h>
 #include <systemd/sd-bus.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cerrno>
+#include <csignal>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <vector>
+
+extern char** environ;
 
 namespace mw::native::capture {
 namespace {
@@ -156,6 +170,116 @@ const char* describe(uint32_t code)
     }
 }
 
+// ── The helper (see the header: who may ask) ────────────────────────────────
+
+/// Set in the helper's environment, with the descriptor its socket sits on.
+constexpr const char* kHelperVariable = "MW_PORTAL_HELPER";
+constexpr int kHelperFd = 3;
+constexpr const char* kHelperFdText = "3";
+
+/// True in the helper process: its handshake runs here, whatever it holds.
+std::atomic<bool> g_InHelper{false};
+
+/// Whether the portal would be refused a look at this process. It opens
+/// /proc/<pid>/root, which the kernel grants a caller holding no capability
+/// only on a process that holds none either, and that may be dumped.
+bool unreadableByPortal()
+{
+    if (::prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) != 1) return true;
+    FILE* status = std::fopen("/proc/self/status", "r");
+    if (!status) return false;
+    char line[256];
+    bool held = false;
+    while (std::fgets(line, sizeof(line), status)) {
+        unsigned long long caps = 0;
+        if (std::sscanf(line, "CapPrm: %llx", &caps) == 1) {
+            held = caps != 0;
+            break;
+        }
+    }
+    std::fclose(status);
+    return held;
+}
+
+/// @p text cut at its first @p parts - 1 newlines; the last part keeps the
+/// rest, newlines and all (an error's text, an empty token).
+std::vector<std::string> splitLines(const std::string& text, size_t parts)
+{
+    std::vector<std::string> out;
+    size_t from = 0;
+    while (out.size() + 1 < parts) {
+        const size_t end = text.find('\n', from);
+        if (end == std::string::npos) break;
+        out.push_back(text.substr(from, end - from));
+        from = end + 1;
+    }
+    out.push_back(text.substr(from));
+    return out;
+}
+
+/// The helper's whole life, in the process startInHelper exec'd: one request,
+/// its handshake, the answer with the PipeWire descriptor — then the portal
+/// session held until the socket closes, which is the stream's stop() or its
+/// owner's death. The session is this connection's: closing it ends the cast.
+int helperMain(int socket)
+{
+    char buffer[4096];
+    ssize_t n = 0;
+    do {
+        n = ::recv(socket, buffer, sizeof(buffer), 0);
+    } while (n < 0 && errno == EINTR);
+    if (n <= 0) return 1;
+    const std::vector<std::string> request =
+        splitLines(std::string(buffer, static_cast<size_t>(n)), 4);
+    if (request.size() != 4 || request[0] != "1") return 1;
+
+    PortalScreenCast cast;
+    cast.setVirtual(request[1] == "1");
+    PortalStream stream;
+    std::string error;
+    const bool ok = cast.start(request[3], std::atoi(request[2].c_str()), stream, error);
+    std::string reply =
+        ok ? "ok\n" + std::to_string(stream.nodeId) + "\n" + std::to_string(stream.width) + "\n" +
+                 std::to_string(stream.height) + "\n" + (stream.hasPosition ? "1" : "0") + "\n" +
+                 std::to_string(stream.x) + "\n" + std::to_string(stream.y) + "\n" +
+                 stream.restoreToken
+           : "error\n" + error;
+    iovec part = {reply.data(), reply.size()};
+    msghdr message = {};
+    message.msg_iov = &part;
+    message.msg_iovlen = 1;
+    alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int))] = {};
+    if (ok) {
+        message.msg_control = control;
+        message.msg_controllen = sizeof(control);
+        cmsghdr* rights = CMSG_FIRSTHDR(&message);
+        rights->cmsg_level = SOL_SOCKET;
+        rights->cmsg_type = SCM_RIGHTS;
+        rights->cmsg_len = CMSG_LEN(sizeof(int));
+        std::memcpy(CMSG_DATA(rights), &stream.pipewireFd, sizeof(int));
+    }
+    const bool sent = ::sendmsg(socket, &message, MSG_NOSIGNAL) >= 0;
+    if (stream.pipewireFd >= 0) ::close(stream.pipewireFd);
+    if (!ok || !sent) return 1;
+
+    char byte = 0;
+    while (::recv(socket, &byte, 1, 0) < 0 && errno == EINTR) {}
+    cast.stop();
+    return 0;
+}
+
+/// The helper's way in: before main(), in whichever binary startInHelper
+/// exec'd — the app, the tests, the bench — since every one of them links this
+/// file. Anywhere else the variable is absent and this returns at once.
+__attribute__((constructor)) void portalHelperEntry()
+{
+    const char* value = std::getenv(kHelperVariable);
+    if (!value || std::strcmp(value, kHelperFdText) != 0) return;
+    ::unsetenv(kHelperVariable);
+    g_InHelper.store(true);
+    std::_Exit(helperMain(kHelperFd));
+}
+
 } // namespace
 
 struct PortalScreenCast::Impl
@@ -164,6 +288,8 @@ struct PortalScreenCast::Impl
     std::string session;
     int calls = 0; ///< makes each handle token unique within one session
     bool virtualMonitor = false;
+    pid_t helper = -1;     ///< the helper holding the session, when one does
+    int helperSocket = -1; ///< its socket: closing it is the helper's cue to end
 
     ~Impl()
     {
@@ -225,6 +351,176 @@ void PortalScreenCast::setVirtual(bool virtualMonitor)
 
 bool PortalScreenCast::start(const std::string& restoreToken, int timeoutMs, PortalStream& out,
                              std::string& error)
+{
+    const bool helper = !g_InHelper.load() && unreadableByPortal();
+    if (!(helper ? startInHelper(restoreToken, timeoutMs, out, error)
+                 : startHere(restoreToken, timeoutMs, out, error)))
+        return false;
+    // Said by the stream's own process: the helper has no one to say it to.
+    if (g_InHelper.load()) return true;
+    log::info(std::string("[native] portal: ") + (d->virtualMonitor ? "virtual monitor, " : "") +
+              "node " + std::to_string(out.nodeId) +
+              (out.width > 0
+                   ? " (" + std::to_string(out.width) + "x" + std::to_string(out.height) + ")"
+                   : std::string()) +
+              (out.hasPosition ? " at " + std::to_string(out.x) + "," + std::to_string(out.y) +
+                                     " in the compositor's space"
+                               : std::string()) +
+              (out.restoreToken.empty() ? " — no restore token, the dialog will come back"
+                                        : " — restore token kept, later sessions are silent") +
+              (helper ? " (asked through a helper without capabilities, which the portal would "
+                        "refuse)"
+                      : ""));
+    return true;
+}
+
+bool PortalScreenCast::startInHelper(const std::string& restoreToken, int timeoutMs,
+                                     PortalStream& out, std::string& error)
+{
+    out = PortalStream{};
+    int pair[2] = {-1, -1};
+    if (::socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pair) < 0) {
+        error = std::string("the portal helper's socket: ") + std::strerror(errno);
+        return false;
+    }
+    // Everything exec needs is made before the fork: the child of a threaded
+    // process may only call what is async-signal-safe, and a string allocates.
+    const std::string variable = std::string(kHelperVariable) + "=" + kHelperFdText;
+    const size_t nameLength = std::strlen(kHelperVariable) + 1;
+    std::vector<char*> env;
+    for (char** e = environ; e && *e; ++e)
+        if (std::strncmp(*e, variable.c_str(), nameLength) != 0) env.push_back(*e);
+    env.push_back(const_cast<char*>(variable.c_str()));
+    env.push_back(nullptr);
+    char name[] = "mw-portal-helper";
+    char* argv[] = {name, nullptr};
+
+    // _Fork, not fork: no atfork handler of a driver or a library runs in a
+    // child that only talks to the kernel and then execs.
+    const pid_t pid = ::_Fork();
+    if (pid < 0) {
+        error = std::string("cannot start the portal helper: ") + std::strerror(errno);
+        ::close(pair[0]);
+        ::close(pair[1]);
+        return false;
+    }
+    if (pid == 0) {
+        if (::dup2(pair[1], kHelperFd) < 0) ::_exit(126);
+        ::fcntl(kHelperFd, F_SETFD, 0);
+        // Nothing else of this process goes with it: DRM cards, buffers and
+        // sockets stay here.
+#if defined(SYS_close_range)
+        if (::syscall(SYS_close_range, static_cast<unsigned long>(kHelperFd + 1),
+                      static_cast<unsigned long>(~0U), 0UL) != 0)
+#endif
+            for (int fd = kHelperFd + 1; fd < 65536; ++fd)
+                ::close(fd);
+        // Every capability dropped, and none to be had again at exec — not
+        // from the ambient set, not from the file's own (a setcap'd binary).
+        // A process that gains nothing at exec is dumpable, and not AT_SECURE:
+        // the bus address in its environment is read as usual.
+        ::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+        ::prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0);
+        __user_cap_header_struct header = {_LINUX_CAPABILITY_VERSION_3, 0};
+        __user_cap_data_struct none[2] = {};
+        ::syscall(SYS_capset, &header, none);
+        ::execve("/proc/self/exe", argv, env.data());
+        ::_exit(127);
+    }
+    ::close(pair[1]);
+    d->helper = pid;
+    d->helperSocket = pair[0];
+
+    const std::string request = std::string("1\n") + (d->virtualMonitor ? "1" : "0") + "\n" +
+                                std::to_string(timeoutMs) + "\n" + restoreToken;
+    if (::send(d->helperSocket, request.data(), request.size(), MSG_NOSIGNAL) < 0) {
+        error = std::string("the portal helper took no request: ") + std::strerror(errno);
+        stopHelper();
+        return false;
+    }
+
+    // As long as the handshake may take in the helper: the dialog's wait, and
+    // the quick steps around it.
+    const int waitMs = (timeoutMs > 0 ? timeoutMs : 120000) + 45000;
+    pollfd ready = {d->helperSocket, POLLIN, 0};
+    int r = 0;
+    do {
+        r = ::poll(&ready, 1, waitMs);
+    } while (r < 0 && errno == EINTR);
+    if (r <= 0) {
+        error = "the portal helper never answered";
+        stopHelper();
+        return false;
+    }
+    char buffer[4096];
+    alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int))] = {};
+    iovec part = {buffer, sizeof(buffer)};
+    msghdr message = {};
+    message.msg_iov = &part;
+    message.msg_iovlen = 1;
+    message.msg_control = control;
+    message.msg_controllen = sizeof(control);
+    ssize_t n = 0;
+    do {
+        n = ::recvmsg(d->helperSocket, &message, MSG_CMSG_CLOEXEC);
+    } while (n < 0 && errno == EINTR);
+    int fd = -1;
+    for (cmsghdr* c = n > 0 ? CMSG_FIRSTHDR(&message) : nullptr; c; c = CMSG_NXTHDR(&message, c))
+        if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS)
+            std::memcpy(&fd, CMSG_DATA(c), sizeof(int));
+    if (n <= 0) {
+        error = "the portal helper went away without an answer";
+        stopHelper();
+        return false;
+    }
+    const std::vector<std::string> reply =
+        splitLines(std::string(buffer, static_cast<size_t>(n)), 8);
+    if (reply.front() != "ok") {
+        error =
+            reply.size() > 1 && reply.front() == "error" ? reply[1] : "the portal helper failed";
+        if (fd >= 0) ::close(fd);
+        stopHelper();
+        return false;
+    }
+    if (fd < 0 || reply.size() != 8) {
+        error = "the portal helper's answer carried no PipeWire descriptor";
+        if (fd >= 0) ::close(fd);
+        stopHelper();
+        return false;
+    }
+    out.nodeId = static_cast<uint32_t>(std::strtoul(reply[1].c_str(), nullptr, 10));
+    out.pipewireFd = fd;
+    out.width = std::atoi(reply[2].c_str());
+    out.height = std::atoi(reply[3].c_str());
+    out.hasPosition = reply[4] == "1";
+    out.x = std::atoi(reply[5].c_str());
+    out.y = std::atoi(reply[6].c_str());
+    out.restoreToken = reply[7];
+    return true;
+}
+
+void PortalScreenCast::stopHelper()
+{
+    // Its cue: it closes the portal session and leaves.
+    if (d->helperSocket >= 0) ::close(d->helperSocket);
+    d->helperSocket = -1;
+    if (d->helper <= 0) return;
+    // A helper stuck on the bus is not waited on for ever.
+    for (int waited = 0; waited < 3000; waited += 10) {
+        const pid_t r = ::waitpid(d->helper, nullptr, WNOHANG);
+        if (r == d->helper || (r < 0 && errno == ECHILD)) {
+            d->helper = -1;
+            return;
+        }
+        ::usleep(10 * 1000);
+    }
+    ::kill(d->helper, SIGKILL);
+    ::waitpid(d->helper, nullptr, 0);
+    d->helper = -1;
+}
+
+bool PortalScreenCast::startHere(const std::string& restoreToken, int timeoutMs, PortalStream& out,
+                                 std::string& error)
 {
     out = PortalStream{};
     if (!d->bus) {
@@ -403,21 +699,15 @@ bool PortalScreenCast::start(const std::string& restoreToken, int timeoutMs, Por
     out.hasPosition = started.hasPosition;
     out.x = started.x;
     out.y = started.y;
-    log::info(std::string("[native] portal: ") + (d->virtualMonitor ? "virtual monitor, " : "") +
-              "node " + std::to_string(out.nodeId) +
-              (out.width > 0
-                   ? " (" + std::to_string(out.width) + "x" + std::to_string(out.height) + ")"
-                   : std::string()) +
-              (out.hasPosition ? " at " + std::to_string(out.x) + "," + std::to_string(out.y) +
-                                     " in the compositor's space"
-                               : std::string()) +
-              (out.restoreToken.empty() ? " — no restore token, the dialog will come back"
-                                        : " — restore token kept, later sessions are silent"));
     return true;
 }
 
 void PortalScreenCast::stop()
 {
+    if (d->helper > 0 || d->helperSocket >= 0) {
+        stopHelper();
+        return;
+    }
     if (!d->bus) return;
     if (!d->session.empty()) {
         // Closing the session is a courtesy: dropping the bus would do it. It
