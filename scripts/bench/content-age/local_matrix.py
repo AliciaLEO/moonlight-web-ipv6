@@ -50,7 +50,9 @@ def kill_dev():
 def launch_dev(rate, cadence, log):
     env = dict(os.environ)
     env.pop("MW_NATIVE_TUNING", None)
-    env["MW_VDD_REFRESH"] = str(rate)
+    env.pop("MW_VDD_REFRESH", None)
+    if rate > 0:  # 0: the rate the product chooses
+        env["MW_VDD_REFRESH"] = str(rate)
     if cadence != "client":
         env["MW_NATIVE_TUNING"] = "cadence=" + cadence
     subprocess.Popen([EXE, "--dev", "--log", log], env=env,
@@ -96,7 +98,8 @@ def host_lines(tag, since):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--rates", default="60,240,500")
+    ap.add_argument("--rates", default="60,240,500",
+                    help="the virtual display's rates (MW_VDD_REFRESH); 0 = the product's own")
     ap.add_argument("--cadences", default="client,host,host-ceiling,host-guarded")
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--secs", type=float, default=30)
@@ -112,6 +115,9 @@ def main():
     ap.add_argument("--client-url", default="")
     ap.add_argument("--local-storage", action="append", default=[], metavar="KEY=VALUE")
     ap.add_argument("--game-fps", default="", help="the page at a game's rate (pass.py --game-fps)")
+    ap.add_argument("--clicks", type=int, default=0, help="click → flag samples (pass.py --clicks)")
+    ap.add_argument("--hold", type=int, default=0,
+                    help="the stream held that long for a game, no bench page (pass.py --hold)")
     ap.add_argument("--vdd-gpu", default="",
                     help="the GPU that renders the virtual display (the XML's <friendlyname>), "
                          "e.g. \"NVIDIA GeForce RTX 5060 Ti\"; put back at the end")
@@ -122,6 +128,10 @@ def main():
         client += ["--local-storage", kv]
     if a.game_fps:
         client += ["--game-fps", a.game_fps]
+    if a.clicks:
+        client += ["--clicks", str(a.clicks)]
+    if a.hold:
+        client += ["--hold", str(a.hold)]
     os.makedirs(OUT, exist_ok=True)
     scratch = os.path.join(OUT, "vdd_settings.saved.xml")
     shutil.copyfile(VDD_XML, scratch)
@@ -158,7 +168,7 @@ def main():
                                         "--bitrate", str(a.bitrate)] + client,
                                        capture_output=True, text=True)
                     tail = (r.stdout + r.stderr).strip().splitlines()
-                    print("\n".join("   " + l for l in tail[-8:]), flush=True)
+                    print("\n".join("   " + l for l in tail[-12:]), flush=True)
                     if not wait_released(baseline):
                         print("   !! the screens did not come back:\n" + monitors(), flush=True)
                     host_lines(tag, since)

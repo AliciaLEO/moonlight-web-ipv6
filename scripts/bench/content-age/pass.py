@@ -39,6 +39,35 @@ def _ms(v):
     return "-" if v is None else "%.2f" % v
 
 
+def click_flag(d, n, every_ms=800):
+    """@p n click → flag samples (frontend LatencyProbe.js, the host's
+    LatencyFlag): the whole loop the player feels, input to picture. Started
+    without waiting on it — a minute is longer than a DevTools call should
+    hang — and read back as it fills. None when the stream has no flag."""
+    if d.eval("typeof (window.mwLatency && window.mwLatency.run)") != "function":
+        print("  clicks: no click-to-photon probe on this stream (latency_flag_enabled?)",
+              flush=True)
+        return None
+    before = d.eval("(window.mwLatencyResults || []).length") or 0
+    d.eval("window.mwLatency.run(%d, %d); 1" % (n, every_ms))
+    end = time.time() + n * (every_ms + 300) / 1000 + 30
+    while time.time() < end:
+        if (d.eval("(window.mwLatencyResults || []).length") or 0) - before >= n:
+            break
+        time.sleep(2)
+    samples = d.json_eval("JSON.stringify((window.mwLatencyResults || []).slice(%d))" % before)
+    ok = sorted(s["latencyMs"] for s in samples
+                if s.get("ok") and s.get("latencyMs") is not None)
+    pick = lambda q: ok[min(len(ok) - 1, int(q * len(ok)))] if ok else None  # noqa: E731
+    summary = {"n": len(samples), "ok": len(ok), "medianMs": pick(0.5), "p90Ms": pick(0.9),
+               "minMs": ok[0] if ok else None, "maxMs": ok[-1] if ok else None}
+    # ASCII only: under local_matrix.py this goes through a cp1252 pipe.
+    print("  clicks: %d of %d measured, click -> flag median %s ms (p90 %s, %s to %s)" % (
+        summary["ok"], summary["n"], _ms(summary["medianMs"]), _ms(summary["p90Ms"]),
+        _ms(summary["minMs"]), _ms(summary["maxMs"])), flush=True)
+    return {"summary": summary, "samples": samples}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fps", type=int, default=0, help="stream_fps; 0 = Auto")
@@ -58,6 +87,12 @@ def main():
     ap.add_argument("--client-url", default="", help="the address that client reaches this host at")
     ap.add_argument("--bitrate", type=int, default=0,
                     help="kbps; 0 = the automatic one, sized for the client's rate")
+    ap.add_argument("--hold", type=int, default=0,
+                    help="seconds of stream held on the virtual display with no bench page "
+                         "over it, for a game driven apart; no content-age reading")
+    ap.add_argument("--clicks", type=int, default=0,
+                    help="click → flag samples after the content-age window (needs "
+                         "latency_flag_enabled in the instance's settings.json)")
     ap.add_argument("--local-storage", action="append", default=[], metavar="KEY=VALUE",
                     help="a bench switch the page reads at launch (mw_decodequeue=pending)")
     a = ap.parse_args()
@@ -115,6 +150,19 @@ def main():
             w, h = vdd[0][2].split("x")
             os.environ["MW_BENCH_CONTENT_RECT"] = "%s,%s,%s,%s" % (x, y, w, h)
             print("virtual display", " ".join(vdd[0]), flush=True)
+        if a.hold > 0:
+            # A game on the virtual display instead of the bench page (RE9,
+            # driven by a script of its own): the stream held, nothing drawn
+            # over it, the overlay read at the end.
+            time.sleep(a.hold)
+            stats = d.stats()
+            with open(os.path.join(age.OUT, a.tag + ".json"), "w") as f:
+                json.dump({"tag": a.tag, "overlay": stats, "args": vars(a),
+                           "env": {k: os.environ.get(k, "")
+                                   for k in ("MW_NATIVE_TUNING", "MW_VDD_REFRESH")}}, f)
+            print("  held %d s; %s" % (a.hold, ((stats or {}).get("rows") or {}).get(
+                "Framerate:", "")), flush=True)
+            return
         if d.eval("typeof (window.mwContentAge && window.mwContentAge.onDecoded)") != "function":
             raise SystemExit("the page runs an older content-age probe")
         run.content_start("scroll.html?band=time&px=%d%s" % (
@@ -131,6 +179,7 @@ def main():
         # followed it, the lead it asked for, and how many frames came late.
         grid = d.eval("window.mwVsyncGrid && window.mwVsyncGrid.running ? "
                       "window.mwVsyncGrid.summary : null")
+        clicks = click_flag(d, a.clicks) if a.clicks > 0 else None
         d.expand_latency_detail()
         stats = d.stats()
         path = os.path.join(age.OUT, a.tag + ".json")
@@ -138,6 +187,7 @@ def main():
             data = json.load(f)
         data["overlay"] = stats
         data["grid"] = grid
+        data["clicks"] = clicks
         if grid:
             print("  grid: followed %s, lead %s ms, margin %s ms, %s misses in %s frames, "
                   "slack median %s ms (p5 %s)" % (
