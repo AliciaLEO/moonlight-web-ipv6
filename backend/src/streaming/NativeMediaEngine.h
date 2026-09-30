@@ -300,6 +300,21 @@ public:
     /// forwarded to Session::setClientDecodeQueue. Safe from any thread.
     void setClientDecodeQueue(int depth);
 
+    /// When the client's screen refreshes (a `vsyncgrid` message): forwarded
+    /// to Session::setClientVsyncGrid. Safe from any thread.
+    void setClientVsyncGrid(double periodUs, int64_t phaseUs, int64_t leadUs);
+
+    /// What the session says about the client's grid, for the pong (see
+    /// Session::vsyncGridStatus): whether it wants one, whether it follows
+    /// it, the host display's period in µs. Safe from any thread.
+    struct VsyncGridStatus
+    {
+        bool wanted = false;
+        bool followed = false;
+        int presentUs = 0;
+    };
+    VsyncGridStatus vsyncGridStatus() const;
+
     /// The viewer moved its bitrate (a `clientbitrate` message): the
     /// estimate following the frame the host really streams. The session's
     /// ceiling from the next frame — see mw::native::Session::

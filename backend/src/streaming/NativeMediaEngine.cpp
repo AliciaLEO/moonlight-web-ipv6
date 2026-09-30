@@ -665,6 +665,22 @@ void NativeMediaEngine::setClientDecodeQueue(int depth)
     if (m_Session) m_Session->setClientDecodeQueue(depth);
 }
 
+void NativeMediaEngine::setClientVsyncGrid(double periodUs, int64_t phaseUs, int64_t leadUs)
+{
+    if (m_Session) m_Session->setClientVsyncGrid(periodUs, phaseUs, leadUs);
+}
+
+NativeMediaEngine::VsyncGridStatus NativeMediaEngine::vsyncGridStatus() const
+{
+    VsyncGridStatus out;
+    if (!m_Session) return out;
+    const mw::native::Session::VsyncGridStatus s = m_Session->vsyncGridStatus();
+    out.wanted = s.wanted;
+    out.followed = s.followed;
+    out.presentUs = s.presentUs;
+    return out;
+}
+
 void NativeMediaEngine::setClientBitrate(int kbps)
 {
     // The same bounds as the setting itself (AppSettings::setStreamBitrate).

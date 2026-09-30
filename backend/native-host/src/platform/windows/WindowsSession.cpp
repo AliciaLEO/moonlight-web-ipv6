@@ -23,6 +23,7 @@
 #include "../../core/CadenceAlign.h"
 #include "../../core/CadenceChoice.h"
 #include "../../core/CursorPositionGate.h"
+#include "../../core/DeadlineCadence.h"
 #include "../../core/DecodeCredit.h"
 #include "../../core/FrameCadence.h"
 #include "../../core/Log.h"
@@ -121,6 +122,25 @@ struct FrameStamps
 FrameStamps resendStamps(int64_t nowUs)
 {
     return FrameStamps{nowUs, nowUs, nowUs, nowUs, true};
+}
+
+/// Sleep until @p deadlineUs on steadyNowUs()'s clock (cadence=deadline): a
+/// high-resolution waitable timer to within kSpinUs of it, then a yielding
+/// spin. The timer alone wakes up to half a millisecond late, and a late
+/// wake-up spends the client's margin; the spin costs a quarter millisecond
+/// of one core per client refresh.
+void sleepUntilUs(HANDLE timer, int64_t deadlineUs)
+{
+    constexpr int64_t kSpinUs = 250;
+    const int64_t coarseUs = deadlineUs - kSpinUs - steadyNowUs();
+    if (coarseUs > 0 && timer) {
+        LARGE_INTEGER due;
+        due.QuadPart = -coarseUs * 10; // relative, in 100 ns units
+        if (SetWaitableTimerEx(timer, &due, 0, nullptr, nullptr, nullptr, 0))
+            WaitForSingleObject(timer, INFINITE);
+    }
+    while (steadyNowUs() < deadlineUs)
+        SwitchToThread();
 }
 
 /// "165", "144", "60" — the refresh rate as a person would say it.
@@ -626,6 +646,25 @@ public:
     }
 
     void setClientDecodeQueue(int depth) override { m_DecodeCredit.note(depth, steadyNowUs()); }
+
+    void setClientVsyncGrid(double periodUs, int64_t phaseUs, int64_t leadUs) override
+    {
+        if (m_Config.tuning.cadence != EncoderTuning::Cadence::Deadline) return;
+        if (!m_Deadline.note(periodUs, phaseUs, leadUs, steadyNowUs()))
+            m_DeadlineRefused.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    VsyncGridStatus vsyncGridStatus() const override
+    {
+        VsyncGridStatus status;
+        if (m_Config.tuning.cadence != EncoderTuning::Cadence::Deadline) return status;
+        status.wanted = true;
+        // Aimed within the last half second: the loop is following the grid.
+        status.followed =
+            steadyNowUs() - m_DeadlineAimedAtUs.load(std::memory_order_relaxed) < 500 * 1000;
+        status.presentUs = m_DisplayPeriodUs.load(std::memory_order_relaxed);
+        return status;
+    }
 
 private:
     /// Take the receiver's latest report, if one arrived since the last call.
@@ -1866,6 +1905,22 @@ private:
         const bool guarded = m_Config.tuning.cadence == EncoderTuning::Cadence::HostGuarded;
         bool creditHeld = false;
         FrameStamps creditHeldStamps;
+        // cadence=deadline: this turn's picture was taken at the instant the
+        // client's grid named (DeadlineCadence.h). It is the one for its
+        // refresh — the gate has nothing to say about it.
+        const bool deadlineMode = m_Config.tuning.cadence == EncoderTuning::Cadence::Deadline;
+        bool aimedNow = false;
+        struct TimerHandle
+        {
+            HANDLE h = nullptr;
+            ~TimerHandle()
+            {
+                if (h) CloseHandle(h);
+            }
+        } deadlineTimer;
+        if (deadlineMode)
+            deadlineTimer.h = CreateWaitableTimerExW(
+                nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
         auto withheld = [&](const FrameStamps& stamps) -> bool {
             if (!guarded || !m_DecodeCredit.missing(steadyNowUs())) return false;
             m_CreditSkips++;
@@ -1874,7 +1929,7 @@ private:
             return true;
         };
         auto emitPicture = [&](const FrameStamps& stamps) -> bool {
-            if (!m_Cadence.admit(stamps.convertedUs)) return true;
+            if (!aimedNow && !m_Cadence.admit(stamps.convertedUs)) return true;
             if (withheld(stamps)) return true;
             creditHeld = false;
             if (!emit(frameNumber, stamps, error)) return false;
@@ -1886,7 +1941,7 @@ private:
         // thread and the loop goes back to the capture; the cadence counts it
         // once it went out (absorbDelivered), the refinement window starts now.
         auto emitPictureLater = [&](const FrameStamps& stamps) {
-            if (!m_Cadence.admit(stamps.convertedUs)) return;
+            if (!aimedNow && !m_Cadence.admit(stamps.convertedUs)) return;
             if (withheld(stamps)) return;
             creditHeld = false;
             emitLater(frameNumber, stamps);
@@ -2049,11 +2104,42 @@ private:
                                   m_DdaMayReturn && duplicationBack();
             const bool leaveDda = m_CaptureApi == CaptureApi::DxgiDuplication &&
                                   (m_DuplicationPaintsPointer || ddaLostOnPurpose());
+            // cadence=deadline with the client's grid fresh: nothing is taken
+            // between two of its refreshes. The loop sleeps until the instant
+            // of the next one's picture and takes what the display last
+            // presented — Desktop Duplication folds every present in between
+            // into it, unconverted. Nothing new, nothing sent. See
+            // DeadlineCadence.h.
+            aimedNow = false;
+            int acquireTimeoutMs = timeoutMs;
+            if (deadlineMode && !leaveDda && !leaveWgc) {
+                const DeadlineCadence::Aim aim = m_Deadline.next(steadyNowUs());
+                if (aim.valid()) {
+                    const int64_t sleepStartUs = steadyNowUs();
+                    sleepUntilUs(deadlineTimer.h, aim.captureUs);
+                    const int64_t wokeUs = steadyNowUs();
+                    m_AcquireWaitUs += wokeUs - sleepStartUs;
+                    const int64_t lateUs = wokeUs - aim.captureUs;
+                    m_DeadlineLateUs += lateUs > 0 ? lateUs : 0;
+                    if (lateUs > m_DeadlineLateMaxUs) m_DeadlineLateMaxUs = lateUs;
+                    if (lateUs > 500) m_DeadlineLateWakes++;
+                    m_Deadline.served(aim);
+                    m_DeadlineAims++;
+                    m_DeadlineAimedAtUs.store(wokeUs, std::memory_order_relaxed);
+                    m_DisplayPeriodUs.store(m_DisplayMilliHz > 0
+                                                ? static_cast<int>(1000000000LL / m_DisplayMilliHz)
+                                                : 0,
+                                            std::memory_order_relaxed);
+                    aimedNow = true;
+                    acquireTimeoutMs = 0;
+                }
+            }
             const int64_t acquireStartUs = steadyNowUs();
             const capture::AcquireStatus status = leaveDda || leaveWgc
                                                       ? capture::AcquireStatus::Lost
-                                                      : m_Capture->acquire(timeoutMs, frame);
+                                                      : m_Capture->acquire(acquireTimeoutMs, frame);
             m_AcquireWaitUs += steadyNowUs() - acquireStartUs;
+            if (aimedNow && status != capture::AcquireStatus::Ok) m_DeadlineNothingNew++;
             if (status == capture::AcquireStatus::PointerOnly)
                 m_PointerWakes++;
             else if (status == capture::AcquireStatus::Timeout)
@@ -2279,7 +2365,12 @@ private:
 
             // t₂ once the capture is given back, so the stage reads as the
             // whole of what stands between the acquire and the encoder.
-            const FrameStamps stamps{frame.presentUs, frame.capturedUs, submittedUs, steadyNowUs()};
+            //
+            // An aimed picture's t₀ is the instant it was taken: its own present
+            // can be a game frame from well before, and the client's lead is
+            // counted from the taking — see DeadlineCadence.h.
+            const FrameStamps stamps{aimedNow ? frame.capturedUs : frame.presentUs,
+                                     frame.capturedUs, submittedUs, steadyNowUs()};
             if (m_Pipeline->pipelined())
                 emitPictureLater(stamps);
             else if (!emitPicture(stamps))
@@ -2998,6 +3089,28 @@ private:
                       waited + " % of the time waiting in the acquire");
         }
 
+        // cadence=deadline: the client's refreshes aimed at, and how on time.
+        if (m_Config.tuning.cadence == EncoderTuning::Cadence::Deadline && seconds > 0) {
+            const auto perSecond = [seconds](int64_t n) {
+                return std::to_string(static_cast<int>(static_cast<double>(n) / seconds + 0.5));
+            };
+            char grid[96];
+            std::snprintf(grid, sizeof(grid), "last period %.1f µs, lead %.1f ms",
+                          m_Deadline.periodUs(), static_cast<double>(m_Deadline.leadUs()) / 1000.0);
+            char late[96];
+            std::snprintf(late, sizeof(late),
+                          "woke %.0f µs late on average, %lld times over 0.5 ms (max %lld)",
+                          m_DeadlineAims ? static_cast<double>(m_DeadlineLateUs) / m_DeadlineAims
+                                         : 0.0,
+                          static_cast<long long>(m_DeadlineLateWakes),
+                          static_cast<long long>(m_DeadlineLateMaxUs));
+            log::info("[native] deadline: " + std::to_string(m_DeadlineAims) +
+                      " client refreshes aimed at (" + perSecond(m_DeadlineAims) + "/s), " +
+                      std::to_string(m_DeadlineNothingNew) + " with nothing new; " + late + "; " +
+                      std::to_string(m_Deadline.grids()) + " grids heard (" +
+                      std::to_string(m_DeadlineRefused.load()) + " refused), " + grid);
+        }
+
         // cadence=host-guarded: what the client's decode queue held back.
         if (m_Config.tuning.cadence == EncoderTuning::Cadence::HostGuarded && seconds > 0) {
             const auto perSecond = [seconds](int64_t n) {
@@ -3057,6 +3170,18 @@ private:
     DecodeCredit m_DecodeCredit;
     int64_t m_CreditSkips = 0;
     int64_t m_CreditFlushes = 0;
+    /// The client's refresh grid, read under cadence=deadline — see
+    /// setClientVsyncGrid. When the loop last aimed at it and the display's
+    /// period, for the pong (vsyncGridStatus); the rest for the log.
+    DeadlineCadence m_Deadline;
+    std::atomic<int64_t> m_DeadlineRefused{0};
+    std::atomic<int64_t> m_DeadlineAimedAtUs{0};
+    std::atomic<int> m_DisplayPeriodUs{0};
+    int64_t m_DeadlineAims = 0;
+    int64_t m_DeadlineNothingNew = 0;
+    int64_t m_DeadlineLateUs = 0;
+    int64_t m_DeadlineLateMaxUs = 0;
+    int64_t m_DeadlineLateWakes = 0;
     /// Presents the display delivered (AcquireStatus::Ok), for the log.
     int64_t m_PresentsSeen = 0;
     int64_t m_AcquireWaitUs = 0;

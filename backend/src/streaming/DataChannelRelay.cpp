@@ -1394,6 +1394,20 @@ void DataChannelRelay::onInputMessage(const std::string& message)
         return;
     }
 
+    if (type == "vsyncgrid") {
+        // When the client's screen refreshes, on this host's clock, and the
+        // lead a frame needs to be ready there: the host takes one picture
+        // per refresh that lead before it (cadence=deadline). See
+        // Session::setClientVsyncGrid.
+        //
+        // Native host only: a GameStream host sends what it captures.
+        if (auto* native = qobject_cast<NativeMediaEngine*>(m_Shim))
+            native->setClientVsyncGrid(msg["periodUs"].toDouble(0),
+                                       static_cast<int64_t>(msg["phaseUs"].toDouble(0)),
+                                       static_cast<int64_t>(msg["leadUs"].toDouble(0)));
+        return;
+    }
+
     if (type == "clientbitrate") {
         // The viewer's automatic bitrate follows the frame the host really
         // streams (its own display's size under Auto, a mode change): the
@@ -1579,6 +1593,19 @@ void DataChannelRelay::onInputMessage(const std::string& message)
         pong["host"] = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(
                                                std::chrono::steady_clock::now().time_since_epoch())
                                                .count());
+        // cadence=deadline (native host): whether the host wants the client's
+        // refresh grid, and whether it aims its pictures at it right now — the
+        // client drops its render reserve and counts its misses only then
+        // (frontend VsyncGrid.js).
+        if (auto* native = qobject_cast<NativeMediaEngine*>(m_Shim)) {
+            const auto grid = native->vsyncGridStatus();
+            if (grid.wanted) pong["grid"] = true;
+            if (grid.followed) {
+                QJsonObject deadline;
+                deadline["presentUs"] = grid.presentUs;
+                pong["deadline"] = deadline;
+            }
+        }
         QByteArray pongJson = QJsonDocument(pong).toJson(QJsonDocument::Compact);
         if (m_InputDc && !m_Stopping.load()) {
             try {

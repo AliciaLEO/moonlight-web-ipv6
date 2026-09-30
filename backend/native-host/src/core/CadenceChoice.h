@@ -130,6 +130,17 @@ inline CadenceChoice chooseCadence(const CadenceInputs& in)
 {
     using cadence_detail::gateText;
     using cadence_detail::hz;
+    if (in.mode == EncoderTuning::Cadence::Deadline) {
+        // The engine's own cadence, until the client says when its screen
+        // refreshes; the loop then aims at those refreshes over the gate
+        // (DeadlineCadence.h), and comes back to it when they go stale.
+        CadenceInputs own = in;
+        own.mode = EncoderTuning::Cadence::Default;
+        CadenceChoice out = chooseCadence(own);
+        out.line += "; one picture per refresh of the client once it says when they are "
+                    "(cadence=deadline)";
+        return out;
+    }
     if (in.mode != EncoderTuning::Cadence::Default) return cadence_detail::hostCadence(in);
 
     CadenceChoice out;

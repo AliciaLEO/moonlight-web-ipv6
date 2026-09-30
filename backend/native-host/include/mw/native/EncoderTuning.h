@@ -318,8 +318,9 @@ struct EncoderTuning
     /// setting, under the ceiling "Auto" states and the one a slow decoder
     /// asks for, aligned on a client that paints on vsync (CadenceAlign.h),
     /// the gate keeping the first present of each interval (FrameCadence).
-    /// The others run at the rate of the host's display, and receive the
-    /// client's ceilings without applying them (CadenceChoice.h). Windows only.
+    /// The host ones run at the rate of the host's display, and receive the
+    /// client's ceilings without applying them (CadenceChoice.h); Deadline
+    /// sends one picture per refresh of the client's screen. Windows only.
     enum class Cadence
     {
         Default,
@@ -330,7 +331,11 @@ struct EncoderTuning
         HostCeiling,
         /// Host, and a present is skipped while the client says its decode
         /// queue holds more than a frame (DecodeCredit.h).
-        HostGuarded
+        HostGuarded,
+        /// The engine's own until the client says when its screen refreshes
+        /// (a `vsyncgrid`); then one picture per refresh, taken as late as it
+        /// can still make it there (DeadlineCadence.h).
+        Deadline
     };
     Cadence cadence = Cadence::Default;
 
@@ -469,6 +474,7 @@ struct EncoderTuning
         if (cadence == Cadence::Host) add("cadence=host");
         if (cadence == Cadence::HostCeiling) add("cadence=host-ceiling");
         if (cadence == Cadence::HostGuarded) add("cadence=host-guarded");
+        if (cadence == Cadence::Deadline) add("cadence=deadline");
         if (convertLinux == ConvertLinux::Gl) add("convert=gl");
         if (convertLinux == ConvertLinux::Vulkan) add("convert=vulkan");
         if (prioVk == PriorityVk::Normal) add("priovk=normal");

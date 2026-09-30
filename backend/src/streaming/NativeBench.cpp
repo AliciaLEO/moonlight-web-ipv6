@@ -173,13 +173,14 @@ const char* const kUsage =
     "  ddasync=gpu|none|cpu        how the capture and the D3D12 read are ordered\n"
     "  gputiming=0|1               GPU times per frame (gpu_convert_us, gpu_encode_us)\n"
     "  strict12=0|1                end rather than run D3D11 when D3D12 was asked for\n"
-    "  cadence=client|host|host-ceiling|host-guarded\n"
+    "  cadence=client|host|host-ceiling|host-guarded|deadline\n"
     "                              whose rate the stream runs at: the client's (the\n"
     "                              default), or the host display's — every present\n"
     "                              (host), held to the display's refresh (host-ceiling),\n"
     "                              or skipped while the client's decode queue is over a\n"
     "                              frame (host-guarded); the client's ceilings are logged,\n"
-    "                              not applied\n"
+    "                              not applied. deadline: one picture per refresh of the\n"
+    "                              client's screen, taken as late as it can make it\n"
     "  (in the environment, MW_D3D12_FAULT=open|convert|timeout|removed|encode[@N]: that fault\n"
     "  at the Nth D3D12 open or conversion — without strict12, to watch the way back to D3D11)\n"
     "the picture chain (Linux), each defaulting to the engine's own choice:\n"
@@ -434,6 +435,8 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
             tuning.cadence = C::HostCeiling;
         else if (c == "host-guarded")
             tuning.cadence = C::HostGuarded;
+        else if (c == "deadline")
+            tuning.cadence = C::Deadline;
         else
             ok = false;
     } else if (key == "convert") {

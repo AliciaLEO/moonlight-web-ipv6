@@ -180,6 +180,21 @@ void run_cadence_choice_tests()
         CHECK(contains(c.line, "skipped while the client's decode queue holds more than a frame"));
     }
 
+    SECTION("CadenceChoice — cadence=deadline: today's cadence until the client's grid");
+    {
+        // A 120 Hz client on vsync, 120 set, a 240 Hz display: the engine's own
+        // choice stands (the gate its fallback), the grid's part named.
+        CadenceInputs in = inputs(120, 240000, 120000, true);
+        const CadenceChoice own = mw::native::chooseCadence(in);
+        in.mode = Mode::Deadline;
+        const CadenceChoice c = mw::native::chooseCadence(in);
+        CHECK_EQ(c.fps, own.fps);
+        CHECK_EQ(c.gate.intervalUs(), own.gate.intervalUs());
+        CHECK(contains(c.line, own.line.c_str()));
+        CHECK(contains(c.line, "one picture per refresh of the client once it says when they "
+                               "are (cadence=deadline)"));
+    }
+
     SECTION("CadenceChoice — the key in the tuning's description");
     {
         EncoderTuning t;
@@ -191,5 +206,7 @@ void run_cadence_choice_tests()
         CHECK_EQ(t.describe(), std::string("cadence=host-ceiling"));
         t.cadence = Mode::HostGuarded;
         CHECK_EQ(t.describe(), std::string("cadence=host-guarded"));
+        t.cadence = Mode::Deadline;
+        CHECK_EQ(t.describe(), std::string("cadence=deadline"));
     }
 }

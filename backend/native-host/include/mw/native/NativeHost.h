@@ -369,6 +369,28 @@ public:
     /// Safe from any thread.
     virtual void setClientDecodeQueue(int /*depth*/) {}
 
+    /// When the client's screen refreshes (a `vsyncgrid` message, frontend
+    /// VsyncGrid.js): every @p periodUs, one refresh at @p phaseUs on this
+    /// host's steady clock, a frame needing @p leadUs from being taken here to
+    /// being ready there. Read only under the bench's cadence=deadline, which
+    /// takes one picture per refresh that lead before it (DeadlineCadence.h);
+    /// every other cadence, and every platform but Windows, ignores it. Safe
+    /// from any thread.
+    virtual void setClientVsyncGrid(double /*periodUs*/, int64_t /*phaseUs*/, int64_t /*leadUs*/) {}
+
+    /// What each pong tells the client about its grid.
+    struct VsyncGridStatus
+    {
+        /// The cadence would aim at a grid: the client should send one.
+        bool wanted = false;
+        /// Pictures are being aimed at the client's grid right now.
+        bool followed = false;
+        /// The host display's refresh period, µs; 0 when unknown.
+        int presentUs = 0;
+    };
+    /// Safe from any thread.
+    virtual VsyncGridStatus vsyncGridStatus() const { return {}; }
+
     /// Where to hear that the viewer's input stopped reaching the host, or
     /// started again — see InputGate. Delivered on the thread that injects,
     /// i.e. the caller's own sendInput() thread, at most once per change.
