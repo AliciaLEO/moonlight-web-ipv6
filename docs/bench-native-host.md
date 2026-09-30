@@ -4600,6 +4600,20 @@ que ~75 images par seconde, ce que le N95 dessine. Mais 150 à 170 ms de capture
 restent : la file est hors du décodeur (transport Wi-Fi ou fil principal), là où
 aucun des deux signaux ne regarde.
 
+### 8p.4 ter Le client DualRTX sans le poids de la sonde (30/09, une image sur dix)
+
+| iGPU AMD local, écran virtuel à 240 Hz | Âge affiché | Capture | Dessinées/s |
+|---|---|---|---|
+| Auto (60 i/s) | **31,1** | 20,0 | 60 |
+| host | 55,6 | 57,1 | 233 |
+| host-guarded `delay` | 47,2 | 37,6 | 219 |
+| host-guarded `pending` | 42,2 | 32,4 | 200 |
+
+L'iGPU décode bien 233 images par seconde : la saturation du §8p.2 venait en
+partie de la sonde. Mais à ce rythme chaque image passe plus longtemps dans le
+décodeur (57 ms de capture contre 20) : la cadence de l'hôte y **coûte** de la
+latence, crédit ou pas.
+
 ### 8p.5 Ce que le banc a appris sur lui-même
 
 - La page de contenu a sa propre chaîne jusqu'à l'écran de l'hôte, qui varie

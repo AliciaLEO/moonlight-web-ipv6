@@ -6609,3 +6609,9 @@ cadence d'aujourd'hui gagne sur les trois clients (Mac −11 à −17 ms, N95
 −13 ms), sans rien demander au réseau ni au client. La cadence de l'hôte ne
 gagne que sur un client qui suit (Mac : 1 à 6 ms de plus), et son garde-fou ne
 voit pas encore toutes les files : elle ne peut pas être le défaut en l'état.
+
+**Le client DualRTX, sans le poids de la sonde** (banc §8p.4 ter) : à 240 Hz,
+Auto 31,1 ms ; `host` 55,6 ms alors que l'iGPU décode ses 233 images par
+seconde — à ce rythme chaque image passe plus longtemps dans le décodeur (57 ms
+de capture contre 20). Sur ce client, la cadence de l'hôte coûte de la latence
+même quand il suit. Elle n'a gagné que sur le Mac.
