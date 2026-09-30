@@ -244,6 +244,9 @@ public:
             return false;
         }
 
+        // The guests' shared feed carries the pictures: input and audio only.
+        if (m_Config.videoSource == VideoSource::External) return startExternal(*display, error);
+
         // Out of EcoQoS and ahead of the game on the GPU before anything is
         // built: a D3D12 queue takes the priority of the class it is made
         // under, for good. Taken after the first build, the class left every
@@ -361,6 +364,7 @@ public:
         m_Info.hdr = m_Target.hdr;
         m_Info.displayWidth = m_Capture->width();
         m_Info.displayHeight = m_Capture->height();
+        noteDesktopRect();
         m_Info.displayHdr = display->hdrActive;
         m_Info.hdrCapable = m_Target.hdrCapable;
         m_Info.yuv444 = yuv444;
@@ -408,33 +412,83 @@ public:
         // streams but cannot inject is degraded; a session that refuses to
         // start because of input gives the user nothing at all. The log says
         // which one they got.
-        {
-            // Rumble travels the opposite way from every other input: the game
-            // asks the pad to shake, and that has to reach the browser. Handed
-            // straight to the session callback — it arrives on a ViGEm thread,
-            // and the consumer is the one that knows how to marshal it.
-            auto sink = std::make_unique<input::Win32Input>(m_Capture->desktopRect(),
-                                                            [this](const RumbleEvent& event) {
-                                                                if (m_Callbacks.onRumble)
-                                                                    m_Callbacks.onRumble(event);
-                                                            });
-            sink->setAllowElevated(m_Config.allowElevatedInput);
-            std::string inputError;
-            if (sink->start(inputError)) {
-                std::lock_guard<std::mutex> lock(m_InputMutex);
-                // A listener registered before start() is handed over here;
-                // one registered later reaches the sink through the setter.
-                sink->setGateCallback(m_OnInputGate);
-                m_Input = std::move(sink);
-            } else {
-                log::warning("[native] input unavailable, streaming view-only: " + inputError);
-            }
-        }
+        startInput(m_Capture->desktopRect());
+        startAudio();
 
-        // Audio, on the same terms as input: wanted only when the consumer gave
-        // a callback, and its failure degrades the session (silent) rather
-        // than refusing it. A machine with no playback device at all still
-        // streams its screen.
+        // The first frame must be a keyframe — a client has nothing to decode
+        // against otherwise.
+        m_ForceKeyframe.store(true);
+        // Awake for the stream's life (the process-wide part was taken before
+        // the build): see StreamPriority.
+        m_Priority.engage();
+        m_Running.store(true);
+        m_Thread = std::thread([this] { run(); });
+        return true;
+    }
+
+    /// A session of the guests' shared feed (VideoSource::External): the
+    /// feed's own process captures and encodes, the consumer carries its
+    /// pictures. What is left here is what belongs to this viewer alone —
+    /// their input, and the host's audio, captured for them as for anyone.
+    /// No capture, no pipeline, no loop, no GPU class: nothing here touches a
+    /// GPU, and the display's mode is never the guest's to change.
+    bool startExternal(const DisplayInfo& display, std::string& error)
+    {
+        (void)error;
+        m_External = true;
+        m_Info = SessionInfo{};
+        m_Info.displayId = display.id;
+        m_Info.displayWidth = display.width;
+        m_Info.displayHeight = display.height;
+        m_Info.displayHdr = display.hdrActive;
+        m_Info.capture = CaptureApi::None;
+        const capture::DesktopRect rect{m_Config.externalLeft, m_Config.externalTop,
+                                        m_Config.externalRight, m_Config.externalBottom};
+        m_Info.desktopLeft = rect.left;
+        m_Info.desktopTop = rect.top;
+        m_Info.desktopRight = rect.right;
+        m_Info.desktopBottom = rect.bottom;
+        if (!rect.valid())
+            log::info("[native] input: the display's place on the desktop is not known yet — "
+                      "absolute positions wait for the feed to say it");
+        startInput(rect);
+        startAudio();
+        m_Running.store(true);
+        log::info("[native] external session up: input and audio only, pictures from the feed");
+        return true;
+    }
+
+    /// The viewer's keyboard, mouse and pads, aimed at @p rect. Its failure
+    /// is not the session's: a session that streams but cannot inject is
+    /// degraded, one that refused to start would give the viewer nothing.
+    void startInput(const capture::DesktopRect& rect)
+    {
+        // Rumble travels the opposite way from every other input: the game
+        // asks the pad to shake, and that has to reach the browser. Handed
+        // straight to the session callback — it arrives on a ViGEm thread,
+        // and the consumer is the one that knows how to marshal it.
+        auto sink = std::make_unique<input::Win32Input>(rect, [this](const RumbleEvent& event) {
+            if (m_Callbacks.onRumble) m_Callbacks.onRumble(event);
+        });
+        sink->setAllowElevated(m_Config.allowElevatedInput);
+        std::string inputError;
+        if (sink->start(inputError)) {
+            std::lock_guard<std::mutex> lock(m_InputMutex);
+            // A listener registered before start() is handed over here;
+            // one registered later reaches the sink through the setter.
+            sink->setGateCallback(m_OnInputGate);
+            m_Input = std::move(sink);
+        } else {
+            log::warning("[native] input unavailable, streaming view-only: " + inputError);
+        }
+    }
+
+    /// The host's playback, on the same terms as input: wanted only when the
+    /// consumer gave a callback, and its failure degrades the session
+    /// (silent) rather than refusing it. A machine with no playback device at
+    /// all still streams its screen.
+    void startAudio()
+    {
         if (m_Callbacks.onAudio) {
             // Before the loopback opens: the mute may move the default output
             // to a device without speakers, and the capture must open on THAT
@@ -455,16 +509,6 @@ public:
                 log::warning("[native] audio unavailable, streaming silent: " + audioError);
             }
         }
-
-        // The first frame must be a keyframe — a client has nothing to decode
-        // against otherwise.
-        m_ForceKeyframe.store(true);
-        // Awake for the stream's life (the process-wide part was taken before
-        // the build): see StreamPriority.
-        m_Priority.engage();
-        m_Running.store(true);
-        m_Thread = std::thread([this] { run(); });
-        return true;
     }
 
     void stop() override
@@ -532,6 +576,25 @@ public:
     {
         std::lock_guard<std::mutex> lock(m_FormatMutex);
         m_OnDisplayFormat = std::move(callback);
+    }
+
+    /// Where the display the capture holds sits on the desktop, in SessionInfo
+    /// for whoever carries the pictures on (the guests' shared feed).
+    void noteDesktopRect()
+    {
+        const capture::DesktopRect& rect = m_Capture->desktopRect();
+        m_Info.desktopLeft = rect.left;
+        m_Info.desktopTop = rect.top;
+        m_Info.desktopRight = rect.right;
+        m_Info.desktopBottom = rect.bottom;
+    }
+
+    void setExternalDesktop(int left, int top, int right, int bottom) override
+    {
+        // A session that captures follows its own capture (restartCapture).
+        if (!m_External) return;
+        std::lock_guard<std::mutex> lock(m_InputMutex);
+        if (m_Input) m_Input->setDisplayRect(left, top, right, bottom);
     }
 
     bool releaseInputBlock() override
@@ -1434,6 +1497,7 @@ private:
         m_Info.height = m_Pipeline->outputHeight();
         // The backend too: a restart may have fallen back to WGC, or left it.
         m_Info.capture = m_CaptureApi;
+        noteDesktopRect();
 
         // Absolute mouse input is aimed at the display's rectangle on the
         // virtual desktop, and a resolution change is exactly what moves it.
@@ -3294,6 +3358,10 @@ private:
     /// (SessionConfig::intraRefreshRequired): the builds after it choose
     /// D3D11 from the start (VideoPipelineFacts::d3d12IntraRefresh).
     bool m_D3d12NoIntraRefresh = false;
+    /// The pictures come from the guests' shared feed (VideoSource::External):
+    /// input and audio only, no capture, no pipeline, no loop. Written once
+    /// by start(), before anything reads it.
+    bool m_External = false;
     /// The chain answered Lost: the loop goes back to D3D11 before its next
     /// capture. Capture thread only.
     bool m_PipelineLost = false;
@@ -3443,7 +3511,9 @@ std::unique_ptr<Session> createPlatformSession(const SessionConfig& config,
                                                const SessionCallbacks& callbacks,
                                                std::string& error)
 {
-    if (!callbacks.onVideo) {
+    // A session of the guests' shared feed encodes nothing: its pictures come
+    // from the feed's process, and only it may go without a video callback.
+    if (!callbacks.onVideo && config.videoSource != VideoSource::External) {
         error = "a session without a video callback would encode into nothing";
         return nullptr;
     }

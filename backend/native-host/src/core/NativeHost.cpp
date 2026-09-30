@@ -47,11 +47,62 @@ VirtualGamepad NativeHost::probeVirtualGamepad()
     return result;
 }
 
+namespace {
+
+/// A session whose pictures come from the guests' shared feed: its display,
+/// found again, and nothing chosen for video — there is no encoder to pick,
+/// and the feed already picked the codec every guest decodes.
+std::unique_ptr<Session> createExternalSession(const SessionConfig& config,
+                                               SessionCallbacks callbacks, std::string& error)
+{
+#ifndef _WIN32
+    (void)config;
+    (void)callbacks;
+    error = "the guests' shared feed is carried on Windows only for now";
+    return nullptr;
+#else
+    const Capabilities caps = mw::native::probe();
+    if (!caps.available) {
+        error = caps.diagnostic.empty() ? toString(caps.reason) : caps.diagnostic;
+        return nullptr;
+    }
+    const DisplayInfo* display = nullptr;
+    for (const DisplayInfo& d : caps.displays)
+        if (d.id == config.displayId) display = &d;
+    if (!display) {
+        error = "that display is no longer connected";
+        return nullptr;
+    }
+    ResolvedTarget target;
+    target.displayId = display->id;
+    target.capture = display->capture != CaptureApi::None ? display->capture : caps.capture;
+    SessionConfig resolved = config;
+    // Nothing downstream encodes: the fields that would pick an encoder are
+    // left as the caller gave them, and read by no one.
+    resolved.intraRefresh = false;
+    resolved.intraRefreshRequired = false;
+    log::info("[native] session: display " + std::to_string(display->id) +
+              ", pictures from the guests' shared feed — this session injects its viewer's "
+              "input and captures the host's audio");
+    return detail::createPlatformSession(resolved, target, callbacks, error);
+#endif
+}
+
+} // namespace
+
 std::unique_ptr<Session> NativeHost::createSession(const SessionConfig& config,
                                                    VideoCallback onVideo, AudioCallback onAudio,
                                                    RumbleCallback onRumble, CursorCallback onCursor,
                                                    SessionEndedCallback onEnded, std::string& error)
 {
+    if (config.videoSource == VideoSource::External) {
+        SessionCallbacks callbacks;
+        callbacks.onAudio = std::move(onAudio);
+        callbacks.onRumble = std::move(onRumble);
+        callbacks.onEnded = std::move(onEnded);
+        return createExternalSession(config, std::move(callbacks), error);
+    }
+
     if (!onVideo) {
         error = "a session without a video callback would encode into nothing";
         return nullptr;

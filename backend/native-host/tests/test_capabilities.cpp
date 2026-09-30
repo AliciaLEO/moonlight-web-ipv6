@@ -134,6 +134,50 @@ void run_capabilities_tests()
         CHECK(!error.empty());
     }
 
+    SECTION("Capabilities — a session of the guests' shared feed needs no video, only a display");
+    {
+        // VideoSource::External: the feed's process encodes, this session only
+        // injects and captures audio — so no video callback is asked for.
+        SessionConfig cfg;
+        cfg.videoSource = VideoSource::External;
+        cfg.displayId = 0;
+        cfg.externalRight = 1920;
+        cfg.externalBottom = 1080;
+        std::string error;
+        auto session =
+            NativeHost::createSession(cfg, nullptr, nullptr, nullptr, nullptr, nullptr, error);
+#ifdef _WIN32
+        const Capabilities caps = NativeHost::probe();
+        if (caps.available && !caps.displays.empty()) {
+            CHECK(session != nullptr);
+            if (session) {
+                // Nothing is captured or encoded: the start is input (and
+                // audio when asked) and nothing else.
+                std::string startError;
+                CHECK(session->start(startError));
+                CHECK_EQ(session->info().displayId, 0);
+                CHECK(session->info().capture == CaptureApi::None);
+                CHECK(!session->info().audio); // no audio callback given
+                session->setExternalDesktop(0, 0, 2560, 1440);
+                session->stop();
+            }
+        } else {
+            CHECK(session == nullptr && !error.empty());
+        }
+#else
+        // Windows only, for now: said, never a crash.
+        CHECK(session == nullptr);
+        CHECK(!error.empty());
+#endif
+        // A display that is not there is refused with a reason, as always.
+        SessionConfig gone = cfg;
+        gone.displayId = 999;
+        std::string why;
+        CHECK(NativeHost::createSession(gone, nullptr, nullptr, nullptr, nullptr, nullptr, why) ==
+              nullptr);
+        CHECK(!why.empty());
+    }
+
     SECTION("Capabilities — enum names are all populated");
 
     {

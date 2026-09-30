@@ -430,6 +430,19 @@ public:
     /// calls it. Everywhere else this is accepted and ignored.
     virtual void setPortalGrantCallback(PortalGrantCallback callback) { (void)callback; }
 
+    /// A session whose pictures come from elsewhere (SessionConfig::
+    /// videoSource External): the display now sits at this rectangle of the
+    /// host's desktop — its mode changed under the feed, which says so.
+    /// Absolute pointer positions land there from the next one. Safe from any
+    /// thread; ignored by a session that captures, whose own capture knows.
+    virtual void setExternalDesktop(int left, int top, int right, int bottom)
+    {
+        (void)left;
+        (void)top;
+        (void)right;
+        (void)bottom;
+    }
+
     /// Get the viewer out of a closed gate, when they cannot click their way
     /// out because the pointer itself is stuck.
     ///

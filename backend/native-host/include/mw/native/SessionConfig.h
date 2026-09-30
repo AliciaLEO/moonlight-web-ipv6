@@ -27,6 +27,19 @@
 
 namespace mw::native {
 
+/// Where a session's pictures come from.
+enum class VideoSource
+{
+    /// The session captures its display and encodes it: every session but
+    /// one kind.
+    Capture,
+    /// Another process encodes them — the guests' shared feed of a native
+    /// host (plan « flux commun des invités ») — and the consumer carries
+    /// them to its browser itself. The session only injects its viewer's
+    /// input and captures the host's audio: no capture, no encoder, no loop.
+    External,
+};
+
 /// What one streaming session asks for. Deliberately small: every knob Sunshine
 /// exposes (GOP, B-frames, preset, tuning, lookahead, VBV, QP) is decided by the
 /// engine and is absent here on purpose (§28 of the mission).
@@ -121,6 +134,21 @@ struct SessionConfig
     /// shared feed holds 60, so that the slowest of them cannot drag the
     /// picture of all the others down with it.
     int governorFloorPercent = 20;
+
+    /// Where the pictures come from — see VideoSource. With External, only
+    /// `displayId`, `allowElevatedInput` and `muteHostAudio` are read, plus
+    /// the rectangle below; the video fields are the feed's business.
+    VideoSource videoSource = VideoSource::Capture;
+
+    /// With External: where the display sits on the host's desktop, which is
+    /// where absolute pointer positions land. The feed's capture is the one
+    /// that knows it, so the feed says it (Session::setExternalDesktop
+    /// follows a change). Empty (right <= left): the display's origin is not
+    /// known, and absolute positions are not injected until it is.
+    int externalLeft = 0;
+    int externalTop = 0;
+    int externalRight = 0;
+    int externalBottom = 0;
 
     /// Draw the mouse cursor into the captured frame. On by default: the remote
     /// user needs to see where they are pointing.
@@ -283,6 +311,15 @@ struct SessionInfo
     int displayWidth = 0;
     int displayHeight = 0;
     bool displayHdr = false;
+
+    /// Where the captured display sits on the host's desktop, as the capture
+    /// found it (Windows; zero elsewhere): what the guests' shared feed tells
+    /// its subscribers, whose input aims there (SessionConfig::externalLeft).
+    /// Kept up to date across a capture restart, like the frame size.
+    int desktopLeft = 0;
+    int desktopTop = 0;
+    int desktopRight = 0;
+    int desktopBottom = 0;
 
     /// Whether this session's encoder would carry HDR, were the display in an
     /// HDR mode and the client asking — a 10-bit GPU encoder on HEVC or AV1.
