@@ -200,7 +200,8 @@ QString LogScrubber::lanHost(const QString& subnet, const QString& host, int fix
         n = ++m_SubnetHosts[subnet];
         if (n == 255) n = ++m_SubnetHosts[subnet]; // .255 is the broadcast's
     }
-    const QString stand = letters + QString::number(n);
+    // In braces: a label, not a number of the address.
+    const QString stand = QLatin1Char('{') + letters + QString::number(n) + QLatin1Char('}');
     m_Stand.insert(k, stand);
     return stand;
 }
@@ -232,15 +233,14 @@ void LogScrubber::replaceAddresses(QString& line)
             case V4Kind::Public: return publicV4(ip);
             case V4Kind::Lan: break;
             }
-            // The range's own prefix stays, so a reader still sees which kind
-            // of network it is: 192.168.A1, 10.B2, 172.24.C1, 100.D1.
+            // Still four parts, so it reads as an address: the range's own
+            // octets, x for the hidden ones, the stand-in last —
+            // 192.168.x.{A1}, 10.x.x.{B2}, 172.24.x.{C1}, 100.x.x.{D1}.
             QString prefix;
-            if (o[0] == 192 || o[0] == 169)
-                prefix = QStringLiteral("%1.%2.").arg(o[0]).arg(o[1]);
-            else if (o[0] == 172)
-                prefix = QStringLiteral("172.%1.").arg(o[1]);
+            if (o[0] == 192 || o[0] == 169 || o[0] == 172)
+                prefix = QStringLiteral("%1.%2.x.").arg(o[0]).arg(o[1]);
             else
-                prefix = QStringLiteral("%1.").arg(o[0]);
+                prefix = QStringLiteral("%1.x.x.").arg(o[0]);
             // The network and the broadcast keep their number.
             const int fixed = o[3] == 0 ? 0 : o[3] == 255 ? 255 : -1;
             return prefix + lanHost(QStringLiteral("%1.%2.%3").arg(o[0]).arg(o[1]).arg(o[2]),
@@ -443,7 +443,8 @@ QString LogScrubber::notice()
         "taken out: PINs, passwords, keys and tokens, cookies, the links that open this\n"
         "instance, typed keys, window titles, e-mail and MAC addresses show as \"(hidden)\".\n"
         "Public IP addresses are replaced by documentation ones (203.0.113.x, 2001:db8::x),\n"
-        "LAN ones by a letter for their network and a number for the machine (192.168.A1,\n"
-        "10.B2, 100.C1, fd::D1), machine and user names by host-N, this-pc, instance-name\n"
+        "LAN ones by a letter for their network and a number for the machine\n"
+        "(192.168.x.{A1}, 10.x.x.{B2}, 100.x.x.{C1}, fd::{D1}), machine and user names by\n"
+        "host-N, this-pc, instance-name\n"
         "and user: the same value always by the same stand-in.\n");
 }

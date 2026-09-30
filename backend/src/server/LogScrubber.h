@@ -41,8 +41,9 @@
  *     198.51.100.x and 192.0.2.x; 2001:db8::x);
  *   - LAN addresses (private ranges, CGNAT/Tailscale, link-local, ULA) by a
  *     letter for their /24 (/64 in IPv6) and a number for the machine in it,
- *     under the range's own prefix: 192.168.A1, 10.B2, 172.24.C1, 100.D1,
- *     fd::E1. Which machines share a network, and who talks to whom, can
+ *     under the range's own octets, x for the hidden ones: 192.168.x.{A1},
+ *     10.x.x.{B2}, 172.24.x.{C1}, 100.x.x.{D1}, fd::{E1}, fe80::{F1}.
+ *     Which machines share a network, and who talks to whom, can
  *     still be read; .0 and .255 keep their number. Loopback, multicast and
  *     0.0.0.0 stay: they are the same on every machine;
  *   - the names it is given (Names) by host-N, this-pc, instance-name and
