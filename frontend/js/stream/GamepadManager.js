@@ -27,8 +27,9 @@
  * (anti-spam).
  *
  * A controller the browser reports without a standard layout is read through
- * a mapping (gamepadMapping.resolveMapping): the user's own, Chrome Android's
- * pre-sorted layout, or SDL_GameControllerDB. One that nothing maps is not
+ * a mapping (gamepadMapping.resolveMapping): the user's own, a built-in
+ * profile (EdgeTX / OpenTX radios), Chrome Android's pre-sorted layout, or
+ * SDL_GameControllerDB. One that nothing maps is not
  * forwarded — every button could be somewhere else — and the caller is told
  * so it can offer the remap wizard.
  *
@@ -44,7 +45,13 @@
  * Backend → browser: {type:"rumble", index, low, high}
  */
 
-import { resolveMapping, readVirtualPad, loadGamepadDb, detectPlatform } from './gamepadMapping.js';
+import {
+    resolveMapping,
+    readVirtualPad,
+    loadGamepadDb,
+    detectPlatform,
+    isAutoMapped,
+} from './gamepadMapping.js';
 import { getMapping, CHANGED_EVENT } from '../util/gamepadMappingsStore.js';
 
 // Limelight button flags (must match Limelight.h).
@@ -175,8 +182,8 @@ export class GamepadManager {
      *   "the profile is wrong".
      *   `onIgnored` is told, once per pad, about a controller nothing maps —
      *   the caller decides how to say it (and offers the wizard).
-     *   `onMapped` is told, once per pad, about one whose layout was GUESSED
-     *   (Chrome Android, SDL database), so the user can check it.
+     *   `onMapped` is told, once per pad, about one laid out without the user
+     *   (a built-in profile, Chrome Android, SDL database), so they can check it.
      *   `single` forwards one pad only, as controller 0 (share-link guests);
      *   `preferredKey` is the pad (gamepadMapping.padKey) to take when present.
      *   `probe` (diagnostics only, PipelineDiag's MainThreadProbe) is told how
@@ -444,7 +451,7 @@ export class GamepadManager {
             ctype: this._controllerType(gp),
             rumble: hasRumble,
         });
-        if ((res.source === 'android' || res.source === 'db') && !this._announced.has(gp.index)) {
+        if (isAutoMapped(res.source) && !this._announced.has(gp.index)) {
             this._announced.add(gp.index);
             if (this._onMapped) this._onMapped(gp, res);
         }

@@ -225,6 +225,7 @@
             "source": {
                 "standard": "Recognized",
                 "user": "Custom",
+                "builtin": "Auto",
                 "android": "Auto",
                 "db": "Auto",
                 "none": "Unknown"

@@ -124,6 +124,29 @@ describe('GamepadManager', () => {
         gm.stop();
     });
 
+    it('forwards an EdgeTX radio from its built-in profile, and says it was laid out for the user', () => {
+        const send = vi.fn();
+        const onMapped = vi.fn();
+        // Throttle at the bottom, CH5 unmixed (0), CH6 switch down (+1).
+        setPads([
+            fakePad({
+                id: 'Radiomaster TX12 Joystick (Vendor: 1209 Product: 4f54)',
+                mapping: '',
+                buttons: Array(24).fill(0),
+                axes: [0, 0, -1, 0, 0, 1, 0],
+            }),
+        ]);
+        const gm = new GamepadManager(send, { onMapped, platform: 'win', user: () => null });
+        gm.start();
+        const msg = send.mock.calls.find((c) => c[0].type === 'gamepad')[0];
+        expect(msg).toMatchObject({ ly: -32767, lt: 128, rt: 255, lx: 0, rx: 0 });
+        expect(onMapped).toHaveBeenCalledWith(
+            expect.anything(),
+            expect.objectContaining({ source: 'builtin' }),
+        );
+        gm.stop();
+    });
+
     it('loads the database before deciding on a desktop pad', async () => {
         const send = vi.fn();
         setPads([fakePad({ id: 'Mystery (Vendor: 0001 Product: 0002)', mapping: '' })]);

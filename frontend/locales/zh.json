@@ -225,6 +225,7 @@
             "source": {
                 "standard": "已识别",
                 "user": "自定义",
+                "builtin": "自动",
                 "android": "自动",
                 "db": "自动",
                 "none": "未知"

@@ -18,6 +18,7 @@ import {
     sameBinding,
     describeBinding,
     loadGamepadDb,
+    isAutoMapped,
 } from '../js/stream/gamepadMapping.js';
 
 function pad({ id = 'Pad', mapping = '', buttons = 16, axes = [0, 0, 0, 0] } = {}) {
@@ -255,6 +256,36 @@ describe('resolveMapping', () => {
         expect(resolveMapping(gp, { platform: 'linux', db }).bindings.a).toEqual({ t: 'b', i: 1 });
     });
 
+    // An EdgeTX radio as each desktop browser names it (T0 relevé, 01/10/2026).
+    const TX12_CHROME = 'Radiomaster TX12 Joystick (Vendor: 1209 Product: 4f54)';
+    const TX12_SAFARI = '1209-4f54-Radiomaster TX12 Joystick';
+    const radio = (id = TX12_CHROME) =>
+        pad({ id, buttons: 24, axes: [0.02, -0.01, -1, 0.01, 0, 0, 0] });
+
+    it('lays an EdgeTX / OpenTX radio out from its built-in profile, on every desktop', () => {
+        for (const platform of ['win', 'mac', 'linux']) {
+            const res = resolveMapping(radio(), { platform, db: undefined });
+            expect(res).toMatchObject({ source: 'builtin', key: 'usb:1209:4f54' });
+            expect(res.bindings.lefty).toEqual({ t: 'a', i: 2, s: 0, inv: true });
+        }
+        // Safari's id names the same pad, and keys it the same.
+        const safari = resolveMapping(radio(TX12_SAFARI), { platform: 'mac', db: null });
+        expect(safari).toMatchObject({ source: 'builtin', key: 'usb:1209:4f54' });
+    });
+
+    it("lets the user's own mapping win over the built-in one, and Android keep its own", () => {
+        const user = (k) => (k === 'usb:1209:4f54' ? { bindings: { a: { t: 'b', i: 3 } } } : null);
+        expect(resolveMapping(radio(), { user, platform: 'win' }).source).toBe('user');
+        expect(
+            resolveMapping(radio('Radiomaster TX12 Joystick'), { platform: 'android' }).source,
+        ).toBe('android');
+    });
+
+    it('hands out a copy of the built-in profile', () => {
+        resolveMapping(radio(), { platform: 'win' }).bindings.lefty.i = 9;
+        expect(resolveMapping(radio(), { platform: 'win' }).bindings.lefty.i).toBe(2);
+    });
+
     it('gives up on a pad nothing maps', () => {
         expect(
             resolveMapping(pad({ id: 'Mystery (Vendor: 1234 Product: 5678)' }), {
@@ -265,6 +296,56 @@ describe('resolveMapping', () => {
         expect(resolveMapping(pad({ id: G4 }), { platform: 'mac', db }).source).toBeNull();
         expect(resolveMapping(pad({ id: 'Siri Remote' }), { platform: 'ios' }).source).toBeNull();
         expect(resolveMapping(pad({ id: G4 }), { platform: 'win', db: null }).source).toBeNull();
+    });
+});
+
+describe('an EdgeTX / OpenTX radio, read through its built-in profile', () => {
+    // Raw axes as Chrome gives them (T0): roll, pitch, throttle, yaw, CH5, CH6, CH7/8.
+    const read = (axes, pressed = []) => {
+        const gp = pad({
+            id: 'Radiomaster TX12 Joystick (Vendor: 1209 Product: 4f54)',
+            buttons: 24,
+            axes,
+        });
+        for (const i of pressed) press(gp, i);
+        const { bindings } = resolveMapping(gp, { platform: 'win' });
+        const v = readVirtualPad(gp, bindings);
+        // A flipped centred axis reads -0, which the host gets as 0.
+        return { ...v, axes: v.axes.map((x) => x + 0) };
+    };
+
+    it('puts the sticks where a Mode 2 pilot holds them, up being up', () => {
+        // Throttle at the bottom is the left stick held down; at the top, up.
+        expect(read([0, 0, -1, 0, 0, 0, 0]).axes).toEqual([0, 1, 0, 0]);
+        expect(read([0, 0, 1, 0, 0, 0, 0]).axes).toEqual([0, -1, 0, 0]);
+        // Yaw left, roll right, pitch up.
+        expect(read([1, 1, 0, -1, 0, 0, 0]).axes).toEqual([-1, 0, 1, -1]);
+    });
+
+    it('reads CH5 and CH6 as whole-axis triggers: 0, half, full', () => {
+        expect(read([0, 0, -1, 0, -1, 1, 0]).buttons[6].value).toBe(0);
+        expect(read([0, 0, -1, 0, 0, 1, 0]).buttons[6].value).toBe(0.5);
+        expect(read([0, 0, -1, 0, 1, 1, 0]).buttons[6].value).toBe(1);
+        expect(read([0, 0, -1, 0, -1, 1, 0]).buttons[7].value).toBe(1);
+    });
+
+    it('presses A to Start from channels 9-16, and sends CH7-8 nowhere', () => {
+        const v = read([0, 0, -1, 0, -1, -1, 1], [0, 3, 7, 8]);
+        const pressed = v.buttons.map((b, i) => (b.pressed ? i : null)).filter((i) => i !== null);
+        // A, Y, Start; raw button 8 (CH17) has no place.
+        expect(pressed).toEqual([0, 3, 9]);
+        expect(v.axes).toEqual([0, 1, 0, 0]);
+    });
+
+    it('is named by its ids when Windows only gives a generic name', () => {
+        expect(padName('HID-compliant game controller (Vendor: 1209 Product: 4f54)')).toBe(
+            'EdgeTX / OpenTX radio',
+        );
+    });
+
+    it('counts as laid out without the user, like a guess', () => {
+        expect(['builtin', 'android', 'db'].every(isAutoMapped)).toBe(true);
+        expect([null, 'user', 'standard', 'pending'].some(isAutoMapped)).toBe(false);
     });
 });
 

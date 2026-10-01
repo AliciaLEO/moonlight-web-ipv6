@@ -273,6 +273,7 @@
 .gp-badge-user {
     color: var(--neon-cyan);
 }
+.gp-badge-builtin,
 .gp-badge-android,
 .gp-badge-db {
     color: var(--c-warning-text);

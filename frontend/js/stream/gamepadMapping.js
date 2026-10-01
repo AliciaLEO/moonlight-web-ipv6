@@ -35,11 +35,13 @@
  * Bindings come from, in this order (resolveMapping):
  *   1. the user's own mapping for this pad (gamepadMappingsStore);
  *   2. the browser's standard layout;
- *   3. Chrome Android: an unknown pad is reported without a mapping, but
+ *   3. a profile built in here (BUILTIN_PADS, desktop only) for a device SDL
+ *      does not know: EdgeTX / OpenTX radios;
+ *   4. Chrome Android: an unknown pad is reported without a mapping, but
  *      Chromium (UnknownGamepadMappings) has already put its buttons and axes
  *      in the standard slots — read it as standard;
- *   4. SDL_GameControllerDB (gamepadDb.js, desktop only, loaded on demand);
- *   5. nothing: the pad is not forwarded until the user maps it.
+ *   5. SDL_GameControllerDB (gamepadDb.js, desktop only, loaded on demand);
+ *   6. nothing: the pad is not forwarded until the user maps it.
  *
  * Bindings are plain JSON so the user's mapping is stored as is.
  */
@@ -150,6 +152,50 @@ const KNOWN_PADS = {
     '054c:0ce6': 'DualSense',
     '054c:0df2': 'DualSense Edge',
     '057e:2009': 'Switch Pro Controller',
+    '046d:c24f': 'Logitech G29',
+    '1209:4f54': 'EdgeTX / OpenTX radio',
+};
+
+/**
+ * Profiles built in for devices SDL_GameControllerDB does not know, by USB ids,
+ * for desktop browsers (their raw indices follow the HID usage order). Each
+ * lays the device out the way it is held onto the Xbox pad the host presents:
+ * the game sees an Xbox 360 controller, never the device itself.
+ *
+ * EdgeTX and OpenTX radios share the pid.codes ids 1209:4f54 — Radiomaster,
+ * Jumper, BetaFPV, FrSky or Flysky under EdgeTX — in their default USB mode
+ * ("Classic"): channels 1-8 are the axes X, Y, Z, Rx, Ry, Rz and two Sliders,
+ * channels 9-32 the buttons 0-23 (pressed above 0). The profile reads Mode 2
+ * in the usual AETR channel order — roll CH1, pitch CH2, throttle CH3, yaw CH4
+ * — as a Radiomaster TX12 reports it in Chrome on Windows (measured 01/10/2026
+ * with scripts/bench/gamepad/pad-probe.html):
+ *   - yaw → left X, throttle → left Y, roll → right X, pitch → right Y. Both
+ *     verticals read +1 at the top, so they are flipped: stick up is up;
+ *   - CH5 → LT and CH6 → RT as whole axes: a switch at -100, 0 and +100 gives
+ *     the trigger 0, 128 and 255. A channel the model leaves unmixed sits at
+ *     0, a trigger half pressed — mix it on the radio, or remap;
+ *   - CH9-16 (buttons 0-7) → A, B, X, Y, LB, RB, Back, Start;
+ *   - CH7-8 go nowhere: the Xbox pad has six analog channels. Chrome on
+ *     Windows even folds the radio's two Sliders onto one axis (6).
+ * Mode 1, another channel order or the "Advanced" USB mode: the wizard.
+ */
+const BUILTIN_PADS = {
+    '1209:4f54': {
+        leftx: { t: 'a', i: 3, s: 0 },
+        lefty: { t: 'a', i: 2, s: 0, inv: true },
+        rightx: { t: 'a', i: 0, s: 0 },
+        righty: { t: 'a', i: 1, s: 0, inv: true },
+        lefttrigger: { t: 'a', i: 4, s: 0 },
+        righttrigger: { t: 'a', i: 5, s: 0 },
+        a: { t: 'b', i: 0 },
+        b: { t: 'b', i: 1 },
+        x: { t: 'b', i: 2 },
+        y: { t: 'b', i: 3 },
+        leftshoulder: { t: 'b', i: 4 },
+        rightshoulder: { t: 'b', i: 5 },
+        back: { t: 'b', i: 6 },
+        start: { t: 'b', i: 7 },
+    },
 };
 
 /**
@@ -290,7 +336,7 @@ export const ANDROID_NAME_FIXES = [];
  *           db?: object|null|undefined, platform?: string }} ctx
  *   `db` undefined = not loaded yet (the result is then 'pending' for a pad
  *   that needs it); null = unavailable.
- * @returns {{ source: 'user'|'standard'|'android'|'db'|'pending'|null,
+ * @returns {{ source: 'user'|'standard'|'builtin'|'android'|'db'|'pending'|null,
  *             bindings: object|null, key: string, name: string, dbName?: string }}
  *   bindings null with source 'standard'/'android' = read the pad as is.
  */
@@ -303,13 +349,16 @@ export function resolveMapping(gp, ctx = {}) {
     if (gp.mapping === 'standard') return { ...base, source: 'standard', bindings: null };
 
     const platform = ctx.platform || detectPlatform();
+    const desktop = platform === 'win' || platform === 'mac' || platform === 'linux';
+    const builtin = desktop ? builtinFor(gp.id) : null;
+    if (builtin) return { ...base, source: 'builtin', bindings: builtin };
     const axesLength = gp.axes ? gp.axes.length : 0;
     if (platform === 'android') {
         const fix = ANDROID_NAME_FIXES.find(([re]) => re.test(name));
         const bindings = fix ? parseSdlMapping(fix[1], { platform, axesLength }) : null;
         return { ...base, source: 'android', bindings };
     }
-    if (platform === 'win' || platform === 'mac' || platform === 'linux') {
+    if (desktop) {
         if (ctx.db === undefined) return { ...base, source: 'pending', bindings: null };
         const entry = ctx.db ? lookupDb(ctx.db, platform, gp.id) : null;
         if (entry) {
@@ -320,6 +369,23 @@ export function resolveMapping(gp, ctx = {}) {
         }
     }
     return { ...base, source: null, bindings: null };
+}
+
+/**
+ * Whether a source laid the pad out without the user — a built-in profile,
+ * Chrome Android's guess, SDL's database. Right most of the time, and worth a
+ * check: the user is told, and offered the wizard.
+ */
+export function isAutoMapped(source) {
+    return source === 'builtin' || source === 'android' || source === 'db';
+}
+
+/** The built-in profile for this pad's USB ids — a copy, the table is shared — or null. */
+function builtinFor(id) {
+    const { vid, pid } = parsePadId(id);
+    const profile = vid && pid ? BUILTIN_PADS[`${vid}:${pid}`] : null;
+    if (!profile) return null;
+    return Object.fromEntries(Object.entries(profile).map(([target, b]) => [target, { ...b }]));
 }
 
 /** [name, mapping] for this pad's ids on this platform; the name breaks ties. */

@@ -35,7 +35,7 @@ import {
     resolvePad,
     sourceBadge,
 } from './GamepadRemapDialog.js';
-import { padKey, padName } from '../stream/gamepadMapping.js';
+import { padKey, padName, isAutoMapped } from '../stream/gamepadMapping.js';
 
 const HEIGHTS = [720, 1080, 1440];
 
@@ -569,7 +569,7 @@ export class PlayerJoinView {
                             .join('')}
                        </select>`
                     : `<span class="gamepad-remap-name">${escapeHtml(padName(pads[0]))}</span>`;
-            const guessed = res && (res.source === 'android' || res.source === 'db');
+            const guessed = res && isAutoMapped(res.source);
             body = `
                 <div class="player-gamepad-row">${control}${res ? sourceBadge(res.source) : ''}</div>
                 ${res && res.source === null ? `<p class="player-hint">${escapeHtml(t('player.gamepadNeedsMap'))}</p>` : ''}

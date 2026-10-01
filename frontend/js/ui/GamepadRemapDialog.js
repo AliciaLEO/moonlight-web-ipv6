@@ -46,6 +46,7 @@ import {
     detectInput,
     isAtRest,
     describeBinding,
+    isAutoMapped,
 } from '../stream/gamepadMapping.js';
 import { getMapping, setMapping, removeMapping } from '../util/gamepadMappingsStore.js';
 
@@ -379,7 +380,7 @@ export class GamepadRemapDialog {
             els.prompt.textContent = t(
                 res.source ? 'gamepad.remap.testPrompt' : 'gamepad.remap.unknown',
             );
-            if (res.source === 'android' || res.source === 'db') hint = t('gamepad.remap.guessed');
+            if (isAutoMapped(res.source)) hint = t('gamepad.remap.guessed');
             actions =
                 (res.source === 'user' ? btn('gp-reset', 'gamepad.remap.reset') : '') +
                 `<span class="gp-spacer"></span>` +
