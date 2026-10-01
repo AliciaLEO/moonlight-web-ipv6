@@ -1,0 +1,354 @@
+/*
+ * MoonlightWeb — browser-based Sunshine/GameStream client.
+ * Copyright (C) 2026 Bruno Martin <brunoocto@gmail.com>
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation, either version 3 of the License, or (at your option)
+ * any later version.
+ */
+
+/**
+ * CadenceStepper — "Auto" with detection: a step kept when the picture gets
+ * younger, given up when it does not, the backoff, the net, and no trial for
+ * content no faster than the client.
+ */
+import { describe, it, expect } from 'vitest';
+import {
+    BACKOFF_MS,
+    BASE_MS,
+    CadenceStepper,
+    ladder,
+    QUEUE_HOLD_MS,
+} from '../js/stream/CadenceStepper.js';
+
+const OFFSET_US = 5e9; // the host's clock, ahead of this one
+
+/**
+ * A client and a native host, a quarter of a millisecond at a time. The host
+ * answers `fpsstep` 1 ms later (`reply`, applied by default), says its cadence
+ * once a second, and sends min(content, step) frames a second; each frame is
+ * received `netMs` after its capture and painted `latency(rate)` after it, a
+ * `paintShare` of them. Pongs every 500 ms carry the host's exact clock.
+ */
+function setup(opts = {}) {
+    const o = {
+        base: 120,
+        display: 240,
+        presents: 240, // or a function of the time
+        latency: () => 20,
+        netMs: 5,
+        paintShare: 1,
+        queue: () => 0,
+        reply: (fps) => ({ verdict: 'applied', fps }),
+        ...opts,
+    };
+    let now = 0;
+    let hostStep = 0;
+    const sent = [];
+    const replies = [];
+    const stepper = new CadenceStepper({
+        baseFps: o.base,
+        send: (msg) => {
+            sent.push({ at: now, ...msg });
+            if (msg.type !== 'fpsstep') return;
+            const r = msg.fps > 0 ? o.reply(msg.fps) : { verdict: 'base', fps: 0 };
+            if (r.verdict !== 'refused') hostStep = r.fps;
+            replies.push({
+                at: now + 1,
+                msg: {
+                    type: 'fpsstep',
+                    asked: msg.fps,
+                    verdict: r.verdict,
+                    why: r.why,
+                    fps: r.verdict === 'refused' ? hostStep : r.fps,
+                },
+            });
+        },
+        now: () => now,
+        log: () => {},
+        timers: { every: () => 0, stop: () => {} },
+    });
+    stepper.start();
+    const presentsAt = (t) => (typeof o.presents === 'function' ? o.presents(t) : o.presents);
+    let frames = [];
+    let nextFrameAt = 10;
+    let nextPong = 100;
+    let nextStats = 1000;
+    let nextTick = 100;
+    let share = 0;
+    let q = 0;
+    const run = (untilMs) => {
+        for (; q <= untilMs * 4; q++) {
+            now = q / 4;
+            while (replies.length && replies[0].at <= now)
+                stepper.noteReply(replies.shift().msg, now);
+            if (now >= nextPong) {
+                stepper.notePong({ ts: now - 0.4, host: (now - 0.2) * 1000 + OFFSET_US }, now);
+                nextPong += 500;
+            }
+            if (now >= nextStats) {
+                stepper.noteStats(
+                    { presents: presentsAt(now), base: o.base, step: hostStep, display: o.display },
+                    now,
+                );
+                nextStats += 1000;
+            }
+            const rate = Math.min(presentsAt(now), hostStep || o.base);
+            if (now >= nextFrameAt) {
+                if (rate > 0) {
+                    frames.push({
+                        recvAt: now + o.netMs,
+                        paintAt: now + o.latency(rate, now),
+                        ts: (now * 1000 + OFFSET_US) / 1000,
+                        rate,
+                        received: false,
+                    });
+                    nextFrameAt += 1000 / rate;
+                } else {
+                    nextFrameAt = now + 10;
+                }
+            }
+            for (const f of frames) {
+                if (f.received || f.recvAt > now) continue;
+                f.received = true;
+                stepper.noteReceived(now);
+                stepper.noteDecodeQueue(o.queue(f.rate, now), now);
+            }
+            const due = frames.filter((f) => f.paintAt <= now);
+            if (due.length) {
+                frames = frames.filter((f) => f.paintAt > now);
+                for (const f of due) {
+                    share += o.paintShare;
+                    if (share >= 1 - 1e-9) {
+                        share -= 1;
+                        stepper.notePainted(f.ts, now);
+                    }
+                }
+            }
+            if (now >= nextTick) {
+                stepper.tick(now);
+                nextTick += 100;
+            }
+        }
+    };
+    const steps = () => sent.filter((m) => m.type === 'fpsstep');
+    return {
+        stepper,
+        run,
+        steps,
+        get hostStep() {
+            return hostStep;
+        },
+    };
+}
+
+describe('ladder', () => {
+    it("is the stream's rate, twice it, then the display's refresh", () => {
+        expect(ladder(60, 240)).toEqual([60, 120, 240]);
+        expect(ladder(120, 240)).toEqual([120, 240]);
+        expect(ladder(144, 240)).toEqual([144, 240]);
+        expect(ladder(120, 144)).toEqual([120, 144]);
+    });
+
+    it('has nothing above a display no faster than the stream', () => {
+        expect(ladder(60, 60)).toEqual([60]);
+        expect(ladder(240, 240)).toEqual([240]);
+    });
+
+    it('doubles without a cap while the display is unknown', () => {
+        expect(ladder(144, 0)).toEqual([144, 288]);
+        expect(ladder(0, 240)).toEqual([]);
+    });
+});
+
+describe('CadenceStepper', () => {
+    it('keeps a step that makes the picture younger, within ten seconds', () => {
+        // 120 Hz client, 240 Hz content: same capture → painted, half the wait.
+        const s = setup();
+        s.run(10000);
+        expect(s.steps().map((m) => m.fps)).toEqual([240]);
+        expect(s.steps()[0].at).toBeLessThan(5000);
+        expect(s.stepper.stepFps).toBe(240);
+        expect(s.stepper.kept).toBe(1);
+        expect(s.hostStep).toBe(240);
+        const kept = s.stepper.events.find((e) => e.what === 'kept');
+        expect(kept.at).toBeLessThan(10000);
+        expect(kept.gain).toBeCloseTo(1000 / 120 / 2 - 1000 / 240 / 2, 0);
+        // And it stays.
+        s.run(60000);
+        expect(s.steps()).toHaveLength(1);
+        expect(s.stepper.stepFps).toBe(240);
+    });
+
+    it('climbs 60 → 120 → 240 on a client that keeps up', () => {
+        const s = setup({ base: 60 });
+        s.run(11000);
+        expect(s.steps().map((m) => m.fps)).toEqual([120, 240]);
+        expect(s.stepper.stepFps).toBe(240);
+        expect(s.stepper.kept).toBe(2);
+    });
+
+    it('gives up a step that makes the picture older, and backs off', () => {
+        // At 240 each frame takes 3.5 ms longer to be painted: more than the
+        // 2.1 ms of waiting it saves, less than the net's half refresh.
+        const s = setup({ latency: (rate) => (rate > 120 ? 23.5 : 20) });
+        s.run(9000);
+        expect(s.steps().map((m) => m.fps)).toEqual([240, 0]);
+        expect(s.stepper.stepFps).toBe(0);
+        expect(s.stepper.rejected).toBe(1);
+        expect(s.stepper.trips).toBe(0);
+        const givenUp = s.steps()[1].at;
+        // The next trial waits 30 s, then a base window.
+        s.run(givenUp + BACKOFF_MS[0] - 1);
+        expect(s.steps()).toHaveLength(2);
+        s.run(givenUp + BACKOFF_MS[0] + BASE_MS + 500);
+        expect(s.steps().map((m) => m.fps)).toEqual([240, 0, 240]);
+        // Given up again: a minute this time.
+        s.run(givenUp + BACKOFF_MS[0] + 8000);
+        expect(s.steps().map((m) => m.fps)).toEqual([240, 0, 240, 0]);
+        const again = s.steps()[3].at;
+        s.run(again + BACKOFF_MS[1] - 1);
+        expect(s.steps()).toHaveLength(4);
+        s.run(again + BACKOFF_MS[1] + BASE_MS + 500);
+        expect(s.steps()).toHaveLength(5);
+    });
+
+    it('gives up a step when the client stops painting what it receives', () => {
+        // Every frame painted at 120, four in five at 240: younger, but not
+        // shown.
+        const s = setup();
+        let n = 0;
+        const painted = s.stepper.notePainted.bind(s.stepper);
+        s.stepper.notePainted = (ts, at) => {
+            if (s.hostStep > 120 && ++n % 5 === 0) return;
+            painted(ts, at);
+        };
+        s.run(9000);
+        expect(s.steps().map((m) => m.fps)).toEqual([240, 0]);
+        const rejected = s.stepper.events.find((e) => e.what === 'rejected');
+        expect(rejected.ratio).toBeLessThan(0.9);
+    });
+
+    it('comes back at once when the client drowns (the net)', () => {
+        const s = setup({ latency: (rate) => (rate > 120 ? 60 : 20) });
+        s.run(9000);
+        const steps = s.steps();
+        expect(steps.map((m) => m.fps)).toEqual([240, 0]);
+        expect(s.stepper.trips).toBe(1);
+        // Once the late frames are half of the net's window: 60 ms for the
+        // first of them to be painted, ~70 more for them to outnumber the
+        // ones painted at 120 — a stall of a few frames does not trip it. A
+        // tenth of a trial.
+        expect(steps[1].at - steps[0].at).toBeLessThan(200);
+        expect(s.stepper.stepFps).toBe(0);
+    });
+
+    it('comes back at once on a decode queue that holds', () => {
+        const s = setup({ queue: (rate) => (rate > 120 ? 3 : 0) });
+        s.run(9000);
+        const steps = s.steps();
+        expect(steps.map((m) => m.fps)).toEqual([240, 0]);
+        expect(s.stepper.trips).toBe(1);
+        expect(steps[1].at - steps[0].at).toBeLessThan(QUEUE_HOLD_MS + 50);
+    });
+
+    it('tries nothing for content no faster than the client', () => {
+        for (const presents of [53, 60, 66]) {
+            const s = setup({ base: 60, presents });
+            s.run(60000);
+            expect(s.steps()).toEqual([]);
+            expect(s.stepper.trials).toBe(0);
+        }
+    });
+
+    it('a game at 80 fps on a 60 Hz client: 120, and no further', () => {
+        const s = setup({ base: 60, presents: 80 });
+        s.run(30000);
+        expect(s.steps().map((m) => m.fps)).toEqual([120]);
+        expect(s.stepper.stepFps).toBe(120);
+    });
+
+    it('stays where it is when the host refuses, and asks again later', () => {
+        const s = setup({
+            reply: () => ({ verdict: 'refused', fps: 0, why: 'the encoder takes longer' }),
+        });
+        s.run(9000);
+        expect(s.steps().map((m) => m.fps)).toEqual([240]);
+        expect(s.stepper.refused).toBe(1);
+        expect(s.stepper.stepFps).toBe(0);
+        const asked = s.steps()[0].at;
+        s.run(asked + BACKOFF_MS[0] - 1);
+        expect(s.steps()).toHaveLength(1);
+        s.run(asked + BACKOFF_MS[0] + BASE_MS + 500);
+        expect(s.steps()).toHaveLength(2);
+    });
+
+    it("takes the host's cap as the step", () => {
+        // The display's refresh unknown to the client: twice 144 is asked,
+        // the host caps it at its 240.
+        const s = setup({
+            base: 144,
+            display: 0,
+            reply: (fps) =>
+                fps > 240 ? { verdict: 'capped', fps: 240 } : { verdict: 'applied', fps },
+        });
+        s.run(10000);
+        expect(s.steps().map((m) => m.fps)).toEqual([288]);
+        expect(s.stepper.stepFps).toBe(240);
+        expect(s.hostStep).toBe(240);
+    });
+
+    it('forgets the backoff when the content changes', () => {
+        // Given up at first; then the content stops and starts again.
+        let presents = 240;
+        const s = setup({
+            presents: () => presents,
+            latency: (rate) => (rate > 120 ? 23.5 : 20),
+        });
+        s.run(9000);
+        expect(s.steps().map((m) => m.fps)).toEqual([240, 0]);
+        const givenUp = s.steps()[1].at;
+        presents = 0;
+        s.run(givenUp + 4000);
+        presents = 240;
+        s.run(givenUp + 14000);
+        // Well before the 30 s the backoff asked for.
+        expect(s.steps().map((m) => m.fps)).toEqual([240, 0, 240, 0]);
+        expect(s.steps()[2].at).toBeLessThan(givenUp + BACKOFF_MS[0]);
+    });
+
+    it('lets a step go when the decoder asks for fewer frames', () => {
+        const s = setup();
+        s.run(10000);
+        expect(s.stepper.stepFps).toBe(240);
+        s.stepper.setDecoderCapped(true, 10000);
+        expect(s.steps().map((m) => m.fps)).toEqual([240, 0]);
+        expect(s.stepper.stepFps).toBe(0);
+        s.run(60000);
+        expect(s.steps()).toHaveLength(2);
+    });
+
+    it('follows a host that dropped the step', () => {
+        const s = setup();
+        s.run(10000);
+        expect(s.stepper.stepFps).toBe(240);
+        // The host lifts it on its own (a decoder cap it heard first).
+        s.stepper.noteStats({ presents: 240, base: 120, step: 0, display: 240 }, 10001);
+        s.stepper.noteStats({ presents: 240, base: 120, step: 0, display: 240 }, 10002);
+        expect(s.stepper.stepFps).toBe(0);
+    });
+
+    it('takes the step back when it stops, and starts over when the screen changes', () => {
+        const s = setup();
+        s.run(10000);
+        expect(s.stepper.stepFps).toBe(240);
+        s.stepper.linkChanged('the screen changed', 10000);
+        expect(s.steps().map((m) => m.fps)).toEqual([240, 0]);
+        // A new trial after the warm-up, no backoff.
+        s.run(20000);
+        expect(s.steps().map((m) => m.fps)).toEqual([240, 0, 240]);
+        s.stepper.stop();
+        expect(s.steps().map((m) => m.fps)).toEqual([240, 0, 240, 0]);
+    });
+});

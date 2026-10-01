@@ -3187,6 +3187,9 @@ const MoonlightApp = {
             // The frame rate this launch asked for: the ceiling the view's
             // decode-rate governor climbs back to — see DecodeRateGovernor.
             streamFps: Number(streamingSettings.stream_fps) || 0,
+            // …and whether it was Auto's choice: only then may the detection
+            // step the stream above it (stream/CadenceStepper.js).
+            fpsAuto: this._fpsAuto === true,
             // "Quit the app when the stream stops": Stop then closes the app on
             // a host where it would otherwise keep running for a resume.
             quitAppOnStop: streamingSettings.quit_app_on_stop === true,

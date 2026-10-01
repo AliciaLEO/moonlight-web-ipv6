@@ -96,6 +96,7 @@ import {
 import { drawCapFor } from '../stream/RenderPacing.js';
 import { ContentAgeProbe } from '../stream/ContentAgeProbe.js';
 import { VsyncGrid } from '../stream/VsyncGrid.js';
+import { CadenceStepper, autostepEnabled } from '../stream/CadenceStepper.js';
 import { LatencyProbe } from '../stream/LatencyProbe.js';
 import { t } from '../i18n/i18n.js';
 
@@ -895,6 +896,12 @@ export class StreamView {
             budgetFactor: vsyncGridBudget(),
         });
         if (!this._standby) window.mwVsyncGrid = this._vsyncGrid;
+        // "Auto" with detection (stream/CadenceStepper.js): a native host's
+        // stream may run above this screen's rate while what it shows gets
+        // younger. Built by the first stats that carry the host's cadence, and
+        // only for a rate left to Auto — see _noteHostCadence.
+        this._autostep = opts.fpsAuto === true && autostepEnabled();
+        this._stepper = null;
         // Native host: mouse motion goes out on `pointerrawupdate` — every
         // report the device makes, not the one-per-display-frame sum that
         // `mousemove` delivers. Decided in _bindPointerRaw; while it is on, the
@@ -3502,6 +3509,8 @@ export class StreamView {
         if (!this._nativeHost || !this.decoder) return;
         const now = performance.now();
         let depth = this.decoder.decodeQueueSize;
+        // The detection's net: a queue that holds above this screen's rate.
+        if (this._stepper) this._stepper.noteDecodeQueue(depth, now);
         if (this._queueSignalMode === 'pending') {
             depth = this._chunkSubmitTimes.size;
         } else if (this._queueSignalMode === 'e2e') {
@@ -4322,6 +4331,8 @@ export class StreamView {
                 // when it is ready, for the vsync grid.
                 if (this._immediateRender && this._vsyncGrid.running)
                     this._vsyncGrid.noteReady(frameBackendTs, drawStart + renderMs);
+                // …and what the detection measures: capture → painted.
+                if (this._stepper) this._stepper.notePainted(frameBackendTs, drawStart + renderMs);
                 if (renderMs >= 0 && renderMs < 5000) this._clientRenderStats.addSample(renderMs);
                 // …and how that time splits between our work and waiting on the
                 // GPU/compositor, which is what tells back-pressure from cost.
@@ -5080,6 +5091,8 @@ export class StreamView {
             this.webrtc.noteResumed();
         }
         if (this._gamepadManager) this._gamepadManager.resendAll();
+        // What the detection measured before is of another page: start over.
+        if (this._stepper) this._stepper.linkChanged('back from the background', performance.now());
     }
 
     // ── This screen's refresh, for the native host's cadence ─────────────
@@ -5102,6 +5115,7 @@ export class StreamView {
                 `[StreamView] Screen refresh ${(mhz / 1000).toFixed(1)} Hz ` +
                     `(${this._clientVsync ? 'vsync' : 'tearing'}) told to the host`,
             );
+            if (this._stepper) this._stepper.linkChanged('the screen changed', performance.now());
         };
         this._offRefreshChange = onRefreshRateChange(tell);
         measureRefreshRate().then(tell, () => {});
@@ -6387,6 +6401,8 @@ export class StreamView {
                     : 'the queue stayed empty — back to the rate that was set'),
         );
         this._sendToHost({ type: 'clientfpscap', fps: cap });
+        // A decoder that asks for fewer frames is never stepped above them.
+        if (this._stepper) this._stepper.setDecoderCapped(cap > 0, now);
     }
 
     _applyEnhancerGovernor(diag, now) {
@@ -6555,9 +6571,15 @@ export class StreamView {
             if (typeof msg.text === 'string') this._applyHostClipboard(msg.text);
             return;
         }
+        if (msg.type === 'fpsstep') {
+            // The native host's answer to a step of the detection.
+            if (this._stepper) this._stepper.noteReply(msg, performance.now());
+            return;
+        }
         if (msg.type === 'pong') {
             this._contentAge.notePong(msg, performance.now());
             this._vsyncGrid.notePong(msg, performance.now());
+            if (this._stepper) this._stepper.notePong(msg, performance.now());
             // The host would aim its frames at this screen's refreshes: tell it
             // when they are (native host, cadence=deadline).
             if (msg.grid === true && this._nativeHost && !this._vsyncGrid.running)
@@ -6614,7 +6636,42 @@ export class StreamView {
             if (typeof msg.linkQueueMs === 'number') {
                 this._hostLinkQueueMs = msg.linkQueueMs;
             }
+            // The native host's cadence, for "Auto" with detection. Absent
+            // from every other host, and from a guest on the shared feed.
+            if (msg.cadence && typeof msg.cadence === 'object') this._noteHostCadence(msg.cadence);
         }
+    }
+
+    /**
+     * The host's cadence, once a second: the first one builds the detection
+     * (stream/CadenceStepper.js) where it can measure — a rate left to Auto
+     * (the switch `mw_autostep`), every frame drawn the moment it is decoded
+     * (a canvas that tears), on this thread, as it comes (no pacer). A client
+     * on vsync shows one frame per refresh and keeps its rate.
+     */
+    _noteHostCadence(cadence) {
+        const now = performance.now();
+        if (!this._stepper) {
+            if (!this._autostep || this._standby || this._quitting || !this._nativeHost) return;
+            if (!this._immediateRender || this._useWorker || this._framePacer) return;
+            this._stepper = new CadenceStepper({
+                baseFps: this._streamFps,
+                send: (msg) => {
+                    if (this.webrtc) this._sendToHost(msg);
+                },
+                sendPing: (seq, ts) => {
+                    if (this.webrtc) this.webrtc.send({ type: 'ping', seq, ts });
+                },
+            });
+            window.mwCadenceStepper = this._stepper;
+            this._stepper.start();
+            console.log(
+                '[StreamView] Auto with detection on: steps above ' +
+                    (this._streamFps || '?') +
+                    ' fps are tried while the content is faster',
+            );
+        }
+        this._stepper.noteStats(cadence, now);
     }
 
     handleVideoFrame(data, isKeyframe, backendTs, frameId = 0) {
@@ -6633,6 +6690,8 @@ export class StreamView {
             console.warn('[StreamView] Video frame too small:', data.length);
             return;
         }
+        // Received, against painted: the detection's share of frames shown.
+        if (this._stepper) this._stepper.noteReceived(performance.now());
 
         // ── Stale frame detection (safety net) ───────────────────────────────
         // The video DataChannel is now ordered=true (SCTP reorders internally),
@@ -11036,6 +11095,11 @@ export class StreamView {
         if (window.mwContentAge === this._contentAge) window.mwContentAge = null;
         this._vsyncGrid.stop();
         if (window.mwVsyncGrid === this._vsyncGrid) window.mwVsyncGrid = null;
+        if (this._stepper) {
+            this._stepper.stop();
+            if (window.mwCadenceStepper === this._stepper) window.mwCadenceStepper = null;
+            this._stepper = null;
+        }
         if (this._mainThreadProbe) {
             this._mainThreadProbe.stop();
             this._mainThreadProbe = null;
