@@ -82,6 +82,12 @@ public:
     /// it. Set before start().
     void setVirtualMonitor(int width, int height, int fps);
 
+    /// Make that virtual monitor through KWin rather than the portal (KDE
+    /// Plasma 6, KwinVirtualOutput.h): an output named after @p name, at the
+    /// size setVirtualMonitor gave. Its stream is read on the session's own
+    /// PipeWire. Before start().
+    void setKwinVirtualOutput(std::string name);
+
     /// What a GPU can import, offered to the compositor for DMA-BUF: its
     /// render node, and per DRM fourcc the modifiers (GlConvert::
     /// importableModifiers). Offered before shared memory, which stays the
@@ -127,6 +133,12 @@ public:
     /// route, to know which pipeline pair can take its frames. Known when
     /// start() returns: it waits for the first buffer.
     bool dmabuf() const;
+    /// The compositor has renegotiated the format again and again since
+    /// start() without a single picture: it settles on one it cannot fill —
+    /// KWin with a DMA-BUF modifier its renderer cannot allocate (Plasma 6.3
+    /// in a VM, hundreds a second). A slow first picture is not this: one
+    /// format, then the wait.
+    bool renegotiatingWithoutPicture() const;
     /// The GPU the session named (setRenderNode), else the offer's when the
     /// buffers are DMA-BUF; empty when neither says one.
     std::string renderNodePath() const override;

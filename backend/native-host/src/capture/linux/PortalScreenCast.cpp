@@ -18,6 +18,7 @@
 #include "PortalScreenCast.h"
 
 #include "../../core/Log.h"
+#include "KwinVirtualOutput.h"
 
 #include <fcntl.h>
 #include <linux/capability.h>
@@ -221,6 +222,8 @@ std::vector<std::string> splitLines(const std::string& text, size_t parts)
 /// its handshake, the answer with the PipeWire descriptor — then the portal
 /// session held until the socket closes, which is the stream's stop() or its
 /// owner's death. The session is this connection's: closing it ends the cast.
+/// Two requests: "1" the portal (virtual or not, timeout, token), "2" KWin's
+/// virtual output (width, height, name), whose node needs no descriptor.
 int helperMain(int socket)
 {
     char buffer[4096];
@@ -231,13 +234,20 @@ int helperMain(int socket)
     if (n <= 0) return 1;
     const std::vector<std::string> request =
         splitLines(std::string(buffer, static_cast<size_t>(n)), 4);
-    if (request.size() != 4 || request[0] != "1") return 1;
+    if (request.size() != 4 || (request[0] != "1" && request[0] != "2")) return 1;
 
     PortalScreenCast cast;
-    cast.setVirtual(request[1] == "1");
     PortalStream stream;
     std::string error;
-    const bool ok = cast.start(request[3], std::atoi(request[2].c_str()), stream, error);
+    bool ok = false;
+    if (request[0] == "2") {
+        cast.setKwinVirtualOutput(request[3], std::atoi(request[1].c_str()),
+                                  std::atoi(request[2].c_str()));
+        ok = cast.start(std::string(), 0, stream, error);
+    } else {
+        cast.setVirtual(request[1] == "1");
+        ok = cast.start(request[3], std::atoi(request[2].c_str()), stream, error);
+    }
     std::string reply =
         ok ? "ok\n" + std::to_string(stream.nodeId) + "\n" + std::to_string(stream.width) + "\n" +
                  std::to_string(stream.height) + "\n" + (stream.hasPosition ? "1" : "0") + "\n" +
@@ -249,7 +259,7 @@ int helperMain(int socket)
     message.msg_iov = &part;
     message.msg_iovlen = 1;
     alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int))] = {};
-    if (ok) {
+    if (ok && stream.pipewireFd >= 0) {
         message.msg_control = control;
         message.msg_controllen = sizeof(control);
         cmsghdr* rights = CMSG_FIRSTHDR(&message);
@@ -290,6 +300,13 @@ struct PortalScreenCast::Impl
     bool virtualMonitor = false;
     pid_t helper = -1;     ///< the helper holding the session, when one does
     int helperSocket = -1; ///< its socket: closing it is the helper's cue to end
+
+    /// KWin's virtual output instead of the portal (setKwinVirtualOutput).
+    bool kwin = false;
+    std::string kwinName;
+    int kwinWidth = 0;
+    int kwinHeight = 0;
+    std::unique_ptr<KwinVirtualOutput> kwinOutput;
 
     ~Impl()
     {
@@ -349,6 +366,15 @@ void PortalScreenCast::setVirtual(bool virtualMonitor)
     d->virtualMonitor = virtualMonitor;
 }
 
+void PortalScreenCast::setKwinVirtualOutput(const std::string& name, int width, int height)
+{
+    d->kwin = true;
+    d->virtualMonitor = true;
+    d->kwinName = name;
+    d->kwinWidth = width;
+    d->kwinHeight = height;
+}
+
 bool PortalScreenCast::start(const std::string& restoreToken, int timeoutMs, PortalStream& out,
                              std::string& error)
 {
@@ -358,6 +384,15 @@ bool PortalScreenCast::start(const std::string& restoreToken, int timeoutMs, Por
         return false;
     // Said by the stream's own process: the helper has no one to say it to.
     if (g_InHelper.load()) return true;
+    if (d->kwin) {
+        log::info("[native] KWin: virtual output \"" + d->kwinName + "\" " +
+                  std::to_string(d->kwinWidth) + "x" + std::to_string(d->kwinHeight) + ", node " +
+                  std::to_string(out.nodeId) +
+                  (helper ? " (asked through a helper without capabilities, which KWin would "
+                            "not trust)"
+                          : ""));
+        return true;
+    }
     log::info(std::string("[native] portal: ") + (d->virtualMonitor ? "virtual monitor, " : "") +
               "node " + std::to_string(out.nodeId) +
               (out.width > 0
@@ -431,8 +466,11 @@ bool PortalScreenCast::startInHelper(const std::string& restoreToken, int timeou
     d->helper = pid;
     d->helperSocket = pair[0];
 
-    const std::string request = std::string("1\n") + (d->virtualMonitor ? "1" : "0") + "\n" +
-                                std::to_string(timeoutMs) + "\n" + restoreToken;
+    const std::string request = d->kwin
+                                    ? "2\n" + std::to_string(d->kwinWidth) + "\n" +
+                                          std::to_string(d->kwinHeight) + "\n" + d->kwinName
+                                    : std::string("1\n") + (d->virtualMonitor ? "1" : "0") + "\n" +
+                                          std::to_string(timeoutMs) + "\n" + restoreToken;
     if (::send(d->helperSocket, request.data(), request.size(), MSG_NOSIGNAL) < 0) {
         error = std::string("the portal helper took no request: ") + std::strerror(errno);
         stopHelper();
@@ -482,7 +520,8 @@ bool PortalScreenCast::startInHelper(const std::string& restoreToken, int timeou
         stopHelper();
         return false;
     }
-    if (fd < 0 || reply.size() != 8) {
+    // KWin's node is on the session's PipeWire: no descriptor comes with it.
+    if ((fd < 0 && !d->kwin) || reply.size() != 8) {
         error = "the portal helper's answer carried no PipeWire descriptor";
         if (fd >= 0) ::close(fd);
         stopHelper();
@@ -496,6 +535,7 @@ bool PortalScreenCast::startInHelper(const std::string& restoreToken, int timeou
     out.x = std::atoi(reply[5].c_str());
     out.y = std::atoi(reply[6].c_str());
     out.restoreToken = reply[7];
+    out.sessionPipeWire = d->kwin;
     return true;
 }
 
@@ -523,6 +563,17 @@ bool PortalScreenCast::startHere(const std::string& restoreToken, int timeoutMs,
                                  std::string& error)
 {
     out = PortalStream{};
+    if (d->kwin) {
+        d->kwinOutput = std::make_unique<KwinVirtualOutput>();
+        uint32_t node = 0;
+        if (!d->kwinOutput->start(d->kwinName, d->kwinWidth, d->kwinHeight, node, error)) {
+            d->kwinOutput.reset();
+            return false;
+        }
+        out.nodeId = node;
+        out.sessionPipeWire = true;
+        return true;
+    }
     if (!d->bus) {
         const int r = sd_bus_open_user(&d->bus);
         if (r < 0) {
@@ -707,6 +758,10 @@ void PortalScreenCast::stop()
     if (d->helper > 0 || d->helperSocket >= 0) {
         stopHelper();
         return;
+    }
+    if (d->kwinOutput) {
+        d->kwinOutput->stop();
+        d->kwinOutput.reset();
     }
     if (!d->bus) return;
     if (!d->session.empty()) {

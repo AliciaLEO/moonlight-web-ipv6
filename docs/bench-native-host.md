@@ -5436,6 +5436,52 @@ montrait qu'une extension vide.
   (celle d'un invité) laisse l'écran au bout du bureau, comme avant.
 - Suites natives de l'UM790Pro : 6584/6584 avec capacités, 6460/6460 sans.
   Windows : compilé, tests de disposition 104/104.
+
+### 8s.10 C3 : l'écran virtuel sous KDE Plasma 6, par KWin
+
+Banc : une VM Debian 13 sur l'UM790Pro (`~/mwvmkde`, ssh par le port 2223),
+**Plasma 6.3.6** (KWin 6.3.6, xdg-desktop-portal-kde 6.3.5, PipeWire 1.4.2),
+rendu logiciel. ⚠️ L'image « genericcloud » de Debian porte un noyau sans
+pilote DRM : SDDM attend un poste graphique qui ne vient jamais. Le noyau
+`linux-image-amd64` règle ça.
+
+- **Le portail de Plasma 6.3 n'offre pas d'écran virtuel** :
+  `AvailableSourceTypes` = 3 (écran, fenêtre). Sous KDE, la carte n'existait
+  donc pas.
+- **KWin en fait un lui-même** : `zkde_screencast_unstable_v1`, requête
+  `stream_virtual_output(nom, largeur, hauteur, échelle, pointeur)`, qui
+  répond par le nœud PipeWire (`KwinVirtualOutput.cpp`, tables de protocole
+  écrites à la main comme celles de `WaylandLayout`). L'écran s'appelle
+  « Virtual-<nom> » et vit tant que la connexion Wayland tient le flux.
+- **Un protocole réservé** : KWin ne le montre qu'à un programme qu'un
+  `.desktop` installé nomme par le chemin de son binaire, avec
+  `X-KDE-Wayland-Interfaces=zkde_screencast_unstable_v1`. KWin le lit à
+  l'ouverture de la session. Sans ce droit, le refus est clair : « KWin does
+  not grant its screencast protocol to this program ». Le paquet installe ce
+  `.desktop` (caché) pour le binaire, pas pour le lanceur.
+- **Le binaire à capacités** : KWin ne peut pas le lire, comme le portail.
+  La demande passe par le même auxiliaire sans capacités (requête « 2 »).
+  Vérifié avec des capacités ambiantes, comme les donne le lanceur du paquet.
+- **Le DMA-BUF** : dans la VM, KWin choisit le modificateur linéaire, ne sait
+  pas l'allouer et renégocie sans fin (≈ 440 fois en une seconde, aucune
+  image). La session le reconnaît (plusieurs formats, aucune image) et
+  redemande la capture en mémoire partagée, qui marche. Sur GNOME, rien ne
+  change : le premier format donne une image.
+- Mesuré par `linux_virtual_display` (18/18, avec et sans auxiliaire) :
+
+| stream | écran KWin | format | images en 3 s |
+|---|---|---|---|
+| 1600×900 à 30 i/s | Virtual-MoonlightWeb 1600×900, en 1280,0 | mémoire partagée, 30 max | 16 |
+| même nom, 1170×2532 à 60 i/s | Virtual-MoonlightWeb 1170×2532 | mémoire partagée, **60 max** | 17-18 |
+
+- Le nom gardé d'un stream à l'autre ne fige pas la taille sur 6.3 : KWin
+  refait l'écran à la nouvelle taille.
+- Le pointeur se place sur l'écran par son nom (« Virtual-MoonlightWeb »).
+- **Limites** : KWin fait ses écrans virtuels à 60 Hz (le 240 Hz demandé
+  retombe sur les formats de repli). Au-delà, il faudrait un mode
+  personnalisé par `kde_output_management_v2` (KWin 6.6+, d'après
+  Punktfunk). L'écran virtuel n'est pas mis en principal sous KDE. Pas de
+  vrai GPU KDE au banc : le DMA-BUF de KWin n'est pas vu marcher.
 - Pas vu : le trajet du drapeau du serveur au worker, qui demande un vrai
   stream (C4).
 

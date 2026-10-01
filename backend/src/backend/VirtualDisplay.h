@@ -92,7 +92,9 @@ struct DisplayInfo;
  * ends — see livesInStream(). On GNOME the owner's stream makes it the main
  * display too, on the left of the others and none switched off, for as long
  * as it lives (SessionConfig::virtualPrimary); a guest's stays where GNOME
- * puts it. No session type but Wayland has the source: an X11 session (a
+ * puts it. KDE Plasma 6's portal has no such source; KWin makes the monitor
+ * itself, for a binary its installed .desktop grant names (the package ships
+ * one), at 60 Hz. No session type but Wayland has either: an X11 session (a
  * machine with NVIDIA's driver, often) shows no card.
  *
  * ── The mode ────────────────────────────────────────────────────────────────

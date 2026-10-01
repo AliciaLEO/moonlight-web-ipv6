@@ -118,6 +118,8 @@ struct PortalCapture::Impl
     /// A buffer has arrived since start(): what dmabuf() says is the
     /// buffers' own word from then on, not the format's.
     bool sawBuffer = false;
+    /// Formats settled on before the first buffer (renegotiatingWithoutPicture).
+    int formatsBeforePicture = 0;
     /// The GPU's modifiers, offered to the compositor before shared memory.
     PortalCapture::DmabufOffer offer;
     /// The GPU the session converts and encodes on.
@@ -132,6 +134,8 @@ struct PortalCapture::Impl
     int virtualWidth = 0;
     int virtualHeight = 0;
     int virtualFps = 60;
+    /// KWin makes the virtual monitor, under this name (setKwinVirtualOutput).
+    std::string kwinName;
 
     int64_t nowUs() const
     {
@@ -175,7 +179,10 @@ struct PortalCapture::Impl
             std::lock_guard<std::mutex> lock(self->mutex);
             self->format = info;
             self->haveFormat = true;
-            if (!self->sawBuffer) self->isDmabuf = modifier;
+            if (!self->sawBuffer) {
+                self->isDmabuf = modifier;
+                ++self->formatsBeforePicture;
+            }
         }
         self->ready.notify_all();
         char modifierText[40] = "shared memory";
@@ -361,6 +368,11 @@ void PortalCapture::setVirtualMonitor(int width, int height, int fps)
     d->virtualFps = fps > 0 ? fps : 60;
 }
 
+void PortalCapture::setKwinVirtualOutput(std::string name)
+{
+    d->kwinName = std::move(name);
+}
+
 void PortalCapture::offerDmabuf(DmabufOffer offer)
 {
     d->offer = std::move(offer);
@@ -383,6 +395,8 @@ bool PortalCapture::start(std::string& error)
 
     const bool virtualMonitor = d->virtualWidth > 0 && d->virtualHeight > 0;
     d->portal.setVirtual(virtualMonitor);
+    if (virtualMonitor && !d->kwinName.empty())
+        d->portal.setKwinVirtualOutput(d->kwinName, d->virtualWidth, d->virtualHeight);
     if (!d->portal.start(d->restore, 0, d->granted, error)) return false;
     if (!d->granted.valid()) {
         error = "the portal granted nothing usable";
@@ -406,8 +420,11 @@ bool PortalCapture::start(std::string& error)
 
     pw_thread_loop_lock(d->loop);
     // The fd the portal handed us: PipeWire takes ownership of it here, which
-    // is why start() must not close it afterwards.
-    d->core = pw_context_connect_fd(d->context, d->granted.pipewireFd, nullptr, 0);
+    // is why start() must not close it afterwards. KWin's output streams on the
+    // session's own PipeWire, reached the ordinary way.
+    d->core = d->granted.pipewireFd >= 0
+                  ? pw_context_connect_fd(d->context, d->granted.pipewireFd, nullptr, 0)
+                  : pw_context_connect(d->context, nullptr, 0);
     d->granted.pipewireFd = -1;
     if (!d->core) {
         pw_thread_loop_unlock(d->loop);
@@ -625,6 +642,7 @@ void PortalCapture::stop()
     d->portal.stop();
     d->haveFormat = false;
     d->sawBuffer = false;
+    d->formatsBeforePicture = 0;
 }
 
 int PortalCapture::width() const
@@ -652,6 +670,12 @@ uint32_t PortalCapture::fourcc() const
 bool PortalCapture::dmabuf() const
 {
     return d->isDmabuf;
+}
+
+bool PortalCapture::renegotiatingWithoutPicture() const
+{
+    std::lock_guard<std::mutex> lock(d->mutex);
+    return !d->sawBuffer && d->formatsBeforePicture >= 3;
 }
 
 std::string PortalCapture::renderNodePath() const

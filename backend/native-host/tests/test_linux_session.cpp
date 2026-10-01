@@ -985,10 +985,14 @@ void run_linux_virtual_display_tests()
     phone.fitRequestedBox = phone.allowUpscale = phone.matchClientDisplay = true;
     phone.virtualRefreshHz = 240;
     // A guest's session, as far as the layout goes: the monitor stays where
-    // GNOME put it.
-    phone.virtualPrimary = false;
+    // GNOME put it. On KWin's route (KDE Plasma 6) the owner's again instead,
+    // which reuses the output's name at another size: KWin keeps a mode per
+    // output name, and the size asked for must still be the one made.
+    const bool kwinRoute = virt->detail.find("KWin") != std::string::npos;
+    phone.virtualPrimary = kwinRoute;
     const std::string token = !granted.empty() ? granted : (replay ? replay : "");
-    if (token.empty()) {
+    // KWin's route asks no consent: there is nothing to replay.
+    if (token.empty() && !kwinRoute) {
         std::fprintf(stderr, "  match session skipped: no grant to replay\n");
         return;
     }
@@ -1014,7 +1018,7 @@ void run_linux_virtual_display_tests()
     CHECK_EQ(pinfo.width, 1170);
     CHECK_EQ(pinfo.height, 2532);
     CHECK_EQ(pinfo.fps, 60);
-    if (gnome && !gnomeBefore.primary.empty()) {
+    if (gnome && !gnomeBefore.primary.empty() && !phone.virtualPrimary) {
         GnomeLayoutView during;
         CHECK(readGnomeLayout(1170, 2532, during));
         CHECK(!during.virtualConnector.empty());

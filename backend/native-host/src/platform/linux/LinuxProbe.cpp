@@ -17,6 +17,7 @@
 
 #include "../../capture/linux/KmsCapture.h"
 #if defined(MW_NATIVE_LINUX_PORTAL)
+#include "../../capture/linux/KwinVirtualOutput.h"
 #include "../../capture/linux/PortalScreenCast.h"
 #endif
 #include "../../core/Log.h"
@@ -371,6 +372,22 @@ Unavailability enumerate(Capabilities& caps)
         log::info("[native] the portal offers a virtual display, but this is an X11 session, "
                   "where GNOME cannot make one — not offered");
     }
+    // KDE Plasma 6: its portal offers no VIRTUAL source (6.3: types 3), KWin
+    // makes the monitor itself (KwinVirtualOutput.h). Offered on KWin's word
+    // alone: whether it trusts the program is asked by the session, from the
+    // helper without capabilities — this process, the server's, may hold one.
+    bool kwinVirtual = false;
+    std::string kwinWhy;
+    if (!portalVirtual && sourceTypes != 0 && !isX11Session()) {
+        bool kwin = false;
+        bool granted = false;
+        if (capture::KwinVirtualOutput::probe(kwin, granted, kwinWhy) && kwin) {
+            kwinVirtual = true;
+            kwinWhy = granted ? "KWin grants its screencast protocol"
+                              : "KWin's grant is checked when the stream starts";
+        }
+    }
+    portalVirtual = portalVirtual || kwinVirtual;
 #else
     const bool portalVirtual = false;
 #endif
@@ -458,9 +475,12 @@ Unavailability enumerate(Capabilities& caps)
         virt.kind = DisplayKind::Virtual;
         virt.key = kPortalVirtualDisplayKey;
         virt.capture = CaptureApi::PipeWire;
-        virt.detail = "created by the ScreenCast portal at the client's size when the stream "
-                      "starts (source types " +
-                      std::to_string(sourceTypes) + ")";
+        virt.detail = kwinVirtual ? "created by KWin at the client's size when the stream "
+                                    "starts (" +
+                                        kwinWhy + ")"
+                                  : "created by the ScreenCast portal at the client's size when "
+                                    "the stream starts (source types " +
+                                        std::to_string(sourceTypes) + ")";
         caps.displays.push_back(virt);
         // Nothing else to capture: this display's route is the machine's.
         if (caps.capture != CaptureApi::Kms && caps.capture != CaptureApi::PipeWire &&

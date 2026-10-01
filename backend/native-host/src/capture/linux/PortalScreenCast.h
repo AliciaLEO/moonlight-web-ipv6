@@ -109,7 +109,11 @@ struct PortalStream
     int x = 0;
     int y = 0;
 
-    bool valid() const { return nodeId != 0 && pipewireFd >= 0; }
+    /// The node is on the session's own PipeWire, reached without a
+    /// descriptor: KWin's virtual output (setKwinVirtualOutput) streams there.
+    bool sessionPipeWire = false;
+
+    bool valid() const { return nodeId != 0 && (pipewireFd >= 0 || sessionPipeWire); }
 };
 
 class PortalScreenCast
@@ -147,6 +151,13 @@ public:
     /// consumer negotiates, and removes it when the session closes. Before
     /// start().
     void setVirtual(bool virtualMonitor);
+
+    /// Ask KWin for the virtual monitor instead of the portal — KDE Plasma 6,
+    /// whose portal offers no VIRTUAL source (KwinVirtualOutput.h): an output
+    /// named after @p name, of @p width × @p height. No dialog and no token;
+    /// the same helper carries the request where this process holds a
+    /// capability, since KWin cannot read such a process either. Before start().
+    void setKwinVirtualOutput(const std::string& name, int width, int height);
 
     /// Run the whole handshake. Blocking, and ⚠️ WAITS ON A HUMAN unless
     /// @p restoreToken replays an earlier grant: the portal shows a dialog and

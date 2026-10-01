@@ -316,9 +316,12 @@ else()
                     message(STATUS "mw-native-host: ScreenCast portal ON (sd-bus ${MW_LINUX_PORTAL_VERSION}, LGPL — see LICENSE.md)")
                     # MutterDisplayConfig: GNOME's layout around the portal's
                     # virtual monitor — the same library, on the same route.
+                    # KwinVirtualOutput: KDE's virtual monitor, which its portal
+                    # does not make (libwayland-client by dlopen, no sd-bus).
                     target_sources(mw-native-host PRIVATE src/capture/linux/PortalScreenCast.cpp
                                                           src/capture/linux/PortalCapture.cpp
-                                                          src/capture/linux/MutterDisplayConfig.cpp)
+                                                          src/capture/linux/MutterDisplayConfig.cpp
+                                                          src/capture/linux/KwinVirtualOutput.cpp)
                     target_include_directories(mw-native-host SYSTEM PRIVATE ${MW_LINUX_PORTAL_INCLUDE_DIRS})
                     target_link_libraries(mw-native-host PRIVATE ${MW_LINUX_PORTAL_LIBRARIES})
                     # PUBLIC so the tests know whether the route is built.

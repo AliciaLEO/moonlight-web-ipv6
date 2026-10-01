@@ -119,6 +119,23 @@ Terminal=false
 StartupWMClass=$APP
 EOF
 
+# KWin's grant (KDE Plasma 6, whose portal makes no virtual display): KWin
+# makes the virtual display through a restricted protocol it hands only to a
+# program an installed .desktop names — by the binary's own path, which it
+# reads from /proc. The binary, then, not the launcher: the session asks
+# through a helper that runs it with every capability dropped, since KWin
+# cannot read a process that holds one. Not a menu entry (NoDisplay). KWin
+# reads it at login: it counts from the next one after the install.
+cat > "$PKG/usr/share/applications/$APPID.KWin.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=$APP virtual display
+Exec=$PREFIX/bin/$APP
+NoDisplay=true
+Terminal=false
+X-KDE-Wayland-Interfaces=zkde_screencast_unstable_v1
+EOF
+
 # AppStream metadata: what GNOME Software / KDE Discover / Ubuntu App Center
 # actually index. Without it the app is installable but invisible in every
 # graphical software centre. The same file is compiled into the repository

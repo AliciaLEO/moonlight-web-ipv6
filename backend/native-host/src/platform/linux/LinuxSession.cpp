@@ -881,6 +881,18 @@ private:
                 portal->setVirtualMonitor(m_Config.width, m_Config.height,
                                           m_Config.virtualRefreshHz > 0 ? m_Config.virtualRefreshHz
                                                                         : m_Config.fps);
+            // KDE Plasma 6: its portal makes no virtual monitor, KWin does
+            // (KwinVirtualOutput.h). The owner's output keeps one name, so
+            // KDE's display settings know it from stream to stream; a guest's
+            // is its own.
+            m_KwinOutputName.clear();
+            if (m_Target.portalVirtual && (capture::PortalScreenCast::sourceTypes() &
+                                           capture::PortalScreenCast::kSourceVirtual) == 0) {
+                m_KwinOutputName = m_Config.virtualPrimary
+                                       ? std::string("MoonlightWeb")
+                                       : "MoonlightWeb-" + std::to_string(::getpid());
+                portal->setKwinVirtualOutput(m_KwinOutputName);
+            }
             portal->setRestoreToken(m_PortalToken);
             // The GPU the pair converts and encodes on, whatever the buffers:
             // the Vulkan conversion reads shared memory too (C13.10).
@@ -897,12 +909,28 @@ private:
             std::vector<std::string> monitorsBefore;
             std::string notGnome;
             const bool primaryWanted =
-                m_Target.portalVirtual && m_Config.virtualPrimary &&
+                m_Target.portalVirtual && m_Config.virtualPrimary && m_KwinOutputName.empty() &&
                 capture::MutterDisplayConfig::connectors(monitorsBefore, notGnome);
-            if (m_Target.portalVirtual && m_Config.virtualPrimary && !primaryWanted)
+            if (m_Target.portalVirtual && m_Config.virtualPrimary && !primaryWanted &&
+                m_KwinOutputName.empty())
                 log::info("[native] virtual display: left where the compositor put it — " +
                           notGnome);
             if (!portal->start(error)) return false;
+            // A compositor that settles on DMA-BUF again and again and fills
+            // nothing — KWin on a renderer that cannot allocate the modifier
+            // (the Plasma 6.3 VM, 01/10/2026: hundreds of renegotiations a
+            // second) — is asked once more for shared memory, which every one
+            // can fill.
+            if (portal->dmabuf() && portal->renegotiatingWithoutPicture() && !m_PortalShmOnly) {
+                log::warning("[native] the compositor renegotiates DMA-BUF without a picture — "
+                             "the capture is asked again in shared memory");
+                m_PortalShmOnly = true;
+                portal.reset();
+                return openCapture(error);
+            }
+            // KWin names its virtual outputs "Virtual-<name>": the pointer
+            // mapping finds this one by it (readInputRects).
+            if (!m_KwinOutputName.empty()) m_VirtualConnector = "Virtual-" + m_KwinOutputName;
             // A grant only comes back from a start that raised the dialog.
             // Handing it up is what spares the user every later one — the
             // consumer stores it and passes it back in SessionConfig.
@@ -2410,9 +2438,13 @@ private:
     /// The portal grant to replay on the next open — the session's own, then
     /// whatever the portal handed back. See openCapture.
     std::string m_PortalToken;
-    /// GNOME's name for the virtual monitor of this portal session ("Meta-0"),
-    /// found by makeVirtualPrimary; empty when there is none, or it is not known.
+    /// The compositor's name for the virtual monitor of this session — GNOME's
+    /// "Meta-0" (makeVirtualPrimary), KWin's "Virtual-<name>"; empty when there
+    /// is none, or it is not known.
     std::string m_VirtualConnector;
+    /// The name KWin's virtual output was asked under (KDE Plasma 6); empty
+    /// when the portal makes the monitor, or there is none.
+    std::string m_KwinOutputName;
     /// The CRTC modes when the portal was opened (KmsCapture::modeSignature).
     std::string m_PortalModes;
     /// The same, as they were when this portal session opened: a mode change
