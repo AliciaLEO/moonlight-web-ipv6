@@ -323,8 +323,8 @@ Aucun mapping par appareil : l'hôte recrée l'appareil tel quel.
 ### 5.3 Latence
 
 - **Meilleure que le mapping.** Chaque rapport part à son arrivée, alors que l'API
-  Gamepad est relevée à 250 Hz, et même au rythme des images tant que T3 du plan
-  radios n'est pas faite.
+  Gamepad est relevée à 250 Hz (T3 du plan radios, faite le 01/10/2026 ; avant,
+  au rythme des images).
 - **Volume :** 500 à 1000 rapports/s pour un volant direct drive **[S]**, soit
   environ 40 Ko/s.
 - **Lecture :** dans un worker WebHID, pour échapper au fil principal. **[S]** Si

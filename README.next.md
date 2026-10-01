@@ -97,6 +97,7 @@ Standard pads just work. Others are recognized from [SDL_GameControllerDB](https
 | 8BitDo SN30 Pro | Bluetooth, Start+A (PS4) | ✅ |
 | 8BitDo SN30 Pro | Bluetooth, Start+B (8BitDo) | ✅ |
 | 8BitDo SN30 Pro | Bluetooth, Start+Y (Switch Pro) | ❌ not read correctly by browsers |
+| Radiomaster TX12 (EdgeTX) | USB Joystick (HID) | ✅ recognized on plug-in, like any EdgeTX/OpenTX radio |
 
 Details and test notes in the [wiki](docs/wiki/04-Frontend.md#48-controller-compatibility).
 

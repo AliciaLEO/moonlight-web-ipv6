@@ -33,8 +33,8 @@ frontend/
 │   │   ├── VideoDecodeWorker.js# OffscreenCanvas decode+render worker (video_worker: auto|on|off)
 │   │   ├── JitterController.js # adaptive jitterBufferTarget (webrtc-media), AIMD control law
 │   │   ├── FramePacer.js      # adaptive presentation reserve (DataChannel paths, mw_pacing)
-│   │   ├── GamepadManager.js   # Gamepad API → input DC (mapped pads, single-pad guests, rumble)
-│   │   ├── gamepadMapping.js   # non-standard pads: user / Android / SDL DB resolution, remap capture
+│   │   ├── GamepadManager.js   # Gamepad API → input DC, read at 250 Hz (mapped pads, single-pad guests, rumble)
+│   │   ├── gamepadMapping.js   # non-standard pads: user / built-in / Android / SDL DB resolution, device kind, remap capture
 │   │   ├── gamepadDb.js        # GENERATED from SDL_GameControllerDB (npm run gamepad-db), loaded on demand
 │   │   ├── LatencyProbe.js     # click→photon probe (debug builds, mwLatency.run())
 │   │   └── renderers/          # VideoRenderer base + Canvas2D / WebGl / WebGpu / VideoElement + factory
@@ -43,6 +43,7 @@ frontend/
 │   │   ├── StreamView.js       # the streaming overlay (largest module: decode, render, input, stats)
 │   │   ├── StreamViewKeyboard.js / StreamViewTouch.js / StreamViewFullscreen.js
 │   │   ├── AdminView.js / SettingsView.js / SetupView.js / LoginView.js
+│   │   ├── GamepadRemapDialog.js / GamepadArt.js / DeviceArt.js  # Test & Remap: wizard, drawn pad, radio, flight stick, wheel
 │   │   ├── PairDialog.js / Toast.js / icons.js
 │   ├── models/                 # Host.js, App.js
 │   ├── util/                   # Mp4Muxer (NAL/avcC/hvcC/codec strings), Av1Utils (OBU parse),
@@ -119,7 +120,7 @@ The **webrtc-media transport** natively renders into a `<video>` element (RTP �
 
 ## 4.8 Controller compatibility
 
-How a pad is read (`gamepadMapping.js`, first match wins): the user's own layout → the browser's `standard` mapping → Chrome Android's pre-sorted layout → SDL_GameControllerDB (desktop, by USB vendor:product) → nothing, and the remap wizard is offered. A pad Windows reports under a generic name ("HID-compliant game controller", e.g. an Xbox pad over Bluetooth) is named from its USB ids.
+How a pad is read (`gamepadMapping.js`, first match wins): the user's own layout → the browser's `standard` mapping → a profile built in for a device SDL does not know (desktop, by USB vendor:product: EdgeTX/OpenTX radios) → Chrome Android's pre-sorted layout → SDL_GameControllerDB (desktop, by USB vendor:product) → nothing, and the remap wizard is offered. A pad Windows reports under a generic name ("HID-compliant game controller", e.g. an Xbox pad over Bluetooth) is named from its USB ids.
 
 **Tested on 24/09/2026** — Windows 11, Chrome, Settings → Controllers then a stream, buttons, sticks and triggers checked; Firefox used as a second opinion on the failing cases.
 
@@ -137,7 +138,41 @@ How a pad is read (`gamepadMapping.js`, first match wins): the user's own layout
 
 **The Switch protocol over Bluetooth fails in the browser, not in MoonlightWeb** — the genuine Pro Controller and the 8BitDo in Switch mode alike. Chrome drives Nintendo pads through its own driver, which must initialize the pad first; over Bluetooth on Windows that fails, and the pad never reaches `navigator.getGamepads()` (a gamepad tester page shows nothing either, `chrome://device-log` stays empty, closing Steam changes nothing). Firefox does list it (`057e-2009-Wireless Gamepad`), buttons working but not the sticks. Over USB the same pad works. Rewriting the Switch protocol (WebHID) was ruled out: use USB, or another mode of the pad — XInput first, for rumble and no layout to guess.
 
-To tell whether a failing pad is ours or the browser's: open a gamepad tester page in the same browser. If it sees nothing, neither can we.
+To tell whether a failing pad is ours or the browser's: open a gamepad tester page in the same browser. If it sees nothing, neither can we. If it sees nothing while Windows does (`joy.cpl`), restart the browser: a Chrome left open for days, its update pending, once stopped seeing every HID device (01/10/2026).
+
+### RC radios, flight sticks and wheels
+
+They reach the game as every pad does, as an **Xbox 360 controller**: two sticks of 16 bits, two triggers of 8 bits (256 steps), 15 buttons and the d-pad. What a device has beyond that is not sent, and no force feedback comes back. Recreating the device itself on the host is another track, the [HID passthrough study](../design/hid-passthrough-study.md).
+
+| Device | Connection / mode | Laid out by | Read on |
+|---|---|---|---|
+| EdgeTX and OpenTX radios: Radiomaster TX12, TX16S, Zorro, Boxer, Pocket, MT12; Jumper; BetaFPV LiteRadio 3 Pro; FrSky and Flysky under EdgeTX | USB, "USB Joystick (HID)", **Classic** mode (the default) | a **built-in profile**, on plug-in (`1209:4f54`) | Radiomaster TX12, EdgeTX, Windows 11 + Chrome 154, 01/10/2026 |
+| Logitech G29 | USB, selector on PS3 | the wizard, once, in a wheel's order (recognized as a wheel) | — |
+| Flight sticks and HOTAS, other wheels and pedals; Ethos and DJI radios; EdgeTX in "Advanced" USB mode | USB | the wizard, once | — |
+
+**The radio profile** reads Mode 2 in the default AETR channel order:
+
+- yaw (CH4) → left stick X, throttle (CH3) → left stick Y, throttle up = stick up; roll (CH1) → right stick X, pitch (CH2) → right stick Y;
+- CH5 → LT and CH6 → RT, over the whole axis: a switch at −100, 0, +100 gives 0, 128, 255. **A channel the radio's model leaves unmixed sits at 0, a trigger half pressed**: mix CH5 and CH6 to switches in the model, or lay them out again in the wizard;
+- CH9-16 (the radio's buttons 0-7, pressed when the channel is above 0) → A, B, X, Y, LB, RB, Back, Start. CH7-8 go nowhere: an Xbox pad has six analog channels;
+- Mode 1, another channel order or the Advanced mode: the wizard.
+
+**The device's kind** (gamepad, RC radio, flight stick, wheel) comes from the user's choice, then the USB ids, then the name (`edgetx`, `hotas`, `rudder`, `wheel`, `fanatec`…), a gamepad otherwise. Settings → Controllers shows it as an icon. **Test** and **Remap** draw that device, each control tagged with what the game gets (LT, A, LS…): a radio's gimbals and switches, a flight stick's grip, twist and throttle, a wheel's rim, paddles and pedals (the clutch greyed: it has no place on an Xbox pad). The wizard asks in the device's words and order (yaw, throttle, roll, pitch; steering, accelerator, brake, paddles). The dialog's **Type** selector corrects a wrong guess, and is saved on its own.
+
+**An axis without a spring** (a throttle, a pedal) rests at an end stop. The wizard reads its direction from that rest, not from the move, so a throttle parked down never comes out inverted. The rest is taken when the wizard starts: start it with the throttle down.
+
+**Settings in the game**, so that it passes the device's travel through untouched:
+
+| Game | Settings |
+|---|---|
+| Liftoff | calibrate the "Xbox 360" controller in its input settings, dead zones at 0 |
+| Assetto Corsa Competizione | steering filter 0, speed sensitivity 0, steering linearity 1 |
+| Automobilista 2 | controller filtering off |
+| Forza Motorsport | steering "Simulation", axis dead zone inside 0, outside 100 |
+
+**On the client, Logitech G HUB:** set the wheel's rotation angle (the game sees a stick: the rim's full turn is the stick's full travel), and turn on the centering spring: no force feedback comes back from the game, and without the spring the rim stays where it was left.
+
+**Limits.** If the link goes silent for 3 s, or the wizard opens mid-game, sticks go back to the center and triggers to 0: a drone's throttle drops to mid-stick and the flight is lost, though arming on CH5 falls back too, which disarms; a wheel's pedals are released. A user's layout belongs to one browser (`localStorage`); built-in profiles need nothing.
 
 ---
 

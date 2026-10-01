@@ -72,6 +72,18 @@ génériques à axes nombreux, que ViGEm ne peut pas restituer.
 - `hid-passthrough-study.md` propose de recréer l'appareil tel quel sur l'hôte natif
   (WebHID côté client, pilote UMDF côté Windows, `uhid` côté Linux).
 
+> **Livré le 01/10/2026 (première voie).** Radios, joysticks de vol et volants
+> passent par le mapping vers la manette Xbox 360 : 4 axes de 16 bits, 2
+> gâchettes de 8 bits, 15 boutons et la croix. Le reste de l'appareil n'est pas
+> transmis. Les radios EdgeTX/OpenTX sont reconnues au branchement (profil
+> intégré, §7) ; volants et joysticks passent une fois par l'assistant, qui
+> parle leur langage. **Pas de retour de force** : le jeu voit une manette, pas
+> un volant ; côté client, le ressort de centrage de G HUB tient la jante. Le
+> passthrough complet, retour de force compris, reste hors de ce périmètre :
+> c'est l'objet de `hid-passthrough-study.md`, où l'étude du retour de force a
+> été fusionnée le 29/09/2026. Réglages côté jeu et limites : wiki, chapitre 4
+> §4.8.
+
 ---
 
 ## 3. Principe architectural
@@ -249,6 +261,32 @@ USB/Bluetooth et version du système. Détection à plusieurs niveaux :
 > manette virtuelle de l'invité suivant. Une manette non reconnue doit être
 > configurée avant d'entrer.
 
+> **Complété le 01/10/2026 : profils intégrés, type d'appareil, axe garé.**
+>
+> - **Profil intégré** (`BUILTIN_PADS`, source `builtin`) : un niveau de plus,
+>   entre le standard (2) et Chrome Android (3), pour un appareil que SDL ne
+>   connaît pas. Bureau seulement, par vid:pid, avant même le chargement de la
+>   base SDL. Premier occupant : les radios EdgeTX/OpenTX (`1209:4f54`, mode
+>   USB « Classic »), lues en Mode 2 et dans l'ordre AETR, comme une TX12 les
+>   rapporte dans Chrome sous Windows (relevé du 01/10/2026). Le mappage de
+>   l'utilisateur reste prioritaire. Une manette mise en place sans lui
+>   (`isAutoMapped` : `builtin`, Android, SDL) reçoit le toast « reconnue
+>   automatiquement » et le badge « Auto ».
+> - **Type d'appareil** (`padKind`) : manette, radio, joystick de vol ou
+>   volant. Il vient du choix de l'utilisateur (sélecteur « Type » du dialogue,
+>   enregistrable seul par `setKind`), puis des ids USB connus, puis d'un
+>   indice tiré du nom (radio, puis vol, puis course ; « Joystick » seul ne dit
+>   rien) ; sinon, manette. Il ne change rien au fil : l'hôte voit toujours un
+>   état X360. Il choisit les étapes de l'assistant et leurs mots
+>   (`WIZARD_STEPS` par type, « montez les gaz », « pédale de frein ») et le
+>   dessin de Tester / Remapper (`DeviceArt.js` : radio, joystick, volant et
+>   pédalier, chaque commande étiquetée de ce que reçoit le jeu).
+> - **Axe garé** (`detectInput`, étape de stick) : un axe qui repose en butée
+>   (|repos| > 0,9), comme des gaz ou une manette des gaz, prend son sens de la
+>   butée et non du mouvement. Il ne sort donc plus inversé quand on demande
+>   « vers le bas » à des gaz déjà en bas. Le repos est relevé à l'ouverture de
+>   l'assistant.
+
 ### 7.1 Sélection manuelle — debug uniquement
 
 L'auto-détection est le comportement de production. Un sélecteur manuel de
@@ -302,6 +340,16 @@ serveur → navigateur
 - Pas de numéro de version. Un champ nouveau se lit comme absent par un serveur
   plus ancien, et c'est assez pour gyro ou touchpad le jour où le navigateur
   les expose.
+- `gamepad` est un **instantané**, envoyé quand l'état change, plus une
+  répétition toutes les 500 ms. Une manette n'émet aucun événement : un bouton
+  n'est vu qu'au relevé de `navigator.getGamepads()`. Depuis le 01/10/2026, le
+  client relève à 250 Hz, la cadence d'échantillonnage de Chrome : une
+  minuterie de 4 ms s'ajoute au rAF, armée tant qu'une manette est transmise,
+  la page visible et le flux hors pause. Relevée une fois par image, une
+  manette attendait ~8 ms en moyenne à 60 Hz, sticks et boutons compris.
+  Mesuré dans Chrome 154 : 16,7 ms entre deux relevés avant, 3,6 ms après (p95
+  4,8 ms). Une manette n'envoie pas plus que sa propre cadence (TX12 : ≤ 197
+  mises à jour/s), soit au plus ~30 Ko/s à 250 messages/s.
 
 > Le plan initial prévoyait `GAMEPAD_CREATE { profile }` et un rumble avec
 > durée. Ni l'un ni l'autre n'existe ; ce bloc décrit le fil tel qu'il est
@@ -555,15 +603,17 @@ Chemin critique : pas de JSON si mesuré coûteux (§8.1), pas d'allocation, pas
 verrou par événement. Messages binaires de taille fixe, structures
 préallouées, bitfields.
 
-⚠️ **Le vrai gain de latence est ailleurs, et il est identifié** : le relais
-marshale chaque message d'entrée vers le thread Qt
-(`DataChannelRelay.cpp`, `onMessage` → `Qt::QueuedConnection`) parce que le même
-handler pilote presse-papier, politique et statistiques. C'est **un tour de
-boucle d'événements** par événement d'entrée. Le sink natif est déjà sûr pour
-s'en passer ; le relais ne l'est pas.
-
-Sortir clavier/souris/manette du handler partagé vaut plus que tout
-micro-optimisation d'encodage.
+⚠️ **Le vrai gain de latence était ailleurs, et il est pris.** Ce paragraphe
+disait que le relais marshale chaque message d'entrée vers le thread Qt
+(`onMessage` → `Qt::QueuedConnection`), soit un tour de boucle d'événements
+par entrée. **Ce n'est plus vrai** (relevé le 01/10/2026) : chaque message est
+lu et injecté sur le fil libdatachannel qui l'a reçu, sous `m_InputMutex`,
+quel que soit le moteur (`DataChannelRelay.cpp:1015-1031`, `m_DirectInput`
+toujours vrai, `DataChannelRelay.h:299`). La forme en file n'est plus qu'une
+branche que rien n'emprunte. Le JSON coûte 0,65 à 1,6 µs par message (wiki,
+chapitre 5 §5.5) : ce qui reste à gagner, c'est **quand** le message part du
+navigateur. D'où la lecture des manettes à 250 Hz (§8) et la souris au rythme
+de l'appareil (`pointerrawupdate`).
 
 ---
 
