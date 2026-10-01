@@ -47,6 +47,7 @@ import {
     noteBoxArtSeen,
 } from '../util/appCache.js';
 import { noteHostUse, forgetHostUse, hostUsageRanker } from '../util/hostUsage.js';
+import * as RemoteNav from './RemoteNav.js';
 
 /**
  * Where the empty host list sends someone who has nothing to stream from yet.
@@ -1661,8 +1662,10 @@ export class HostListView {
                 nameEl.textContent = nameEl.dataset.label;
                 delete nameEl.dataset.label;
             }
+            // Not with a remote: there the focus IS the pointer, and a card that
+            // drops it leaves the next arrow press starting from nowhere.
             const focused = /** @type {HTMLElement | null} */ (document.activeElement);
-            if (focused && card.contains(focused)) focused.blur();
+            if (focused && card.contains(focused) && !RemoteNav.isActive()) focused.blur();
             if (failed) this._flashLaunchFailed(card);
         });
     }

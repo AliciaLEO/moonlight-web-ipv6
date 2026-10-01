@@ -58,6 +58,7 @@ import { PlayerJoinView } from './ui/PlayerJoinView.js';
 import { BackendClient } from './api/BackendClient.js';
 import { Toast } from './ui/Toast.js';
 import { DiscordLink } from './ui/DiscordLink.js';
+import * as RemoteNav from './ui/RemoteNav.js';
 import { GamepadDriverNotice } from './ui/GamepadDriverNotice.js';
 import { VersionGuard } from './util/VersionGuard.js';
 import {
@@ -4399,5 +4400,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     // the catalogs are in so its label is not the English one for a French
     // reader, and left alone from then on. The stream hides it in CSS.
     DiscordLink.mount();
+    // Arrows and pads get around the pages on a TV (nothing is attached
+    // elsewhere). Before the app, so its listeners see the keys first.
+    RemoteNav.init();
     MoonlightApp.init();
 });

@@ -9,6 +9,7 @@ vi.mock('../js/api/BackendClient.js', () => ({
 }));
 
 import { HostListView } from '../js/ui/HostListView.js';
+import * as RemoteNav from '../js/ui/RemoteNav.js';
 import { Host } from '../js/models/Host.js';
 import { BackendClient } from '../js/api/BackendClient.js';
 
@@ -83,6 +84,17 @@ describe('app card launch feedback', () => {
             view.clearLaunching({ failed: true });
 
             expect(document.activeElement).not.toBe(el);
+        });
+
+        it('keeps the focus on a TV, where the focus is the pointer', () => {
+            RemoteNav._setActiveForTest(true);
+            try {
+                const el = launch();
+                view.clearLaunching({ failed: true });
+                expect(document.activeElement).toBe(el);
+            } finally {
+                RemoteNav._setActiveForTest(null);
+            }
         });
 
         it('leaves no colour behind once the fade is over', () => {

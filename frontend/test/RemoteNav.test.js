@@ -1,0 +1,283 @@
+/*
+ * MoonlightWeb — TNR suite. Copyright (C) 2026 Bruno Martin.
+ * GPLv3 — see repository LICENSE.
+ */
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import {
+    pickNext,
+    navKey,
+    arrowStaysNative,
+    init,
+    isActive,
+    _setActiveForTest,
+    _resetForTest,
+    _settleForTest,
+    _pollForTest,
+} from '../js/ui/RemoteNav.js';
+
+/** jsdom has no layout: give an element the box it would have on screen. */
+function place(el, left, top, width, height) {
+    el.getBoundingClientRect = () => ({
+        left,
+        top,
+        right: left + width,
+        bottom: top + height,
+        width,
+        height,
+        x: left,
+        y: top,
+    });
+    return el;
+}
+
+function rect(left, top, width, height) {
+    return { left, top, right: left + width, bottom: top + height };
+}
+
+function button(id, left, top, width = 100, height = 60, parent = document.body) {
+    const b = document.createElement('button');
+    b.id = id;
+    b.textContent = id;
+    parent.appendChild(b);
+    return place(b, left, top, width, height);
+}
+
+function press(key, target = document.activeElement || document.body) {
+    const ev = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+    target.dispatchEvent(ev);
+    return ev;
+}
+
+describe('RemoteNav.pickNext', () => {
+    // Two rows of three, 100×60 with 20 px gaps.
+    const grid = [];
+    for (let row = 0; row < 2; row++) {
+        for (let col = 0; col < 3; col++) {
+            grid.push({ el: `${col},${row}`, rect: rect(col * 120, row * 80, 100, 60) });
+        }
+    }
+    const from = (id) => grid.find((c) => c.el === id).rect;
+    const others = (id) => grid.filter((c) => c.el !== id);
+
+    it('moves one step in each direction across a grid', () => {
+        expect(pickNext(from('1,0'), 'right', others('1,0'))).toBe('2,0');
+        expect(pickNext(from('1,0'), 'left', others('1,0'))).toBe('0,0');
+        expect(pickNext(from('1,0'), 'down', others('1,0'))).toBe('1,1');
+        expect(pickNext(from('1,1'), 'up', others('1,1'))).toBe('1,0');
+    });
+
+    it('stops at the edge instead of wrapping around', () => {
+        expect(pickNext(from('2,0'), 'right', others('2,0'))).toBe(null);
+        expect(pickNext(from('0,0'), 'up', others('0,0'))).toBe(null);
+    });
+
+    it('prefers what lines up with the current element to a closer diagonal', () => {
+        const list = [
+            { el: 'diagonal', rect: rect(150, 90, 100, 60) },
+            { el: 'below', rect: rect(0, 200, 100, 60) },
+        ];
+        expect(pickNext(rect(0, 0, 100, 60), 'down', list)).toBe('below');
+    });
+
+    it('reaches the Quit button inside a card and comes back to the card', () => {
+        const card = rect(0, 0, 100, 140);
+        const quit = rect(10, 110, 80, 20);
+        const nextRow = rect(0, 160, 100, 140);
+        expect(
+            pickNext(card, 'down', [
+                { el: 'quit', rect: quit },
+                { el: 'next row', rect: nextRow },
+            ]),
+        ).toBe('quit');
+        expect(pickNext(quit, 'up', [{ el: 'card', rect: card }])).toBe('card');
+    });
+});
+
+describe('RemoteNav.navKey', () => {
+    afterEach(() => {
+        document.body.innerHTML = '';
+    });
+
+    it('names an element by its own key, else its id', () => {
+        const a = document.createElement('div');
+        a.setAttribute('data-nav-key', 'resume');
+        a.id = 'x';
+        expect(navKey(a)).toBe('resume');
+        const b = document.createElement('button');
+        b.id = 'btn-settings';
+        expect(navKey(b)).toBe('#btn-settings');
+    });
+
+    it('names an app card the same way after it was rebuilt', () => {
+        const make = () => {
+            document.body.innerHTML =
+                '<section id="main-content"><div class="host-card" data-uuid="h1">' +
+                '<div class="app-card" data-app-id="7" tabindex="0"></div></div></section>';
+            return document.querySelector('.app-card');
+        };
+        const first = navKey(make());
+        const second = navKey(make());
+        expect(first).toBe(second);
+        expect(first).toContain('data-app-id=7');
+        expect(first).toContain('data-uuid=h1');
+    });
+});
+
+describe('RemoteNav.arrowStaysNative', () => {
+    it('leaves the caret its arrows inside a text, but not at its ends', () => {
+        const input = document.createElement('input');
+        input.value = 'abcd';
+        input.setSelectionRange(2, 2);
+        expect(arrowStaysNative(input, 'ArrowLeft')).toBe(true);
+        expect(arrowStaysNative(input, 'ArrowRight')).toBe(true);
+        expect(arrowStaysNative(input, 'ArrowDown')).toBe(false);
+        input.setSelectionRange(0, 0);
+        expect(arrowStaysNative(input, 'ArrowLeft')).toBe(false);
+    });
+
+    it('leaves a slider its left and right, and a checkbox nothing', () => {
+        const range = document.createElement('input');
+        range.type = 'range';
+        expect(arrowStaysNative(range, 'ArrowRight')).toBe(true);
+        expect(arrowStaysNative(range, 'ArrowUp')).toBe(false);
+        const box = document.createElement('input');
+        box.type = 'checkbox';
+        expect(arrowStaysNative(box, 'ArrowLeft')).toBe(false);
+        expect(arrowStaysNative(document.createElement('button'), 'ArrowLeft')).toBe(false);
+    });
+});
+
+describe('RemoteNav on a page', () => {
+    beforeEach(() => {
+        _resetForTest();
+        document.body.innerHTML = '';
+        document.body.className = '';
+    });
+
+    afterEach(() => {
+        _resetForTest();
+        document.body.innerHTML = '';
+        document.body.className = '';
+    });
+
+    it('is off on a desktop unless asked', () => {
+        expect(isActive()).toBe(false);
+        init();
+        const a = button('a', 0, 0);
+        button('b', 120, 0);
+        a.focus();
+        const ev = press('ArrowRight');
+        expect(ev.defaultPrevented).toBe(false);
+        expect(document.activeElement).toBe(a);
+    });
+
+    it('moves the focus with the arrows and keeps the browser from moving it too', () => {
+        _setActiveForTest(true);
+        init();
+        const a = button('a', 0, 0);
+        const b = button('b', 120, 0);
+        const c = button('c', 0, 80);
+        a.focus();
+        const ev = press('ArrowRight');
+        expect(ev.defaultPrevented).toBe(true);
+        expect(document.activeElement).toBe(b);
+        press('ArrowLeft');
+        press('ArrowDown');
+        expect(document.activeElement).toBe(c);
+    });
+
+    it('puts the first press on an app card when nothing has the focus', () => {
+        _setActiveForTest(true);
+        init();
+        button('settings', 0, 0);
+        const main = document.createElement('section');
+        main.id = 'main-content';
+        document.body.appendChild(main);
+        const card = place(document.createElement('div'), 0, 100, 100, 140);
+        card.className = 'app-card';
+        card.tabIndex = 0;
+        main.appendChild(card);
+        press('ArrowDown', document.body);
+        expect(document.activeElement).toBe(card);
+    });
+
+    it('gives an opening dialog the focus and keeps the arrows inside it', () => {
+        _setActiveForTest(true);
+        init();
+        const opener = button('open', 0, 0);
+        opener.focus();
+        const dialog = place(document.createElement('div'), 200, 200, 400, 200);
+        dialog.className = 'pairing-overlay';
+        document.body.appendChild(dialog);
+        const cancel = button('cancel', 220, 300, 100, 60, dialog);
+        const danger = button('remove', 340, 300, 100, 60, dialog);
+        danger.className = 'btn-danger';
+        _settleForTest();
+        expect(document.activeElement).toBe(cancel);
+        press('ArrowRight');
+        expect(document.activeElement).toBe(danger);
+        // Nowhere further right inside the dialog: the press stays there.
+        const ev = press('ArrowRight');
+        expect(ev.defaultPrevented).toBe(true);
+        expect(document.activeElement).toBe(danger);
+        // Closed: the focus goes back to the element that opened it.
+        dialog.remove();
+        _settleForTest();
+        expect(document.activeElement).toBe(opener);
+    });
+
+    it('puts the focus back on a card the host list rebuilt', () => {
+        _setActiveForTest(true);
+        init();
+        const main = document.createElement('section');
+        main.id = 'main-content';
+        document.body.appendChild(main);
+        const draw = () => {
+            main.innerHTML =
+                '<div class="host-card" data-uuid="h1"><div class="app-card" data-app-id="3" tabindex="0"></div></div>';
+            return place(main.querySelector('.app-card'), 0, 0, 100, 140);
+        };
+        draw().focus();
+        const again = draw();
+        expect(document.activeElement).not.toBe(again);
+        _settleForTest();
+        expect(document.activeElement).toBe(again);
+    });
+
+    it('leaves the keys to the stream, unless a menu is open over it', () => {
+        _setActiveForTest(true);
+        init();
+        const a = button('a', 0, 0);
+        button('b', 120, 0);
+        a.focus();
+        document.body.classList.add('streaming-active');
+        expect(press('ArrowRight').defaultPrevented).toBe(false);
+        expect(document.activeElement).toBe(a);
+    });
+
+    it("moves with a pad's direction pad and clicks with A", () => {
+        _setActiveForTest(true);
+        init();
+        const a = button('a', 0, 0);
+        const b = button('b', 120, 0);
+        let clicked = 0;
+        b.addEventListener('click', () => clicked++);
+        a.focus();
+        const buttons = Array.from({ length: 17 }, () => ({ pressed: false, value: 0 }));
+        const pad = { index: 0, connected: true, buttons, axes: [0, 0, 0, 0] };
+        Object.defineProperty(navigator, 'getGamepads', {
+            value: () => [pad],
+            configurable: true,
+        });
+        _pollForTest(); // first sight of the pad: nothing held counts
+        buttons[15].pressed = true; // right
+        _pollForTest();
+        expect(document.activeElement).toBe(b);
+        buttons[15].pressed = false;
+        _pollForTest();
+        buttons[0].pressed = true; // A
+        _pollForTest();
+        expect(clicked).toBe(1);
+        delete (/** @type {any} */ (navigator).getGamepads);
+    });
+});

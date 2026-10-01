@@ -94,6 +94,43 @@ h2,
 :focus:not(:focus-visible) {
     outline: none;
 }
+/* The bevelled surfaces clip away an outline drawn outside their box, so
+   theirs goes inside — white, apart from the yellow launching edge — and an
+   app card takes the look it has under a mouse. */
+.btn:focus-visible,
+.host-card:focus-visible,
+.app-card:focus-visible,
+.settings-section:focus-visible {
+    outline: 3px solid var(--text-1);
+    outline-offset: -5px;
+}
+.app-card:focus-visible {
+    box-shadow: var(--edge-accent), var(--glass-highlight);
+    filter: var(--glow-accent);
+}
+.settings-slider:focus-visible {
+    box-shadow: 0 0 0 3px var(--accent-ring);
+}
+/* On a TV (RemoteNav sets .remote-nav) the focus is the only pointer there is,
+   whatever moved it: a pad's press is no keyboard event, and :focus-visible
+   would stay off for it. Any focus is drawn, thicker for a screen three metres
+   away, and the focused app card lifts. */
+.remote-nav :focus {
+    outline: 4px solid var(--text-1);
+    outline-offset: 2px;
+}
+.remote-nav .btn:focus,
+.remote-nav .host-card:focus,
+.remote-nav .app-card:focus,
+.remote-nav .settings-section:focus {
+    outline: 4px solid var(--text-1);
+    outline-offset: -6px;
+}
+.remote-nav .app-card:focus {
+    box-shadow: var(--edge-accent), var(--glass-highlight);
+    filter: var(--glow-accent);
+    transform: translateY(-3px) scale(1.04);
+}
 
 /* ── Scrollbar ─────────────────────────────────────────────────────────────
    The page's own scroll container plus any overlay tall enough to need one of

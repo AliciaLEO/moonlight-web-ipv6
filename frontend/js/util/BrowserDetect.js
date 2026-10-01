@@ -105,9 +105,6 @@ export function isIphone() {
     return /iPhone|iPod/i.test(navigator.userAgent);
 }
 
-/** True when the browser supports touch events (any touch-capable device). */
-export const IS_TOUCH_DEVICE = platform.isTouchDevice;
-
 /**
  * True for a television or a TV box: Android TV, Google TV, Fire TV, a set
  * top box. Its browser says "Android" and, as often as not, "Mobile" too —
@@ -120,8 +117,9 @@ export const IS_TOUCH_DEVICE = platform.isTouchDevice;
  * Android phone and tablet has a touchscreen and reports its touch points,
  * a TV has none (maxTouchPoints 0, measured on that Mi TV in TV Bro and in a
  * Chromium build alike). A few vendors also say it outright in the agent.
- * Only the size decisions read this — a TV is driven by a remote or a pad
- * through the same pages a phone uses, and stays a phone for everything else.
+ * The size decisions read this, and so does everything built for a finger
+ * (IS_TOUCH_DEVICE): a TV is driven by a remote or a pad, never by touch.
+ * For the rest it goes through the same pages a phone does.
  * @param {Navigator} [nav]
  */
 export function detectTv(nav) {
@@ -136,6 +134,14 @@ export function detectTv(nav) {
 
 /** True on a television (see detectTv). */
 export const IS_TV = detectTv();
+
+/**
+ * True when the browser takes touch input: a phone, a tablet, a touchscreen
+ * laptop. Not a TV, though its user agent reads like a phone's: what a finger
+ * would do there (the keyboard toggle, the gesture help, the touch modes) no
+ * remote can reach.
+ */
+export const IS_TOUCH_DEVICE = platform.isTouchDevice && !IS_TV;
 
 /**
  * True when the stream's size should be chosen as for a phone or a tablet —

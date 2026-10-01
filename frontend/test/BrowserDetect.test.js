@@ -286,6 +286,20 @@ describe('BrowserDetect.supportsGamingMode', () => {
 
     afterEach(() => vi.unstubAllGlobals());
 
+    it('a TV is no touch device, nor handheld, and keeps gaming mode out', async () => {
+        const tv =
+            'Mozilla/5.0 (Linux; Android 10; Freebox Player POP Build/QTT8.201201.002; wv) ' +
+            'AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/153.0.8010.39 Mobile Safari/537.36';
+        const m = await fresh(tv, 0, false);
+        expect(m.IS_TV).toBe(true);
+        expect(m.IS_TOUCH_DEVICE).toBe(false);
+        expect(m.IS_HANDHELD).toBe(false);
+        expect(m.supportsGamingMode()).toBe(false);
+        // A phone is still one.
+        const phone = await fresh(UA.androidPhone, 5, false);
+        expect(phone.IS_TOUCH_DEVICE).toBe(true);
+    });
+
     it('a touchscreen PC with a mouse has it (Surface, issue #16)', async () => {
         const m = await fresh(UA.desktop, 10, true);
         expect(m.IS_TOUCH_DEVICE).toBe(true);

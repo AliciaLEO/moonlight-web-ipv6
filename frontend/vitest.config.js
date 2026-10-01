@@ -58,6 +58,7 @@ export default defineConfig({
                 'js/api/BackendClient.js',
                 'js/api/FloodCounter.js',
                 'js/ui/Toast.js',
+                'js/ui/RemoteNav.js',
             ],
             thresholds: {
                 lines: 70,

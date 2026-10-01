@@ -49,8 +49,8 @@ import {
 } from '../util/gamepadMappingsStore.js';
 import {
     SUPPORTS_CANVAS_TEARING,
-    IS_MOBILE_OR_TABLET,
     IS_HANDHELD,
+    IS_TOUCH_DEVICE,
     resolveTearing,
     supportsDisplayHdr,
     hdrClientCapability,
@@ -70,11 +70,6 @@ import {
     fitPixelBudget,
     readResolutionChoice,
 } from '../util/StreamResolution.js';
-
-/** True when the browser supports touch events (mobile/tablet, or touchscreen laptop). */
-const IS_TOUCH_DEVICE =
-    'ontouchstart' in window ||
-    (typeof navigator.maxTouchPoints !== 'undefined' && navigator.maxTouchPoints > 0);
 
 const STORAGE_KEY = 'mw-streaming-settings';
 
@@ -1474,9 +1469,10 @@ export class SettingsView {
                     <!-- Finger input, mobile/tablet only. A touchscreen laptop is
                          driven by its trackpad or a mouse: both settings only act on
                          the touch path (StreamViewTouch), so neither is offered
-                         there — gate on the platform type, not on IS_TOUCH_DEVICE. -->
+                         there — gate on the platform type, not on IS_TOUCH_DEVICE.
+                         Nor on a TV, whose user agent reads like a phone's. -->
                     ${
-                        IS_MOBILE_OR_TABLET
+                        IS_HANDHELD
                             ? `
                     <div class="settings-field">
                         <label class="settings-checkbox-label">
