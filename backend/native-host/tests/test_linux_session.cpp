@@ -901,5 +901,51 @@ void run_linux_virtual_display_tests()
         std::fprintf(stderr, "  new grant — MW_PORTAL_VIRTUAL_TOKEN=%s\n", granted.c_str());
     // A replayed grant raises no dialog, and so hands nothing back.
     if (replay && *replay) CHECK_EQ(grants.load(), 0);
+
+    // "Match my screen" from a phone held upright, the monitor made at 240 Hz
+    // under a 60 fps stream (C0 of plan Idées Punktfunk): the monitor takes the
+    // phone's size to the pixel — a shape the nominal 1080p entry would have
+    // refused — and the stream keeps its own cadence, the gate carrying the
+    // first present of each interval ("cadence:" line). Replays the grant the
+    // first session ended with.
+    SessionConfig phone = config;
+    phone.width = 1170;
+    phone.height = 2532;
+    phone.fps = 60;
+    phone.fitRequestedBox = phone.allowUpscale = phone.matchClientDisplay = true;
+    phone.virtualRefreshHz = 240;
+    const std::string token = !granted.empty() ? granted : (replay ? replay : "");
+    if (token.empty()) {
+        std::fprintf(stderr, "  match session skipped: no grant to replay\n");
+        return;
+    }
+    phone.portalRestoreToken = token;
+    std::atomic<int> phoneFrames{0};
+    std::string phoneEnded;
+    std::unique_ptr<Session> phoneSession = NativeHost::createSession(
+        phone, [&](const EncodedFrame&) { phoneFrames.fetch_add(1); }, nullptr, nullptr, nullptr,
+        [&](const std::string& reason) { phoneEnded = reason; }, error);
+    CHECK(phoneSession != nullptr);
+    if (!phoneSession) return;
+    const bool phoneStarted = phoneSession->start(error);
+    CHECK(phoneStarted);
+    if (!phoneStarted) {
+        std::fprintf(stderr, "  match start failed: %s\n", error.c_str());
+        return;
+    }
+    const SessionInfo& pinfo = phoneSession->info();
+    std::fprintf(stderr, "  match session: display %dx%d, stream %dx%d@%d\n", pinfo.displayWidth,
+                 pinfo.displayHeight, pinfo.width, pinfo.height, pinfo.fps);
+    CHECK_EQ(pinfo.displayWidth, 1170);
+    CHECK_EQ(pinfo.displayHeight, 2532);
+    CHECK_EQ(pinfo.width, 1170);
+    CHECK_EQ(pinfo.height, 2532);
+    CHECK_EQ(pinfo.fps, 60);
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+    phoneSession->stop();
+    std::fprintf(stderr, "  %d frame(s)%s\n", phoneFrames.load(),
+                 phoneEnded.empty() ? "" : (", ended: " + phoneEnded).c_str());
+    CHECK(phoneFrames.load() >= 1);
+    CHECK(phoneEnded.empty());
 #endif
 }

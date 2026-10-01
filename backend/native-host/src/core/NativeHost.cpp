@@ -148,10 +148,16 @@ std::unique_ptr<Session> NativeHost::createSession(const SessionConfig& config,
     // "Match my screen" is a Windows or macOS session's to attempt (a display
     // mode change, applyClientMode in both). On Linux it is Auto from the start:
     // the fallback box, never upscaled — no mode change without root under
-    // Wayland, and none attempted (decided 24/09/2026).
+    // Wayland, and none attempted (decided 24/09/2026). Except on the portal's
+    // virtual monitor, which changes no mode either: the stream makes it, and
+    // makes it at the client's size (plan Idées Punktfunk, C0, 01/10/2026).
     SessionConfig asked = config;
 #if !defined(_WIN32) && !defined(__APPLE__)
-    if (fallBackFromMatch(asked))
+    if (sizeVirtualMonitorToClient(caps, asked))
+        log::info("[native] \"Match my screen\" on the virtual display — made at the client's "
+                  "size (" +
+                  std::to_string(asked.width) + "x" + std::to_string(asked.height) + " asked)");
+    else if (fallBackFromMatch(asked))
         log::info("[native] this platform changes no display mode — \"Match my screen\" "
                   "streams as Auto");
 #endif

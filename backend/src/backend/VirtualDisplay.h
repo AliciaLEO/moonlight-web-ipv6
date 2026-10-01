@@ -85,8 +85,12 @@ struct DisplayInfo;
  * A ScreenCast portal that lists source type 4 (GNOME 46+) creates a monitor
  * for a session that asks for one, sized by the format the stream negotiates.
  * The card is there whenever the probe lists that display (key
- * "portal-virtual"); the worker's own portal session makes it at the client's
- * size and cadence, and it is gone when the stream ends — see livesInStream().
+ * "portal-virtual"); the worker's own portal session makes it — at the
+ * stream's size, the client's screen to the pixel under "Match my screen"
+ * (mw::native::sizeVirtualMonitorToClient), and at 240 Hz like the Windows
+ * display (SessionConfig::virtualRefreshHz) — and it is gone when the stream
+ * ends — see livesInStream(). No session type but Wayland has the source: an
+ * X11 session (a machine with NVIDIA's driver, often) shows no card.
  *
  * ── The mode ────────────────────────────────────────────────────────────────
  *
@@ -103,13 +107,14 @@ struct DisplayInfo;
  * out-of-bounds size, or a machine whose settings file belongs to someone
  * else's VDD, quietly keeps 1080p — the mode stage is never fatal.
  *
- * The rate travels the same way, and always: a display nobody looks at has no
- * reason to refresh at anything but the rate of the screen the stream lands
- * on. The browser measures it (util/RefreshRate.js) and it reaches the
- * Activate request through /start's `client_refresh_mhz`, so a 60 Hz laptop
- * gets a 60 Hz desktop and a 165 Hz panel a 165 Hz one, each frame the host
- * paints having somewhere to go. No measurement — an old client, a hidden
- * tab at launch — keeps the 120 Hz default.
+ * The rate travels the same way, and always. On Windows and Linux it is
+ * 240 Hz whatever the client's (refreshForStream, kFasterThanStream, plan
+ * framerate-hote of 30/09/2026): a picture the host paints waits for the
+ * compositor at most 1/240 s, and the stream keeps the client's own cadence
+ * — the browser measures it (util/RefreshRate.js) and /start carries it as
+ * `client_refresh_mhz` — by taking the first present of each of its
+ * intervals. On macOS the display runs at the stream's rate; no measurement
+ * — an old client, a hidden tab at launch — keeps the 120 Hz default.
  *
  * Everything in this header that has no OS dependency (the request parser,
  * the settings XML, the names) is pure and covered by
@@ -188,6 +193,17 @@ bool normaliseRate(int& hz);
 /// The bench's MW_VDD_REFRESH (@p benchHz > 0) wins either way, up to the
 /// driver's own ceiling.
 int refreshForStream(int streamFps, int benchHz, bool faster = false);
+
+/// Whether this platform's virtual display runs faster than the stream
+/// (refreshForStream's @p faster): Windows (decision A of plan framerate-hote,
+/// 30/09/2026) and Linux, whose portal monitor the stream itself makes (C0 of
+/// plan Idées Punktfunk, 01/10/2026). macOS keeps the stream's own rate —
+/// unmeasured there.
+#if defined(Q_OS_WIN) || defined(Q_OS_LINUX)
+constexpr bool kFasterThanStream = true;
+#else
+constexpr bool kFasterThanStream = false;
+#endif
 
 // ── The bundled driver (Windows x64) ───────────────────────────────────────
 //

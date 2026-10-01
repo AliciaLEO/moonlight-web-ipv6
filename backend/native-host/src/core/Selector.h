@@ -157,4 +157,21 @@ inline FramePolicy policyOf(const SessionConfig& config)
 /// Selector would have.
 bool fallBackFromMatch(SessionConfig& config);
 
+/// The size a display the stream makes for itself may be made at: the bounds
+/// the server pins a virtual display's mode to (VirtualDisplay::normaliseMode),
+/// even on both sides.
+constexpr int kMadeDisplayMin = 480;
+constexpr int kMadeDisplayMax = 4096;
+
+/// "Match my screen" on the portal's virtual monitor (Linux). That display has
+/// no mode to change and no size of its own — the stream makes it
+/// (PortalCapture::setVirtualMonitor) — so the request is honoured by making
+/// it at the client's size: the display @p config names takes that size,
+/// pinned to [kMadeDisplayMin, kMadeDisplayMax] and made even, and the config
+/// stops asking for a mode change. select() then shapes nothing and the frame
+/// is the client's screen to the pixel. Returns false, changing nothing, for
+/// any other display or a config that did not ask — the caller falls back
+/// from the match as before.
+bool sizeVirtualMonitorToClient(Capabilities& caps, SessionConfig& config);
+
 } // namespace mw::native

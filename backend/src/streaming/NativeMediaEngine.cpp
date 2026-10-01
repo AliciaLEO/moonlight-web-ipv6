@@ -21,6 +21,7 @@
 #include "FeedSubscriber.h"
 #include "InputWatchdog.h"
 #include "NativeBench.h"
+#include "backend/VirtualDisplay.h"
 
 #include "mw/native/FeedWire.h"
 #include "mw/native/NativeHost.h"
@@ -220,6 +221,12 @@ void NativeMediaEngine::startCapture(const StartParams& params)
     config.matchClientDisplay = params.matchClientDisplay;
     config.fallbackWidth = params.fallbackWidth;
     config.fallbackHeight = params.fallbackHeight;
+    // A display the session makes for itself (the portal's virtual monitor on
+    // Linux) runs at the rate the server gives its own virtual display: the
+    // same rule, MW_VDD_REFRESH included, so both platforms bench alike.
+    config.virtualRefreshHz =
+        VirtualDisplay::refreshForStream(params.fps, qEnvironmentVariableIntValue("MW_VDD_REFRESH"),
+                                         VirtualDisplay::kFasterThanStream);
     config.allowElevatedInput = params.viewerAdmin;
     config.muteHostAudio = params.muteHostAudio;
     // The consent this machine was already given, replayed. Empty on the very

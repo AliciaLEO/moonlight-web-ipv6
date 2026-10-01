@@ -262,6 +262,16 @@ struct SessionConfig
     int fallbackWidth = 0;
     int fallbackHeight = 0;
 
+    /// The refresh rate a display this session makes for itself is created at
+    /// — the portal's virtual monitor on Linux, made by the stream. 0 = the
+    /// stream's own rate. The consumer sets it as it sets its own virtual
+    /// display's (240 Hz on Windows and Linux, plan framerate-hote and C0 of
+    /// plan Idées Punktfunk): a picture waits for the compositor at most
+    /// 1/240 s, and the stream keeps its cadence — the session's gate takes
+    /// the first present of each of its intervals. Ignored where the session
+    /// makes no display.
+    int virtualRefreshHz = 0;
+
     /// The chain that carries the pictures on Windows (VideoPipeline.h). Auto,
     /// the default, is the engine's vendor table; the admin's "Advanced"
     /// setting can force one. A D3D12 the session cannot build — a display

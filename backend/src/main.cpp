@@ -3930,17 +3930,15 @@ int main(int argc, char* argv[])
             // intervals, so nothing more is encoded or sent. Measured: 6 to
             // 17 ms off the age of what the client shows behind an Arc or an
             // iGPU, neutral behind an RTX (bench §8p.4 sexies).
+            // Linux too, where the stream makes the portal's monitor itself and
+            // the engine applies the same rule (SessionConfig::virtualRefreshHz).
             // Elsewhere (macOS), the stream's own rate: a display nobody looks
             // at runs at the cadence of the frames it exists to produce;
             // unmeasured (0) leaves the display's default rate.
             //
             // MW_VDD_REFRESH (bench only) sets it apart from both, up to the
             // driver's own 500 Hz. Never set by the product.
-#ifdef Q_OS_WIN
-            constexpr bool vdFaster = true;
-#else
-            constexpr bool vdFaster = false;
-#endif
+            constexpr bool vdFaster = VirtualDisplay::kFasterThanStream;
             const int vdBenchRefresh = qEnvironmentVariableIntValue("MW_VDD_REFRESH");
             const int vdRefresh =
                 VirtualDisplay::refreshForStream(reqFps, vdBenchRefresh, vdFaster);
@@ -5124,13 +5122,9 @@ int main(int argc, char* argv[])
         if (host->backendType == NativeHostBackend::typeName() &&
             appId == NativeHostBackend::virtualDisplayAppId()) {
             // As the owner's /start: 240 Hz on Windows whatever the stream's.
-#ifdef Q_OS_WIN
-            constexpr bool vdFaster = true;
-#else
-            constexpr bool vdFaster = false;
-#endif
-            const int vdRefresh = VirtualDisplay::refreshForStream(
-                60, qEnvironmentVariableIntValue("MW_VDD_REFRESH"), vdFaster);
+            const int vdRefresh =
+                VirtualDisplay::refreshForStream(60, qEnvironmentVariableIntValue("MW_VDD_REFRESH"),
+                                                 VirtualDisplay::kFasterThanStream);
             readyThenStart = [claimThenStart, worker, respond, slot, generation, width, height,
                               vdRefresh]() {
                 qInfo() << "[Session] Player slot" << slot << "on the virtual display — on at"

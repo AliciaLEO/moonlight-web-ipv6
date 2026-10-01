@@ -870,11 +870,16 @@ private:
                 m_Capture.reset();
             }
             auto portal = std::make_unique<capture::PortalCapture>();
-            // A monitor made for this stream, at its size and cadence. Its
-            // consent is a different one from a monitor's: the consumer hands
-            // the matching token in, and stores what comes back apart.
+            // A monitor made for this stream, at its size, and at the rate the
+            // consumer asks of a display it makes — 240 Hz, faster than the
+            // stream, whose own cadence the gate keeps (chooseCadence reads
+            // the rate the format settled on). Its consent is a different one
+            // from a monitor's: the consumer hands the matching token in, and
+            // stores what comes back apart.
             if (m_Target.portalVirtual)
-                portal->setVirtualMonitor(m_Config.width, m_Config.height, m_Config.fps);
+                portal->setVirtualMonitor(m_Config.width, m_Config.height,
+                                          m_Config.virtualRefreshHz > 0 ? m_Config.virtualRefreshHz
+                                                                        : m_Config.fps);
             portal->setRestoreToken(m_PortalToken);
             // The GPU the pair converts and encodes on, whatever the buffers:
             // the Vulkan conversion reads shared memory too (C13.10).
