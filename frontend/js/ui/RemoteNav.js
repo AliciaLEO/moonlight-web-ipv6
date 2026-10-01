@@ -550,14 +550,11 @@ function pollPads() {
         if (!gp || !gp.connected) continue;
         let st = state.pads.get(gp.index);
         if (!st) {
-            // Whatever is already held when a pad is first seen is not a press.
-            st = {
-                pressed: new Set(gp.buttons.map((b, i) => (b.pressed ? i : -1))),
-                heldDir: null,
-                nextRepeatAt: 0,
-            };
+            // A pad held at its first sight IS a press: Chromium only shows a
+            // page a pad once one of its buttons went down, so that button is
+            // the user's first move — ignored, every page load would eat one.
+            st = { pressed: new Set(), heldDir: null, nextRepeatAt: 0 };
             state.pads.set(gp.index, st);
-            continue;
         }
         const down = new Set();
         gp.buttons.forEach((b, i) => {

@@ -132,6 +132,24 @@ describe('a TV remote in a stream', () => {
         expect(v.sent).toEqual([]);
     });
 
+    it("does not let the held OK's repeats press the menu's first button", () => {
+        // Android repeats a held key without the repeat flag, and the menu's
+        // Resume takes the focus as it opens: the next repeat landed on it.
+        const v = view();
+        v.handleKeyDown(ok());
+        vi.advanceTimersByTime(StreamView.REMOTE_MENU_HOLD_MS);
+        const resume = menuEl().querySelector('[data-act="resume"]');
+        let pressed = 0;
+        const repeat = ok({ target: resume, preventDefault: () => pressed-- });
+        v.handleKeyDown(repeat);
+        v.handleKeyDown(repeat);
+        expect(pressed).toBe(-2); // both default actions (the button's press) cancelled
+        v.handleKeyUp(ok({ target: resume }));
+        expect(menuEl()).not.toBe(null);
+        expect(v._okHold).toBe(null);
+        expect(v.sent).toEqual([]);
+    });
+
     it('lets go of what was held on the host when the menu opens', () => {
         const v = view();
         v.handleKeyDown(ev('KeyW', 'w', { keyCode: 0x57 }));
@@ -157,6 +175,14 @@ describe('a TV remote in a stream', () => {
         act('resume');
         expect(menuEl()).toBe(null);
         expect(v.pad.paused).toBe(false);
+        v.handleKeyUp(ok());
+        expect(v.sent).toEqual([]);
+    });
+
+    it('keeps the release of the OK that chose Stop here', () => {
+        // "Leave" in the guests question, minutes after the menu closed: the
+        // stream is going, and the host never had that key down.
+        const v = view({ _manualQuitting: true, _remoteMenuClosedAt: -1e9 });
         v.handleKeyUp(ok());
         expect(v.sent).toEqual([]);
     });

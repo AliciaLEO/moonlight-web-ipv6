@@ -269,7 +269,7 @@ describe('RemoteNav on a page', () => {
             value: () => [pad],
             configurable: true,
         });
-        _pollForTest(); // first sight of the pad: nothing held counts
+        _pollForTest();
         buttons[15].pressed = true; // right
         _pollForTest();
         expect(document.activeElement).toBe(b);
@@ -278,6 +278,22 @@ describe('RemoteNav on a page', () => {
         buttons[0].pressed = true; // A
         _pollForTest();
         expect(clicked).toBe(1);
+        delete (/** @type {any} */ (navigator).getGamepads);
+    });
+
+    it('takes the press that made a pad appear: Chromium shows a pad only once pressed', () => {
+        _setActiveForTest(true);
+        init();
+        const a = button('a', 0, 0);
+        const b = button('b', 120, 0);
+        a.focus();
+        const buttons = Array.from({ length: 17 }, (_, i) => ({ pressed: i === 15, value: 0 }));
+        Object.defineProperty(navigator, 'getGamepads', {
+            value: () => [{ index: 0, connected: true, buttons, axes: [0, 0, 0, 0] }],
+            configurable: true,
+        });
+        _pollForTest();
+        expect(document.activeElement).toBe(b);
         delete (/** @type {any} */ (navigator).getGamepads);
     });
 });

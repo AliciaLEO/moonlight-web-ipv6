@@ -8953,6 +8953,13 @@ export class StreamView {
         // Soft-keyboard events on the capture element are handled by its own
         // listeners (beforeinput/keydown) — don't double-process here.
         if (e.target === this._kbdCapture) return;
+        // The OK that opened the remote's menu, still held: its repeats land
+        // on the menu's first button the moment it takes the focus, and press
+        // it — the menu closed again under the finger (measured on a Freebox).
+        if (this._okHold && this._okHold.fired && e.key === 'Enter' && !e.code) {
+            e.preventDefault();
+            return;
+        }
         // A dialog over the stream owns the keyboard. Forwarding its keystrokes
         // to the host — and preventDefault-ing them — made Ctrl+C on the share
         // popin's PIN do nothing locally while sending a copy chord to the game.
@@ -9235,6 +9242,9 @@ export class StreamView {
 
     handleKeyUp(e) {
         if (e.target === this._kbdCapture) return;
+        // Ahead of the dialog exclusion: the OK that opened the remote's menu
+        // comes back up on the menu's button, and its hold must end there.
+        if (this._okHold && this._remoteOkUp(e)) return;
         // Same exclusion as handleKeyDown: a release whose press was never sent
         // would land on the host as an unmatched key-up.
         if (StreamView.isLocalKeyboardTarget(e.target)) return;
@@ -9242,14 +9252,16 @@ export class StreamView {
             e.preventDefault();
             return;
         }
-        if (this._okHold && this._remoteOkUp(e)) return;
         // The menu takes its keys down and up; and the release of the OK that
         // picked one of its buttons comes after the menu is gone — its press
-        // never went to the host, so neither does it.
+        // never went to the host, so neither does it. Same once Stop was
+        // chosen (from the menu's "leave or stop" question, say): a release of
+        // a key the host does not hold has nothing to release.
         const held = this._heldPhysKeys.has(e.code) || this._heldPhysKeys.has(e.keyCode);
         if (
             (this._remoteMenu && this._remoteMenu.isOpen) ||
-            (!held && performance.now() - this._remoteMenuClosedAt < 1000)
+            (!held && performance.now() - this._remoteMenuClosedAt < 1000) ||
+            (!held && this._manualQuitting)
         ) {
             e.preventDefault();
             return;
