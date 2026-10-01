@@ -72,6 +72,7 @@ import {
     decoderRidesOutGaps,
     isSnapdragonGpu,
     noteDecoderCannotRideOut,
+    noteDecoderRefusesReferenceRepairs,
     pickAutoEnhancer,
     supportsDisplayHdr,
     supportsGamingMode,
@@ -3286,11 +3287,14 @@ export class StreamView {
      *
      * On a stream that rides losses out, that is this device's decoder failing
      * under the refresh wave — the Freebox Player POP's does, for good, a few
-     * seconds in. The device keeps the verdict and the session comes back on
-     * keyframes, the same app in the same codec, relaunched the way a codec
-     * fallback is. Not a guest: the feed is the owner's, and the same wave
-     * would come back with it. Elsewhere, the ordinary recovery: a new decoder
-     * and a keyframe on the main thread; the worker's decoder is asked for one.
+     * seconds in. On keyframes already, from a host that heals a loss by a
+     * reference repair, the repairs are what is left: the same box falls
+     * silent every 2.5 s under AMF's long-term references at 30 fps. Either
+     * way the device keeps the verdict and the session comes back, the same
+     * app in the same codec, relaunched the way a codec fallback is — at most
+     * twice, one verdict each. Not a guest: the feed is the owner's, and it
+     * would come back the same. Elsewhere, the ordinary recovery: a new
+     * decoder and a keyframe on the main thread; the worker's is asked for one.
      */
     _checkSilentDecoder(now = performance.now()) {
         if (this._quitting || this._manualQuitting || this._codecFallbackRequested) return;
@@ -3303,16 +3307,19 @@ export class StreamView {
         const silence = this._silentWatch.observe(this.stats.received, this.stats.decoded, now);
         if (!silence) return;
         const ridingOut = !!(this.webrtc && this.webrtc.rideOutLoss);
+        const repaired = !ridingOut && this._refInvalidation === true;
         console.warn(
             '[StreamView] Decoder went silent: ' +
                 silence.chunks +
                 ' chunks in, no picture for ' +
                 Math.round(silence.ms) +
                 ' ms' +
-                (ridingOut ? ' — under the refresh wave' : ''),
+                (ridingOut ? ' — under the refresh wave' : '') +
+                (repaired ? " — under the host's reference repairs" : ''),
         );
         if (ridingOut) noteDecoderCannotRideOut();
-        if (ridingOut && !this._playerMode) {
+        if (repaired) noteDecoderRefusesReferenceRepairs();
+        if ((ridingOut || repaired) && !this._playerMode) {
             this._relaunchOnKeyframes();
         } else if (this._videoWorker) {
             this._requestIdr('decoder silent');

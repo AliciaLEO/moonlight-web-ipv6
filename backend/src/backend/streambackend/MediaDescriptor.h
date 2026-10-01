@@ -79,6 +79,12 @@ struct NativeHostMedia
     /// worth its cost. Asked for by the browser, never assumed: the receiver
     /// is the party that pays if it turns out to handle damage badly.
     bool rideOutLoss = false;
+
+    /// False when the client says its decoder falls silent under the
+    /// encoder's reference repairs (long-term references, an invalidated DPB):
+    /// the session then keeps one reference and heals a loss by a keyframe.
+    /// True — the engine's own repairs — for every other client.
+    bool refInvalidation = true;
 };
 
 struct MediaDescriptor

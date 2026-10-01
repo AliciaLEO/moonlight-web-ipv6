@@ -103,6 +103,10 @@ public:
         /// Encode with intra-refresh. Only worth asking when the receiver will
         /// decode through a gap — see rideOutLoss in MediaDescriptor.h.
         bool intraRefresh = false;
+        /// Heal a lost frame by a reference repair (long-term references,
+        /// NVENC's invalidated DPB). False when the client's decoder falls
+        /// silent under them — see refInvalidation in MediaDescriptor.h.
+        bool refInvalidation = true;
         /// Rebuild at the display's new shape when its mode changes under the
         /// session — see SessionConfig::followDisplayShape.
         bool followDisplayShape = false;

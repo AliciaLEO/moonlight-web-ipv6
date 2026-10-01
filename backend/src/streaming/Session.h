@@ -140,6 +140,12 @@ public:
     /// benefit. Ignored by every path except the native engine.
     void setRideOutLoss(bool enabled) { m_RideOutLoss = enabled; }
 
+    /// False when the browser's decoder falls silent under the encoder's
+    /// reference repairs: the native engine then keeps one reference and heals
+    /// a loss by a keyframe (mw::native::refuseReferenceRepairs). Ignored by
+    /// every other path.
+    void setRefInvalidation(bool allowed) { m_RefInvalidation = allowed; }
+
     /// Whether the viewer administers MoonlightWeb here — HttpRequest::isLocal
     /// at /start. Only the native engine acts on it: anyone else is kept out
     /// of the host's windows that run as administrator (InputGate).
@@ -473,6 +479,10 @@ private:
     /// keyframe. Set from the /start request; only the native engine acts on
     /// it, and only if its encoder really honours intra-refresh.
     bool m_RideOutLoss = false;
+
+    /// See setRefInvalidation. True, the engine's own repairs, unless the
+    /// /start request said otherwise.
+    bool m_RefInvalidation = true;
 
     /// See setViewerAdmin. Defaults to the trusting value only because every
     /// caller sets it; a worker whose parent predates the field is the owner

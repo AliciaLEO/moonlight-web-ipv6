@@ -271,6 +271,7 @@ LaunchRequest StreamSession::buildLaunchRequest() const
     req.hdrEnabled = m_Config.hdrEnabled;
     req.muteHostAudio = m_Config.muteHostAudio;
     req.rideOutLoss = m_RideOutLoss;
+    req.refInvalidation = m_RefInvalidation;
     req.rikey = m_Config.rikey;
     req.rikeyid = m_Config.rikeyid;
     // Empty means "the provider's default identity"; effectiveUniqueId() would
@@ -663,6 +664,8 @@ void StreamSession::onLaunchResult(bool ok, const BackendError& err, const Media
         // Intra-refresh is only worth its cost when the client will decode
         // through the damage, so the client's word is what turns it on.
         nativeParams.intraRefresh = media.nativeHost.rideOutLoss;
+        // And its decoder's word on the reference repairs.
+        nativeParams.refInvalidation = media.nativeHost.refInvalidation;
         // The client's screen, so the cadence can land on its grid when it
         // paints on vsync — see SessionConfig::clientRefreshMilliHz.
         nativeParams.clientRefreshMilliHz = m_ClientRefreshMilliHz;

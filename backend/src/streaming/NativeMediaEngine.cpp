@@ -270,6 +270,11 @@ void NativeMediaEngine::startCapture(const StartParams& params)
             qWarning().noquote() << "[NativeMediaEngine]" << tuningSource
                                  << "ignored:" << parseError;
     }
+    // The client's decoder takes no reference repairs (/start's
+    // ref_invalidation): one reference, and a keyframe for a loss.
+    if (!params.refInvalidation && mw::native::refuseReferenceRepairs(config.tuning))
+        qInfo().noquote() << "[NativeMediaEngine] the client's decoder takes no reference "
+                             "repairs: one reference, keyframes on loss";
     m_NameLinkDropsKey.store(config.tuning.nameLinkDrops, std::memory_order_release);
 
     std::string error;

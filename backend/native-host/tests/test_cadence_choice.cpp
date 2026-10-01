@@ -209,4 +209,25 @@ void run_cadence_choice_tests()
         t.cadence = Mode::Deadline;
         CHECK_EQ(t.describe(), std::string("cadence=deadline"));
     }
+
+    // A client whose decoder falls silent under the reference repairs asks for
+    // none (/start's ref_invalidation): the bench's dpb=1, on every encoder.
+    SECTION("refuseReferenceRepairs — one reference for that client, a bench's dpb kept");
+    {
+        EncoderTuning own;
+        CHECK(mw::native::refuseReferenceRepairs(own));
+        CHECK_EQ(own.dpbFrames, 1);
+        CHECK_EQ(own.describe(), std::string("dpb=1"));
+        // Asked twice (a relaunch): nothing more to change.
+        CHECK(!mw::native::refuseReferenceRepairs(own));
+        CHECK_EQ(own.dpbFrames, 1);
+        EncoderTuning bench;
+        bench.dpbFrames = 6;
+        CHECK(!mw::native::refuseReferenceRepairs(bench));
+        CHECK_EQ(bench.dpbFrames, 6);
+        // Every other client never calls it: the engine's own stays default.
+        EncoderTuning other;
+        CHECK(other.isDefault());
+        CHECK_EQ(other.dpbFrames, 0);
+    }
 }

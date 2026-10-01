@@ -284,6 +284,38 @@ export function noteDecoderCannotRideOut(store = rideOutStore()) {
     }
 }
 
+/** This device's verdict on the encoder's reference repairs. */
+const REF_REPAIRS_VERDICT_KEY = 'mw_ref_repairs';
+
+/**
+ * Whether this device's decoder follows the native host's reference repairs:
+ * long-term references marked every frame or two (AMF, oneVPL, D3D12 and
+ * Vulkan Video), an invalidated DPB (NVENC), all for healing a lost frame by a
+ * delta. Every decoder met so far does — but the Freebox Player POP's falls
+ * silent under AMF's at 30 fps and under, without a word, as it does under the
+ * wave (01/10/2026). Nothing tells it in advance: the stream finds out, the
+ * device keeps the verdict, and /start then asks for none (`ref_invalidation`):
+ * one reference, a keyframe for a loss.
+ * @param {Storage|null} [store]
+ * @returns {boolean}
+ */
+export function decoderTakesReferenceRepairs(store = rideOutStore()) {
+    try {
+        return !store || store.getItem(REF_REPAIRS_VERDICT_KEY) !== 'off';
+    } catch (e) {
+        return true;
+    }
+}
+
+/** @param {Storage|null} [store] */
+export function noteDecoderRefusesReferenceRepairs(store = rideOutStore()) {
+    try {
+        if (store) store.setItem(REF_REPAIRS_VERDICT_KEY, 'off');
+    } catch (e) {
+        // Not kept: found out again on the next launch.
+    }
+}
+
 /**
  * True on the WebKit engine: Safari on macOS, and every browser on iOS/iPadOS
  * (they all wrap WebKit, whatever their name). Chromium and Gecko on a Mac are

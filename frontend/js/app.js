@@ -4308,7 +4308,7 @@ const MoonlightApp = {
             const sameCodecAgain = fallbackTarget.reason === 'silent-decoder';
             console.warn(
                 sameCodecAgain
-                    ? `[MW] Relaunch on keyframes: the decoder went silent under the refresh wave (attempt ${this._fallbackAttemptCount})`
+                    ? `[MW] Relaunch on keyframes: the decoder went silent (attempt ${this._fallbackAttemptCount})`
                     : `[MW] Codec fallback → ${fallbackTarget.codec}` +
                           `${fallbackTarget.hdr ? ' HDR' : ' SDR'} (attempt ${this._fallbackAttemptCount})`,
             );

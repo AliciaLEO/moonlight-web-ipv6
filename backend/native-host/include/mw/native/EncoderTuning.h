@@ -545,4 +545,19 @@ inline bool nameLinkDropsByDefault(VideoPipeline pipeline, EncoderApi encoder,
     return false;
 }
 
+/// A client whose decoder falls silent under the encoder's reference repairs
+/// asks for none (/start's `ref_invalidation`: false), and gets the bench's
+/// "before" on every encoder: one reference, a keyframe for a loss. Seen on a
+/// Freebox Player POP (Amlogic, 01/10/2026): AMF marked a long-term reference
+/// every frame at 30 fps, and the box's decoder gave no picture back every
+/// 2.5 s; with dpb=1, 25 fps steady. Nothing changes for any other client,
+/// and a bench's own dpb= is left as it set it.
+/// @returns whether the tuning changed
+inline bool refuseReferenceRepairs(EncoderTuning& tuning)
+{
+    if (tuning.dpbFrames != 0) return false;
+    tuning.dpbFrames = 1;
+    return true;
+}
+
 } // namespace mw::native

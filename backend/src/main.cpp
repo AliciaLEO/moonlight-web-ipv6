@@ -3495,6 +3495,10 @@ int main(int argc, char* argv[])
             // Absent means today's behaviour, so an older cached frontend — and
             // every non-native host — is unaffected.
             s->setRideOutLoss(body["ride_out_loss"].toBool(false));
+            // The browser's decoder falls silent under reference repairs: one
+            // reference and keyframes for it. Absent (every other client, an
+            // older frontend) → the engine's own repairs, as before.
+            s->setRefInvalidation(body["ref_invalidation"].toBool(true));
             // The client's screen: its measured refresh and whether it paints
             // on vsync. Absent (an older frontend) → unknown, no alignment.
             s->setClientPresentation(body["client_refresh_mhz"].toInt(0),
@@ -3641,6 +3645,8 @@ int main(int argc, char* argv[])
             // travel with the config — setting it on the in-process session
             // alone would never reach the encoder.
             cfg["rideOutLoss"] = body["ride_out_loss"].toBool(false);
+            // And the reference repairs, the same way (setRefInvalidation).
+            cfg["refInvalidation"] = body["ref_invalidation"].toBool(true);
             cfg["fpsCeiling"] = reqFpsCeiling;
             cfg["clientRefreshMilliHz"] = body["client_refresh_mhz"].toInt(0);
             cfg["clientVsync"] = body["client_vsync"].toBool(false);

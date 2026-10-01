@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { StreamView } from '../js/ui/StreamView.js';
 import { SilentDecoderWatch } from '../js/stream/SilentDecoderWatch.js';
-import { decoderRidesOutGaps } from '../js/util/BrowserDetect.js';
+import { decoderRidesOutGaps, decoderTakesReferenceRepairs } from '../js/util/BrowserDetect.js';
 
 /**
  * A decoder gone silent under the refresh wave (Freebox Player POP, 01/10/2026):
@@ -48,9 +48,13 @@ function goSilent(v) {
 }
 
 describe('StreamView — a decoder gone silent', () => {
-    beforeEach(() => localStorage.removeItem('mw_ride_out'));
+    beforeEach(() => {
+        localStorage.removeItem('mw_ride_out');
+        localStorage.removeItem('mw_ref_repairs');
+    });
     afterEach(() => {
         localStorage.removeItem('mw_ride_out');
+        localStorage.removeItem('mw_ref_repairs');
         vi.unstubAllGlobals();
     });
 
@@ -78,6 +82,37 @@ describe('StreamView — a decoder gone silent', () => {
         expect(v._handleDecoderError).toHaveBeenCalledOnce();
     });
 
+    it("on keyframes, under the host's reference repairs: the second verdict, and back again", () => {
+        // The Freebox at 30 fps: AMF marks a long-term reference every frame.
+        const v = view({ webrtc: { rideOutLoss: false }, _refInvalidation: true });
+        goSilent(v);
+        expect(decoderTakesReferenceRepairs()).toBe(false);
+        expect(decoderRidesOutGaps('Linux; Android 10')).toBe(true);
+        expect(v._codecFallback).toEqual({ codec: 'hevc', hdr: false, reason: 'silent-decoder' });
+        expect(v.quit).toHaveBeenCalledOnce();
+        expect(v._handleDecoderError).not.toHaveBeenCalled();
+    });
+
+    it('under the wave, the wave alone is blamed: one verdict a relaunch', () => {
+        const v = view({ _refInvalidation: true });
+        goSilent(v);
+        expect(decoderRidesOutGaps('Linux; Android 10')).toBe(false);
+        expect(decoderTakesReferenceRepairs()).toBe(true);
+        expect(v.quit).toHaveBeenCalledOnce();
+    });
+
+    it('a guest keeps the repairs verdict too, and stays', () => {
+        const v = view({
+            webrtc: { rideOutLoss: false },
+            _refInvalidation: true,
+            _playerMode: true,
+        });
+        goSilent(v);
+        expect(decoderTakesReferenceRepairs()).toBe(false);
+        expect(v.quit).not.toHaveBeenCalled();
+        expect(v._handleDecoderError).toHaveBeenCalledOnce();
+    });
+
     it('on keyframes already: a new decoder on the main thread, a keyframe from the worker', () => {
         const main = view({ webrtc: { rideOutLoss: false } });
         goSilent(main);
@@ -87,8 +122,10 @@ describe('StreamView — a decoder gone silent', () => {
         goSilent(worker);
         expect(worker._requestIdr).toHaveBeenCalledWith('decoder silent');
         expect(worker._handleDecoderError).not.toHaveBeenCalled();
-        // Neither says anything about riding out.
+        // Neither says anything about riding out, nor about the repairs: the
+        // host made none (NVENC with dpb=1, a GameStream host).
         expect(decoderRidesOutGaps('Linux; Android 10')).toBe(true);
+        expect(decoderTakesReferenceRepairs()).toBe(true);
     });
 
     it('says nothing while pictures come out', () => {

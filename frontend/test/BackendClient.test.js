@@ -206,6 +206,19 @@ describe('BackendClient', () => {
         ua.mockRestore();
     });
 
+    // Every client takes the host's reference repairs, except a device whose
+    // decoder fell silent under them (Freebox Player POP, 01/10/2026).
+    it('launchApp refuses the reference repairs only on a device that kept that verdict', async () => {
+        localStorage.removeItem('mw_ref_repairs');
+        const fetchMock = mockFetch(jsonResponse({ started: true }));
+        await BackendClient.launchApp('host1', 42, {});
+        expect(JSON.parse(fetchMock.apiCalls()[0][1].body).ref_invalidation).toBe(true);
+        localStorage.setItem('mw_ref_repairs', 'off');
+        await BackendClient.launchApp('host1', 42, {});
+        expect(JSON.parse(fetchMock.apiCalls()[1][1].body).ref_invalidation).toBe(false);
+        localStorage.removeItem('mw_ref_repairs');
+    });
+
     it('downloadCertificate returns raw text', async () => {
         vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse('CERT-TOKEN')));
         await expect(BackendClient.downloadCertificate()).resolves.toBe('CERT-TOKEN');

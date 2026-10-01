@@ -5,11 +5,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
     decoderRidesOutGaps,
+    decoderTakesReferenceRepairs,
     detectPlatform,
     detectTv,
     isLowMemory,
     isIphone,
     noteDecoderCannotRideOut,
+    noteDecoderRefusesReferenceRepairs,
     physicalScreenSize,
     pickAutoEnhancer,
     PLATFORM_TYPE,
@@ -194,6 +196,34 @@ describe('BrowserDetect.decoderRidesOutGaps', () => {
         expect(decoderRidesOutGaps(FREEBOX, broken)).toBe(true);
         expect(() => noteDecoderCannotRideOut(broken)).not.toThrow();
         expect(decoderRidesOutGaps(FREEBOX, null)).toBe(true);
+    });
+});
+
+// The same box falls silent under AMF's long-term references at 30 fps, on
+// keyframes too: a second verdict, kept apart from the first.
+describe('BrowserDetect.decoderTakesReferenceRepairs', () => {
+    afterEach(() => localStorage.removeItem('mw_ref_repairs'));
+
+    it('says yes until this device kept the verdict, and no after', () => {
+        expect(decoderTakesReferenceRepairs()).toBe(true);
+        noteDecoderRefusesReferenceRepairs();
+        expect(decoderTakesReferenceRepairs()).toBe(false);
+        // The two verdicts are apart: refusing the repairs says nothing of the wave.
+        expect(decoderRidesOutGaps('Linux; Android 10')).toBe(true);
+    });
+
+    it('says yes when the store cannot be read, and keeps quiet when it cannot be written', () => {
+        const broken = {
+            getItem() {
+                throw new Error('denied');
+            },
+            setItem() {
+                throw new Error('denied');
+            },
+        };
+        expect(decoderTakesReferenceRepairs(broken)).toBe(true);
+        expect(() => noteDecoderRefusesReferenceRepairs(broken)).not.toThrow();
+        expect(decoderTakesReferenceRepairs(null)).toBe(true);
     });
 });
 

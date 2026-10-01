@@ -74,7 +74,11 @@ const RIDE_OUT_LOSS = true;
  */
 
 import { loadOrCreateIdentity, rememberHostIdentity } from '../util/pairingCrypto.js';
-import { decoderRidesOutGaps, resolveTearing } from '../util/BrowserDetect.js';
+import {
+    decoderRidesOutGaps,
+    decoderTakesReferenceRepairs,
+    resolveTearing,
+} from '../util/BrowserDetect.js';
 import { currentRefreshMilliHz } from '../util/RefreshRate.js';
 
 export class BackendClient {
@@ -365,6 +369,9 @@ export class BackendClient {
                 appId,
                 client_uniqueid: this.clientUniqueId(),
                 ride_out_loss: RIDE_OUT_LOSS && decoderRidesOutGaps(),
+                // False only on a device whose decoder fell silent under the
+                // encoder's reference repairs (decoderTakesReferenceRepairs).
+                ref_invalidation: decoderTakesReferenceRepairs(),
                 // This screen's measured refresh and whether frames wait for
                 // its vsync (tearing off). The native host runs a vsync client
                 // at a divisor of its refresh so frames land on its grid — see

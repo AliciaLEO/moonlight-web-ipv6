@@ -47,6 +47,9 @@ struct LaunchRequest
     /// Only the native engine acts on it — a GameStream host has no say in how
     /// its encoder recovers.
     bool rideOutLoss = false;
+    /// The client's decoder takes the encoder's reference repairs. Only the
+    /// native engine acts on it, as on rideOutLoss.
+    bool refInvalidation = true;
     QByteArray rikey;
     int rikeyid = 0;
     QString clientUniqueId;
