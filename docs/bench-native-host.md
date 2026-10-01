@@ -5635,6 +5635,22 @@ depuis DualRTX :
 - Suites natives de l'UM790Pro : 6598/6598 avec capacités, 6484/6484 sans.
   Windows compilé, tests purs 86/86. Compilé aussi sous Ubuntu 22.04 (GCC 11).
 
+**Porte C, premier essai de Bruno** (UM790Pro, son Chrome, 2560×1440 à 62 i/s)
+
+- **Saccades** : GNOME ne livre que 30 à 47 images/s de l'écran virtuel (« frames arrive at 32… 47
+  fps »). L'encodage tient (7,7 ms par image). C'est la limite vue à C1 (§8s.3) : le M27Q est sur la
+  GTX 1050, et la copie d'un GPU à l'autre freine le screen cast de Mutter, quelle que soit la route.
+  Le régulateur de débit a en plus suivi les rafales de grosses images : 37 → 7,4 Mbit/s.
+- **Deux pointeurs**, corrigé (`7e5df18d`) :
+  - jusqu'à GNOME 47, Mutter recopie la vue de l'écran virtuel dans les images DMA-BUF, pointeur
+    compris (`meta-screen-cast-virtual-stream-src.c`, 46). Les images en mémoire partagée sont
+    redessinées sans lui ;
+  - la forme partait quand même en métadonnées au premier changement, et le client dessinait la sienne
+    par-dessus ;
+  - désormais l'hôte dit « pas de pointeur à dessiner » quand l'image le porte déjà (DMA-BUF, GNOME < 48
+    d'après `ShellVersion`), et n'en ajoute pas en mode jeu. Vérifié : pointeur du client masqué,
+    flèche de GNOME à ±1-3 px.
+
 **Limites**
 
 - **KDE** : un invité garde son propre écran à côté de celui de l'owner.
