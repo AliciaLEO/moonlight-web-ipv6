@@ -4303,14 +4303,19 @@ const MoonlightApp = {
                 return;
             }
 
+            // The same codec again, on keyframes (StreamView._checkSilentDecoder):
+            // nothing the viewer asked for is lost, so nothing to tell them.
+            const sameCodecAgain = fallbackTarget.reason === 'silent-decoder';
             console.warn(
-                `[MW] Codec fallback → ${fallbackTarget.codec}` +
-                    `${fallbackTarget.hdr ? ' HDR' : ' SDR'} (attempt ${this._fallbackAttemptCount})`,
+                sameCodecAgain
+                    ? `[MW] Relaunch on keyframes: the decoder went silent under the refresh wave (attempt ${this._fallbackAttemptCount})`
+                    : `[MW] Codec fallback → ${fallbackTarget.codec}` +
+                          `${fallbackTarget.hdr ? ' HDR' : ' SDR'} (attempt ${this._fallbackAttemptCount})`,
             );
 
             // When the fallback drops HDR, persist the unchecked preference so the
             // Settings HDR checkbox reflects reality, and inform the user.
-            if (fallbackTarget.hdr === false) {
+            if (fallbackTarget.hdr === false && !sameCodecAgain) {
                 // Not for the native host, which never reads the checkbox: its
                 // HDR comes back on the next launch if this screen can show it.
                 if (fallbackHost && fallbackHost.backendType !== 'native')
@@ -4324,7 +4329,7 @@ const MoonlightApp = {
             // the stream that failed asked for it, not only when the saved
             // preference still did (a launch can ask 4:4:4 the storage no
             // longer holds, and then the loss went unsaid again).
-            if (fallbackTarget.codec === 'h264') {
+            if (fallbackTarget.codec === 'h264' && !sameCodecAgain) {
                 const asked = (this._lastStreamingSettings || {}).chroma_444_enabled === true;
                 if (this._persistChroma444Disabled() || asked) {
                     Toast.warning(t('launch.chroma444Fallback'));

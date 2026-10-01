@@ -71,6 +71,7 @@ import {
     SUPPORTS_CANVAS_TEARING,
     decoderRidesOutGaps,
     isSnapdragonGpu,
+    noteDecoderCannotRideOut,
     pickAutoEnhancer,
     supportsDisplayHdr,
     supportsGamingMode,
@@ -88,6 +89,7 @@ import {
 import { shouldFlushAtKeyframe } from '../stream/DecodeQueuePolicy.js';
 import { DecodeDelay, DecodeQueueSignal } from '../stream/DecodeQueueSignal.js';
 import { DecodeRateGovernor } from '../stream/DecodeRateGovernor.js';
+import { SilentDecoderWatch } from '../stream/SilentDecoderWatch.js';
 import {
     EnhancerGovernor,
     ladderRung,
@@ -1119,6 +1121,9 @@ export class StreamView {
         this._totalBytes = 0; // Cumulative video bytes for bitrate
         this._startTime = performance.now(); // Stream start time for bitrate calc
         this._fpsTimestamps = []; // performance.now() per decoded frame
+        // A decoder that takes chunks and gives no picture back, read off the
+        // two counters on the overlay's tick — see _checkSilentDecoder.
+        this._silentWatch = new SilentDecoderWatch();
 
         // ── Stats overlay ───────────────────────────────────────────────────
         // Latency is the sum of independently measured legs (moonlight-qt
@@ -2157,8 +2162,12 @@ export class StreamView {
         // covers the streamed image, leaving the header/letterbox untouched.
         this.canvasArea.appendChild(this._revealEl);
 
-        // Start overlay update timer (every 500ms)
-        this._overlayInterval = setInterval(() => this._updateOverlay(), 500);
+        // Start overlay update timer (every 500ms). The silent-decoder check
+        // rides on it: it reads the same counters, whether the stats show or not.
+        this._overlayInterval = setInterval(() => {
+            this._checkSilentDecoder();
+            this._updateOverlay();
+        }, 500);
 
         // ── Keyboard shortcuts slide ────────────────────────────────────────
         this._shortcutsSlide = document.createElement('div');
@@ -3266,6 +3275,57 @@ export class StreamView {
         if (cur === 'h264') return;
         console.warn('[StreamView] The shared feed goes H.264 — rejoining in it');
         this._codecFallback = { codec: 'h264', hdr: false };
+        this._codecFallbackRequested = true;
+        this.quit();
+    }
+
+    /**
+     * A decoder gone silent: chunks keep going in, no picture comes out, and
+     * WebCodecs says nothing (SilentDecoderWatch). Checked on the overlay's
+     * tick, for the main thread's decoder and the worker's alike.
+     *
+     * On a stream that rides losses out, that is this device's decoder failing
+     * under the refresh wave — the Freebox Player POP's does, for good, a few
+     * seconds in. The device keeps the verdict and the session comes back on
+     * keyframes, the same app in the same codec, relaunched the way a codec
+     * fallback is. Not a guest: the feed is the owner's, and the same wave
+     * would come back with it. Elsewhere, the ordinary recovery: a new decoder
+     * and a keyframe on the main thread; the worker's decoder is asked for one.
+     */
+    _checkSilentDecoder(now = performance.now()) {
+        if (this._quitting || this._manualQuitting || this._codecFallbackRequested) return;
+        if (this._decoderRecovering || this._standby) return;
+        // A hidden page may be decoding nothing on purpose: count from its return.
+        if (typeof document !== 'undefined' && document.hidden) {
+            this._silentWatch.reset();
+            return;
+        }
+        const silence = this._silentWatch.observe(this.stats.received, this.stats.decoded, now);
+        if (!silence) return;
+        const ridingOut = !!(this.webrtc && this.webrtc.rideOutLoss);
+        console.warn(
+            '[StreamView] Decoder went silent: ' +
+                silence.chunks +
+                ' chunks in, no picture for ' +
+                Math.round(silence.ms) +
+                ' ms' +
+                (ridingOut ? ' — under the refresh wave' : ''),
+        );
+        if (ridingOut) noteDecoderCannotRideOut();
+        if (ridingOut && !this._playerMode) {
+            this._relaunchOnKeyframes();
+        } else if (this._videoWorker) {
+            this._requestIdr('decoder silent');
+        } else {
+            this._handleDecoderError(new Error('Decoder went silent'));
+        }
+    }
+
+    /** The same app, in the same codec, launched again: see _checkSilentDecoder. */
+    _relaunchOnKeyframes() {
+        if (this._codecFallbackRequested || this._quitting || this._manualQuitting) return;
+        const codec = (this.videoCodec === 'auto' ? 'hevc' : this.videoCodec).toLowerCase();
+        this._codecFallback = { codec, hdr: !!this._hdrEnabled, reason: 'silent-decoder' };
         this._codecFallbackRequested = true;
         this.quit();
     }

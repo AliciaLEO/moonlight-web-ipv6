@@ -236,13 +236,52 @@ export const IS_APPLE = /mac|iphone|ipad|ipod/i.test(navigator.userAgent || '') 
  * iPadOS decode on the same VideoToolbox whatever the browser, and iPadOS's
  * Mac user agent reads as Apple here too. "AppleWebKit", in nearly every user
  * agent, does not.
+ *
+ * Nor on a device whose decoder was seen going silent under the wave: no
+ * error, every chunk taken and not one picture given back, for good. The
+ * Freebox Player POP does that (Amlogic, Android TV 10, 01/10/2026) where
+ * another Android TV, on MediaTek, rides the same stream out. Nothing in the
+ * user agent tells those apart, so the stream finds out (SilentDecoderWatch)
+ * and the device keeps the verdict (noteDecoderCannotRideOut).
  * @param {string} [ua]
+ * @param {Storage|null} [store] where that verdict is kept
  * @returns {boolean}
  */
 export function decoderRidesOutGaps(
     ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '',
+    store = rideOutStore(),
 ) {
-    return !/mac|iphone|ipad|ipod/i.test(ua);
+    if (/mac|iphone|ipad|ipod/i.test(ua)) return false;
+    try {
+        return !store || store.getItem(RIDE_OUT_VERDICT_KEY) !== 'off';
+    } catch (e) {
+        return true;
+    }
+}
+
+/** This device's verdict on the wave, set once its decoder failed under one. */
+const RIDE_OUT_VERDICT_KEY = 'mw_ride_out';
+
+/** localStorage, or null where reading it throws (sandboxed frame, privacy mode). */
+function rideOutStore() {
+    try {
+        return typeof localStorage !== 'undefined' ? localStorage : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * Remember that this device's decoder cannot ride a gap out: every later
+ * launch asks the host for keyframes instead (decoderRidesOutGaps).
+ * @param {Storage|null} [store]
+ */
+export function noteDecoderCannotRideOut(store = rideOutStore()) {
+    try {
+        if (store) store.setItem(RIDE_OUT_VERDICT_KEY, 'off');
+    } catch (e) {
+        // Not kept: the next launch finds out again, a relaunch later.
+    }
 }
 
 /**

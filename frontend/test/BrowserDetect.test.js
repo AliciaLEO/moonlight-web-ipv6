@@ -9,6 +9,7 @@ import {
     detectTv,
     isLowMemory,
     isIphone,
+    noteDecoderCannotRideOut,
     physicalScreenSize,
     pickAutoEnhancer,
     PLATFORM_TYPE,
@@ -152,6 +153,47 @@ describe('BrowserDetect.decoderRidesOutGaps', () => {
         vi.stubGlobal('navigator', { userAgent: WIN_CHROME });
         expect(decoderRidesOutGaps()).toBe(true);
         vi.unstubAllGlobals();
+    });
+
+    // The Freebox Player POP's decoder goes silent under the wave where the
+    // Mi TV's rides it out, and nothing in their user agents says which: the
+    // stream finds out, and the device keeps what it found.
+    const FREEBOX =
+        'Mozilla/5.0 (Linux; Android 10; Freebox Player POP Build/QTT8.201201.002; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/153.0.8010.39 Mobile Safari/537.36';
+
+    function memoryStore() {
+        const m = new Map();
+        return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, v) };
+    }
+
+    it("says no on a device that kept its decoder's verdict, and only there", () => {
+        const store = memoryStore();
+        expect(decoderRidesOutGaps(FREEBOX, store)).toBe(true);
+        noteDecoderCannotRideOut(store);
+        expect(decoderRidesOutGaps(FREEBOX, store)).toBe(false);
+        expect(decoderRidesOutGaps(FREEBOX, memoryStore())).toBe(true);
+    });
+
+    it('keeps the verdict in localStorage by default', () => {
+        localStorage.removeItem('mw_ride_out');
+        expect(decoderRidesOutGaps(WIN_CHROME)).toBe(true);
+        noteDecoderCannotRideOut();
+        expect(decoderRidesOutGaps(WIN_CHROME)).toBe(false);
+        localStorage.removeItem('mw_ride_out');
+    });
+
+    it('rides out when the store cannot be read, and keeps quiet when it cannot be written', () => {
+        const broken = {
+            getItem() {
+                throw new Error('denied');
+            },
+            setItem() {
+                throw new Error('denied');
+            },
+        };
+        expect(decoderRidesOutGaps(FREEBOX, broken)).toBe(true);
+        expect(() => noteDecoderCannotRideOut(broken)).not.toThrow();
+        expect(decoderRidesOutGaps(FREEBOX, null)).toBe(true);
     });
 });
 
