@@ -790,7 +790,18 @@
         "gamepadAutoMapped": "« {{name}} » a été reconnue automatiquement. Des boutons mal placés ?",
         "gamepadRemap": "Remapper",
         "gamepadButton": "Manette",
-        "streamEndAppRunning": "Fin du flux — l'appli tourne toujours sur l'hôte. Reprenez-la depuis sa tuile."
+        "streamEndAppRunning": "Fin du flux — l'appli tourne toujours sur l'hôte. Reprenez-la depuis sa tuile.",
+        "remoteMenu": "Menu du stream",
+        "remoteResume": "Reprendre",
+        "remoteStats": "Statistiques",
+        "remoteStop": "Arrêter le stream",
+        "remoteTitle": "Télécommande",
+        "rcMenu": "Menu du stream",
+        "rcMenuVal": "OK maintenu",
+        "rcArrows": "Flèches sur l'hôte",
+        "rcArrowsVal": "Flèches",
+        "rcOk": "Entrée sur l'hôte",
+        "rcOkVal": "OK"
     },
     "transport": {
         "webrtcDcUdp": "WebRTC DataChannel (UDP)",

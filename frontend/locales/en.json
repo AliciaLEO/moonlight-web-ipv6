@@ -790,7 +790,18 @@
         "gamepadAutoMapped": "\"{{name}}\" was recognized automatically. Buttons in the wrong place?",
         "gamepadRemap": "Remap",
         "gamepadButton": "Controller",
-        "streamEndAppRunning": "Stream ended — the app is still running on the host. Resume it from its card."
+        "streamEndAppRunning": "Stream ended — the app is still running on the host. Resume it from its card.",
+        "remoteMenu": "Stream menu",
+        "remoteResume": "Resume",
+        "remoteStats": "Statistics",
+        "remoteStop": "Stop the stream",
+        "remoteTitle": "TV remote",
+        "rcMenu": "Stream menu",
+        "rcMenuVal": "Hold OK",
+        "rcArrows": "Arrows on the host",
+        "rcArrowsVal": "Arrows",
+        "rcOk": "Enter on the host",
+        "rcOkVal": "OK"
     },
     "transport": {
         "webrtcDcUdp": "WebRTC DataChannel (UDP)",

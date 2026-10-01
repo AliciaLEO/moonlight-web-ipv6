@@ -90,8 +90,22 @@ export function gestureRows(touchScreen) {
           ];
 }
 
-/** The title above the list, for the same three cases as the rows. */
-export function shortcutsTitle({ touch, touchScreen }) {
+/**
+ * TV remote rows: `[action, key]`. Mirrors StreamView's handling of a remote
+ * (_remoteOkDown): its arrows and OK go to the host, OK held opens the menu —
+ * Back never reaches a page, so the menu is the only way out.
+ */
+export function remoteRows() {
+    return [
+        [t('stream.rcMenu'), t('stream.rcMenuVal')],
+        [t('stream.rcArrows'), t('stream.rcArrowsVal')],
+        [t('stream.rcOk'), t('stream.rcOkVal')],
+    ];
+}
+
+/** The title above the list, for the same cases as the rows. */
+export function shortcutsTitle({ touch, touchScreen, remote = false }) {
+    if (remote) return t('stream.remoteTitle');
     if (!touch) return t('stream.shortcutsTitle');
     return touchScreen ? t('stream.touchScreenTitle') : t('stream.touchTitle');
 }
@@ -103,11 +117,12 @@ export function shortcutsTitle({ touch, touchScreen }) {
  * @param {boolean} opts.touch      device has touch → gestures instead of keys
  * @param {boolean} [opts.touchScreen] touch-screen mode rather than trackpad
  * @param {boolean} [opts.isMac]    Mac keyboard labels (ignored when `touch`)
+ * @param {boolean} [opts.remote]   a TV remote (RemoteNav) → its rows, first of all
  */
-export function shortcutsGridHtml({ touch, touchScreen = false, isMac = false }) {
+export function shortcutsGridHtml({ touch, touchScreen = false, isMac = false, remote = false }) {
     let html = '<div class="shortcuts-slide-grid">';
-    if (touch) {
-        for (const [action, gesture] of gestureRows(touchScreen)) {
+    if (remote || touch) {
+        for (const [action, gesture] of remote ? remoteRows() : gestureRows(touchScreen)) {
             html += '<div class="shortcut-row">';
             html += '<span class="shortcut-action">' + escapeHtml(action) + '</span>';
             html +=

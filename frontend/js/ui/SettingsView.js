@@ -57,6 +57,7 @@ import {
     chroma444ClientCapability,
     supportsGamingMode,
 } from '../util/BrowserDetect.js';
+import * as RemoteNav from './RemoteNav.js';
 import { aspectToNumber, computeAutoBitrate } from '../util/AutoBitrate.js';
 import { autoFps, measuredFps } from '../util/RefreshRate.js';
 import { ASPECT_VALUES, SCREEN_ASPECTS } from '../util/AspectRatio.js';
@@ -1638,6 +1639,7 @@ export class SettingsView {
             touch: IS_TOUCH_DEVICE,
             touchScreen: this._touchScreen,
             isMac: /Mac/.test(navigator.platform),
+            remote: RemoteNav.isActive(),
         };
     }
 

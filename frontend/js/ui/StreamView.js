@@ -75,6 +75,8 @@ import {
     supportsDisplayHdr,
     supportsGamingMode,
 } from '../util/BrowserDetect.js';
+import * as RemoteNav from './RemoteNav.js';
+import { StreamRemoteMenu } from './StreamRemoteMenu.js';
 import { createVideoRenderer, NO_WEBGPU_ALGOS } from '../stream/renderers/createRenderer.js';
 import { videoSinkCtor } from '../stream/renderers/videoSink.js';
 import {
@@ -499,6 +501,14 @@ export class StreamView {
         this._shareMenu = null;
         this._shareExitOverlay = null;
         this._stallPopinOverlay = null;
+        // A TV remote's menu (long press of OK), the press being held for it,
+        // and when it last closed (see handleKeyUp).
+        this._remoteMenu = null;
+        this._okHold = null;
+        this._remoteMenuClosedAt = 0;
+        // Who keeps the pads from reaching the host: the remap dialog, the
+        // remote's menu. Either may close while the other is still up.
+        this._padHolds = new Set();
         // Audio time-stretch (WSOLA) — server-controlled kill switch.
         this._audioTimeStretch = audioTimeStretch !== false;
         // Mobile only: direct touch-screen input (absolute finger position) in
@@ -3850,9 +3860,9 @@ export class StreamView {
             container: this._rootEl || document.body,
             padKey: key || null,
             mode: 'auto',
-            onOpen: () => gm && gm.setPaused(true),
+            onOpen: () => this._holdPads('remap'),
             onClose: () => {
-                if (gm) gm.setPaused(false);
+                this._releasePads('remap');
                 if (this._padBtn) this._padBtn.classList.remove('is-attention');
             },
             onPadChange: (k) => {
@@ -4591,6 +4601,11 @@ export class StreamView {
                         },
                     },
                 );
+            }
+            // A hold asked before the pads were up (the remote's menu opened
+            // while connecting) still holds.
+            if (this._gamepadManager && this._padHolds.size > 0) {
+                this._gamepadManager.setPaused(true);
             }
             // Standby: created but not polling — started in activate().
             if (this._gamepadManager && !this._standby) this._gamepadManager.start();
@@ -7344,7 +7359,9 @@ export class StreamView {
         // carries no initial lock state, so the host can't know the client
         // started with e.g. NumLock on. Re-sync once per session on the first
         // real keyboard event (getModifierState requires a KeyboardEvent).
-        this._locksSynced = false;
+        // Not from a TV remote: it has no lock keys, reads them all off, and
+        // its first press would turn the host's NumLock off.
+        this._locksSynced = RemoteNav.isActive();
         // Load the physical-key → printed-label map so control combos match the
         // user's layout (AZERTY: KeyA → 'q') instead of the QWERTY position.
         // Chromium-only; Safari/Firefox fall back to e.key/e.code detection.
@@ -8933,6 +8950,19 @@ export class StreamView {
         // to the host — and preventDefault-ing them — made Ctrl+C on the share
         // popin's PIN do nothing locally while sending a copy chord to the game.
         if (StreamView.isLocalKeyboardTarget(e.target)) return;
+        // The remote's menu is up: nothing reaches the host. Its buttons have
+        // the keys through the focus (RemoteNav moves it there).
+        if (this._remoteMenu && this._remoteMenu.isOpen) {
+            e.preventDefault();
+            return;
+        }
+        // A key the host has no code for — a remote's colour or app keys
+        // (no code, keyCode 0), an IME's 229 — has nothing to press there.
+        if (!e.code && (!e.keyCode || e.keyCode === 229)) {
+            e.preventDefault();
+            return;
+        }
+        if (RemoteNav.isActive() && this._remoteOkDown(e)) return;
 
         // Before anything else reads this event: a modifier the local OS ate
         // the key-up of is still down on the host, and this event says so.
@@ -9201,6 +9231,22 @@ export class StreamView {
         // Same exclusion as handleKeyDown: a release whose press was never sent
         // would land on the host as an unmatched key-up.
         if (StreamView.isLocalKeyboardTarget(e.target)) return;
+        if (!e.code && (!e.keyCode || e.keyCode === 229)) {
+            e.preventDefault();
+            return;
+        }
+        if (this._okHold && this._remoteOkUp(e)) return;
+        // The menu takes its keys down and up; and the release of the OK that
+        // picked one of its buttons comes after the menu is gone — its press
+        // never went to the host, so neither does it.
+        const held = this._heldPhysKeys.has(e.code) || this._heldPhysKeys.has(e.keyCode);
+        if (
+            (this._remoteMenu && this._remoteMenu.isOpen) ||
+            (!held && performance.now() - this._remoteMenuClosedAt < 1000)
+        ) {
+            e.preventDefault();
+            return;
+        }
         // Above every branch below, all of which return early.
         this._reconcileModifiers(e);
         // A key the meta-tap branch already released: its press is long gone
@@ -10298,6 +10344,7 @@ export class StreamView {
             touch,
             touchScreen: this._touchScreen,
             isMac: /Mac/.test(navigator.platform),
+            remote: RemoteNav.isActive(),
         };
         this._shortcutsSlide.innerHTML =
             '<div class="shortcuts-slide-title">' +
@@ -10322,12 +10369,13 @@ export class StreamView {
         if (this._shortcutsTimeout) {
             clearTimeout(this._shortcutsTimeout);
         }
-        // Touch help has more rows to read than the keyboard combos.
+        // Touch help has more rows to read than the keyboard combos, and a TV
+        // is read from the sofa.
         this._shortcutsTimeout = setTimeout(
             () => {
                 this._hideShortcutsSlide();
             },
-            IS_TOUCH_DEVICE ? 7000 : 4000,
+            IS_TOUCH_DEVICE || RemoteNav.isActive() ? 7000 : 4000,
         );
     }
 
@@ -10692,6 +10740,106 @@ export class StreamView {
                 }),
             );
         }, 1200);
+    }
+
+    // ── A TV remote: OK held opens the stream's own menu ───────────────────
+
+    /** How long OK must be held to open the menu instead of pressing Enter. */
+    static get REMOTE_MENU_HOLD_MS() {
+        return 800;
+    }
+
+    /**
+     * A remote's OK going down — Enter with no code; a keyboard's Enter has
+     * one. Nothing goes to the host yet: released before REMOTE_MENU_HOLD_MS
+     * it becomes an Enter press and release (_remoteOkUp), held past it the
+     * menu opens and the host never hears of it. The price is that Enter
+     * cannot be held down on the host from a remote, which nothing asks of it.
+     * @returns {boolean} whether the event was taken
+     */
+    _remoteOkDown(e) {
+        if (!RemoteNav.isActive() || e.key !== 'Enter' || e.code) return false;
+        e.preventDefault();
+        if (e.repeat || this._okHold) return true;
+        const hold = { fired: false, timer: 0 };
+        hold.timer = setTimeout(() => {
+            if (this._okHold !== hold) return;
+            hold.fired = true;
+            this._openRemoteMenu();
+        }, StreamView.REMOTE_MENU_HOLD_MS);
+        this._okHold = hold;
+        return true;
+    }
+
+    /** The same OK coming back up: an Enter tap, or nothing if it opened the menu. */
+    _remoteOkUp(e) {
+        if (!this._okHold || e.key !== 'Enter' || e.code) return false;
+        e.preventDefault();
+        const { fired, timer } = this._okHold;
+        clearTimeout(timer);
+        this._okHold = null;
+        if (!fired) {
+            const tap = { keyCode: 0x0d, code: 'Enter', key: 'Enter', char: null, nonUs: false };
+            this._sendKeyEvent({ type: 'keydown', ...tap });
+            this._sendKeyEvent({ type: 'keyup', ...tap });
+        }
+        return true;
+    }
+
+    /** Keep the pads from reaching the host for as long as `who` asks. */
+    _holdPads(who) {
+        this._padHolds.add(who);
+        if (this._gamepadManager) this._gamepadManager.setPaused(true);
+    }
+
+    _releasePads(who) {
+        this._padHolds.delete(who);
+        if (this._gamepadManager && this._padHolds.size === 0) {
+            this._gamepadManager.setPaused(false);
+        }
+    }
+
+    /**
+     * Open the remote's menu: Resume, Statistics, Stop. Whatever was held is
+     * let go on the host first, and the pads stop reaching it, so a menu over
+     * a game does not leave a key or a trigger down underneath.
+     */
+    _openRemoteMenu() {
+        if (this._quitting || this._manualQuitting) return;
+        if (!this._remoteMenu) {
+            this._remoteMenu = new StreamRemoteMenu({
+                container: this._rootEl || document.body,
+                statsOn: () => !!(this._showPerfStats && !this._statsClosed),
+                onResume: () => this._closeRemoteMenu(),
+                onStats: () => this._toggleStatsFromMenu(),
+                onStop: () => {
+                    this._closeRemoteMenu();
+                    this._handleManualQuit();
+                },
+            });
+        }
+        if (this._remoteMenu.isOpen) return;
+        this._releaseAllPhysKeys();
+        this._holdPads('remote-menu');
+        this._remoteMenu.open();
+    }
+
+    _closeRemoteMenu() {
+        if (!this._remoteMenu || !this._remoteMenu.isOpen) return;
+        this._remoteMenu.close();
+        this._remoteMenuClosedAt = performance.now();
+        this._releasePads('remote-menu');
+    }
+
+    /** The menu's Statistics: the stats card on, or off as its × would. */
+    _toggleStatsFromMenu() {
+        if (this._showPerfStats && !this._statsClosed) {
+            this._closeOverlayEl(this._overlayEl);
+        } else {
+            this._showPerfStats = true;
+            this._statsClosed = false;
+            this._updateOverlay();
+        }
     }
 
     /**
@@ -11112,6 +11260,14 @@ export class StreamView {
         if (this._shareExitOverlay) {
             this._shareExitOverlay.remove();
             this._shareExitOverlay = null;
+        }
+        if (this._okHold) {
+            clearTimeout(this._okHold.timer);
+            this._okHold = null;
+        }
+        if (this._remoteMenu) {
+            this._remoteMenu.close();
+            this._remoteMenu = null;
         }
         if (this._stallPopinOverlay) {
             this._stallPopinOverlay.remove();

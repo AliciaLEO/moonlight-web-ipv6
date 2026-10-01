@@ -1800,3 +1800,21 @@ body.streaming-active::after {
         animation: none;
     }
 }
+
+/* ── The stream's own menu: a TV remote's long press of OK ─────────────────
+   One column, so Up and Down are all a remote needs; buttons a finger's
+   width tall, read from three metres away. */
+.stream-remote-menu-box {
+    width: min(360px, 100%);
+}
+.stream-remote-menu-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 16px;
+}
+.stream-remote-menu-actions .btn {
+    width: 100%;
+    padding: 14px 18px;
+    font-size: 1rem;
+}

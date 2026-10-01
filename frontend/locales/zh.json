@@ -790,7 +790,18 @@
         "gamepadAutoMapped": "“{{name}}”已自动识别。按键位置不对？",
         "gamepadRemap": "重新映射",
         "gamepadButton": "手柄",
-        "streamEndAppRunning": "串流结束——应用仍在主机上运行。可从其卡片继续。"
+        "streamEndAppRunning": "串流结束——应用仍在主机上运行。可从其卡片继续。",
+        "remoteMenu": "串流菜单",
+        "remoteResume": "继续",
+        "remoteStats": "统计信息",
+        "remoteStop": "停止串流",
+        "remoteTitle": "电视遥控器",
+        "rcMenu": "串流菜单",
+        "rcMenuVal": "长按 OK",
+        "rcArrows": "主机上的方向键",
+        "rcArrowsVal": "方向键",
+        "rcOk": "主机上的回车键",
+        "rcOkVal": "OK"
     },
     "transport": {
         "webrtcDcUdp": "WebRTC 数据通道（UDP）",

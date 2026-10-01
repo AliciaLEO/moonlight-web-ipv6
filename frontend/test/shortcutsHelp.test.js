@@ -7,6 +7,7 @@ import {
     comboModifiers,
     keyboardShortcutRows,
     gestureRows,
+    remoteRows,
     shortcutsGridHtml,
     shortcutsTitle,
 } from '../js/util/shortcutsHelp.js';
@@ -89,5 +90,13 @@ describe('the rendered grid', () => {
         expect(shortcutsTitle({ touch: false })).toBe('stream.shortcutsTitle');
         expect(shortcutsTitle({ touch: true, touchScreen: false })).toBe('stream.touchTitle');
         expect(shortcutsTitle({ touch: true, touchScreen: true })).toBe('stream.touchScreenTitle');
+    });
+
+    it('teaches a TV remote its way out first: OK held opens the menu', () => {
+        expect(remoteRows()[0]).toEqual(['stream.rcMenu', 'stream.rcMenuVal']);
+        expect(shortcutsTitle({ touch: false, remote: true })).toBe('stream.remoteTitle');
+        const html = shortcutsGridHtml({ touch: false, remote: true });
+        expect(html).toContain('stream.rcMenuVal');
+        expect(html).not.toContain('stream.scQuit');
     });
 });
