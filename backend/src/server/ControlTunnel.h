@@ -134,6 +134,11 @@ private:
 
         std::shared_ptr<rtc::PeerConnection> pc;
         std::shared_ptr<rtc::DataChannel> dc;
+        /// Which peer connection of this session `pc` is: a pinned port that
+        /// will not bind is followed by a second one on an ephemeral port, and
+        /// what the first says after it has been replaced is not about this
+        /// session any more. See buildPeerConnection().
+        int attempt = 0;
 
         /// The router hole this connection listens behind, or 0 when there is
         /// none and ICE is left to an ephemeral port. See takeTunnelPort().

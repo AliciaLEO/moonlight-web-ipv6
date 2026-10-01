@@ -425,14 +425,21 @@ void ControlTunnel::buildPeerConnection(Peer& p)
     p.pc = std::make_shared<rtc::PeerConnection>(config);
 
     const QString id = sessionId;
+    // Every callback below is about THIS peer connection. The one a pinned
+    // port refused fails as well, and its word arrives queued, after the
+    // ephemeral one has replaced it: taken for the session's end, it closed
+    // the browser's line ("The introduction server hung up") whenever another
+    // program held the hole's port — the service beside a --dev instance, on
+    // one machine.
+    const int attempt = ++p.attempt;
 
-    p.pc->onLocalDescription([this, id](const rtc::Description& sdp) {
+    p.pc->onLocalDescription([this, id, attempt](const rtc::Description& sdp) {
         const std::string text(sdp);
         QMetaObject::invokeMethod(
             this,
-            [this, id, text]() {
+            [this, id, attempt, text]() {
                 Peer* pp = peer(id);
-                if (!pp) return;
+                if (!pp || pp->attempt != attempt) return;
                 pp->pendingOffer = text;
                 pp->localFingerprint = SdpFingerprint::extract(QString::fromStdString(text));
                 if (pp->localFingerprint.isEmpty()) {
@@ -450,7 +457,8 @@ void ControlTunnel::buildPeerConnection(Peer& p)
 
     const std::string publicIP = m_PublicIP;
     const uint16_t mappedPort = p.port;
-    p.pc->onLocalCandidate([this, id, publicIP, mappedPort](const rtc::Candidate& candidate) {
+    p.pc->onLocalCandidate([this, id, attempt, publicIP,
+                            mappedPort](const rtc::Candidate& candidate) {
         const std::string cand = candidate.candidate();
         const std::string mid = candidate.mid();
 
@@ -490,9 +498,9 @@ void ControlTunnel::buildPeerConnection(Peer& p)
 
         QMetaObject::invokeMethod(
             this,
-            [this, id, cand, mid, publicCand]() {
+            [this, id, attempt, cand, mid, publicCand]() {
                 Peer* pp = peer(id);
-                if (!pp) return;
+                if (!pp || pp->attempt != attempt) return;
                 const auto send = [this, &id, &mid](const std::string& line) {
                     m_Rendezvous->sendSignal(
                         id, QJsonObject{{QStringLiteral("type"), QStringLiteral("ice")},
@@ -519,13 +527,15 @@ void ControlTunnel::buildPeerConnection(Peer& p)
             Qt::QueuedConnection);
     });
 
-    p.pc->onStateChange([this, id](rtc::PeerConnection::State state) {
+    p.pc->onStateChange([this, id, attempt](rtc::PeerConnection::State state) {
         if (state != rtc::PeerConnection::State::Failed &&
             state != rtc::PeerConnection::State::Closed)
             return;
         QMetaObject::invokeMethod(
             this,
-            [this, id]() {
+            [this, id, attempt]() {
+                // A replaced connection's end is not the session's (see above).
+                if (const Peer* pp = peer(id); pp && pp->attempt != attempt) return;
                 // The introduction server is told, and that is not a courtesy.
                 // It is the only party that knows this session is over: the
                 // browser's socket to it is still open — a page whose connection
