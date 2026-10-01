@@ -56,6 +56,7 @@ export default defineConfig({
                 'js/models/Host.js',
                 'js/i18n/i18n.js',
                 'js/api/BackendClient.js',
+                'js/api/FloodCounter.js',
                 'js/ui/Toast.js',
             ],
             thresholds: {

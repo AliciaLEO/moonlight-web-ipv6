@@ -29,6 +29,7 @@ import {
 } from '../util/pairingCrypto.js';
 import { defaultIceServers } from './IceServers.js';
 import { isViewMessage } from './hostMessages.js';
+import { attachFloodCounter, floodMode } from './FloodCounter.js';
 import { setAudioJitterBufferTarget } from '../util/AudioJitter.js';
 
 /**
@@ -686,6 +687,11 @@ export class WebRtcDataChannel {
         // Clear reassembly buffers
         this._reassembly.clear();
 
+        if (this._flood) {
+            this._flood.stop();
+            this._flood = null;
+        }
+
         // Close DataChannels
         for (const [label, dc] of Object.entries(this.dataChannels)) {
             if (dc && dc.readyState !== 'closed') {
@@ -884,6 +890,12 @@ export class WebRtcDataChannel {
         };
         this.dataChannels.input = this.pc.createDataChannel('input', inputInit);
         this._setupDataChannel('input', this.dataChannels.input);
+
+        // Bench only (plan Idées Punktfunk, A0): the host's flood on DC#3,
+        // counted when localStorage says `mw_flood`. Not one of the channels
+        // the connection waits for.
+        const flood = floodMode();
+        if (flood) this._flood = attachFloodCounter(this.pc, flood);
 
         console.log('[WebRTC] Channels created (video=DC#0, audio=RTP, input=DC#2)');
     }

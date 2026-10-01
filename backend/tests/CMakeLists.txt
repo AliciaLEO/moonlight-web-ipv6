@@ -71,6 +71,7 @@ add_executable(run_tests
     test_backend_probe.cpp
     test_host_os_probe.cpp
     test_send_backlog.cpp
+    test_link_loss.cpp
     test_annexb_filler.cpp
     test_link_freeze_log.cpp
     test_host_lag_tracker.cpp

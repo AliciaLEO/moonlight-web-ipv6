@@ -369,6 +369,32 @@ struct EncoderTuning
     /// own is on.
     Choice portalDmabuf = Choice::Default;
 
+    // ── The link, on a real session (plan Idées Punktfunk, A0) ─────────────
+    //
+    // A lab for losses and for what SCTP carries under them. The relay reads
+    // these, never an encoder; nothing in the product ever sets one.
+
+    /// Video messages thrown away before SCTP is handed them, per thousand,
+    /// on a fixed seed: the losses a client meets, with nothing for SCTP's
+    /// congestion control to react to. 0, the product: none.
+    int lossPermille = 0;
+    /// How many messages in a row each loss takes. 0 or 1: one.
+    int lossBurst = 0;
+    /// usrsctp's congestion control: 0 RFC 2581, 1 HSTCP, 2 H-TCP, 3 RTCC.
+    /// -1, the product: usrsctp's own (RFC 2581).
+    int sctpCongestion = -1;
+    /// Messages of no use on a channel of their own (id 3), to measure what
+    /// SCTP carries: paced at this many kbps, or -1 for as much as SCTP takes
+    /// (its backlog kept short). 0, the product: none.
+    int floodKbps = 0;
+    /// Their size in bytes, 64-16000. 0: 1100, a datagram's worth at
+    /// libdatachannel's fixed MTU of 1280.
+    int floodBytes = 0;
+    /// Their channel: unordered with no retransmission (the FEC channel the
+    /// plan wants, the default), or the video channel's own — ordered, given
+    /// up on after 500 ms.
+    bool floodLikeVideo = false;
+
     bool isDefault() const
     {
         return nvencPreset == 0 && nvencTuning == Latency::Default &&
@@ -391,7 +417,9 @@ struct EncoderTuning
                ddaSync == DdaSync::Default && !gpuTiming && !strict12 &&
                pipelined == Choice::Default && keep12 == Choice::Default &&
                cadence == Cadence::Default && convertLinux == ConvertLinux::Default &&
-               prioVk == PriorityVk::Default && portalDmabuf == Choice::Default;
+               prioVk == PriorityVk::Default && portalDmabuf == Choice::Default &&
+               lossPermille == 0 && lossBurst == 0 && sctpCongestion < 0 && floodKbps == 0 &&
+               floodBytes == 0 && !floodLikeVideo;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -481,6 +509,13 @@ struct EncoderTuning
         if (prioVk == PriorityVk::High) add("priovk=high");
         if (portalDmabuf != Choice::Default)
             add(std::string("portaldmabuf=") + choice(portalDmabuf));
+        if (lossPermille > 0) add("loss=" + std::to_string(lossPermille));
+        if (lossBurst > 1) add("burst=" + std::to_string(lossBurst));
+        if (sctpCongestion >= 0) add("sctpcc=" + std::to_string(sctpCongestion));
+        if (floodKbps > 0) add("flood=" + std::to_string(floodKbps));
+        if (floodKbps < 0) add("flood=max");
+        if (floodBytes > 0) add("floodsize=" + std::to_string(floodBytes));
+        if (floodLikeVideo) add("floodchannel=video");
         return s;
     }
 };

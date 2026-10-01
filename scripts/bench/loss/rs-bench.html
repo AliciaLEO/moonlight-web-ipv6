@@ -1,0 +1,234 @@
+<!doctype html>
+<!--
+  MoonlightWeb — Reed-Solomon decoder micro-bench (plan Idées Punktfunk, A0.5).
+  Copyright (C) 2026 Bruno Martin. GPLv3.
+
+  The FEC chapter's client decoder, timed before a line of it is written into
+  the product: pure JavaScript (log/exp tables, a 64 KiB multiplication table)
+  against WebAssembly SIMD (each multiplication split in two 16-entry tables,
+  i8x16.swizzle — the ISA-L way), on the code nanors writes: GF(2^8) of
+  polynomial 285, a Cauchy parity matrix P[j][i] = 1 / ((m + i) xor j).
+
+  k = 170 data shards of 1100 bytes (padded to 1104, a multiple of 16), 1, 5
+  and 20 of them lost, each decode checked against the original. Gate A0:
+  <= 2 ms p99 on a phone with 5 erasures.
+
+  Open it in any browser (file:// is fine); ?runs=N, ?auto=1 starts at once.
+  The result lands in the page and in globalThis.__rsBench, for a CDP driver.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RS decoder bench</title>
+<style>
+  :root { color-scheme: light dark; --bg: #fff; --fg: #111; --muted: #666; --line: #ddd; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #111; --fg: #eee; --muted: #999; --line: #333; } }
+  body { background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; margin: 16px; }
+  table { border-collapse: collapse; margin-top: 12px; width: 100%; max-width: 640px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+  #ua, #note { color: var(--muted); font-size: 13px; word-break: break-word; }
+  button { font: inherit; padding: 8px 16px; }
+</style>
+</head>
+<body>
+<h1>RS decoder bench</h1>
+<p id="ua"></p>
+<button id="go">Run</button>
+<p id="note"></p>
+<table id="out"><thead><tr><th>decoder</th><th>erasures</th><th>median ms</th><th>p99 ms</th><th>MB/s</th><th>ok</th></tr></thead><tbody></tbody></table>
+<script>
+'use strict';
+const K = 170, S = 1104, ERASURES = [1, 5, 20], M = 20;
+const params = new URLSearchParams(location.search);
+const RUNS = Math.max(20, Number(params.get('runs')) || 200);
+
+// ── GF(2^8), polynomial 285 (0x11d), as nanors' gf2_8_tables.h ──────────────
+const EXP = new Uint8Array(512), LOG = new Uint8Array(256);
+{ let x = 1; for (let i = 0; i < 255; i++) { EXP[i] = x; LOG[x] = i; x <<= 1; if (x & 0x100) x ^= 0x11d; }
+  for (let i = 255; i < 512; i++) EXP[i] = EXP[i - 255]; }
+const mul = (a, b) => (a && b ? EXP[LOG[a] + LOG[b]] : 0);
+const inv = (a) => EXP[255 - LOG[a]];
+const MUL = new Uint8Array(256 * 256);
+for (let a = 0; a < 256; a++) for (let b = 0; b < 256; b++) MUL[a * 256 + b] = mul(a, b);
+// nanors: P[j][i] = GF2_8_INV[(ps + i) ^ j]
+const P = (m, j, i) => inv((m + i) ^ j);
+
+// ── axpy kernels: dst ^= c * src over n bytes ──────────────────────────────
+function axpyJs(dst, dOff, src, sOff, c, n) {
+  if (c === 0) return;
+  if (c === 1) { for (let i = 0; i < n; i++) dst[dOff + i] ^= src[sOff + i]; return; }
+  const row = c * 256;
+  for (let i = 0; i < n; i++) dst[dOff + i] ^= MUL[row + src[sOff + i]];
+}
+
+// WebAssembly SIMD: axpy(dst, src, n, tlo, thi), n a multiple of 16. Hand
+// assembled — no toolchain, the module is these bytes.
+function buildWasm() {
+  const fd = (op) => [0xfd, op];
+  const load = [...fd(0x00), 0x04, 0x00], store = [...fd(0x0b), 0x04, 0x00];
+  const body = [
+    0x02, 0x01, 0x7f, 0x04, 0x7b,           // locals: 1 i32 (i), 4 v128 (lo, hi, mask, x)
+    0x20, 3, ...load, 0x21, 6,              // lo = load(tlo)
+    0x20, 4, ...load, 0x21, 7,              // hi = load(thi)
+    0x41, 15, ...fd(0x0f), 0x21, 8,         // mask = splat(15)
+    0x41, 0, 0x21, 5,                       // i = 0
+    0x02, 0x40, 0x03, 0x40,                 // block loop
+    0x20, 5, 0x20, 2, 0x4f, 0x0d, 1,        //   if (i >= n) break
+    0x20, 1, 0x20, 5, 0x6a, ...load, 0x21, 9,          // x = load(src + i)
+    0x20, 0, 0x20, 5, 0x6a,                            // &dst[i] (for the store)
+    0x20, 0, 0x20, 5, 0x6a, ...load,                   // dst[i]
+    0x20, 6, 0x20, 9, 0x20, 8, ...fd(0x4e), ...fd(0x0e), ...fd(0x51),   // ^ swizzle(lo, x & 15)
+    0x20, 7, 0x20, 9, 0x41, 4, ...fd(0x6d), ...fd(0x0e), ...fd(0x51),   // ^ swizzle(hi, x >> 4)
+    ...store,
+    0x20, 5, 0x41, 16, 0x6a, 0x21, 5,       //   i += 16
+    0x0c, 0, 0x0b, 0x0b,                    // continue; end loop; end block
+    0x0b,                                   // end function
+  ];
+  const sec = (id, bytes) => [id, ...leb(bytes.length), ...bytes];
+  const leb = (n) => { const o = []; do { let b = n & 0x7f; n >>>= 7; if (n) b |= 0x80; o.push(b); } while (n); return o; };
+  const str = (s) => [s.length, ...[...s].map((c) => c.charCodeAt(0))];
+  const bytes = [
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+    ...sec(1, [1, 0x60, 5, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0]),
+    ...sec(3, [1, 0]),
+    ...sec(5, [1, 0x00, 32]),                              // 32 pages, 2 MiB
+    ...sec(7, [2, ...str('mem'), 0x02, 0, ...str('axpy'), 0x00, 0]),
+    ...sec(10, [1, ...leb(body.length), ...body]),
+  ];
+  return new Uint8Array(bytes);
+}
+
+let wasm = null;
+try {
+  wasm = new WebAssembly.Instance(new WebAssembly.Module(buildWasm())).exports;
+} catch (e) {
+  document.getElementById('note').textContent = 'WebAssembly SIMD unavailable here: ' + e.message;
+}
+
+// Memory layout for the WASM decoder: tables (256 × 32 bytes), then shards.
+const TBL = 0, SHARDS = 256 * 32;
+function wasmSetup() {
+  const mem = new Uint8Array(wasm.mem.buffer);
+  for (let c = 0; c < 256; c++)
+    for (let j = 0; j < 16; j++) { mem[TBL + c * 32 + j] = mul(c, j); mem[TBL + c * 32 + 16 + j] = mul(c, j << 4); }
+  return mem;
+}
+const shardAt = (idx) => SHARDS + idx * S;
+
+// ── encode (once, JS) and decode (timed, either kernel) ─────────────────────
+// Layout: one buffer, data shards 0..K-1 then parity K..K+M-1, S bytes each.
+function encode(buf, off) {
+  for (let j = 0; j < M; j++) {
+    const p = off + (K + j) * S;
+    buf.fill(0, p, p + S);
+    for (let i = 0; i < K; i++) axpyJs(buf, p, buf, off + i * S, P(M, j, i), S);
+  }
+}
+
+// Erased data shards E, recovered from the first |E| parity shards:
+// s_r = p_r ^ sum_{i not in E} P[r][i] d_i ; d_E = A^-1 s, A = P[R][E].
+function decode(buf, off, erased, axpy) {
+  const e = erased.length, isE = new Uint8Array(K);
+  for (const x of erased) isE[x] = 1;
+  const rows = []; for (let r = 0; r < e; r++) rows.push(r);
+  // Residuals, in place in the parity shards used.
+  for (const r of rows) {
+    const p = off + (K + r) * S;
+    for (let i = 0; i < K; i++) if (!isE[i]) axpy(buf, p, buf, off + i * S, P(M, r, i), S);
+  }
+  // A^-1 (e × e, scalars).
+  const A = new Uint8Array(e * e), I = new Uint8Array(e * e);
+  for (let a = 0; a < e; a++) { I[a * e + a] = 1; for (let b = 0; b < e; b++) A[a * e + b] = P(M, rows[a], erased[b]); }
+  for (let c = 0; c < e; c++) {
+    let piv = c; while (A[piv * e + c] === 0) piv++;
+    if (piv !== c) for (let b = 0; b < e; b++) {
+      [A[c * e + b], A[piv * e + b]] = [A[piv * e + b], A[c * e + b]];
+      [I[c * e + b], I[piv * e + b]] = [I[piv * e + b], I[c * e + b]];
+    }
+    const iv = inv(A[c * e + c]);
+    for (let b = 0; b < e; b++) { A[c * e + b] = mul(A[c * e + b], iv); I[c * e + b] = mul(I[c * e + b], iv); }
+    for (let a = 0; a < e; a++) {
+      if (a === c || A[a * e + c] === 0) continue;
+      const f = A[a * e + c];
+      for (let b = 0; b < e; b++) { A[a * e + b] ^= mul(f, A[c * e + b]); I[a * e + b] ^= mul(f, I[c * e + b]); }
+    }
+  }
+  // d_E = A^-1 s
+  for (let x = 0; x < e; x++) {
+    const d = off + erased[x] * S;
+    buf.fill(0, d, d + S);
+    for (let y = 0; y < e; y++) axpy(buf, d, buf, off + (K + rows[y]) * S, I[x * e + y], S);
+  }
+}
+
+function pickErased(n, seed) {
+  const out = new Set(); let s = seed;
+  while (out.size < n) { s = (s * 1103515245 + 12345) >>> 0; out.add(s % K); }
+  return [...out].sort((a, b) => a - b);
+}
+
+function quantile(sorted, q) { return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]; }
+
+async function run() {
+  const tbody = document.querySelector('#out tbody');
+  tbody.textContent = '';
+  const results = [];
+  const total = (K + M) * S;
+  const original = new Uint8Array(total);
+  for (let i = 0; i < K * S; i++) original[i] = (i * 2654435761) >>> 24;
+  encode(original, 0);
+  const work = new Uint8Array(total);
+  let mem = null;
+  if (wasm) mem = wasmSetup();
+  const kernels = [['javascript', null]];
+  if (wasm) kernels.push(['wasm simd', true]);
+  for (const [name, isWasm] of kernels) {
+    for (const e of ERASURES) {
+      const times = []; let ok = true;
+      for (let run = 0; run < RUNS; run++) {
+        const erased = pickErased(e, run + 1);
+        let buf, off, axpy;
+        if (isWasm) {
+          mem.set(original, SHARDS); buf = mem; off = SHARDS;
+          for (const x of erased) mem.fill(0, SHARDS + x * S, SHARDS + (x + 1) * S);
+          axpy = (b, dOff, s, sOff, c, n) => {
+            if (c === 0) return;
+            wasm.axpy(dOff, sOff, n, TBL + c * 32, TBL + c * 32 + 16);
+          };
+        } else {
+          work.set(original); buf = work; off = 0;
+          for (const x of erased) work.fill(0, x * S, (x + 1) * S);
+          axpy = axpyJs;
+        }
+        const t0 = performance.now();
+        decode(buf, off, erased, axpy);
+        times.push(performance.now() - t0);
+        if (run < 5) for (const x of erased) for (let i = 0; i < S; i++)
+          if (buf[off + x * S + i] !== original[x * S + i]) { ok = false; break; }
+        if (run % 25 === 24) await new Promise((r) => setTimeout(r, 0));
+      }
+      times.sort((a, b) => a - b);
+      const med = quantile(times, 0.5), p99 = quantile(times, 0.99);
+      const row = { decoder: name, erasures: e, medianMs: +med.toFixed(3), p99Ms: +p99.toFixed(3),
+                    mbps: +((e * K * S) / 1e6 / (med / 1000)).toFixed(0), ok };
+      results.push(row);
+      const tr = document.createElement('tr');
+      for (const v of [name, e, row.medianMs, row.p99Ms, row.mbps, ok ? 'yes' : 'NO']) {
+        const td = document.createElement('td'); td.textContent = v; tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  }
+  globalThis.__rsBench = { ua: navigator.userAgent, k: K, shardBytes: S, runs: RUNS, results };
+  document.getElementById('note').textContent = 'done — ' + RUNS + ' decodes per row, k = ' + K + ', ' + S + ' bytes per shard';
+}
+
+document.getElementById('ua').textContent = navigator.userAgent;
+document.getElementById('go').onclick = () => run();
+if (params.get('auto') === '1') run();
+</script>
+</body>
+</html>

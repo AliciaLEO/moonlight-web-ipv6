@@ -29,6 +29,7 @@ extern "C" {
 }
 
 #include "SctpCounters.h"
+#include "SctpFlood.h"
 
 #include <rtc/rtc.hpp>
 #include <QJsonArray>
@@ -40,6 +41,7 @@ extern "C" {
 #include <QDateTime>
 #include <QMap>
 #include <QVector>
+#include <algorithm>
 #include <mutex>
 #include <chrono>
 #include <random>
@@ -696,7 +698,7 @@ DataChannelRelay::~DataChannelRelay()
 /// A sysctl, read by each SCTP socket at creation: it must be set before the
 /// peer connection, and setting it again for another session in the same
 /// process is fine.
-void applySctpSettings(int bitrateKbps)
+void applySctpSettings(int bitrateKbps, int congestionModule)
 {
     const size_t bytes = SendBacklog::sendBufferBytesFor(bitrateKbps);
     rtc::SctpSettings settings;
@@ -711,6 +713,14 @@ void applySctpSettings(int bitrateKbps)
     if (ok && rtoMinMs > 0) settings.minRetransmitTimeout = std::chrono::milliseconds(rtoMinMs);
     const int sackMs = qEnvironmentVariableIntValue("MW_SCTP_SACK_DELAY_MS", &ok);
     if (ok && sackMs >= 0) settings.delayedSackTime = std::chrono::milliseconds(sackMs);
+    // The bench's `sctpcc=` (plan Idées Punktfunk, A0.3): which loss-driven
+    // window the link is held to. Unset, usrsctp's own (RFC 2581).
+    if (congestionModule >= 0) {
+        settings.congestionControlModule = static_cast<unsigned int>(congestionModule);
+        static const char* const kModules[] = {"RFC 2581", "HSTCP", "H-TCP", "RTCC"};
+        qWarning() << "[DataChannelRelay] SCTP bench override: congestion control"
+                   << kModules[congestionModule & 3];
+    }
     rtc::SetSctpSettings(settings);
     qInfo() << "[DataChannelRelay] SCTP send buffer set to" << (bytes / 1024) << "KiB for"
             << bitrateKbps << "kbps, so bufferedAmount reflects the real backlog";
@@ -721,11 +731,24 @@ void applySctpSettings(int bitrateKbps)
                 << (settings.delayedSackTime ? settings.delayedSackTime->count() : -1) << "ms";
 }
 
+void DataChannelRelay::setLinkBench(const mw::native::EncoderTuning& tuning)
+{
+    m_Loss.configure(tuning.lossPermille, tuning.lossBurst);
+    m_SctpCongestion = tuning.sctpCongestion;
+    m_FloodKbps = tuning.floodKbps;
+    m_FloodBytes = tuning.floodBytes > 0 ? tuning.floodBytes : SctpFlood::kDefaultBytes;
+    m_FloodLikeVideo = tuning.floodLikeVideo;
+    if (m_Loss.active())
+        qWarning() << "[DataChannelRelay] bench losses: video messages thrown away before SCTP,"
+                   << tuning.lossPermille << "per thousand, bursts of"
+                   << (tuning.lossBurst > 1 ? tuning.lossBurst : 1);
+}
+
 bool DataChannelRelay::prepare(const rtc::Configuration& config, bool isInternet)
 {
     // Before the peer connection, since each SCTP socket reads this when it is
     // made.
-    applySctpSettings(m_StreamBitrateKbps);
+    applySctpSettings(m_StreamBitrateKbps, m_SctpCongestion);
     m_Backlog.setBitrateKbps(m_StreamBitrateKbps);
 
     if (m_Pc) {
@@ -1006,6 +1029,37 @@ void DataChannelRelay::createDataChannels()
             QMetaObject::invokeMethod(
                 this, [this, text]() { onInputMessage(text); }, Qt::QueuedConnection);
         });
+    }
+
+    // --- Flood DataChannel (bench only: `flood=`, plan Idées Punktfunk A0) ---
+    // What SCTP carries to the real receiver, on the id the FEC channel is to
+    // have (3) and with its reliability — unordered, never retransmitted — or
+    // the video channel's, to compare the two the same way. Negotiated, so it
+    // adds nothing to the offer; a client without `mw_flood` drops what lands
+    // on the id. See SctpFlood.h.
+    if (m_FloodKbps != 0) {
+        rtc::DataChannelInit floodConfig;
+        floodConfig.negotiated = true;
+        floodConfig.id = 3;
+        if (m_FloodLikeVideo) {
+            floodConfig.reliability.unordered = false;
+            floodConfig.reliability.maxPacketLifeTime =
+                std::chrono::milliseconds(kVideoFrameLifetimeMs);
+        } else {
+            floodConfig.reliability.unordered = true;
+            floodConfig.reliability.maxRetransmits = 0;
+        }
+        m_FloodDc = m_Pc->createDataChannel("flood", floodConfig);
+        if (m_FloodDc) {
+            m_Flood = std::make_unique<SctpFlood>(m_FloodDc, m_FloodKbps, m_FloodBytes);
+            m_FloodDc->onOpen([this]() {
+                qInfo() << "[DataChannelRelay] Flood DataChannel open (bench)";
+                if (m_Flood && !m_Stopping.load()) m_Flood->start();
+            });
+            qWarning().noquote() << "[DataChannelRelay] bench flood on DC#3,"
+                                 << (m_FloodLikeVideo ? "ordered, 500 ms lifetime"
+                                                      : "unordered, no retransmission");
+        }
     }
 
     // Guard on the ordering invariant above: everything we want negotiated is
@@ -1869,8 +1923,24 @@ void DataChannelRelay::sendFragmented(const QByteArray& data, bool isKeyframe,
         auto fragments = FrameSender::buildFragments(
             reinterpret_cast<const uint8_t*>(data.constData()), static_cast<size_t>(data.size()),
             isKeyframe, frameId, backendTs);
-        evicted = m_Sender->enqueueFragments(dc, std::move(fragments), isKeyframe, reportedNumber,
-                                             sink, evictedOut);
+        // The bench's losses (`loss=`, LinkLoss.h): messages that never reach
+        // SCTP, so the receiver meets holes SCTP knows nothing of. A frame that
+        // loses every message still spent its wire id: a gap, as on a link.
+        if (m_Loss.active()) {
+            const uint64_t before = m_Loss.dropped();
+            fragments.erase(
+                std::remove_if(fragments.begin(), fragments.end(),
+                               [this](const FrameSender::Fragment&) { return m_Loss.dropNext(); }),
+                fragments.end());
+            const uint64_t dropped = m_Loss.dropped();
+            if (dropped != before && (dropped <= 3 || dropped / 500 != before / 500))
+                qInfo() << "[DataChannelRelay] bench losses:" << dropped << "messages in"
+                        << m_Loss.losses() << "losses so far";
+        }
+        evicted = fragments.empty()
+                      ? false
+                      : m_Sender->enqueueFragments(dc, std::move(fragments), isKeyframe,
+                                                   reportedNumber, sink, evictedOut);
     } else {
         // Queued mode: the frame is already ours (copied out of the GameStream
         // engine), the sender cuts it on its own thread as it always has.
@@ -2106,6 +2176,17 @@ void DataChannelRelay::stop()
     }
 
     closeDc(m_InputDc, "input");
+
+    // The bench's flood: its channel closed first, so a send blocked on it
+    // errors out and the thread joins at once.
+    if (m_Flood) {
+        closeDc(m_FloodDc, "flood");
+        m_Flood->stop();
+        m_Flood.reset();
+    }
+    if (m_Loss.active())
+        qInfo() << "[DataChannelRelay] bench losses:" << m_Loss.dropped() << "video messages in"
+                << m_Loss.losses() << "losses this session";
 
     // Direct input: a message may be halfway through injection on a
     // libdatachannel thread. Wait it out — m_Stopping is set, so the next one

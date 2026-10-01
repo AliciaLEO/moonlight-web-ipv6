@@ -24,6 +24,7 @@
 #include "StreamRelay.h"
 #include "MoonlightShim.h"
 #include "NativeMediaEngine.h"
+#include "NativeBench.h"
 #include "InputMessageCodec.h"
 #include "StartChoice.h"
 #include "../backend/NvHTTP.h"
@@ -898,6 +899,19 @@ void StreamSession::onLaunchResult(bool ok, const BackendError& err, const Media
         // asked at the moment a gap happens, because the engine has not started
         // yet at this point and would answer no to anything asked now.
         relay->setRideOutLoss(media.type == MediaType::NativeHost && media.nativeHost.rideOutLoss);
+
+        // The bench's link keys (loss=, sctpcc=, flood= — plan Idées Punktfunk,
+        // A0), read here rather than by the engine: the SCTP settings apply to
+        // the association prepare() is about to make, before the engine starts.
+        // A bad spec is the engine's to report; here it only means none.
+        if (media.type == MediaType::NativeHost) {
+            const QString spec = effectiveTuningSpec(m_NativeTuning);
+            mw::native::EncoderTuning tuning;
+            int gpu = -1;
+            QString error;
+            if (!spec.isEmpty() && parseEncoderTuningSpec(spec, tuning, gpu, error))
+                relay->setLinkBench(tuning);
+        }
 
         // SignalingServer: WebSocket for SDP/ICE exchange only.
         // NonSecure mode: external tunnel or Cloudflare provides TLS termination.

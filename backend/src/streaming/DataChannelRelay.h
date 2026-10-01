@@ -22,6 +22,8 @@
 #include "LinkFreezeLog.h"
 #include "SendBacklog.h"
 #include "FrameSender.h"
+#include "LinkLoss.h"
+#include "mw/native/EncoderTuning.h"
 #include <QByteArray>
 #include <QElapsedTimer>
 #include <QMutex>
@@ -42,6 +44,7 @@ class Track;
 } // namespace rtc
 
 class IMediaEngine;
+class SctpFlood;
 
 // WebRTC DataChannel relay that replaces StreamRelay.
 // Forwards video/audio from the media engine + input from the browser over a
@@ -156,6 +159,13 @@ public:
     /// Unknown (0) keeps the fixed sizes that served the LAN. Set once before
     /// the relay moves to its own thread, like the flags above.
     void setStreamBitrateKbps(int kbps) { m_StreamBitrateKbps = kbps; }
+
+    /// The bench's link keys of a native session (plan Idées Punktfunk, A0):
+    /// its losses (`loss=`, `burst=`), usrsctp's congestion module (`sctpcc=`)
+    /// and a flood on channel id 3 (`flood=`, SctpFlood.h). All off unless a
+    /// bench set them in MW_NATIVE_TUNING or native_tuning. Set once before
+    /// prepare(), like the flags above.
+    void setLinkBench(const mw::native::EncoderTuning& tuning);
 
 private:
     /// Both halves of the bargain, asked at the moment a gap happens.
@@ -318,6 +328,16 @@ private:
     // packet no longer head-of-line-blocks the audio (the periodic dropouts).
     std::shared_ptr<rtc::Track> m_AudioTrack;
     std::shared_ptr<rtc::DataChannel> m_InputDc;
+
+    // The bench's link keys (setLinkBench). m_Loss is the video path's, under
+    // m_VideoMutex; the rest is read once, at setup.
+    LinkLoss m_Loss;
+    int m_SctpCongestion = -1;
+    int m_FloodKbps = 0;
+    int m_FloodBytes = 0;
+    bool m_FloodLikeVideo = false;
+    std::shared_ptr<rtc::DataChannel> m_FloodDc;
+    std::unique_ptr<SctpFlood> m_Flood;
 
     // Audio RTP timestamp (48 kHz Opus clock), advanced by samplesPerFrame per
     // packet for a smooth, jitter-free clock; serialized with track teardown.

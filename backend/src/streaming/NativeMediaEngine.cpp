@@ -257,12 +257,8 @@ void NativeMediaEngine::startCapture(const StartParams& params)
     // Never set in production — nothing in the product writes either — and
     // logged loudly when one is, so a stray knob cannot pass for the engine's
     // own choice.
-    QString tuningSpec = qEnvironmentVariable("MW_NATIVE_TUNING");
-    QString tuningSource = QStringLiteral("MW_NATIVE_TUNING");
-    if (tuningSpec.isEmpty()) {
-        tuningSpec = params.tuningSpec.trimmed();
-        tuningSource = QStringLiteral("settings.json native_tuning");
-    }
+    QString tuningSource;
+    const QString tuningSpec = effectiveTuningSpec(params.tuningSpec, &tuningSource);
     if (!tuningSpec.isEmpty()) {
         QString parseError;
         if (parseEncoderTuningSpec(tuningSpec, config.tuning, config.encodeGpuId, parseError))

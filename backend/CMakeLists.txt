@@ -302,6 +302,7 @@ add_executable(mw-server
     src/streaming/StreamRelay.cpp
     src/streaming/DataChannelRelay.cpp
     src/streaming/SctpCounters.cpp
+    src/streaming/SctpFlood.cpp
     src/streaming/FrameSender.cpp
     src/streaming/MediaTrackRelay.cpp
     src/streaming/SignalingServer.cpp

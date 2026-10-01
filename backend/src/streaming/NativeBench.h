@@ -31,6 +31,13 @@
 bool parseEncoderTuningSpec(const QString& spec, mw::native::EncoderTuning& tuning, int& gpu,
                             QString& error);
 
+/// The knobs a real native session runs with: the `MW_NATIVE_TUNING`
+/// environment variable when it is set, otherwise settings.json's hand-added
+/// `native_tuning` (@p fromSettings), which reaches a SYSTEM worker the
+/// variable cannot. @p source, when given, names which one it was. Empty —
+/// the product — when neither is set.
+QString effectiveTuningSpec(const QString& fromSettings, QString* source = nullptr);
+
 /// `--native-bench <spec>`: run the native capture & encode engine on one
 /// display for a while, with no network and no browser, and write what every
 /// frame cost.

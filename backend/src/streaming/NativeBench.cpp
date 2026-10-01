@@ -199,6 +199,16 @@ const char* const kUsage =
     "                              only, what a compositor without DMA-BUF hands over\n"
     "  (in the environment, MW_PORTAL_RESTORE_TOKEN=<grant>: the portal's consent replayed,\n"
     "  on a binary that cannot read the scanout; a new grant is printed as \"portal grant:\")\n"
+    "the link, a real session's only (MW_NATIVE_TUNING or native_tuning; plan Idees\n"
+    "Punktfunk, A0), each off by default:\n"
+    "  loss=<permille>   video messages thrown away before SCTP gets them, on a fixed seed\n"
+    "  burst=<n>         each loss takes n messages in a row (with loss=)\n"
+    "  sctpcc=0..3       usrsctp's congestion control: RFC 2581, HSTCP, H-TCP, RTCC\n"
+    "  flood=<kbps>|max  messages of no use on channel id 3, paced, or as much as SCTP\n"
+    "                    takes; the client counts them when its localStorage has mw_flood\n"
+    "  floodsize=<bytes> their size, 64-16000 (default 1100)\n"
+    "  floodchannel=fec|video   unordered with no retransmission (default), or the video\n"
+    "                    channel's own: ordered, given up on after 500 ms\n"
     "the bench's own:\n"
     "  dump=<path>      the encoded stream as it comes out (Annex-B, or OBUs for AV1)\n"
     "  lose=<frames>[x<burst>][k]  every N frames, report the latest one lost (reference\n"
@@ -463,6 +473,33 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
             ok = false;
     } else if (key == "portaldmabuf") {
         ok = parseChoice(value, tuning.portalDmabuf);
+    } else if (key == "loss") {
+        tuning.lossPermille = value.toInt(&ok);
+        ok = ok && tuning.lossPermille >= 0 && tuning.lossPermille <= 1000;
+    } else if (key == "burst") {
+        tuning.lossBurst = value.toInt(&ok);
+        ok = ok && tuning.lossBurst >= 1 && tuning.lossBurst <= 64;
+    } else if (key == "sctpcc") {
+        tuning.sctpCongestion = value.toInt(&ok);
+        ok = ok && tuning.sctpCongestion >= 0 && tuning.sctpCongestion <= 3;
+    } else if (key == "flood") {
+        if (value.compare("max", Qt::CaseInsensitive) == 0) {
+            tuning.floodKbps = -1;
+        } else {
+            tuning.floodKbps = value.toInt(&ok);
+            ok = ok && tuning.floodKbps >= 0 && tuning.floodKbps <= 2'000'000;
+        }
+    } else if (key == "floodsize") {
+        tuning.floodBytes = value.toInt(&ok);
+        ok = ok && tuning.floodBytes >= 64 && tuning.floodBytes <= 16000;
+    } else if (key == "floodchannel") {
+        const QString c = value.toLower();
+        if (c == "fec")
+            tuning.floodLikeVideo = false;
+        else if (c == "video")
+            tuning.floodLikeVideo = true;
+        else
+            ok = false;
     } else {
         return false;
     }
@@ -624,6 +661,17 @@ bool parseEncoderTuningSpec(const QString& spec, mw::native::EncoderTuning& tuni
         }
     }
     return true;
+}
+
+QString effectiveTuningSpec(const QString& fromSettings, QString* source)
+{
+    const QString env = qEnvironmentVariable("MW_NATIVE_TUNING");
+    if (!env.isEmpty()) {
+        if (source) *source = QStringLiteral("MW_NATIVE_TUNING");
+        return env;
+    }
+    if (source) *source = QStringLiteral("settings.json native_tuning");
+    return fromSettings.trimmed();
 }
 
 int runNativeBenchCommand(const QString& specText)
