@@ -1,0 +1,438 @@
+<!doctype html>
+<!--
+  MoonlightWeb — gamepad probe: which raw index each control of a device moves,
+  and its sign, at rest and at full travel (plan "Radios, joysticks et volants", T0).
+  Copyright (C) 2026 Bruno Martin. GPLv3.
+
+  A guided reading for the person holding the device, so its words are French:
+  one control per step, Space (or the green button) for the next one. Each step
+  keeps the min/max of every axis, the order the extremes were reached in, the
+  values held for 300 ms or more, and every button flip. "Copier le relevé"
+  puts the whole reading on the clipboard as JSON.
+
+  ?dev=tx12 (default) | g29 | generic — the step list. ?pad=N forces a browser
+  index. The Gamepad API wants a secure context and a visible page: serve the
+  folder on the loopback (python -m http.server 39917 --bind 127.0.0.1) and open
+  http://127.0.0.1:39917/pad-probe.html. A browser only shows a pad after a
+  gesture on it while the page is visible. The reading is also in
+  globalThis.__probe (report(), text()) for a CDP driver.
+-->
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Relevé manette</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 14px 18px 40px; background: #121417; color: #e8e8e8;
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  h1 { font-size: 16px; margin: 0 0 6px; color: #8aa0b4; font-weight: 600; }
+  .mono { font-family: ui-monospace, Consolas, Menlo, monospace; }
+  #pad { color: #9fd49f; font-size: 14px; white-space: pre-wrap; }
+  #pad.none { color: #e0a060; }
+  #vis { color: #e06060; font-weight: 600; }
+  #stepbox { margin: 12px 0; padding: 12px 16px; border-radius: 10px; background: #1d2228; border: 1px solid #2f3a45; }
+  #stepno { color: #8aa0b4; font-size: 13px; }
+  #title { font-size: 30px; font-weight: 700; color: #ffd54a; margin: 2px 0 6px; }
+  #hint { font-size: 20px; max-width: 70em; }
+  #seen { margin-top: 10px; font-size: 15px; color: #a8e0ff; white-space: pre-wrap; min-height: 1.4em; }
+  .bar { display: flex; gap: 10px; flex-wrap: wrap; margin: 10px 0; }
+  button { font: inherit; font-size: 16px; padding: 8px 16px; border-radius: 8px; border: 1px solid #44505c;
+           background: #26303a; color: #eee; cursor: pointer; }
+  button.primary { background: #2f6f3f; border-color: #3f8f52; font-weight: 600; }
+  table { border-collapse: collapse; font-size: 13px; margin: 4px 0 10px; }
+  td, th { border: 1px solid #333c45; padding: 2px 6px; text-align: right; min-width: 50px; }
+  th { color: #8aa0b4; font-weight: 500; }
+  td.moved { background: #23462a; }
+  td.on { background: #6a5714; }
+  #summary { white-space: pre-wrap; font-size: 14px; display: none; margin-top: 10px; padding: 10px; background: #0d0f11; border: 1px solid #333; }
+  #result { width: 100%; height: 220px; margin-top: 10px; background: #0d0f11; color: #cfe; border: 1px solid #333;
+            font: 12px ui-monospace, Consolas, Menlo, monospace; display: none; }
+</style>
+</head>
+<body>
+<h1>Relevé de manette — MoonlightWeb (T0)</h1>
+<div id="pad" class="mono none">Aucun appareil vu. Bougez un manche ou appuyez sur un bouton de l'appareil.</div>
+<div id="vis"></div>
+<div id="stepbox">
+  <div id="stepno"></div>
+  <div id="title"></div>
+  <div id="hint"></div>
+  <div id="seen" class="mono"></div>
+</div>
+<div class="bar">
+  <button id="prev" tabindex="-1">◀ Étape précédente</button>
+  <button id="redo" tabindex="-1">↺ Refaire cette étape</button>
+  <button id="next" tabindex="-1" class="primary">Étape suivante ▶ (Espace)</button>
+  <button id="copy" tabindex="-1">Copier le relevé</button>
+</div>
+<div id="live" class="mono"></div>
+<pre id="summary" class="mono"></pre>
+<textarea id="result" readonly></textarea>
+<script>
+'use strict';
+(() => {
+  const qs = new URLSearchParams(location.search);
+  const DEV = (qs.get('dev') || 'tx12').toLowerCase();
+  const PAD_PARAM = qs.has('pad') ? Number(qs.get('pad')) : null;
+
+  const MATCH = {
+    tx12: /1209|4f54|edgetx|opentx|radiomaster|tx12|jumper|frsky/i,
+    g29: /046d|c24f|c260|c266|g29|logitech|driving force/i,
+  };
+
+  const swStep = (name, where) => ({
+    kind: 'switch',
+    title: `Inter ${name} (levier ${where}, 3 positions)`,
+    hint: 'Cran par cran : haut, milieu, bas, une seconde sur chaque, puis remontez-le en haut. Puis Espace.',
+  });
+  const padBtnStep = (name, where) => ({
+    kind: 'button',
+    title: `Bouton ${name} (ovale, ${where})`,
+    hint: 'Appuyez une fois, puis relâchez. Puis Espace.',
+  });
+  const sliderStep = (name, side) => ({
+    kind: 'axis', title: `Curseur ${name} (sur le côté ${side})`, dirs: ['première butée', 'seconde butée'],
+    hint: "Faites-le glisser jusqu'en butée d'un côté, puis de l'autre, puis remettez-le au milieu. Puis Espace.",
+  });
+  const btnStep = (title, hint) => ({ kind: 'button', title, hint: hint || 'Appuyez une fois, puis relâchez.' });
+  const pedalStep = (title) => ({
+    kind: 'axis', title, fromRest: true, dirs: ['relâchée (repos)', 'enfoncée'],
+    hint: "Enfoncez-la lentement jusqu'au fond, puis relâchez-la complètement.",
+  });
+
+  const STEPS = {
+    tx12: [
+      { kind: 'info', title: 'Préparation',
+        hint: "Sur la radio : répondez « USB Joystick (HID) » si elle le demande, et gardez votre modèle de simulateur. " +
+          "Bougez un manche : la radio doit s'afficher en vert en haut. Cliquez une fois dans cette page, puis Espace." },
+      { kind: 'rest', title: 'Repos',
+        hint: "Gaz tout en bas, manche droit lâché, tous les inters en haut ↑ (leviers poussés loin de vous), " +
+          "potentiomètres S1 et S2 au milieu. Ne touchez plus à rien 2 secondes, puis Espace." },
+      { kind: 'axis', title: 'Manche GAUCHE, horizontal', dirs: ['gauche', 'droite'],
+        hint: 'Poussez-le à fond à GAUCHE, puis à fond à DROITE, puis lâchez-le. Les gaz restent en bas.' },
+      { kind: 'axis', title: 'Manche GAUCHE, vertical (gaz)', dirs: ['bas (repos)', 'haut'], fromRest: true,
+        hint: 'Montez-le tout en HAUT, puis redescendez-le tout en BAS.' },
+      { kind: 'axis', title: 'Manche DROIT, horizontal', dirs: ['gauche', 'droite'],
+        hint: 'Poussez-le à fond à GAUCHE, puis à fond à DROITE, puis lâchez-le.' },
+      { kind: 'axis', title: 'Manche DROIT, vertical', dirs: ['bas', 'haut'],
+        hint: 'Tirez-le tout en BAS (vers vous), puis poussez-le tout en HAUT (loin de vous), puis lâchez-le.' },
+      // The TX12's own layout; another radio skips what it does not have.
+      padBtnStep('SA', 'en haut à gauche'),
+      swStep('SB', 'sur la face, à gauche'),
+      swStep('SC', 'sur la face, à droite'),
+      padBtnStep('SD', 'en haut à droite'),
+      swStep('SE', 'sur la tranche du haut, à gauche'),
+      swStep('SF', 'sur la tranche du haut, à droite'),
+      sliderStep('S1', 'gauche'),
+      sliderStep('S2', 'droit'),
+      { kind: 'rate', title: 'Cadence des rapports',
+        hint: 'Faites tourner les deux manches en cercles, sans arrêt, pendant 5 secondes. Puis lâchez-les, gaz en bas, et Espace.' },
+      { kind: 'end', title: 'Fin', hint: 'Terminé. Le résumé est en bas de la page ; vous pouvez le copier.' },
+    ],
+    g29: [
+      { kind: 'info', title: 'Préparation',
+        hint: "Sélecteur du volant sur PS3. Pédalier branché au volant. Tournez un peu le volant : il doit s'afficher " +
+          'en vert en haut. Cliquez une fois dans cette page, puis Espace.' },
+      { kind: 'rest', title: 'Repos',
+        hint: 'Volant au centre, pieds hors des pédales, aucun bouton appuyé. Ne touchez plus à rien 2 secondes, puis Espace.' },
+      { kind: 'axis', title: 'Volant', dirs: ['gauche', 'droite'],
+        hint: "Tournez-le jusqu'en butée à GAUCHE, puis jusqu'en butée à DROITE, puis ramenez-le au centre." },
+      pedalStep('Accélérateur (pédale de droite)'),
+      pedalStep('Frein (pédale du milieu)'),
+      pedalStep('Embrayage (pédale de gauche)'),
+      btnStep('Palette DROITE (derrière le volant)', 'Tirez-la une fois, puis lâchez-la.'),
+      btnStep('Palette GAUCHE (derrière le volant)', 'Tirez-la une fois, puis lâchez-la.'),
+      btnStep('Bouton ✕ (croix)'), btnStep('Bouton ○ (rond)'), btnStep('Bouton □ (carré)'), btnStep('Bouton △ (triangle)'),
+      btnStep('Bouton R2'), btnStep('Bouton L2'), btnStep('Bouton R3'), btnStep('Bouton L3'),
+      btnStep('Bouton SHARE'), btnStep('Bouton OPTIONS'), btnStep('Bouton PS'),
+      btnStep('Bouton + (plus)'), btnStep('Bouton − (moins)'),
+      btnStep('Molette rouge, sens horaire', "Tournez-la d'UN cran vers la droite."),
+      btnStep('Molette rouge, sens antihoraire', "Tournez-la d'UN cran vers la gauche."),
+      btnStep('Bouton Entrée (au centre de la molette)'),
+      btnStep('Croix directionnelle : HAUT'), btnStep('Croix directionnelle : DROITE'),
+      btnStep('Croix directionnelle : BAS'), btnStep('Croix directionnelle : GAUCHE'),
+      btnStep('Levier de vitesses (s’il est branché)',
+        'Passez la 1ʳᵉ, puis la 2ᵉ, 3ᵉ, 4ᵉ, 5ᵉ, 6ᵉ et la marche arrière, une seconde sur chaque rapport, puis le point mort. Sans levier, passez.'),
+      { kind: 'rate', title: 'Cadence des rapports',
+        hint: 'Tournez le volant de gauche à droite sans arrêt pendant 5 secondes, puis ramenez-le au centre et Espace.' },
+      { kind: 'end', title: 'Fin', hint: 'Terminé. Le résumé est en bas de la page ; vous pouvez le copier.' },
+    ],
+    generic: [
+      { kind: 'info', title: 'Préparation', hint: "Bougez une commande de l'appareil : il doit s'afficher en vert en haut. Cliquez une fois dans cette page, puis Espace." },
+      { kind: 'rest', title: 'Repos', hint: 'Lâchez tout. Ne touchez plus à rien 2 secondes, puis Espace.' },
+      { kind: 'free', title: 'Toutes les commandes', hint: 'Bougez chaque commande une par une, jusqu’en butée, avec une pause entre deux. Puis Espace.' },
+      { kind: 'rate', title: 'Cadence des rapports', hint: 'Remuez un axe sans arrêt pendant 5 secondes, puis Espace.' },
+      { kind: 'end', title: 'Fin', hint: 'Terminé. Le résumé est en bas de la page ; vous pouvez le copier.' },
+    ],
+  };
+
+  const steps = STEPS[DEV] || STEPS.generic;
+  const st = { dev: DEV, steps, idx: 0, pad: null, allPads: [], recs: [], cur: null, lastTs: null, tsWin: [], rateNow: 0 };
+  window.__probe = st;
+
+  const $ = (id) => document.getElementById(id);
+  const fmt = (v) => (v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(3));
+  const now = () => performance.now();
+
+  function pickPad(list) {
+    if (PAD_PARAM !== null) return list[PAD_PARAM] || null;
+    let fallback = null;
+    for (const p of list) {
+      if (!p) continue;
+      if (MATCH[DEV] && MATCH[DEV].test(p.id)) return p;
+      if (!fallback && p.mapping !== 'standard') fallback = p;
+    }
+    if (fallback) return fallback;
+    for (const p of list) if (p) return p;
+    return null;
+  }
+
+  function snap(p) {
+    return {
+      axes: Array.from(p.axes, (v) => +v.toFixed(4)),
+      buttons: Array.from(p.buttons, (b) => +b.value.toFixed(3)),
+      pressed: Array.from(p.buttons, (b) => (b.pressed ? 1 : 0)),
+    };
+  }
+
+  function newRec(i, p, t) {
+    const s = snap(p);
+    return {
+      step: i, title: steps[i].title, kind: steps[i].kind, t0: t, t1: null, start: s, end: null,
+      axes: s.axes.map((v) => ({ min: v, max: v, tMin: t, tMax: t, last: v })),
+      buttons: s.buttons.map((v, j) => ({ startPressed: s.pressed[j], flips: 0, maxValue: v, minValue: v, lastPressed: s.pressed[j] })),
+      ev: [], rateMax: 0, samples: 0, tsDeltas: [], lastTs: null,
+    };
+  }
+
+  function sample() {
+    const list = navigator.getGamepads ? Array.from(navigator.getGamepads()) : [];
+    st.allPads = list.filter(Boolean).map((q) => ({ index: q.index, id: q.id, mapping: q.mapping, axes: q.axes.length, buttons: q.buttons.length }));
+    const p = pickPad(list);
+    st.cur = p;
+    if (!p) return;
+    const t = now();
+    if (!st.pad || st.pad.index !== p.index || st.pad.id !== p.id || st.pad.axes !== p.axes.length) {
+      st.pad = { index: p.index, id: p.id, mapping: p.mapping, axes: p.axes.length, buttons: p.buttons.length,
+        vibration: !!p.vibrationActuator, hapticActuators: p.hapticActuators ? p.hapticActuators.length : null };
+    }
+    if (p.timestamp !== st.lastTs) { st.lastTs = p.timestamp; st.tsWin.push(t); }
+    while (st.tsWin.length && t - st.tsWin[0] > 1000) st.tsWin.shift();
+    st.rateNow = st.tsWin.length;
+
+    if (steps[st.idx].kind === 'end') return;
+    let rec = st.recs[st.idx];
+    if (!rec) rec = st.recs[st.idx] = newRec(st.idx, p, t);
+    rec.samples++;
+    if (t - rec.t0 >= 1000 && st.rateNow > rec.rateMax) rec.rateMax = st.rateNow;
+    if (p.timestamp !== rec.lastTs) {
+      if (rec.lastTs != null) rec.tsDeltas.push(+(p.timestamp - rec.lastTs).toFixed(3));
+      rec.lastTs = p.timestamp;
+    }
+    const rel = Math.round(t - rec.t0);
+    for (let i = 0; i < p.axes.length && i < rec.axes.length; i++) {
+      const v = p.axes[i];
+      const a = rec.axes[i];
+      if (v < a.min) { a.min = v; a.tMin = t; }
+      if (v > a.max) { a.max = v; a.tMax = t; }
+      if (Math.abs(v - a.last) >= 0.004) { a.last = v; rec.ev.push([rel, 'a', i, +v.toFixed(4)]); }
+    }
+    for (let j = 0; j < p.buttons.length && j < rec.buttons.length; j++) {
+      const b = p.buttons[j];
+      const r = rec.buttons[j];
+      if (b.value > r.maxValue) r.maxValue = b.value;
+      if (b.value < r.minValue) r.minValue = b.value;
+      const pr = b.pressed ? 1 : 0;
+      if (pr !== r.lastPressed) { r.lastPressed = pr; r.flips++; rec.ev.push([rel, 'b', j, pr]); }
+    }
+  }
+
+  // Stable values held >= 300 ms for one index, from the start value and the change log.
+  function stableRuns(rec, kind, idx) {
+    const startVal = kind === 'a' ? rec.start.axes[idx] : rec.start.pressed[idx];
+    const pts = [[0, startVal]];
+    for (const e of rec.ev) if (e[1] === kind && e[2] === idx) pts.push([e[0], e[3]]);
+    const tEnd = Math.round((rec.t1 ?? now()) - rec.t0);
+    const runs = [];
+    let segStart = pts[0][0];
+    let segVal = pts[0][1];
+    for (let k = 1; k <= pts.length; k++) {
+      const q = pts[k];
+      if (q && Math.abs(q[1] - segVal) <= 0.03) continue;
+      const segEnd = q ? q[0] : tEnd;
+      if (segEnd - segStart >= 300 && (!runs.length || Math.abs(runs[runs.length - 1] - segVal) > 0.03)) runs.push(+(+segVal).toFixed(3));
+      if (q) { segStart = q[0]; segVal = q[1]; }
+    }
+    return runs;
+  }
+
+  function pct(arr, q) {
+    if (!arr.length) return null;
+    const s = [...arr].sort((x, y) => x - y);
+    return s[Math.min(s.length - 1, Math.floor(q * s.length))];
+  }
+
+  function analyse(rec) {
+    const step = steps[rec.step];
+    const end = rec.end || (st.cur ? snap(st.cur) : null);
+    const axes = rec.axes.map((a, i) => ({
+      i, range: +(a.max - a.min).toFixed(3), min: +a.min.toFixed(3), max: +a.max.toFixed(3),
+      tMin: Math.round(a.tMin - rec.t0), tMax: Math.round(a.tMax - rec.t0),
+      start: rec.start.axes[i], end: end ? end.axes[i] : null,
+    }));
+    const moved = axes.filter((a) => a.range >= 0.1).sort((x, y) => y.range - x.range).map((a) => ({ ...a, runs: stableRuns(rec, 'a', a.i) }));
+    const buttons = rec.buttons.map((b, j) => ({ i: j, ...b }))
+      .filter((b) => b.flips > 0 || b.maxValue - b.minValue > 0.1)
+      .map((b) => ({ i: b.i, flips: b.flips, startPressed: b.startPressed, min: +b.minValue.toFixed(3), max: +b.maxValue.toFixed(3), runs: stableRuns(rec, 'b', b.i) }));
+    const out = { step: rec.step, title: rec.title, kind: rec.kind, ms: Math.round((rec.t1 ?? now()) - rec.t0), moved, buttons, verdict: '' };
+    const lines = [];
+    if (step.kind === 'rest') {
+      lines.push('repos, axes : ' + rec.start.axes.map((v, i) => `${i}:${fmt(v)}`).join('  '));
+      const pressed = rec.start.pressed.map((v, i) => (v ? i : null)).filter((v) => v !== null);
+      lines.push('repos, boutons appuyés : ' + (pressed.length ? pressed.join(', ') : 'aucun'));
+      if (moved.length || buttons.length) lines.push('⚠ quelque chose a bougé pendant le repos');
+    } else if (step.kind === 'axis' && moved.length) {
+      const a = moved[0];
+      let first;
+      let second;
+      if (step.fromRest) {
+        const nearMin = Math.abs(a.start - a.min) <= Math.abs(a.start - a.max);
+        first = nearMin ? a.min : a.max;
+        second = nearMin ? a.max : a.min;
+      } else {
+        const minFirst = a.tMin <= a.tMax;
+        first = minFirst ? a.min : a.max;
+        second = minFirst ? a.max : a.min;
+      }
+      lines.push(`axe ${a.i} : ${step.dirs[0]} = ${fmt(first)}, ${step.dirs[1]} = ${fmt(second)} (départ ${fmt(a.start)}, fin ${fmt(a.end)})`);
+      for (const o of moved.slice(1)) lines.push(`  aussi axe ${o.i} : ${fmt(o.min)} → ${fmt(o.max)} (départ ${fmt(o.start)})`);
+    } else if (step.kind === 'rate') {
+      const d = rec.tsDeltas.filter((x) => x > 0);
+      out.rate = { maxPerSec: rec.rateMax, deltas: d.length, medianMs: pct(d, 0.5), p95Ms: pct(d, 0.95), minMs: pct(d, 0) };
+      lines.push(`mises à jour : ${rec.rateMax}/s au plus ; intervalle médian ${out.rate.medianMs} ms, p95 ${out.rate.p95Ms} ms, min ${out.rate.minMs} ms (${d.length} écarts)`);
+    } else if (step.kind !== 'info' && step.kind !== 'end') {
+      for (const a of moved) lines.push(`axe ${a.i} : ${fmt(a.min)} → ${fmt(a.max)}, départ ${fmt(a.start)}, fin ${fmt(a.end)}, paliers [${a.runs.map(fmt).join(', ')}]`);
+      for (const b of buttons) lines.push(`bouton ${b.i} : ${b.flips} bascule(s), appuyé au départ = ${b.startPressed ? 'oui' : 'non'}, valeur ${b.min}→${b.max}, paliers [${b.runs.join(', ')}]`);
+    }
+    if (!lines.length && step.kind !== 'info' && step.kind !== 'end') lines.push('aucun changement');
+    out.verdict = lines.join('\n');
+    return out;
+  }
+
+  function closeStep() {
+    const rec = st.recs[st.idx];
+    if (rec && !rec.t1) {
+      rec.t1 = now();
+      rec.end = st.cur ? snap(st.cur) : null;
+      rec.analysis = analyse(rec);
+    }
+  }
+
+  let fast = false;
+  const mc = new MessageChannel();
+  mc.port1.onmessage = () => { sample(); if (fast) mc.port2.postMessage(0); };
+  function setFast(on) {
+    if (on && !fast) { fast = true; mc.port2.postMessage(0); } else if (!on) fast = false;
+  }
+
+  function go(i) {
+    closeStep();
+    st.idx = Math.max(0, Math.min(steps.length - 1, i));
+    delete st.recs[st.idx];
+    setFast(steps[st.idx].kind === 'rate');
+    if (steps[st.idx].kind === 'end') showSummary();
+    renderStep();
+  }
+  const next = () => go(st.idx + 1);
+  const prev = () => go(st.idx - 1);
+  const redo = () => { delete st.recs[st.idx]; renderStep(); };
+
+  function report() {
+    const results = st.recs.filter(Boolean).map((r) => r.analysis || analyse(r));
+    return {
+      tool: 'mw-pad-probe/1', dev: DEV, when: new Date().toISOString(), userAgent: navigator.userAgent,
+      platform: navigator.userAgentData ? navigator.userAgentData.platform : navigator.platform,
+      pad: st.pad, allPads: st.allPads, steps: results,
+    };
+  }
+  function reportText(r) {
+    const head = [
+      `Navigateur : ${r.userAgent}`,
+      r.pad ? `Appareil : id = "${r.pad.id}"\n  index ${r.pad.index}, mapping = "${r.pad.mapping}", ${r.pad.axes} axes, ${r.pad.buttons} boutons, vibration = ${r.pad.vibration}` : 'Appareil : aucun',
+      `Tous : ${r.allPads.map((p) => `[${p.index}] "${p.id}" (${p.mapping || 'sans mapping'})`).join(' ; ')}`,
+      '',
+    ];
+    return head.concat(r.steps.filter((s) => s.kind !== 'info').map((s) => `■ ${s.title}\n${s.verdict}`)).join('\n');
+  }
+  window.__probe.report = report;
+  window.__probe.text = () => reportText(report());
+
+  function showSummary() {
+    const r = report();
+    $('summary').style.display = 'block';
+    $('summary').textContent = reportText(r);
+    $('result').style.display = 'block';
+    $('result').value = JSON.stringify(r, null, 1);
+  }
+
+  function renderStep() {
+    const s = steps[st.idx];
+    $('stepno').textContent = `Étape ${st.idx + 1} / ${steps.length}`;
+    $('title').textContent = s.title;
+    $('hint').textContent = s.hint;
+  }
+
+  function renderLive() {
+    const p = st.cur;
+    $('vis').textContent = document.visibilityState === 'visible' ? '' : 'Page cachée : le navigateur ne donne plus la manette.';
+    if (!p) {
+      $('pad').className = 'mono none';
+      $('pad').textContent = st.allPads.length
+        ? 'Manettes vues : ' + st.allPads.map((q) => `[${q.index}] ${q.id}`).join(' ; ')
+        : "Aucun appareil vu. Bougez un manche ou appuyez sur un bouton de l'appareil.";
+    } else {
+      $('pad').className = 'mono';
+      $('pad').textContent = `id = "${p.id}"\nindex ${p.index} · mapping = "${p.mapping}" · ${p.axes.length} axes · ${p.buttons.length} boutons · ${st.rateNow} mises à jour/s` +
+        (st.allPads.length > 1 ? `\nautres : ${st.allPads.filter((q) => q.index !== p.index).map((q) => `[${q.index}] ${q.id}`).join(' ; ')}` : '');
+      const rec = st.recs[st.idx];
+      const rest = rec ? rec.start : null;
+      let h = '<table><tr><th>axe</th>' + Array.from(p.axes, (_, i) => `<th>${i}</th>`).join('') + '</tr><tr><th>valeur</th>';
+      h += Array.from(p.axes, (v, i) => `<td class="${rest && Math.abs(v - rest.axes[i]) > 0.1 ? 'moved' : ''}">${fmt(v)}</td>`).join('') + '</tr></table>';
+      h += '<table><tr><th>bouton</th>' + Array.from(p.buttons, (_, j) => `<th>${j}</th>`).join('') + '</tr><tr><th>valeur</th>';
+      h += Array.from(p.buttons, (b) => `<td class="${b.pressed ? 'on' : ''}">${b.value.toFixed(2)}</td>`).join('') + '</tr></table>';
+      $('live').innerHTML = h;
+      if (rec && steps[st.idx].kind !== 'info') $('seen').textContent = analyse(rec).verdict;
+      else $('seen').textContent = '';
+    }
+    requestAnimationFrame(renderLive);
+  }
+
+  for (const [id, fn] of [['next', next], ['prev', prev], ['redo', redo], ['copy', null]]) {
+    $(id).addEventListener('mousedown', (e) => e.preventDefault());
+    $(id).addEventListener('click', (e) => {
+      e.currentTarget.blur();
+      if (fn) fn();
+      else {
+        showSummary();
+        const txt = $('result').value;
+        if (navigator.clipboard) navigator.clipboard.writeText(txt).then(() => { $('copy').textContent = 'Copié ✓'; }, () => { $('result').select(); });
+        else $('result').select();
+      }
+    });
+  }
+  addEventListener('keydown', (e) => {
+    if (e.code === 'Space' || e.code === 'Enter' || e.code === 'ArrowRight') { e.preventDefault(); next(); }
+    else if (e.code === 'ArrowLeft' || e.code === 'Backspace') { e.preventDefault(); prev(); }
+  });
+  addEventListener('keyup', (e) => { if (e.code === 'Space') e.preventDefault(); });
+  addEventListener('gamepadconnected', (e) => console.log('[probe] connected', e.gamepad.index, e.gamepad.id, e.gamepad.mapping));
+  addEventListener('gamepaddisconnected', (e) => console.log('[probe] disconnected', e.gamepad.index, e.gamepad.id));
+
+  setInterval(sample, 1);
+  renderStep();
+  requestAnimationFrame(renderLive);
+})();
+</script>
+</body>
+</html>
