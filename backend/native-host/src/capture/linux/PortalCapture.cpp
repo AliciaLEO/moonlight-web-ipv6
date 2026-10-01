@@ -225,29 +225,32 @@ struct PortalCapture::Impl
         pw_stream_update_params(self->stream, params, count);
     }
 
-    /// Read the cursor metadata a buffer carries, if any.
-    void readCursor(pw_buffer* b)
+    /// Read the cursor metadata a buffer carries, if any. True when the pointer
+    /// moved, appeared, went or changed shape.
+    bool readCursor(pw_buffer* b)
     {
         auto* meta = static_cast<spa_meta_cursor*>(
             spa_buffer_find_meta_data(b->buffer, SPA_META_Cursor, sizeof(spa_meta_cursor)));
-        if (!meta) return;
+        if (!meta) return false;
         const bool visible = spa_meta_cursor_is_valid(meta);
         if (!visible) {
-            if (cursor.visible) {
-                cursor.visible = false;
-                cursorFresh = true;
-            }
-            return;
+            if (!cursor.visible) return false;
+            cursor.visible = false;
+            cursorFresh = true;
+            return true;
         }
+        const bool moved =
+            !cursor.visible || cursor.x != meta->position.x || cursor.y != meta->position.y;
         cursor.visible = true;
         cursor.x = meta->position.x;
         cursor.y = meta->position.y;
+        if (moved) cursorFresh = true;
 
         // The shape only travels when it changes; a zero id means "same as
         // before", which is the common case for thousands of frames.
-        if (meta->bitmap_offset == 0) return;
+        if (meta->bitmap_offset == 0) return moved;
         auto* bitmap = SPA_PTROFF(meta, meta->bitmap_offset, spa_meta_bitmap);
-        if (!bitmap || bitmap->size.width == 0 || bitmap->size.height == 0) return;
+        if (!bitmap || bitmap->size.width == 0 || bitmap->size.height == 0) return moved;
         const auto* pixels = SPA_PTROFF(bitmap, bitmap->offset, uint8_t);
         const int w = static_cast<int>(bitmap->size.width);
         const int h = static_cast<int>(bitmap->size.height);
@@ -270,6 +273,7 @@ struct PortalCapture::Impl
         cursor.inkHeight = inkH;
         ++cursor.shapeVersion;
         cursorFresh = true;
+        return true;
     }
 
     /// PipeWire takes a buffer back — a renegotiation, which GNOME 42 does at
@@ -293,19 +297,28 @@ struct PortalCapture::Impl
         if (!b) return;
 
         std::unique_lock<std::mutex> lock(self->mutex);
+        spa_buffer* buf = b->buffer;
+        if (buf->n_datas < 1 || buf->datas[0].chunk == nullptr || buf->datas[0].chunk->size == 0) {
+            // An empty buffer is how PipeWire says "nothing new" — and how
+            // Mutter sends a pointer that moved over a still screen: its
+            // metadata on a buffer with no pixels (bench §8s.4). Not a frame:
+            // the one held for the consumer stays held, it may be reading it
+            // right now, and this one goes straight back, which is what keeps
+            // the stream fed. The pointer it carries is read first.
+            const bool pointer = self->readCursor(b);
+            pw_stream_queue_buffer(self->stream, b);
+            if (pointer) {
+                lock.unlock();
+                self->ready.notify_all();
+            }
+            return;
+        }
+
         // One frame held at a time: if the consumer has not taken the last one,
         // this newer one replaces it. Never a queue — the whole engine's rule.
         if (self->held) {
             pw_stream_queue_buffer(self->stream, self->held);
             self->held = nullptr;
-        }
-
-        spa_buffer* buf = b->buffer;
-        if (buf->n_datas < 1 || buf->datas[0].chunk == nullptr || buf->datas[0].chunk->size == 0) {
-            // An empty buffer is how PipeWire says "nothing new" — it is not a
-            // frame, and queuing it straight back is what keeps the stream fed.
-            pw_stream_queue_buffer(self->stream, b);
-            return;
         }
 
         self->readCursor(b);
@@ -580,9 +593,9 @@ AcquireStatus PortalCapture::acquire(int timeoutMs, KmsFrame& frame)
 {
     std::unique_lock<std::mutex> lock(d->mutex);
     if (d->failed) return AcquireStatus::Lost;
-    if (!d->frameFresh) {
+    if (!d->frameFresh && !d->cursorFresh) {
         d->ready.wait_for(lock, std::chrono::milliseconds(timeoutMs > 0 ? timeoutMs : 1),
-                          [this] { return d->frameFresh || d->failed; });
+                          [this] { return d->frameFresh || d->cursorFresh || d->failed; });
     }
     if (d->failed) return AcquireStatus::Lost;
     if (!d->frameFresh) {
