@@ -429,12 +429,18 @@ Unavailability enumerate(Capabilities& caps)
     // Steam's Big Picture in its own gamescope (GamescopeSession.h, plan Idées
     // Punktfunk, chapter G): a gamescope recent enough and a Steam someone
     // uses. No desktop needed — an X11 session, or none, has this card too.
+    // The user's own apps (G5) need gamescope alone: one hidden entry for them
+    // all, which the server turns into a card per app of its settings.
     std::string gamescopeWhy;
     std::string gamescopeDetail;
+    std::string gamescopeVersion;
     bool gamescopeSteam = false;
+    bool gamescopeApps = false;
     {
         capture::GamescopeBinary gamescope;
         if (capture::findGamescope(gamescope, gamescopeWhy)) {
+            gamescopeApps = true;
+            gamescopeVersion = gamescope.version.text();
             const std::vector<capture::SteamInstall> installs = capture::findSteamInstalls();
             int pid = 0;
             const int chosen = capture::chooseSteam(installs, capture::runningDesktopSteam(pid));
@@ -455,8 +461,9 @@ Unavailability enumerate(Capabilities& caps)
 #else
     const bool portalVirtual = false;
     const bool gamescopeSteam = false;
+    const bool gamescopeApps = false;
 #endif
-    if (caps.displays.empty() && !portalVirtual && !gamescopeSteam) {
+    if (caps.displays.empty() && !portalVirtual && !gamescopeSteam && !gamescopeApps) {
         caps.diagnostic = "no display is connected";
         return Unavailability::NoDisplay;
     }
@@ -584,6 +591,34 @@ Unavailability enumerate(Capabilities& caps)
         steam.capture = CaptureApi::PipeWire;
         steam.detail = gamescopeDetail;
         caps.displays.push_back(steam);
+        if (caps.capture != CaptureApi::Kms && caps.capture != CaptureApi::PipeWire &&
+            caps.displays.size() == 1) {
+            caps.capture = CaptureApi::PipeWire;
+            caps.diagnostic.clear();
+        }
+    }
+
+    if (gamescopeApps) {
+        const GpuInfo* gpu = nullptr;
+        for (const GpuInfo& g : caps.gpus)
+            if (!gpu && !g.encoders.empty() && !g.codecs.empty()) gpu = &g;
+        if (!gpu && !caps.gpus.empty()) gpu = &caps.gpus.front();
+        int nextId = 0;
+        for (const DisplayInfo& d : caps.displays)
+            nextId = std::max(nextId, d.id + 1);
+        DisplayInfo apps;
+        apps.id = nextId;
+        apps.gpuId = gpu ? gpu->id : -1;
+        apps.width = 1920;
+        apps.height = 1080;
+        apps.refreshMilliHz = 60000;
+        apps.label = "Apps in gamescope";
+        apps.kind = DisplayKind::Virtual;
+        apps.key = kGamescopeAppDisplayKey;
+        apps.capture = CaptureApi::PipeWire;
+        apps.detail = "the user's own apps, each in its own gamescope " + gamescopeVersion +
+                      " at the client's size (a card per app of the settings)";
+        caps.displays.push_back(apps);
         if (caps.capture != CaptureApi::Kms && caps.capture != CaptureApi::PipeWire &&
             caps.displays.size() == 1) {
             caps.capture = CaptureApi::PipeWire;

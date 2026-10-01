@@ -19,6 +19,7 @@
 
 #include <QList>
 #include <QString>
+#include <QJsonArray>
 #include <QJsonObject>
 
 #include "../streaming/StreamConfig.h"
@@ -602,6 +603,21 @@ public:
     /// Stores one of the three names, in any case. False, with the file left
     /// as it was, for anything else.
     bool setNativeVideoPipeline(const QString& pipeline);
+
+    /// The apps a Linux native host runs each in its own gamescope, a card
+    /// apiece beside the displays (plan Idées Punktfunk, chapter G, G5):
+    /// [{"name", "command"}], in the owner's order. A command is run by
+    /// /bin/sh as the host's user — the host owner's to write, never a
+    /// viewer's. An entry the file holds that is not valid is left out.
+    QJsonArray gamescopeApps() const;
+    /// Stores @p apps: 16 at most, each a name of 1 to 40 characters and a
+    /// command of 1 to 1000, on one line. False with @p error, the file left
+    /// as it was, for anything else.
+    bool setGamescopeApps(const QJsonArray& apps, QString* error);
+    /// The limits setGamescopeApps holds to, for the page that edits them.
+    static constexpr int kGamescopeAppsMax = 16;
+    static constexpr int kGamescopeAppNameMax = 40;
+    static constexpr int kGamescopeCommandMax = 1000;
 
     // ── HMAC key for session tokens ──────────────────────────────────────────
 

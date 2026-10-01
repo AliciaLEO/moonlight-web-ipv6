@@ -687,6 +687,8 @@ void StreamSession::onLaunchResult(bool ok, const BackendError& err, const Media
         // that captures through the portal has one at all.
         nativeParams.portalRestoreToken = m_PortalRestoreToken;
         nativeParams.virtualPrimary = m_VirtualPrimary;
+        nativeParams.gamescopeApp = m_GamescopeApp;
+        nativeParams.gamescopeCommand = m_GamescopeCommand;
         // The picture chain the admin chose (Advanced). A value this build
         // does not know leaves Auto in place rather than guessing.
         mw::native::parseVideoPipeline(m_NativeVideoPipeline.toStdString(),

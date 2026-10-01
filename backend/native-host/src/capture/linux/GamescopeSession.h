@@ -391,6 +391,28 @@ inline std::vector<std::string> gamescopeLingerCommand(const std::string& unit, 
             unit + ".service"};
 }
 
+/// The session name of one of the user's apps: "app-" and its name in lower
+/// case letters, digits and dashes, 32 at most — what a systemd unit's name
+/// and a file's take. The same name, the same session: two cards of one name
+/// would share it, as they would run the same thing.
+inline std::string gamescopeCardName(const std::string& appName)
+{
+    std::string slug;
+    for (char c : appName) {
+        const auto u = static_cast<unsigned char>(c);
+        if (u >= 'A' && u <= 'Z')
+            slug += static_cast<char>(u - 'A' + 'a');
+        else if ((u >= 'a' && u <= 'z') || (u >= '0' && u <= '9'))
+            slug += c;
+        else if (!slug.empty() && slug.back() != '-')
+            slug += '-';
+        if (slug.size() >= 32) break;
+    }
+    while (!slug.empty() && slug.back() == '-')
+        slug.pop_back();
+    return slug.empty() ? std::string("app") : "app-" + slug;
+}
+
 // ── The record ───────────────────────────────────────────────────────────────
 
 /// A running session, as its starter recorded it for the next stream.

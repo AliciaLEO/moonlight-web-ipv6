@@ -151,6 +151,13 @@ export class AdminView {
         this._videoPipeline = 'auto';
         this._videoPipelineSupported = false;
         this._videoPipelineValues = ['auto', 'd3d11', 'd3d12'];
+        // The owner's apps in gamescope (a Linux native host): [{name, command}],
+        // and whether this machine can run them — the section is hidden where
+        // it cannot.
+        /** @type {{name: string, command: string}[]} */
+        this._gamescopeApps = [];
+        this._gamescopeAppsSupported = false;
+        this._gamescopeAppsMax = 16;
         // Diagnostics (Advanced): the two modes in force, and whether the
         // command line holds each on for this run — its box then cannot
         // turn it off. The logs archive, while it is being built.
@@ -260,6 +267,11 @@ export class AdminView {
             if (Array.isArray(settings.native_video_pipeline_options)) {
                 this._videoPipelineValues = settings.native_video_pipeline_options;
             }
+            this._gamescopeAppsSupported = settings.gamescope_apps_supported === true;
+            if (Array.isArray(settings.gamescope_apps))
+                this._gamescopeApps = settings.gamescope_apps;
+            if (settings.gamescope_apps_max > 0)
+                this._gamescopeAppsMax = settings.gamescope_apps_max;
         } catch (err) {
             console.warn('[Admin] Failed to load streaming settings:', err);
         }
@@ -1107,6 +1119,7 @@ export class AdminView {
                         </div>
                     </div>
                 </div>
+                ${this._gamescopeAppsSupported ? this._renderGamescopeApps() : ''}
                 ${this._renderAdvanced()}
             </div>
         `;
@@ -1441,6 +1454,9 @@ export class AdminView {
                 this._saveVideoPipeline(pipelineSelect.value);
             });
         }
+
+        // The owner's apps in gamescope: each change saved at once.
+        this._bindGamescopeApps();
 
         // Diagnostics (Advanced): both modes saved at once, the archive on click.
         for (const id of ['#chk-debug-mode', '#chk-verbose-logs']) {
@@ -2397,6 +2413,111 @@ export class AdminView {
             setTimeout(() => {
                 if (bar && !this._logsBusy) bar.hidden = true;
             }, 600);
+        }
+    }
+
+    // --- The owner's apps in gamescope (Linux native host) ---
+
+    // A card each on this host, beside the displays and Steam's: the name the
+    // card shows, the command the host runs in the app's own gamescope.
+    _renderGamescopeApps() {
+        const full = this._gamescopeApps.length >= this._gamescopeAppsMax;
+        const rows = this._gamescopeApps
+            .map(
+                (app, i) => `
+                        <li class="gamescope-app-row">
+                            <span class="gamescope-app-name">${this.esc(app.name)}</span>
+                            <code class="gamescope-app-command">${this.esc(app.command)}</code>
+                            <button class="btn btn-secondary btn-small" data-gamescope-remove="${i}">
+                                ${t('admin.gamescopeAppRemove')}
+                            </button>
+                        </li>`,
+            )
+            .join('');
+        return `
+                <div class="settings-section" id="admin-section-gamescope">
+                    <h3 class="settings-section-title">${t('admin.gamescopeApps')}</h3>
+                    <p class="setting-desc">${t('admin.gamescopeAppsDesc')}</p>
+                    ${
+                        rows
+                            ? `<ul class="gamescope-app-list">${rows}</ul>`
+                            : `<p class="settings-hint">${t('admin.gamescopeAppsEmpty')}</p>`
+                    }
+                    <div class="settings-field gamescope-app-add">
+                        <input type="text" id="gamescope-app-name" class="settings-input"
+                               maxlength="40" placeholder="${this.esc(t('admin.gamescopeAppName'))}"
+                               aria-label="${this.esc(t('admin.gamescopeAppName'))}" ${full ? 'disabled' : ''} />
+                        <input type="text" id="gamescope-app-command" class="settings-input u-grow"
+                               maxlength="1000" placeholder="${this.esc(t('admin.gamescopeAppCommand'))}"
+                               aria-label="${this.esc(t('admin.gamescopeAppCommand'))}" ${full ? 'disabled' : ''} />
+                        <button class="btn btn-save u-shrink-0" id="btn-gamescope-add" disabled>
+                            ${t('admin.gamescopeAppAdd')}
+                        </button>
+                    </div>
+                    ${full ? `<p class="settings-hint">${t('admin.gamescopeAppsFull', { max: this._gamescopeAppsMax })}</p>` : ''}
+                </div>`;
+    }
+
+    _bindGamescopeApps() {
+        const section = this.container.querySelector('#admin-section-gamescope');
+        if (!section) return;
+        const name = /** @type {HTMLInputElement|null} */ (
+            section.querySelector('#gamescope-app-name')
+        );
+        const command = /** @type {HTMLInputElement|null} */ (
+            section.querySelector('#gamescope-app-command')
+        );
+        const add = /** @type {HTMLButtonElement|null} */ (
+            section.querySelector('#btn-gamescope-add')
+        );
+        const ready = () => {
+            if (add && name && command) {
+                add.disabled = !name.value.trim() || !command.value.trim() || name.disabled;
+            }
+        };
+        if (name) name.addEventListener('input', ready);
+        if (command) {
+            command.addEventListener('input', ready);
+            command.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && add && !add.disabled) add.click();
+            });
+        }
+        if (add && name && command) {
+            add.addEventListener('click', () => {
+                const next = [
+                    ...this._gamescopeApps,
+                    { name: name.value.trim(), command: command.value.trim() },
+                ];
+                void this._saveGamescopeApps(next);
+            });
+        }
+        section.querySelectorAll('[data-gamescope-remove]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const index = Number(/** @type {HTMLElement} */ (btn).dataset.gamescopeRemove);
+                void this._saveGamescopeApps(this._gamescopeApps.filter((_, i) => i !== index));
+            });
+        });
+    }
+
+    /**
+     * Save the whole list, then show what the server kept.
+     * @param {{name: string, command: string}[]} apps
+     */
+    async _saveGamescopeApps(apps) {
+        try {
+            const resp = await BackendClient.saveStreamingSettings({ gamescope_apps: apps });
+            this._gamescopeApps = Array.isArray(resp.gamescope_apps) ? resp.gamescope_apps : apps;
+            Toast.success(t('admin.gamescopeAppsSaved'));
+        } catch (err) {
+            console.warn('[Admin] Failed to save the gamescope apps:', err);
+            Toast.error(
+                t('admin.gamescopeAppsSaveFailed', { message: /** @type {Error} */ (err).message }),
+            );
+        }
+        const section = this.container.querySelector('#admin-section-gamescope');
+        if (section) {
+            section.outerHTML = this._renderGamescopeApps();
+            this._bindGamescopeApps();
         }
     }
 

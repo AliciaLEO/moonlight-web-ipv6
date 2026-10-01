@@ -277,11 +277,18 @@ constexpr const char* kPortalVirtualDisplayKey = "portal-virtual";
 /// like the portal's virtual display.
 constexpr const char* kGamescopeSteamDisplayKey = "gamescope-steam";
 
+/// DisplayInfo::key of the screen any app of the user's gets in its own
+/// gamescope, on Linux: one entry for them all, never a card itself — the
+/// server makes one card per app in its settings and hands the session the
+/// app's name and command (SessionConfig::gamescopeApp).
+constexpr const char* kGamescopeAppDisplayKey = "gamescope-app";
+
 /// Whether @p key is a screen the stream makes for itself at the client's size
 /// — the portal's virtual display, or a gamescope's — rather than a monitor.
 inline bool isMadeForStreamKey(const std::string& key)
 {
-    return key == kPortalVirtualDisplayKey || key == kGamescopeSteamDisplayKey;
+    return key == kPortalVirtualDisplayKey || key == kGamescopeSteamDisplayKey ||
+           key == kGamescopeAppDisplayKey;
 }
 
 /// Why the native engine cannot run here. The caller maps every one of these to

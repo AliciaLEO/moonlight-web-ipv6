@@ -3523,6 +3523,13 @@ int main(int argc, char* argv[])
             // The owner's virtual display is the desktop's primary while it
             // streams, as the server makes it on Windows and macOS.
             s->setVirtualPrimary(portalVirtual);
+            // One of the owner's apps in gamescope (Linux): what it runs.
+            {
+                QString gsName, gsCommand;
+                if (host->backendType == NativeHostBackend::typeName() &&
+                    NativeHostBackend::gamescopeAppFor(appId, &gsName, &gsCommand))
+                    s->setGamescopeApp(gsName, gsCommand);
+            }
             // The admin's picture chain for a native Windows session.
             s->setNativeVideoPipeline(appSettings.nativeVideoPipeline());
             // The bench's knobs, when someone added them to the settings file.
@@ -3674,6 +3681,15 @@ int main(int argc, char* argv[])
             // The owner's virtual display is the desktop's primary while it
             // streams (Linux, where the session makes it; a guest never asks).
             cfg["virtualPrimary"] = portalVirtual;
+            // One of the owner's apps in gamescope (Linux): what it runs.
+            {
+                QString gsName, gsCommand;
+                if (host->backendType == NativeHostBackend::typeName() &&
+                    NativeHostBackend::gamescopeAppFor(appId, &gsName, &gsCommand)) {
+                    cfg["gamescopeApp"] = gsName;
+                    cfg["gamescopeCommand"] = gsCommand;
+                }
+            }
             // The admin's picture chain for a native Windows session.
             cfg["nativeVideoPipeline"] = appSettings.nativeVideoPipeline();
             // The bench's knobs, read here: a SYSTEM worker's own AppData is
@@ -5008,6 +5024,16 @@ int main(int argc, char* argv[])
         const bool portalVirtual = host->backendType == NativeHostBackend::typeName() &&
                                    appId == NativeHostBackend::virtualDisplayAppId();
         cfg["portalRestoreToken"] = appSettings.portalRestoreToken(portalVirtual);
+        // An app of the owner's in gamescope: the guest joins its session,
+        // found by its name (GamescopeSession.h), and would start it the same.
+        {
+            QString gsName, gsCommand;
+            if (host->backendType == NativeHostBackend::typeName() &&
+                NativeHostBackend::gamescopeAppFor(appId, &gsName, &gsCommand)) {
+                cfg["gamescopeApp"] = gsName;
+                cfg["gamescopeCommand"] = gsCommand;
+            }
+        }
         // The host's own setting, whoever the viewer is: the chain is the
         // machine's, not the session's.
         cfg["nativeVideoPipeline"] = appSettings.nativeVideoPipeline();

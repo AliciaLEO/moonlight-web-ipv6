@@ -114,6 +114,11 @@ public:
     /// guests' shared feed, which shows the owner's display.
     static int displayForApp(int appId, QString* error);
 
+    /// Whether @p appId is one of the owner's apps in gamescope (a Linux native
+    /// host, AppSettings::gamescopeApps), and which: its name and command, as
+    /// the session runs them.
+    static bool gamescopeAppFor(int appId, QString* name, QString* command);
+
     NativeHostBackend() = default;
 
     QString type() const override { return typeName(); }

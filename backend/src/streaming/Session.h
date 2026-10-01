@@ -164,6 +164,15 @@ public:
     /// it; a guest's session never sets it.
     void setVirtualPrimary(bool primary) { m_VirtualPrimary = primary; }
 
+    /// One of the owner's apps in its own gamescope, on a Linux native host
+    /// (SessionConfig::gamescopeApp): its name and command, from the settings.
+    /// Only the native engine acts on it.
+    void setGamescopeApp(const QString& name, const QString& command)
+    {
+        m_GamescopeApp = name;
+        m_GamescopeCommand = command;
+    }
+
     /// The chain a native Windows session carries its pictures on, as the
     /// admin chose it (AppSettings::nativeVideoPipeline): "auto", "d3d11" or
     /// "d3d12". Only the native engine acts on it; empty or unknown is auto.
@@ -495,6 +504,10 @@ private:
 
     /// See setVirtualPrimary. Off unless the owner's /start says so.
     bool m_VirtualPrimary = false;
+
+    /// See setGamescopeApp. Empty on every other card.
+    QString m_GamescopeApp;
+    QString m_GamescopeCommand;
 
     /// See setNativeVideoPipeline. Empty — a parent that predates the setting —
     /// is auto, the engine's own table.

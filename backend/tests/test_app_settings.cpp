@@ -9,6 +9,7 @@
 #include <QTemporaryDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 
@@ -132,6 +133,54 @@ void run_app_settings_tests()
             CHECK(parsed == n.engine);
         }
     }
+    // The owner's apps in gamescope (Linux): none until some are set; stored
+    // trimmed, refused whole when one entry is not valid — the file is then
+    // left as it was — and an entry edited by hand into nonsense left out.
+    {
+        CHECK_EQ(s.gamescopeApps().size(), 0);
+        QJsonArray apps;
+        apps.append(QJsonObject{{"name", "  RetroArch "}, {"command", " retroarch -f "}});
+        apps.append(QJsonObject{{"name", "Heroic"}, {"command", "heroic --no-gui"}});
+        QString why;
+        CHECK(s.setGamescopeApps(apps, &why));
+        CHECK_EQ(s.gamescopeApps().size(), 2);
+        CHECK_EQ(s.gamescopeApps().at(0).toObject().value("name").toString(), QString("RetroArch"));
+        CHECK_EQ(s.gamescopeApps().at(0).toObject().value("command").toString(),
+                 QString("retroarch -f"));
+
+        QJsonArray bad = apps;
+        bad.append(QJsonObject{{"name", "Two lines"}, {"command", "a\nb"}});
+        CHECK(!s.setGamescopeApps(bad, &why));
+        CHECK(why.contains("one line"));
+        QJsonArray unnamed;
+        unnamed.append(QJsonObject{{"name", "   "}, {"command", "x"}});
+        CHECK(!s.setGamescopeApps(unnamed, &why));
+        QJsonArray tooLong;
+        tooLong.append(QJsonObject{{"name", QString(41, 'n')}, {"command", "x"}});
+        CHECK(!s.setGamescopeApps(tooLong, &why));
+        QJsonArray tooMany;
+        for (int i = 0; i <= AppSettings::kGamescopeAppsMax; ++i)
+            tooMany.append(QJsonObject{{"name", QString("App %1").arg(i)}, {"command", "x"}});
+        CHECK(!s.setGamescopeApps(tooMany, &why));
+        CHECK_EQ(s.gamescopeApps().size(), 2);
+
+        QFile f(s.m_FilePath);
+        CHECK(f.open(QIODevice::ReadOnly));
+        QJsonObject edited = QJsonDocument::fromJson(f.readAll()).object();
+        f.close();
+        QJsonArray stored = edited["gamescope_apps"].toArray();
+        stored.append(QJsonObject{{"name", "Hand-made"}});
+        stored.append(QString("not an object"));
+        edited["gamescope_apps"] = stored;
+        CHECK(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        f.write(QJsonDocument(edited).toJson());
+        f.close();
+        CHECK_EQ(s.gamescopeApps().size(), 2);
+
+        CHECK(s.setGamescopeApps(QJsonArray(), &why));
+        CHECK_EQ(s.gamescopeApps().size(), 0);
+    }
+
     s.setUniqueId("abcd1234");
     CHECK_EQ(s.uniqueId(), QString("abcd1234"));
 

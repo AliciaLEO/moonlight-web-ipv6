@@ -79,6 +79,9 @@ struct ResolvedTarget
     /// (GamescopeSession.h) — started or found by the session, at the stream's
     /// size and cadence, kept ten minutes after the last stream.
     bool gamescopeSteam = false;
+    /// Linux: one of the user's apps in its own gamescope, the same way
+    /// (SessionConfig::gamescopeApp names it).
+    bool gamescopeApp = false;
 
     /// The adapter that scans the display out — where capture must happen.
     uint64_t captureAdapterHandle = 0;

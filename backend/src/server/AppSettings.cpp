@@ -1053,6 +1053,64 @@ bool AppSettings::setNativeVideoPipeline(const QString& pipeline)
     return true;
 }
 
+// ── Apps in gamescope (Linux native host) ───────────────────────────────────
+
+namespace {
+
+/// One entry, trimmed, or an empty object with @p error when it is not one.
+QJsonObject gamescopeAppEntry(const QJsonValue& value, QString* error)
+{
+    const QJsonObject in = value.toObject();
+    const QString name = in.value("name").toString().trimmed();
+    const QString command = in.value("command").toString().trimmed();
+    if (!value.isObject() || name.isEmpty() || name.size() > AppSettings::kGamescopeAppNameMax) {
+        if (error)
+            *error = QStringLiteral("each app needs a name of 1 to %1 characters")
+                         .arg(AppSettings::kGamescopeAppNameMax);
+        return {};
+    }
+    if (command.isEmpty() || command.size() > AppSettings::kGamescopeCommandMax ||
+        command.contains(QLatin1Char('\n')) || command.contains(QLatin1Char('\r')) ||
+        command.contains(QChar(0))) {
+        if (error)
+            *error = QStringLiteral("\"%1\" needs a command of 1 to %2 characters, on one line")
+                         .arg(name)
+                         .arg(AppSettings::kGamescopeCommandMax);
+        return {};
+    }
+    return QJsonObject{{"name", name}, {"command", command}};
+}
+
+} // namespace
+
+QJsonArray AppSettings::gamescopeApps() const
+{
+    QJsonArray out;
+    for (const QJsonValue& v : readAll().value("gamescope_apps").toArray()) {
+        const QJsonObject entry = gamescopeAppEntry(v, nullptr);
+        if (!entry.isEmpty() && out.size() < kGamescopeAppsMax) out.append(entry);
+    }
+    return out;
+}
+
+bool AppSettings::setGamescopeApps(const QJsonArray& apps, QString* error)
+{
+    if (apps.size() > kGamescopeAppsMax) {
+        if (error) *error = QStringLiteral("%1 apps at most").arg(kGamescopeAppsMax);
+        return false;
+    }
+    QJsonArray checked;
+    for (const QJsonValue& v : apps) {
+        const QJsonObject entry = gamescopeAppEntry(v, error);
+        if (entry.isEmpty()) return false;
+        checked.append(entry);
+    }
+    QJsonObject obj = readAll();
+    obj["gamescope_apps"] = checked;
+    writeAll(obj);
+    return true;
+}
+
 // ── Video enhancement ───────────────────────────────────────────────────────
 
 QString AppSettings::videoEnhancement() const

@@ -89,6 +89,19 @@ static bool nativeVideoPipelineSupported()
     return false;
 }
 
+/// Whether this host can run the owner's apps in gamescope: a Linux native
+/// host whose engine found a gamescope recent enough (LinuxProbe).
+static bool gamescopeAppsSupported()
+{
+#if defined(Q_OS_LINUX)
+    if (!NativeHostBackend::isEnabled()) return false;
+    for (const mw::native::DisplayInfo& display :
+         NativeProbeService::instance().snapshot().displays)
+        if (display.key == mw::native::kGamescopeAppDisplayKey) return true;
+#endif
+    return false;
+}
+
 /// The values the admin offers, this OS's chains only.
 static QJsonArray nativeVideoPipelineOptions()
 {
@@ -1245,6 +1258,11 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
         obj["native_video_pipeline"] = appSettings.nativeVideoPipeline();
         obj["native_video_pipeline_supported"] = nativeVideoPipelineSupported();
         obj["native_video_pipeline_options"] = nativeVideoPipelineOptions();
+        // The owner's apps in gamescope (Linux native host), and whether this
+        // machine can run them.
+        obj["gamescope_apps"] = appSettings.gamescopeApps();
+        obj["gamescope_apps_supported"] = gamescopeAppsSupported();
+        obj["gamescope_apps_max"] = AppSettings::kGamescopeAppsMax;
         obj["auto_ip_detection"] = appSettings.autoIpDetection();
         obj["stream_bitrate"] = appSettings.streamBitrate();
         obj["stream_height"] = appSettings.streamHeight();
@@ -1313,6 +1331,19 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
                 return HttpResponse::error(
                     400, "native_video_pipeline must be auto, d3d11, d3d12, vaapi or vulkan");
             obj["native_video_pipeline"] = appSettings.nativeVideoPipeline();
+            obj["status"] = "saved";
+            hadChange = true;
+        }
+
+        // Commands the host runs as its user: this route is localhost's only
+        // (above), the host owner's. The whole list, or nothing.
+        if (body.contains("gamescope_apps")) {
+            QString why;
+            if (!body["gamescope_apps"].isArray() ||
+                !appSettings.setGamescopeApps(body["gamescope_apps"].toArray(), &why))
+                return HttpResponse::error(
+                    400, why.isEmpty() ? QStringLiteral("gamescope_apps must be a list") : why);
+            obj["gamescope_apps"] = appSettings.gamescopeApps();
             obj["status"] = "saved";
             hadChange = true;
         }

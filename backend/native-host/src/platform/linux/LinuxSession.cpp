@@ -565,6 +565,7 @@ public:
             }
         } else {
             m_ConnectorName = m_Target.gamescopeSteam  ? "Steam Big Picture"
+                              : m_Target.gamescopeApp  ? "gamescope"
                               : m_Target.portalVirtual ? "virtual display"
                                                        : "portal";
         }
@@ -900,7 +901,7 @@ private:
     bool openCapture(std::string& error)
     {
 #if defined(MW_NATIVE_LINUX_PORTAL)
-        if (m_Target.gamescopeSteam) return openGamescope(error);
+        if (m_Target.gamescopeSteam || m_Target.gamescopeApp) return openGamescope(error);
         if (m_Target.capture == CaptureApi::PipeWire) {
             // The grant as it stands NOW: a restart reopens the portal, and a
             // portal that rotates its tokens has already spent the one the
@@ -1038,9 +1039,20 @@ private:
         capture::GamescopeApp app;
         app.card = "steam";
         app.steam = true;
+        if (m_Target.gamescopeApp) {
+            // One of the user's apps: a session of its own, named after it,
+            // its command run by the shell as the owner wrote it.
+            if (m_Config.gamescopeCommand.empty()) {
+                error = "the app has no command";
+                return false;
+            }
+            app.card = capture::gamescopeCardName(m_Config.gamescopeApp);
+            app.steam = false;
+            app.command = {"/bin/sh", "-c", m_Config.gamescopeCommand};
+        }
         // The bench's stand-in for Steam: the same card, the same route, an
         // app that needs no sign-in (MW_GAMESCOPE_APP="vkcube --wsi xcb").
-        if (const char* bench = std::getenv("MW_GAMESCOPE_APP"); bench && *bench) {
+        else if (const char* bench = std::getenv("MW_GAMESCOPE_APP"); bench && *bench) {
             app.card = "bench";
             app.steam = false;
             std::istringstream words(bench);
@@ -1049,7 +1061,10 @@ private:
             log::warning(std::string("[native] gamescope: MW_GAMESCOPE_APP in effect — \"") +
                          bench + "\" instead of Steam");
         }
-        m_GamescopeApp = app.steam ? "Steam" : app.command.empty() ? "the app" : app.command[0];
+        m_GamescopeApp = app.steam               ? std::string("Steam")
+                         : m_Target.gamescopeApp ? m_Config.gamescopeApp
+                         : app.command.empty()   ? std::string("the app")
+                                                 : app.command[0];
         capture::GamescopeSession session;
         if (!capture::openGamescopeSession(app, m_Config.width, m_Config.height,
                                            m_Config.fps > 0 ? m_Config.fps : 60, session, error))

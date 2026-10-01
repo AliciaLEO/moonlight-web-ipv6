@@ -250,6 +250,19 @@ void testCommands()
     CHECK_EQ(linger[linger.size() - 2], std::string("stop"));
 }
 
+void testCardName()
+{
+    SECTION("gamescope: the session name of one of the user's apps");
+    CHECK_EQ(gamescopeCardName("Heroic Games Launcher"), std::string("app-heroic-games-launcher"));
+    CHECK_EQ(gamescopeCardName("RetroArch!"), std::string("app-retroarch"));
+    CHECK_EQ(gamescopeCardName("  Dolphin  (GC)  "), std::string("app-dolphin-gc"));
+    CHECK_EQ(gamescopeCardName("\xC3\x89mulateur"), std::string("app-mulateur"));
+    CHECK_EQ(gamescopeCardName("   "), std::string("app"));
+    CHECK_EQ(gamescopeCardName(""), std::string("app"));
+    const std::string longName = gamescopeCardName(std::string(80, 'x'));
+    CHECK_EQ(longName.size(), size_t(36));
+}
+
 void testRecord()
 {
     SECTION("gamescope: the record a later stream finds");
@@ -289,5 +302,6 @@ void run_gamescope_tests()
     testLogAndWrapper();
     testSteam();
     testCommands();
+    testCardName();
     testRecord();
 }

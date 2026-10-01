@@ -69,6 +69,19 @@ int appIdToDisplayId(int appId)
 /// of monitors, never a thousand.
 constexpr int kVirtualDisplayAppId = 1000;
 
+/// The owner's apps in gamescope, numbered from here in the settings' order:
+/// one engine entry (kGamescopeAppDisplayKey) streams them all, the name and
+/// command travelling with the session.
+constexpr int kGamescopeAppIdBase = 1100;
+
+/// The engine's entry for the owner's apps in gamescope, or nullptr.
+const mw::native::DisplayInfo* gamescopeAppsDisplay(const mw::native::Capabilities& caps)
+{
+    for (const mw::native::DisplayInfo& display : caps.displays)
+        if (display.key == mw::native::kGamescopeAppDisplayKey) return &display;
+    return nullptr;
+}
+
 /// The display @p appId stands for among @p caps, or -1 with @p why.
 int displayOf(const mw::native::Capabilities& caps, int appId, QString* why)
 {
@@ -78,6 +91,16 @@ int displayOf(const mw::native::Capabilities& caps, int appId, QString* why)
         for (const mw::native::DisplayInfo& display : caps.displays)
             if (VirtualDisplay::isOurs(display)) return display.id;
         if (why) *why = QStringLiteral("The virtual display is not on");
+        return -1;
+    }
+    if (appId >= kGamescopeAppIdBase &&
+        appId < kGamescopeAppIdBase + AppSettings::kGamescopeAppsMax) {
+        const mw::native::DisplayInfo* apps = gamescopeAppsDisplay(caps);
+        if (apps && appId - kGamescopeAppIdBase < AppSettings().gamescopeApps().size())
+            return apps->id;
+        if (why)
+            *why = apps ? QStringLiteral("That app is no longer in the host's settings")
+                        : QStringLiteral("gamescope is no longer usable on the host");
         return -1;
     }
     const int displayId = appIdToDisplayId(appId);
@@ -110,6 +133,18 @@ NvApp virtualDisplayApp(const mw::native::Capabilities& caps)
 int NativeHostBackend::virtualDisplayAppId()
 {
     return kVirtualDisplayAppId;
+}
+
+bool NativeHostBackend::gamescopeAppFor(int appId, QString* name, QString* command)
+{
+    const int index = appId - kGamescopeAppIdBase;
+    if (index < 0 || index >= AppSettings::kGamescopeAppsMax) return false;
+    const QJsonArray apps = AppSettings().gamescopeApps();
+    if (index >= apps.size()) return false;
+    const QJsonObject app = apps.at(index).toObject();
+    if (name) *name = app.value("name").toString();
+    if (command) *command = app.value("command").toString();
+    return true;
 }
 
 int NativeHostBackend::displayForApp(int appId, QString* error)
@@ -316,6 +351,9 @@ void NativeHostBackend::getAppList(const QString& seatId, BackendAppListCallback
     bool virtualListed = false;
     for (const mw::native::DisplayInfo* entry : ordered) {
         const mw::native::DisplayInfo& display = *entry;
+        // The owner's apps in gamescope have a card each, below — never one
+        // for the entry they share.
+        if (display.key == mw::native::kGamescopeAppDisplayKey) continue;
         if (VirtualDisplay::isOurs(display)) {
             // On right now (a stream is running on it): the same card as
             // when it is off, under its own name and its fixed id.
@@ -342,6 +380,24 @@ void NativeHostBackend::getAppList(const QString& seatId, BackendAppListCallback
             {QStringLiteral("battery"), caps.hasBattery},
         });
         apps.append(app);
+    }
+    // The owner's apps in gamescope (Linux, AppSettings::gamescopeApps), in the
+    // settings' order, when the engine can run them at all.
+    if (gamescopeAppsDisplay(caps)) {
+        const QJsonArray owned = AppSettings().gamescopeApps();
+        for (int i = 0; i < owned.size(); ++i) {
+            const QString name = owned.at(i).toObject().value("name").toString();
+            NvApp app(kGamescopeAppIdBase + i, name, /*hdr=*/false);
+            app.setHasBoxArt(false);
+            app.setDevice(QJsonObject{
+                {QStringLiteral("os"), HostOsProbe::toString(HostOsProbe::thisMachine())},
+                {QStringLiteral("display"), QStringLiteral("virtual")},
+                {QStringLiteral("model"), name},
+                {QStringLiteral("key"), QStringLiteral("gamescope-app-") + name},
+                {QStringLiteral("battery"), caps.hasBattery},
+            });
+            apps.append(app);
+        }
     }
     if (virtualInstalled && !virtualListed) apps.append(virtualDisplayApp(caps));
     cb(true, BackendError{}, apps);

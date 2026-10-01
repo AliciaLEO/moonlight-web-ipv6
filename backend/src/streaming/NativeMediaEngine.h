@@ -145,6 +145,11 @@ public:
         /// session makes (Linux) becomes the desktop's primary while it
         /// streams — see SessionConfig::virtualPrimary. Never a guest's.
         bool virtualPrimary = false;
+        /// One of the owner's apps in its own gamescope (Linux): its name and
+        /// command, from the settings — see SessionConfig::gamescopeApp. Empty
+        /// on every other card.
+        QString gamescopeApp;
+        QString gamescopeCommand;
         /// The chain a Windows session carries its pictures on, as the admin
         /// chose it (Advanced) — see SessionConfig::videoPipeline. Auto unless
         /// a choice was made; ignored off Windows.

@@ -285,6 +285,13 @@ struct SessionConfig
     /// makes no display, and off GNOME.
     bool virtualPrimary = false;
 
+    /// One of the user's apps in its own gamescope, on Linux (kGamescopeAppDisplayKey):
+    /// its name, which names its session, and the command it runs, through
+    /// /bin/sh. Both from the server's settings, the host owner's to write.
+    /// Empty everywhere else.
+    std::string gamescopeApp;
+    std::string gamescopeCommand;
+
     /// The chain that carries the pictures on Windows (VideoPipeline.h). Auto,
     /// the default, is the engine's vendor table; the admin's "Advanced"
     /// setting can force one. A D3D12 the session cannot build — a display
