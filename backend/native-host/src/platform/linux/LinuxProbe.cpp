@@ -27,6 +27,7 @@
 
 #include <fcntl.h>
 #include <glob.h>
+#include <sys/stat.h>
 #include <sys/utsname.h>
 #include <unistd.h>
 #include <va/va.h>
@@ -50,8 +51,13 @@
 // running and whoever is logged in — that is the point of choosing it (see
 // KmsCapture.h). So the question Windows has to ask ("can this process reach a
 // desktop?") becomes "is anything being shown at all?", which is a CRTC with a
-// framebuffer. A machine whose screen is off, or headless, answers no and is
-// reported as such rather than as a capture failure.
+// framebuffer. A machine whose screen is off answers no and is reported as
+// such rather than as a capture failure.
+//
+// One exception: a Wayland session this process can reach, on a build with the
+// portal's route. A machine with no monitor at all still runs one — autologin
+// on a mini PC under the TV's shelf — and its compositor can make the virtual
+// display for a stream (enumerate() lists it then, or says why it cannot).
 
 namespace mw::native::platform {
 namespace {
@@ -254,6 +260,25 @@ bool hasInteractiveSession()
         for (const capture::KmsOutput& out : capture::KmsCapture::listOutputs(card, error))
             if (out.active) return true;
     }
+#if defined(MW_NATIVE_LINUX_PORTAL)
+    // ...or, with nothing shown, a Wayland session to make a display in. Before
+    // this, a machine with no monitor was "no interactive desktop session", and
+    // its native host card was gone — measured on the GNOME 48 VM with its only
+    // connector off (video=Virtual-1:d), gnome-shell running headless, the
+    // portal offering VIRTUAL (01/10/2026).
+    if (!isX11Session()) {
+        const char* wayland = std::getenv("WAYLAND_DISPLAY");
+        if (wayland && *wayland) {
+            std::string socket = wayland;
+            if (socket.front() != '/') {
+                const char* runtime = std::getenv("XDG_RUNTIME_DIR");
+                socket = std::string(runtime ? runtime : "") + "/" + socket;
+            }
+            struct stat st = {};
+            if (::stat(socket.c_str(), &st) == 0 && S_ISSOCK(st.st_mode)) return true;
+        }
+    }
+#endif
     return false;
 }
 
