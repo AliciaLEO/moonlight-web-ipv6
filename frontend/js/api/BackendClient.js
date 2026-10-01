@@ -516,6 +516,9 @@ export class BackendClient {
         if (transportIndex > 0) body.transport_index = transportIndex;
         if (codec) body.codec = codec;
         if (udpBlocked) body.udp_blocked = true;
+        // As launchApp's: a guest's browser decodes through a gap too, and a
+        // native host then gives their stream the owner's refresh wave.
+        body.ride_out_loss = RIDE_OUT_LOSS && decoderRidesOutGaps();
         return this.post('/api/share/player/join', body, { timeoutMs: 25000 });
     }
     static async playerLeave() {

@@ -492,7 +492,11 @@ describe('BackendClient request shaping', () => {
     it('playerJoin only sends an aspect when it was overridden', async () => {
         const plain = mockFetch(jsonResponse({ ok: true }));
         await BackendClient.playerJoin('tok', 1080);
-        expect(JSON.parse(plain.apiCalls()[0][1].body)).toEqual({ token: 'tok', height: 1080 });
+        expect(JSON.parse(plain.apiCalls()[0][1].body)).toEqual({
+            token: 'tok',
+            height: 1080,
+            ride_out_loss: true,
+        });
 
         const forced = mockFetch(jsonResponse({ ok: true }));
         await BackendClient.playerJoin('tok', 1080, '16:9');
@@ -500,7 +504,25 @@ describe('BackendClient request shaping', () => {
             token: 'tok',
             height: 1080,
             aspect: '16:9',
+            ride_out_loss: true,
         });
+    });
+
+    // A guest of a Linux host encodes on its own: without the wish, its stream
+    // had no refresh wave and every lost frame cost a keyframe (01/10/2026).
+    it('playerJoin asks to ride out a gap, except from an Apple platform', async () => {
+        const fetchMock = mockFetch(jsonResponse({ ok: true }));
+        await BackendClient.playerJoin('tok', 1080);
+        expect(JSON.parse(fetchMock.apiCalls()[0][1].body).ride_out_loss).toBe(true);
+
+        const ua = vi
+            .spyOn(navigator, 'userAgent', 'get')
+            .mockReturnValue(
+                'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+            );
+        await BackendClient.playerJoin('tok', 1080);
+        expect(JSON.parse(fetchMock.apiCalls()[1][1].body).ride_out_loss).toBe(false);
+        ua.mockRestore();
     });
 
     it('quitApp scopes to one slot when the caller names it', async () => {

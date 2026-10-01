@@ -4930,6 +4930,17 @@ int main(int argc, char* argv[])
         cfg["iceTcp"] = mode.endsWith(QStringLiteral("-tcp"));
         cfg["lowAudio"] = false;
         cfg["muteHostAudio"] = false;
+        // The guest's browser decodes through a gap, as the owner's /start
+        // says it (ride_out_loss): a native host then refreshes their stream
+        // in a wave, and a lost frame costs no keyframe. The shared feed sets
+        // it below anyway; a guest encoding on its own — every guest of a
+        // Linux host — took keyframes on demand without it, one per loss
+        // (UM790Pro, 01/10/2026: 17 and 22 asked in 24 and 42 s). Absent, from
+        // an older cached player page: as before.
+        cfg["rideOutLoss"] = QJsonDocument::fromJson(req.body)
+                                 .object()
+                                 .value(QStringLiteral("ride_out_loss"))
+                                 .toBool(false);
         // A guest's width already follows the host's shape (above), and a
         // native host's display changing mode mid-stream is theirs to follow
         // as well: the encoder is rebuilt at the new shape, their decoder picks
