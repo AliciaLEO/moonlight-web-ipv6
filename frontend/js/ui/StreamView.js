@@ -66,6 +66,7 @@ import {
     IS_MOBILE,
     IS_MOBILE_OR_TABLET,
     IS_LOW_MEMORY,
+    IS_TV,
     IS_APPLE,
     IS_WEBKIT,
     SUPPORTS_CANVAS_TEARING,
@@ -80,7 +81,7 @@ import {
 import * as RemoteNav from './RemoteNav.js';
 import { StreamRemoteMenu } from './StreamRemoteMenu.js';
 import { createVideoRenderer, NO_WEBGPU_ALGOS } from '../stream/renderers/createRenderer.js';
-import { videoSinkCtor } from '../stream/renderers/videoSink.js';
+import { tvPresentsThroughSink, videoSinkCtor } from '../stream/renderers/videoSink.js';
 import {
     PipelineDiag,
     MainThreadProbe,
@@ -648,6 +649,13 @@ export class StreamView {
                 if (IS_LOW_MEMORY) {
                     console.log('[StreamView] Enhancer: none on a low-memory device');
                     sel = 'off';
+                } else if (IS_TV && !hdr) {
+                    // Its <video> presents every frame, a canvas a third fewer
+                    // and a shader pass fewer still (see the TV sink below).
+                    console.log(
+                        '[StreamView] Enhancer: none on a TV — its <video> shows every frame',
+                    );
+                    sel = 'off';
                 } else if (hdr) sel = isSnapdragonGpu() ? 'sgsr' : 'fsr1';
                 else sel = 'gl-' + pickAutoEnhancer();
             }
@@ -679,9 +687,15 @@ export class StreamView {
         if (forceCanvas2d) wantWebGpu = false;
         this._wantWebGpu = wantWebGpu;
         // Dev override (no UI): also force the Canvas2D path for comparison.
+        let devCanvas2d = false;
         try {
-            if (localStorage.getItem('mw_force_2d') === '1') this._wantWebGpu = false;
+            devCanvas2d = localStorage.getItem('mw_force_2d') === '1';
+            if (devCanvas2d) this._wantWebGpu = false;
         } catch (e) {}
+
+        // A TV presents through the <video> sink, fed on decode: see
+        // tvPresentsThroughSink. DataChannel/WSS only, as every sink (below).
+        const tvSink = tvPresentsThroughSink({ tv: IS_TV, hdr, algo, forceCanvas2d, devCanvas2d });
 
         // HDR routing (DataChannel/WSS only). Two things decide it: whether the
         // user asked for the Enhancer, and what this browser gives us to work
@@ -713,7 +727,7 @@ export class StreamView {
         // compare), '0' disables the readback altogether; mw_hdr_ext_tonemap
         // '1'/'0' forces or disables the external-texture tone-map.
         let hdrMode = 'none';
-        if (forceVideo && transport !== 'webrtc-media') {
+        if ((forceVideo || tvSink) && transport !== 'webrtc-media') {
             hdrMode = videoSinkCtor() ? 'sink' : 'none';
         } else if (forceCanvas2d) {
             hdrMode = hdr ? 'browser' : 'none';
@@ -748,13 +762,20 @@ export class StreamView {
         // no software decoder needed, so the enhancer survives on any codec.
         this._hdrExtTonemap = hdrMode === 'tonemap-ext';
         this._useVideoSink = hdrMode === 'sink';
+        // The TV's sink (above), fed on decode (startRenderLoop) and on the main
+        // thread: a <video> is a DOM element the video worker cannot reach.
+        this._tvSink = tvSink && this._useVideoSink;
+        if (this._tvSink && this._useWorker) {
+            console.log('[StreamView] TV: <video> sink on the main thread, not the video worker');
+            this._useWorker = false;
+        }
         // Either readback path: the decoder must be software (see configureDecoder).
         this._hdrYuv = this._hdrTonemap || this._hdrLinear;
         // The <video> sink has no shader stage: an enhancer asked for there is
         // dropped, and said so, rather than silently swapped for a tone-map that
         // would throw the HDR away.
         this._enhancerBlockedByHdr = false;
-        this._forceVideoSink = forceVideo;
+        this._forceVideoSink = forceVideo || this._tvSink;
         if (hdrMode === 'sink' && algo !== 'off') {
             console.log(
                 '[StreamView] HDR: ' +
@@ -4245,7 +4266,11 @@ export class StreamView {
         // → _pumpRender) for lower latency. The rAF loop then only handles context-loss
         // detection. Tearing off (default): the rAF loop paces rendering to the
         // display refresh (VSync).
-        this._immediateRender = this._tearing;
+        //
+        // A TV's <video> sink is fed on decode too: the compositor paces the
+        // element on its own vsync, so nothing tears, and the page's rAF —
+        // ~35 a second on a Freebox under a 50 fps stream — no longer caps it.
+        this._immediateRender = this._tearing || this._tvSink === true;
 
         const loop = (now) => {
             if (!this.renderRunning) return;

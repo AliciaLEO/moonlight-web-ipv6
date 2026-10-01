@@ -33,3 +33,22 @@ export function videoSinkCtor() {
     } catch (e) {}
     return null;
 }
+
+/**
+ * Whether a stream presents through the sink because the screen is a TV's.
+ *
+ * The sink, fed each frame as it is decoded, is shown by the compositor on its
+ * own, off the page's main thread; a canvas waits on that thread's rAF, which
+ * a TV's slow cores starve under a stream. Measured 01/10/2026 on a Freebox
+ * Player POP (Amlogic, Android System WebView 153), 1080p50: 49.6 frames a
+ * second presented by the sink (presentedFrames), 28.4 by Canvas2D, 17.8 by
+ * WebGL — the same box presenting 50 of either in a page of its own. A Mi TV
+ * shows the 30 it is fed. SDR with no enhancer only: the sink has no shader
+ * stage, and an HDR stream has its own routing. The canvas stays reachable for
+ * a bench, by the Canvas2D presenter or `mw_force_2d`.
+ * @param {{tv: boolean, hdr: boolean, algo: string, forceCanvas2d?: boolean, devCanvas2d?: boolean}} s
+ * @returns {boolean}
+ */
+export function tvPresentsThroughSink(s) {
+    return s.tv === true && !s.hdr && s.algo === 'off' && !s.forceCanvas2d && !s.devCanvas2d;
+}
