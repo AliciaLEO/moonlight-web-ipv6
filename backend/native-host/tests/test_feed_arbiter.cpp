@@ -127,4 +127,19 @@ void run_feed_arbiter_tests()
         LinkFeedback out;
         CHECK(!a.linkDue(500, out));
     }
+
+    SECTION("FeedArbiter — the pointer is held on the display only for a guest with no other");
+    {
+        FeedArbiter a;
+        CHECK(!a.keepPointerOnDisplay()); // nobody said: free, as for a desktop page
+        a.setPointerInPicture(1, false);  // desktop mode: its own pointer
+        CHECK(!a.keepPointerOnDisplay());
+        a.setPointerInPicture(2, true); // a phone's trackpad
+        CHECK(a.keepPointerOnDisplay());
+        a.setPointerInPicture(1, true);  // the first one locks its pointer too...
+        a.setPointerInPicture(2, false); // ...as the phone draws its own
+        CHECK(a.keepPointerOnDisplay());
+        a.leave(1);
+        CHECK(!a.keepPointerOnDisplay());
+    }
 }

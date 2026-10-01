@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <map>
+#include <set>
 
 namespace mw::native {
 
@@ -51,6 +52,13 @@ namespace mw::native {
 ///    A report that says its page was hidden (`resumed`) is kept only when
 ///    every report of the period says so: one guest back from the background
 ///    is not every guest's link recovering.
+///  - **Pointer**: the feed draws the host's pointer into the picture they
+///    share, and a session that draws it brings it back onto its display when
+///    it wanders off (Session::setRecentrePointer). The feed does that only
+///    while some guest sees the pointer nowhere else — pointer lock, a phone's
+///    trackpad — as its page tells its own worker (`cursormode`). A guest in
+///    desktop mode has its own pointer and asks nothing, and the host's stays
+///    free for whoever else moves it: the owner, someone at the host.
 ///
 /// Pure and clocked by its caller, like RateGovernor.
 class FeedArbiter
@@ -86,8 +94,26 @@ public:
         p.fb.resumed = p.fb.resumed && fb.resumed;
     }
 
+    /// A guest's page says whether the pointer in the picture is the only one
+    /// its viewer has (its `cursormode`): pointer lock, or a touch screen.
+    void setPointerInPicture(int subscriber, bool inPicture)
+    {
+        if (inPicture)
+            m_PointerInPicture.insert(subscriber);
+        else
+            m_PointerInPicture.erase(subscriber);
+    }
+
+    /// True while some guest sees the pointer only in the picture: the feed
+    /// then keeps the host's pointer on its display.
+    bool keepPointerOnDisplay() const { return !m_PointerInPicture.empty(); }
+
     /// A guest is gone: what it said no longer counts.
-    void leave(int subscriber) { m_Reports.erase(subscriber); }
+    void leave(int subscriber)
+    {
+        m_Reports.erase(subscriber);
+        m_PointerInPicture.erase(subscriber);
+    }
 
     /// True when a keyframe is to be asked of the encoder now — once for the
     /// whole window, never within kMinGapMs of the last.
@@ -149,6 +175,7 @@ private:
     int64_t m_LastKeyframeMs = kNever;
     int64_t m_LastLinkMs = kNever;
     std::map<int, Pending> m_Reports;
+    std::set<int> m_PointerInPicture;
     int64_t m_Asked = 0;
     int64_t m_Served = 0;
 };

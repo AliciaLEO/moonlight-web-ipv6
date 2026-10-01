@@ -275,7 +275,19 @@ public:
     /// and every touch screen) or reports its shape for the browser to draw
     /// (desktop). @p cursorFramePx is how wide the drawn pointer should be, in
     /// frame pixels, or 0 for its natural size — see Session. Safe at any time.
+    ///
+    /// A guest of the shared feed draws nothing itself: its page's word goes to
+    /// the feed, which keeps the host's pointer on its display only while some
+    /// guest sees it nowhere else (FeedArbiter). Remembered, and said again to
+    /// a feed that came back, which starts knowing nothing.
     void setCompositeCursor(bool composite, int cursorFramePx);
+
+    /// Whether the session may bring the host's pointer back onto its display
+    /// when it wanders off while drawn into the picture — see
+    /// Session::setRecentrePointer. The guests' feed turns it off, then on and
+    /// off as its guests ask. Remembered, and given to a session before its
+    /// capture starts. Safe at any time.
+    void setRecentrePointer(bool allowed);
 
     /// How fast the client wants frames to keep coming while nothing on the
     /// host's screen moves — see Session::setFrameFloorFps. 0 leaves the engine
@@ -432,6 +444,9 @@ private:
     /// The feed died and came back (relaunched under the same name): its
     /// pictures follow from its next keyframe, asked for at once.
     void onFeedRejoined(const QJsonObject& info);
+    /// A guest's: tell the feed what its page last said about the pointer
+    /// (`cursormode`), when it has said anything. Any thread.
+    void tellFeedPointer();
     /// The feed worker's: say what the session is now, to every subscriber.
     void publishInfo();
     /// The feed's `info`, taken as this engine's own; false when unreadable.
@@ -518,6 +533,12 @@ private:
     /// The client's last word on the still-screen frame floor, replayed onto a
     /// session that starts after it was said. See setFrameFloorFps.
     std::atomic<int> m_FrameFloorFps{0};
+
+    /// See setRecentrePointer: given to the session before it starts.
+    std::atomic<bool> m_RecentrePointer{true};
+    /// A guest's page's last word on the pointer: -1 not said yet, 0 it draws
+    /// its own, 1 it sees the one in the picture. See setCompositeCursor.
+    std::atomic<int> m_GuestPointerInPicture{-1};
 
     /// The client's screen as last reported, replayed onto a session that
     /// starts after it was said. See setClientRefresh.

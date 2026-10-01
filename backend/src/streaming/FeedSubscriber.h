@@ -76,7 +76,7 @@ public:
     /// frame callback.
     void stop();
 
-    /// A control message to the feed (idr, link, bye). Any thread.
+    /// A control message to the feed (idr, link, cursormode, bye). Any thread.
     void sendControl(const QJsonObject& message);
 
     bool isConnected() const { return m_Connected.load(std::memory_order_acquire); }

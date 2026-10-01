@@ -258,7 +258,8 @@ int runFeedWorker(const QJsonObject& cfg)
 
     // What the guests ask of the one encoder they share, arbitrated (S6):
     // their keyframes gathered and rationed, their link reports folded into
-    // the slowest one's for the feed's governor. See FeedArbiter.
+    // the slowest one's for the feed's governor, and the host's pointer held
+    // on the display only for a guest who sees it nowhere else. See FeedArbiter.
     auto arbiter = std::make_shared<mw::native::FeedArbiter>();
     auto steadyMs = []() {
         return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -267,7 +268,7 @@ int runFeedWorker(const QJsonObject& cfg)
     };
     QObject::connect(
         publisher, &FeedPublisher::controlReceived, qApp,
-        [arbiter, steadyMs](int id, const QJsonObject& msg) {
+        [arbiter, engine, steadyMs](int id, const QJsonObject& msg) {
             const QString type = msg.value(QStringLiteral("type")).toString();
             if (type == QLatin1String("idr")) {
                 arbiter->requestKeyframe(id, steadyMs());
@@ -279,6 +280,9 @@ int runFeedWorker(const QJsonObject& cfg)
                 fb.receivedFps = msg.value(QStringLiteral("fps")).toInt();
                 fb.resumed = msg.value(QStringLiteral("resumed")).toBool();
                 arbiter->report(id, fb, steadyMs());
+            } else if (type == QLatin1String("cursormode")) {
+                arbiter->setPointerInPicture(id, msg.value(QStringLiteral("composite")).toBool());
+                engine->setRecentrePointer(arbiter->keepPointerOnDisplay());
             }
         },
         Qt::QueuedConnection);
@@ -294,11 +298,13 @@ int runFeedWorker(const QJsonObject& cfg)
     QObject::connect(publisher, &FeedPublisher::subscriberJoined, qApp, [](int id, int slot) {
         qInfo() << "[StreamWorker] feed: guest of slot" << slot << "in (" << id << ")";
     });
-    QObject::connect(publisher, &FeedPublisher::subscriberLeft, qApp, [arbiter](int id, int slot) {
-        arbiter->leave(id);
-        qInfo() << "[StreamWorker] feed: guest of slot" << slot << "gone (" << id
-                << ") — keyframes asked" << arbiter->asked() << ", served" << arbiter->served();
-    });
+    QObject::connect(
+        publisher, &FeedPublisher::subscriberLeft, qApp, [arbiter, engine](int id, int slot) {
+            arbiter->leave(id);
+            engine->setRecentrePointer(arbiter->keepPointerOnDisplay());
+            qInfo() << "[StreamWorker] feed: guest of slot" << slot << "gone (" << id
+                    << ") — keyframes asked" << arbiter->asked() << ", served" << arbiter->served();
+        });
 
     QObject::connect(engine, &IMediaEngine::connectionStarted, qApp, [engine]() {
         mw::native::SessionInfo info;
@@ -356,6 +362,11 @@ int runFeedWorker(const QJsonObject& cfg)
     qInfo() << "[StreamWorker] feed: display" << displayId << "at" << p.width << "x" << p.height
             << "@" << p.fps << "," << p.bitrateKbps << "kbps,"
             << (cfg["h264"].toBool() ? "H.264" : "HEVC") << "— pipe" << publisher->name();
+
+    // The pointer this feed draws for its guests stays free until one of them
+    // sees it nowhere else (FeedArbiter): it is the owner's too, and the
+    // person's at the host.
+    engine->setRecentrePointer(false);
 
     std::thread stdinThread([finish, publisher]() {
         std::string line;

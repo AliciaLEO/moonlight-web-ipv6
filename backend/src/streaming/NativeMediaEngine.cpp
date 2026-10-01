@@ -330,6 +330,9 @@ void NativeMediaEngine::startCapture(const StartParams& params)
     m_Session->setPortalGrantCallback([this](const std::string& token) {
         emit portalGrantReceived(QString::fromStdString(token));
     });
+    // Before start() as well: the capture loop's very first pass already asks
+    // whether to bring the pointer back.
+    m_Session->setRecentrePointer(m_RecentrePointer.load(std::memory_order_acquire));
 
     if (!m_Session->start(error)) {
         qWarning() << "[NativeMediaEngine] could not start session:"
@@ -495,6 +498,7 @@ void NativeMediaEngine::startSubscriber(const StartParams& params)
     emit connectionStarted();
     // The feed is already running: this guest starts from its next keyframe.
     requestIdrFrame();
+    tellFeedPointer();
 }
 
 bool NativeMediaEngine::takeFeedInfo(const QJsonObject& info)
@@ -587,6 +591,15 @@ void NativeMediaEngine::onFeedRejoined(const QJsonObject& info)
     m_FeedNeedsKeyframe.store(true, std::memory_order_release);
     onFeedControl(info); // the feed's session as it came back, desktop included
     requestIdrFrame();
+    tellFeedPointer(); // a new feed worker, which has heard nothing yet
+}
+
+void NativeMediaEngine::tellFeedPointer()
+{
+    const int said = m_GuestPointerInPicture.load(std::memory_order_acquire);
+    if (!m_Subscriber || said < 0) return;
+    m_Subscriber->sendControl(QJsonObject{{QStringLiteral("type"), QStringLiteral("cursormode")},
+                                          {QStringLiteral("composite"), said == 1}});
 }
 
 void NativeMediaEngine::onFeedLost(const QString& why)
@@ -896,7 +909,17 @@ void NativeMediaEngine::onCursor(const mw::native::CursorUpdate& cursor)
 
 void NativeMediaEngine::setCompositeCursor(bool composite, int cursorFramePx)
 {
+    // A guest's own session draws nothing — the picture, pointer and all, is
+    // the feed's. The feed is what needs to hear it.
+    m_GuestPointerInPicture.store(composite ? 1 : 0, std::memory_order_release);
+    tellFeedPointer();
     if (m_Session) m_Session->setCompositeCursor(composite, cursorFramePx);
+}
+
+void NativeMediaEngine::setRecentrePointer(bool allowed)
+{
+    m_RecentrePointer.store(allowed, std::memory_order_release);
+    if (m_Session) m_Session->setRecentrePointer(allowed);
 }
 
 void NativeMediaEngine::setFrameFloorFps(int fps)

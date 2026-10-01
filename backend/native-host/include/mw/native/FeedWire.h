@@ -60,7 +60,7 @@ enum class Kind : uint8_t
     /// An encoded picture: Annex B (H.264, HEVC) or OBUs (AV1).
     Frame = 1,
     /// A control message, UTF-8 JSON with a "type" field: hello, info, idr,
-    /// link, cursor, displayFormat, codec, bye.
+    /// link, cursor, cursormode, displayFormat, codec, bye.
     Control = 2,
 };
 
