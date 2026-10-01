@@ -6845,6 +6845,76 @@ la composition 4,2 ms au plus, au lieu d'une période du flux.
 - Reste : les i/s d'un vrai jeu à 240 Hz (RE9 n'a pas pu être piloté ce
   soir-là) et le ressenti de Bruno.
 
+### 33.10 « Auto » avec détection (01/10/2026, POC Ultra, Phase UA)
+
+Décision de Bruno (01/10) : la cadence de l'hôte revient comme un
+comportement de l'« Auto » existant, sans choix de plus dans la liste, avec
+une clé pour le couper. Esquisse : plan `framerate-hote.md` §14 ; étapes et
+porte : Phase UA du plan du POC Ultra.
+
+**Pourquoi une détection.** `host-guarded` gagne 3 à 6 ms sur un client qui
+suit (UM790Pro en Ethernet, Mac) et perd lourdement ailleurs (N95 : 140 à
+170 ms ; iGPU AMD local : 31 → 47 ms), et aucun crédit ne voyait la file du
+N95 (§33.7). On ne sait pas d'avance qui suit : le client le mesure, un palier
+à la fois, et redescend dès que ça coûte.
+
+**L'échelle.** La fréquence du flux (celle de l'Auto), puis deux fois elle,
+puis la fréquence de l'écran capturé (240 Hz sur l'écran virtuel du produit,
+§33.9), chacune plafonnée à cette dernière. Un palier n'est essayé que si
+l'écran capturé présente nettement plus vite que le palier en cours (× 1,15) :
+un jeu à 49-53 i/s sur un client à 60 Hz n'en déclenche aucun, un jeu à
+75-83 i/s monte à 120 et s'y arrête.
+
+**L'hôte** (`core/CadenceStep.h`, Windows seulement) :
+- Le client demande un palier par `fpsstep` (0 : retour à sa fréquence). Le
+  relais répond aussitôt : appliqué, plafonné à la fréquence de l'écran, ou
+  refusé avec la raison. Les raisons : un encodage dont le p95 sur la dernière
+  fenêtre de 2 s dépasse une image à ce rythme, une clé de banc `cadence=`, un
+  plafond du décodeur (`clientfpscap`), un client en vsync, un écran pas plus
+  rapide que le flux. Un refus laisse le palier déjà gardé.
+- La boucle applique le palier entre deux images, par le chemin d'un écran
+  client qui change (`chooseCadence` : porte à ce rythme, plafond à la
+  fréquence de l'écran). Le budget par image suit (`EffectiveCadence::retarget`)
+  et le fil garde le débit de la fréquence du client : le doubler avait coûté
+  ~3 ms (banc §8p.4 septies).
+- Les contrôles de charge (Lanczos-2, palier du CPU) gardent la fréquence de
+  base : un essai à 240 ne coûte pas sa mise à l'échelle à la session.
+- `stats.cadence`, chaque seconde : les présentations par seconde de l'écran
+  capturé (acquises et repliées), la fréquence de base, le palier en cours,
+  la fréquence de l'écran.
+- Linux et macOS refusent tout palier et n'annoncent rien ; Sunshine, Wolf et
+  MultiSeat ne connaissent pas le message.
+
+**Le client** (`stream/CadenceStepper.js`) :
+- L'âge de ce qui est montré : la médiane de capture → peinte, sur l'horloge
+  de l'hôte (estimateur du ping/pong, un ping toutes les 500 ms tant qu'il
+  tourne), plus une demi-période entre deux images peintes.
+- 2,5 s de base au palier en cours, la demande, 0,4 s après la réponse, puis
+  2,5 s d'essai. Le palier est gardé si l'âge baisse d'au moins 1 ms et si au
+  moins 90 % des images reçues sont peintes. Sinon retour au palier d'avant et
+  recul : 30 s, 1, 2, 4, 8, 16 min, remis à zéro quand le contenu (la bande des
+  présentations) ou le lien (écran, retour d'arrière-plan) change. Un palier
+  gardé sert de base à l'essai suivant.
+- Le filet est armé dès que le flux dépasse la fréquence du client, essais
+  compris : médiane de capture → peinte sur les 250 dernières ms au-dessus de
+  sa référence (mesurée à la fréquence du client) d'une demi-période du
+  client, ou deux images en file au décodeur pendant 150 ms. Retour immédiat
+  à la fréquence du client, en un aller-retour.
+- Un gouverneur de décodage qui demande moins d'images (`clientfpscap`)
+  l'emporte : le palier est lâché, et aucun essai n'a lieu tant qu'il plafonne.
+- Il ne tourne que là où il mesure : hôte natif, fréquence laissée à l'Auto,
+  canvas qui déchire (Chromium sur un ordinateur, son défaut), décodage et
+  dessin sur le fil principal, sans pacer. Un client en vsync garde sa
+  fréquence ; l'émission calée (§33.8) en reste la piste.
+- Simulé (Vitest) : 120 → 240 décidé en ~7 s, 60 → 120 → 240 en ~10 s.
+
+**La clé.** Coupée par défaut jusqu'à la porte UA :
+`localStorage.mw_autostep = '1'` l'active. `window.mwCadenceStepper` donne
+au banc l'état et les décisions (`events`).
+
+**Reste** : le banc (UA.3, `scripts/bench/content-age`), la porte UA (Bruno),
+puis l'« Auto » détecté par défaut (UA.4).
+
 ## 34. Le flux commun des invités (plan du 28/09 au 01/10/2026)
 
 Plan « flux commun des invités » (`non-je-veux-que-jazzy-sutherland.md`).
