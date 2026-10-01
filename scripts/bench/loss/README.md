@@ -80,10 +80,14 @@ console, `globalThis.__mwFlood` for a driver.
   line per phase: delivered kbps, messages/s, the counter's loss, extra delay
   p50/p95, Chrome's main-thread busy share (CDP `TaskDuration`).
 - `flood_summary.py` — those lines as a table (`--markdown` for the docs).
+- `video_run.py` — today's video channel under the same phases, as the viewer
+  sees it: the host shows `scroll.html?band=1`, a sampler on the stream's
+  canvas counts damaged pictures and freezes (gaps over 100 ms); the host's
+  native tuning picks the recovery (default, `namedrops=0`, `dpb=1`).
 - `rs-bench.html` — the client decoder micro-bench: Reed-Solomon GF(2⁸) as
   nanors writes it, pure JavaScript against hand-assembled WebAssembly SIMD;
   `?auto=1`, results in the page and in `globalThis.__rsBench`.
 
-Measurements still need a picture: `scripts/bench/content/scroll.html?band=1`
-with `bench-out` `drops_run_band.py` counts damaged and frozen pictures (see
-the bench's §8n.27).
+The first results — the SCTP ceiling under losses per congestion module, the
+largest single-packet message, the main thread against the message rate, the
+decoder — are in `docs/bench-native-host.md` §8r.

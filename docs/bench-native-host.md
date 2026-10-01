@@ -5124,6 +5124,153 @@ DualRTX. Scripts dans `scripts/bench/shared-feed` : `hard_cases.py`,
 - **Interrupteur à 0** : l'invité a de nouveau son encodeur (S5, S6, et
   l'écran virtuel ci-dessus).
 
+## 8r. Idées Punktfunk, A0 : le labo des pertes et le plafond de SCTP (01/10/2026)
+
+La question qui décide du chapitre FEC (plan `question-c-est-quoi-functional-
+possum.md`, A0) : un canal de données **non ordonné et sans retransmission**
+échappe-t-il au plafond que SCTP impose sous pertes au canal vidéo
+d'aujourd'hui (§8n.22) ? Rien n'est écrit dans le produit avant la réponse,
+sauf les clés de banc (`4815aabd`).
+
+### 8r.0 Le montage
+
+- Hôte : DualRTX, édition DEV bâtie de `main` (`build-pf-dev`), écran de
+  l'iGPU AMD (« Display 2 ») en kiosque, HEVC 1080p60 par AMF, 20 Mb/s fixes.
+- Client : Chrome 154 sur l'UM790Pro (Ubuntu 24.04, session Wayland), piloté
+  par DevTools (`scripts/bench/loss/client-chrome.sh`, `flood_run.py`).
+- Lien : `tc netem` sur l'UM790Pro (`netem.py`), aux ports média de l'hôte,
+  IPv4 et IPv6 ; l'aller-retour ajouté à moitié dans chaque sens ; pertes au
+  hasard, ou en rafales (Gilbert-Elliott, rafales de 4 en moyenne). La limite
+  de netem est ouverte à 20 000 paquets : sa ligne à retard compte dedans, et à
+  14 000 paquets/s 200 jetaient d'eux-mêmes.
+- Mesure : un flood de messages de 1 100 octets sur le canal id 3 (`flood=max`,
+  `SctpFlood`), compté par le navigateur (`mw_flood`, `FloodCounter.js`) :
+  débit livré (médiane des secondes après 6 s), pertes vues, retard ajouté au
+  plus court de la session. Le stream vidéo tourne à côté sur une page fixe.
+
+### 8r.1 Le plafond de SCTP sous pertes (A0.3)
+
+Débit livré, Mb/s, par module de congestion d'usrsctp (`sctpcc=`). Les quatre
+premières colonnes : canal non ordonné sans retransmission (celui que le FEC
+aurait) ; la dernière : le canal du flood avec la fiabilité de la vidéo
+(ordonné, 500 ms).
+
+| lien | RFC 2581 | HSTCP | H-TCP | RTCC | comme la vidéo |
+|---|---|---|---|---|---|
+| 2 ms, 0 % | 121,7 | 128,2 | 7,3 | 125,9 | 124,7 |
+| 2 ms, 1 % | 23,2 | 22,7 | 7,0 | 22,2 | 24,6 |
+| 30 ms, 0 % | 60,6 | 60,4 | 1,0 | 60,5 | 60,8 |
+| 30 ms, 0,3 % | 5,6 | 5,0 | 1,0 | 5,5 | 5,7 |
+| **30 ms, 1 %** | **3,4** | **3,3** | **1,0** | **3,5** | **4,2** |
+| 30 ms, 2 % | 2,2 | 2,2 | 0,9 | 2,3 | 3,9 |
+| 80 ms, 0 % | 17,9 | 17,8 | 0,4 | 17,2 | 17,7 |
+| 80 ms, 0,3 % | 2,3 | 2,2 | 0,4 | 2,4 | 3,7 |
+| 80 ms, 1 % | 1,1 | 1,1 | 0,4 | 1,4 | 3,2 |
+| 80 ms, 2 % | 0,8 | 1,0 | 0,4 | 0,8 | 3,0 |
+| 30 ms, 1 % en rafales | 7,2 | 6,0 | 1,0 | 6,1 | 6,9 |
+| 30 ms, 2 % en rafales | 4,3 | 3,8 | 0,9 | 4,2 | 4,8 |
+
+- **Sans retransmission, le plafond reste.** La fenêtre de congestion de SCTP
+  se réduit à chaque perte, que le message soit renvoyé ou abandonné : 3,4 Mb/s
+  à 1 % et 30 ms, là où la formule de Mathis donne ~3,8 Mb/s pour un paquet de
+  1 172 octets. Le canal sans retransmission fait même un peu moins bien que
+  celui de la vidéo, qui récupère ses pertes.
+- HSTCP et RTCC ne changent rien aux petites fenêtres. **H-TCP est cassé dans
+  usrsctp** : 7 Mb/s sans aucune perte à 2 ms, 1 Mb/s à 30 ms.
+- Les rafales coûtent moins que des pertes isolées au même taux (7,2 contre
+  3,4 Mb/s à 1 %) : SCTP réagit à l'événement de perte, pas au nombre de
+  paquets perdus.
+- Sans pertes, à 80 ms d'aller-retour, le canal tient ~18 Mb/s : le tampon
+  d'envoi du produit (244 Kio pour 20 Mb/s, `SendBacklog`) en est la limite
+  probable (25 Mb/s au plus par aller-retour).
+
+### 8r.2 Le canal vidéo d'aujourd'hui sous pertes (A0.2)
+
+Le même montage, sans flood : l'écran de l'iGPU affiche la page à bandes
+(`scroll.html?band=1`), et l'échantillonneur de `video_run.py` compte les
+images abîmées et les gels sur le canevas du stream (§8n.27). Trois réglages
+de récupération sur AMF : le défaut (pertes nommées et invalidation),
+`namedrops=0`, `dpb=1` (images clés seules). 30 ms d'aller-retour, 25 s par
+phase.
+
+| phase | défaut : abîmées · gels (ms) | `namedrops=0` | `dpb=1` | débit · latence (défaut) |
+|---|---|---|---|---|
+| 0 % | 0 · 2 (250) | 0 · 3 (367) | 0 · 3 (400) | 18,9 Mb/s · 53 ms |
+| 0,3 % | 0 · 4 (500) | 32 · 1 (100) | 160 · 0 | 15,3 Mb/s · 111 ms |
+| 1 % | 125 · 5 (550) | 94 · 8 (1 034) | 1 · 5 (2 485) | 11,0 Mb/s · 674 ms |
+| 1 % en rafales | 4 · 2 (217) | 3 · 5 (534) | 0 · 5 (851) | 9,1 Mb/s · 203 ms |
+| 2 % en rafales | 28 · 3 (400) | 37 · 4 (434) | 0 · 7 (2 285) | 8,0 Mb/s · 413 ms |
+| 0 % | 0 · 2 (234) | 0 · 1 (117) | 0 · 1 (117) | 7,6 Mb/s · 36 ms |
+
+- À 1 % de pertes, le gouverneur descend à 11 Mb/s, encore au-dessus de ce que
+  SCTP laisse passer : la file monte et la latence passe à 0,5-0,7 s.
+- L'image clé seule gèle (2,5 s sur 25 s à 1 %) ; l'invalidation abîme
+  (94-125 images) mais gèle peu. Les pertes nommées ne servent qu'à un lien qui
+  ne se vide plus : elles ne changent rien aux pertes du réseau.
+- Le débit reste en bas après les pertes (7,6 Mb/s à la dernière phase) : le
+  gouverneur remonte lentement.
+- Les gels de la phase sans pertes (2-3 de ~120 ms) sont le bruit du montage.
+
+### 8r.3 La taille d'un shard, le débit de messages, la porte de jet (A0.4)
+
+- **Le plus grand message d'un seul paquet : 1 156 octets.** À 30 Mb/s,
+  1 150 et 1 156 octets font 1,07 paquet par message (la vidéo comprise),
+  1 160 en fait 2,07. libdatachannel laisse 1 280 − 12 − 48 − 8 − 40 = 1 172
+  octets aux chunks SCTP, moins 16 d'en-tête DATA. Avec l'en-tête FEC de 24
+  octets, un shard porterait 1 132 octets.
+- **Le fil principal de Chrome** (CDP `TaskDuration`, stream fixe à côté) :
+
+  | messages/s | UM790Pro (Linux, Ethernet) | N95 (Windows, Wi-Fi) |
+  |---|---|---|
+  | 0 | 2,5 % | 7,1 % |
+  | 2 000 | 4,1 % | 13,0 % |
+  | 5 000 | **5,8 %** | — (le Wi-Fi plafonne à 3 260 : 13,7 %) |
+  | 10 000 | 9,0 % | — |
+
+- **La porte de jet** : un flood rythmé à 20 Mb/s sur le canal non ordonné, à
+  30 ms. Dans la seconde où 1 % de pertes arrive, la file de libdatachannel est
+  pleine et 85-90 % des messages sont retenus (2-4 Mb/s livrés) ; trois
+  secondes après la fin des pertes, tout repasse. La porte de jet de la vidéo
+  (`SendBacklog`) se déclencherait comme aujourd'hui.
+
+### 8r.4 Le décodeur (A0.5)
+
+`rs-bench.html` : Reed-Solomon GF(2⁸) comme nanors l'écrit (polynôme 285,
+Cauchy), k = 170 shards de 1 104 octets, 200 décodages par ligne, chacun
+vérifié. Médiane / p99, en ms.
+
+| machine | JS, 1 eff. | JS, 5 | JS, 20 | WASM SIMD, 1 | WASM, 5 | WASM, 20 |
+|---|---|---|---|---|---|---|
+| DualRTX (Node 24) | 0,18 / 0,50 | 0,86 / 1,64 | 3,45 / 3,66 | 0,02 / 0,33 | 0,05 / 0,08 | 0,19 / 0,32 |
+| UM790Pro (Chrome Linux) | 0,3 / 0,6 | 1,4 / 2,4 | 6,1 / 6,7 | 0 / 1,2 | 0,1 / 0,3 | 0,2 / 0,9 |
+| N95 (Chrome Windows) | 0,8 / 2,9 | **3,8 / 5,1** | 17,5 / 21 | 0 / 0,5 | **0,2 / 0,4** | 0,7 / 1,1 |
+
+Le WASM SIMD (noyau assemblé à la main, `i8x16.swizzle` sur deux tables de 16)
+va 16 à 20 fois plus vite que le JS. Le JS ne tient pas 2 ms p99 sur le N95 ;
+le WASM les tient de loin. Les téléphones (iPhone, Android) restent à mesurer
+avec la même page.
+
+### 8r.4 bis Le shaper WinDivert étendu, vérifié
+
+`mwshaper.py` sait maintenant `loss`, en rafales, et `delay`. Vérifié contre
+le Chrome du N95 en Wi-Fi (flood rythmé à 8 Mb/s, `--remote` borné au N95 et
+au routeur) : 2 % demandés → 2,17 % comptés par le navigateur ; 2 % en
+rafales de 4 → 1,84 % ; `delay 20 20` appliqué à 68 284 paquets, sans
+désordre. Le Wi-Fi de ce montage plafonne vers 28,7 Mb/s.
+
+### 8r.5 La porte A0
+
+| critère | mesuré | |
+|---|---|---|
+| canal non ordonné ≥ 1,3 × le débit visé à 1 % et 30 ms (≥ 26 Mb/s pour 20) | 3,5 Mb/s au mieux (RTCC) | **non** |
+| transport ≤ 10 % du fil principal à 5 000 messages/s, Chrome desktop | 5,8 % | oui |
+| décodage ≤ 2 ms p99 sur mobile, 5 effacements | WASM : 0,4 ms sur le N95 (téléphones à mesurer) ; JS : 5,1 ms | oui en WASM |
+
+**Le premier critère tombe, et de loin** : sur un canal de données, ce n'est
+pas la retransmission qui plafonne la vidéo sous pertes, c'est le contrôle de
+congestion de SCTP. Un FEC réparerait les trous d'un débit que SCTP ne laisse
+pas passer.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
