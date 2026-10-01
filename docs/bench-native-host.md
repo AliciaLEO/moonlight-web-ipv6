@@ -5281,6 +5281,132 @@ niveaux grossiers. Deux pistes notées, non ouvertes : un contrôle de congestio
 du canal vidéo qui ne lise pas une perte au hasard comme une congestion (usrsctp
 patché, le gouverneur seul juge du débit), ou la vidéo sur RTP.
 
+## 8s. Idées Punktfunk, C1 : les écrans virtuels de Mutter, par son API directe (01/10/2026)
+
+La question de la porte C1 (plan `question-c-est-quoi-functional-possum.md`) :
+l'API D-Bus de Mutter (`RemoteDesktop` → `ScreenCast.RecordVirtual`), celle de
+gnome-remote-desktop et de Punktfunk, donne-t-elle ce que le portail ne donne
+pas ? Sonde hors produit : `scripts/bench/mutter/` (README).
+
+### 8s.0 Le montage
+
+- **GNOME 46.0** : l'UM790Pro (Ubuntu 24.04, Wayland), Mutter sur le 780M. Deux
+  écrans physiques : le M27Q 2560×1440 sur la GTX 1050 (second GPU),
+  principal, et l'écran virtuel du noyau (HDMI-1) sur l'AMD.
+- **GNOME 48.7** : la VM Debian 13 de l'UM790Pro (rendu logiciel, mémoire
+  partagée seule).
+- **GNOME 42.9** : une VM Ubuntu 22.04 montée pour C1 (`~/mwvm22`, ssh par le
+  port 2222 de l'UM790Pro), dont le portail n'offre pas d'écran virtuel.
+- Partout : API ScreenCast en version 4, RemoteDesktop en version 1.
+- Mesure : `pw_vcount` consomme le nœud et compte les images par seconde ;
+  `anim.py` redessine une fenêtre à chaque tick de l'écran virtuel ; une image
+  du flux (PPM) dit ce que l'écran montre.
+
+### 8s.1 L'API marche sur les trois versions
+
+- Pas de dialogue. Le nœud PipeWire arrive en 30 à 190 ms.
+- L'écran (« Meta-0 », « MetaVendor / Virtual remote monitor ») apparaît
+  **quand le consommateur négocie le format**, pas à `RecordVirtual`.
+- `Stop` le retire en 0,2-0,4 s, et gnome-shell reste debout. Deux écrans à la
+  fois (GNOME 46 et 48) : Meta-0 et Meta-1, chacun son flux, retirés tous deux.
+- GNOME 42, dont le portail n'a pas de source virtuelle, en fait un aussi.
+
+### 8s.2 La fréquence de l'écran est le `maxFramerate` négocié
+
+| GNOME | `maxFramerate` fixé à 240 | négociation du produit (avant C0 bis) | `modes` seul (120 Hz) |
+|---|---|---|---|
+| 42.9 | 240 Hz | 60 Hz | ignoré |
+| 46.0 | 240 Hz | 60 Hz | 60 Hz |
+| 48.7 | 240 Hz | 60 Hz | 60 Hz |
+
+- Le produit ne demandait que `framerate` : `maxFramerate` restait libre, et
+  le défaut de Mutter (60) l'emportait. **C'est la cause du « 60 Hz quoi qu'on
+  demande » de C0** : le portail n'y est pour rien.
+- La taille suit la même règle. Une taille libre donne 1280×720 ; épinglée,
+  c'est celle du client.
+- La clé `modes` (Mutter 47+ selon Punktfunk) ne change rien sur ces trois
+  versions : `maxFramerate` suffit, par le portail comme par l'API directe.
+
+### 8s.3 Les images livrées
+
+Contenu animé visible sur l'écran virtuel ; images livrées / images dessinées
+par seconde, médianes.
+
+| banc | écran à 60 Hz (produit) | écran à 240 Hz (`maxFramerate`) |
+|---|---|---|
+| GNOME 48, VM, 1280×720 | 34 / 61, écart max 37 ms | 141 / 142, écart max 8 ms |
+| GNOME 42, VM, 1280×720 | 39 / 64 | 115 / 210 |
+| GNOME 46, UM790Pro, 1920×1080, DMA-BUF | 28 / 186 | 46 / 223 |
+
+- **Un écran à 60 Hz servi à 60 i/s au plus perd ~40 % de ses images** : le
+  limiteur de Mutter saute toute image arrivée moins de 1/60 s après la
+  précédente, et un écran à 60 Hz tombe pile sur la limite. À 240 Hz, tout
+  passe (VM GNOME 48). C'est le modèle Windows (écran à 240 Hz, stream à la
+  cadence du client) qui le règle.
+- L'UM790Pro reste bas même à 240 Hz. Ce qui le freine, c'est son écran
+  principal sur la GTX (copie entre GPU) : écrans physiques éteints, le même
+  écran virtuel livre 223-230 i/s, écart max 5 ms. Mais ce montage-là a fait
+  planter gnome-shell (8s.5) : le chiffre est noté, pas à refaire.
+
+### 8s.4 Le curseur
+
+- En mode métadonnées, Mutter 46 et 48 exigent la place d'un curseur
+  384×384. Une demande qui s'arrête à 256×256 — celle du produit jusqu'à C0 bis
+  — ne reçoit **aucune** métadonnée de curseur. La demande corrigée en reçoit
+  70 à 167 positions par seconde, le pointeur déplacé par RemoteDesktop
+  (`NotifyPointerMotionAbsolute` sur le flux).
+- Une mise à jour du curseur seul arrive comme un tampon sans pixels, marqué
+  « corrompu ».
+
+### 8s.5 L'écran virtuel principal, et le piège des écrans éteints
+
+- **Principal** (`ApplyMonitorsConfig` temporaire) : Meta-0 en 0,0, les
+  écrans physiques gardés à sa droite. Le bureau y vient (barre, dock). Au
+  `Stop`, Mutter revient seul à la disposition d'avant (GNOME 46 et 48). Une
+  nouvelle fenêtre s'ouvre sur l'écran du pointeur, pas sur le principal.
+- **Seul** (écrans physiques éteints) : sur la VM, sans souci. Sur l'UM790Pro,
+  trois fois sans souci, puis **gnome-shell 46 a planté** au retour (SIGSEGV
+  juste après « Created gbm renderer for '/dev/dri/card2' », le M27Q de la GTX
+  rallumé). La session est tombée avec tout ce qu'elle portait, dont la prod
+  de l'UM790Pro, pendant ~4 min (rétablie par `systemctl restart gdm3`).
+  **Règle pour C2 : jamais éteindre un écran physique.**
+
+### 8s.6 Le verrouillage
+
+- Verrouiller la session (`loginctl lock-session`, GNOME 46) **ferme en moins
+  de 50 ms toute session ScreenCast**, RemoteDesktop ou non : le flux s'arrête,
+  l'écran virtuel est retiré, rien ne revient au déverrouillage. Le portail
+  passe par les mêmes sessions : un stream sur l'écran virtuel finit au
+  verrouillage de l'hôte.
+- Une session verrouillée refuse toute création (« Session creation
+  inhibited », GNOME 42 verrouillé après 5 min d'inactivité).
+- Après un déverrouillage, les écrans physiques peuvent rester en économie
+  d'énergie (`PowerSaveMode` 3). La sonde du produit (sorties KMS actives) dit
+  alors « pas de session interactive ».
+
+### 8s.7 C0 bis : la correction dans le produit
+
+`PortalCapture` propose d'abord, pour un écran virtuel, les mêmes formats avec
+`maxFramerate` fixé à la fréquence voulue (240 Hz), puis ceux d'avant en
+repli pour un compositeur qui ne monte pas si haut. La place du curseur va
+jusqu'à 512×512, 384×384 par défaut. Test du produit par le portail :
+« portal stream: 1170x2532 BGRx at 240 fps max » et « 60 fps stream on a
+240 Hz display », sur GNOME 46 (UM790Pro, DMA-BUF) et 48 (VM), 18/18.
+
+### 8s.8 La porte C1
+
+| ce que la route directe devait apporter | mesuré |
+|---|---|
+| pas de fenêtre de partage | oui (le portail demande une fois, puis rejoue son jeton) |
+| plus de 60 Hz | oui, mais **le portail aussi depuis C0 bis** |
+| les métadonnées du curseur | oui, comme le portail (même règle des 384×384) |
+| plusieurs écrans à la fois | oui (46, 48) ; non mesuré par le portail |
+| GNOME < 46 | **oui, GNOME 42** : le seul moyen d'y avoir un écran virtuel |
+| l'écran virtuel principal | `DisplayConfig`, à part, utilisable par les deux routes |
+
+Restent pour C2 : le démarrage silencieux, GNOME 42-45 (Ubuntu 22.04 LTS),
+l'entrée par RemoteDesktop. Le gain de cadence ne demande plus C2.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session

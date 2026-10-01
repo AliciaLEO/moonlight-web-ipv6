@@ -192,6 +192,9 @@ struct PortalCapture::Impl
         // Ask for the metadata we want alongside the pixels. The cursor one is
         // what keeps the pointer OUT of the picture — the handshake asked for
         // METADATA mode, and this is where the buffer gets somewhere to put it.
+        // Mutter 46 and later want room for a 384×384 cursor: a range that
+        // stops below it agrees on no cursor metadata at all, and the pointer
+        // never travels (bench §8s).
         uint8_t storage[1024];
         spa_pod_builder builder{};
         spa_pod_builder_init(&builder, storage, sizeof(storage));
@@ -204,8 +207,8 @@ struct PortalCapture::Impl
         params[count++] = static_cast<const spa_pod*>(spa_pod_builder_add_object(
             &builder, SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta, SPA_PARAM_META_type,
             SPA_POD_Id(SPA_META_Cursor), SPA_PARAM_META_size,
-            SPA_POD_CHOICE_RANGE_Int(cursorMetaSize(64, 64), cursorMetaSize(1, 1),
-                                     cursorMetaSize(256, 256))));
+            SPA_POD_CHOICE_RANGE_Int(cursorMetaSize(384, 384), cursorMetaSize(1, 1),
+                                     cursorMetaSize(512, 512))));
         // DMA-BUF asked for by name once a modifier is agreed. Shared memory
         // keeps what it always had: no buffer parameter, the compositor's own.
         if (modifier)
@@ -456,46 +459,69 @@ bool PortalCapture::start(std::string& error)
         rateDefault = rateMax = SPA_FRACTION(fps, 1);
     }
     std::vector<const spa_pod*> params;
-    if (!d->offer.renderNode.empty()) {
-        static const uint32_t kFormats[] = {SPA_VIDEO_FORMAT_BGRx, SPA_VIDEO_FORMAT_RGBx,
-                                            SPA_VIDEO_FORMAT_BGRA, SPA_VIDEO_FORMAT_RGBA};
-        for (uint32_t spaFormat : kFormats) {
-            const std::vector<uint64_t>* modifiers = nullptr;
-            for (const auto& entry : d->offer.modifiers)
-                if (entry.first == drmFourcc(spaFormat) && !entry.second.empty())
-                    modifiers = &entry.second;
-            if (!modifiers) continue;
-            spa_pod_frame object{};
-            spa_pod_frame choice{};
-            spa_pod_builder_push_object(&builder, &object, SPA_TYPE_OBJECT_Format,
-                                        SPA_PARAM_EnumFormat);
-            spa_pod_builder_add(&builder, SPA_FORMAT_mediaType, SPA_POD_Id(SPA_MEDIA_TYPE_video),
-                                SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
-                                SPA_FORMAT_VIDEO_format, SPA_POD_Id(spaFormat), 0);
-            spa_pod_builder_prop(&builder, SPA_FORMAT_VIDEO_modifier,
-                                 SPA_POD_PROP_FLAG_MANDATORY | SPA_POD_PROP_FLAG_DONT_FIXATE);
-            spa_pod_builder_push_choice(&builder, &choice, SPA_CHOICE_Enum, 0);
-            // An enum choice: its default first, then every value it allows.
-            spa_pod_builder_long(&builder, static_cast<int64_t>(modifiers->front()));
-            for (uint64_t modifier : *modifiers)
-                spa_pod_builder_long(&builder, static_cast<int64_t>(modifier));
-            spa_pod_builder_pop(&builder, &choice);
-            spa_pod_builder_add(&builder, SPA_FORMAT_VIDEO_size,
-                                SPA_POD_CHOICE_RANGE_Rectangle(&sizeDefault, &sizeMin, &sizeMax),
-                                SPA_FORMAT_VIDEO_framerate,
-                                SPA_POD_CHOICE_RANGE_Fraction(&rateDefault, &rateMin, &rateMax), 0);
-            params.push_back(static_cast<const spa_pod*>(spa_pod_builder_pop(&builder, &object)));
+    // The size and the rate every entry carries. A virtual monitor's refresh
+    // is the maxFramerate the format settles on (GNOME 42, 46 and 48 alike):
+    // left free, Mutter's own default wins and makes it 60 Hz, and a 60 Hz
+    // monitor streamed at 60 fps at most loses about 40 % of its frames to
+    // Mutter's rate limit (bench §8s). So the virtual monitor's entries come
+    // first with maxFramerate pinned to its rate — 240 Hz, the Windows model —
+    // then again without, for a compositor that cannot go that high.
+    const spa_fraction pinnedMax = rateMax;
+    auto addSizeAndRate = [&](bool pinMax) {
+        spa_pod_builder_add(&builder, SPA_FORMAT_VIDEO_size,
+                            SPA_POD_CHOICE_RANGE_Rectangle(&sizeDefault, &sizeMin, &sizeMax),
+                            SPA_FORMAT_VIDEO_framerate,
+                            SPA_POD_CHOICE_RANGE_Fraction(&rateDefault, &rateMin, &rateMax), 0);
+        if (pinMax)
+            spa_pod_builder_add(&builder, SPA_FORMAT_VIDEO_maxFramerate,
+                                SPA_POD_Fraction(&pinnedMax), 0);
+    };
+    auto addFormats = [&](bool pinMax) {
+        if (!d->offer.renderNode.empty()) {
+            static const uint32_t kFormats[] = {SPA_VIDEO_FORMAT_BGRx, SPA_VIDEO_FORMAT_RGBx,
+                                                SPA_VIDEO_FORMAT_BGRA, SPA_VIDEO_FORMAT_RGBA};
+            for (uint32_t spaFormat : kFormats) {
+                const std::vector<uint64_t>* modifiers = nullptr;
+                for (const auto& entry : d->offer.modifiers)
+                    if (entry.first == drmFourcc(spaFormat) && !entry.second.empty())
+                        modifiers = &entry.second;
+                if (!modifiers) continue;
+                spa_pod_frame object{};
+                spa_pod_frame choice{};
+                spa_pod_builder_push_object(&builder, &object, SPA_TYPE_OBJECT_Format,
+                                            SPA_PARAM_EnumFormat);
+                spa_pod_builder_add(&builder, SPA_FORMAT_mediaType,
+                                    SPA_POD_Id(SPA_MEDIA_TYPE_video), SPA_FORMAT_mediaSubtype,
+                                    SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw), SPA_FORMAT_VIDEO_format,
+                                    SPA_POD_Id(spaFormat), 0);
+                spa_pod_builder_prop(&builder, SPA_FORMAT_VIDEO_modifier,
+                                     SPA_POD_PROP_FLAG_MANDATORY | SPA_POD_PROP_FLAG_DONT_FIXATE);
+                spa_pod_builder_push_choice(&builder, &choice, SPA_CHOICE_Enum, 0);
+                // An enum choice: its default first, then every value it allows.
+                spa_pod_builder_long(&builder, static_cast<int64_t>(modifiers->front()));
+                for (uint64_t modifier : *modifiers)
+                    spa_pod_builder_long(&builder, static_cast<int64_t>(modifier));
+                spa_pod_builder_pop(&builder, &choice);
+                addSizeAndRate(pinMax);
+                params.push_back(
+                    static_cast<const spa_pod*>(spa_pod_builder_pop(&builder, &object)));
+            }
         }
-    }
-    params.push_back(static_cast<const spa_pod*>(spa_pod_builder_add_object(
-        &builder, SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat, SPA_FORMAT_mediaType,
-        SPA_POD_Id(SPA_MEDIA_TYPE_video), SPA_FORMAT_mediaSubtype,
-        SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw), SPA_FORMAT_VIDEO_format,
-        SPA_POD_CHOICE_ENUM_Id(5, SPA_VIDEO_FORMAT_BGRx, SPA_VIDEO_FORMAT_BGRx,
-                               SPA_VIDEO_FORMAT_RGBx, SPA_VIDEO_FORMAT_BGRA, SPA_VIDEO_FORMAT_RGBA),
-        SPA_FORMAT_VIDEO_size, SPA_POD_CHOICE_RANGE_Rectangle(&sizeDefault, &sizeMin, &sizeMax),
-        SPA_FORMAT_VIDEO_framerate,
-        SPA_POD_CHOICE_RANGE_Fraction(&rateDefault, &rateMin, &rateMax))));
+        spa_pod_frame object{};
+        spa_pod_builder_push_object(&builder, &object, SPA_TYPE_OBJECT_Format,
+                                    SPA_PARAM_EnumFormat);
+        spa_pod_builder_add(&builder, SPA_FORMAT_mediaType, SPA_POD_Id(SPA_MEDIA_TYPE_video),
+                            SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
+                            SPA_FORMAT_VIDEO_format,
+                            SPA_POD_CHOICE_ENUM_Id(5, SPA_VIDEO_FORMAT_BGRx, SPA_VIDEO_FORMAT_BGRx,
+                                                   SPA_VIDEO_FORMAT_RGBx, SPA_VIDEO_FORMAT_BGRA,
+                                                   SPA_VIDEO_FORMAT_RGBA),
+                            0);
+        addSizeAndRate(pinMax);
+        params.push_back(static_cast<const spa_pod*>(spa_pod_builder_pop(&builder, &object)));
+    };
+    if (virtualMonitor) addFormats(true);
+    addFormats(false);
 
     const int res = pw_stream_connect(
         d->stream, PW_DIRECTION_INPUT, d->granted.nodeId,
