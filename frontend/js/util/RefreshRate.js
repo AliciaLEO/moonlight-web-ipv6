@@ -27,6 +27,8 @@
  * that than a snapped 165 000 would be if the panel really runs at 164.8.
  */
 
+import { IS_LOW_MEMORY } from './BrowserDetect.js';
+
 /** @type {number} Last good measurement, millihertz. 0 = none yet. */
 let _milliHz = 0;
 /** @type {Promise<number> | null} A measurement in flight, shared. */
@@ -140,6 +142,19 @@ export function currentRefreshMilliHz() {
 export const AUTO_FPS_MIN = 24;
 export const AUTO_FPS_MAX = 120;
 
+/** Auto's ceiling on a device of a gigabyte of memory or less.
+ *
+ *  Measured on a Mi TV (MT5867, Mali-G31, 1.4 GB, 01/10/2026) streaming a
+ *  moving 720p desktop: asked 60, its browser decoded 34 frames a second
+ *  with 112 ms in the decoder and a quarter of the frames thrown away, for
+ *  146 ms end to end; asked 30, 25 ms in the decoder and 54 ms end to end.
+ *  The decoder alone does 60 and more (127 fps fed flat out); what gives way
+ *  is the page around it — every decoded frame waits for the next refresh to
+ *  be drawn, and MediaCodec does not hand out the next one meanwhile. The
+ *  decode-rate governor finds the same answer, seconds later and after a
+ *  burst of keyframes; a choice made FOR the viewer starts where it ends. */
+export const LOW_MEMORY_AUTO_FPS_MAX = 30;
+
 /** What a panel was actually measured at, whole frames per second, with no
  *  ceiling on it: what the Settings line says about the screen, and the floor
  *  the pixel budget reads (fitPixelBudget). 0 when nothing was measured. */
@@ -161,12 +176,15 @@ export function measuredFps(milliHz) {
  * stands.
  *
  * @param {number} [milliHz] defaults to the last measurement
+ * @param {boolean} [lowMemory] a device of a gigabyte or less (BrowserDetect):
+ *        the ceiling is then LOW_MEMORY_AUTO_FPS_MAX
  * @returns {number} frames per second, or 0 when unknown
  */
-export function autoFps(milliHz) {
+export function autoFps(milliHz, lowMemory = IS_LOW_MEMORY) {
     const fps = measuredFps(milliHz);
     if (!fps) return 0;
-    return Math.min(AUTO_FPS_MAX, Math.max(AUTO_FPS_MIN, fps));
+    const ceiling = lowMemory ? LOW_MEMORY_AUTO_FPS_MAX : AUTO_FPS_MAX;
+    return Math.min(ceiling, Math.max(AUTO_FPS_MIN, fps));
 }
 
 /**

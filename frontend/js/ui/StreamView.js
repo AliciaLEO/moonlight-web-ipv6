@@ -65,6 +65,7 @@ import {
     IS_TOUCH_DEVICE,
     IS_MOBILE,
     IS_MOBILE_OR_TABLET,
+    IS_LOW_MEMORY,
     IS_APPLE,
     IS_WEBKIT,
     SUPPORTS_CANVAS_TEARING,
@@ -624,7 +625,16 @@ export class StreamView {
             if (sel === 'auto') {
                 // A Snapdragon runs Qualcomm's own upscaler in both flavours;
                 // HDR otherwise keeps FSR1, the sharper one, on WebGPU.
-                if (hdr) sel = isSnapdragonGpu() ? 'sgsr' : 'fsr1';
+                //
+                // A device of a gigabyte or less gets none: 'auto' is the
+                // platform's call, and on that GPU class the answer is no. A
+                // Mi TV's Mali-G31 (1.4 GB, 01/10/2026) lost its WebGL context
+                // to SGSR, and presents no more than ~27 plain 720p frames a
+                // second to begin with — a pass on top only costs frames.
+                if (IS_LOW_MEMORY) {
+                    console.log('[StreamView] Enhancer: none on a low-memory device');
+                    sel = 'off';
+                } else if (hdr) sel = isSnapdragonGpu() ? 'sgsr' : 'fsr1';
                 else sel = 'gl-' + pickAutoEnhancer();
             }
             // HDR has no WebGL2 or Canvas2D presentation in Chrome (no HDR

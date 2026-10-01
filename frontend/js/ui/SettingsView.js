@@ -44,6 +44,7 @@ import { listMappings, removeMapping, CHANGED_EVENT } from '../util/gamepadMappi
 import {
     SUPPORTS_CANVAS_TEARING,
     IS_MOBILE_OR_TABLET,
+    IS_HANDHELD,
     resolveTearing,
     supportsDisplayHdr,
     hdrClientCapability,
@@ -411,7 +412,7 @@ export class SettingsView {
     }
 
     _computeAutoBitrate(height, fps, aspect, chroma444, hdr) {
-        return computeAutoBitrate(height, fps, aspect, chroma444, hdr, IS_MOBILE_OR_TABLET);
+        return computeAutoBitrate(height, fps, aspect, chroma444, hdr, IS_HANDHELD);
     }
 
     /**
@@ -451,7 +452,7 @@ export class SettingsView {
         // format at launch, which is unknown here — aspectToNumber() reads it
         // as the 16:9 baseline, which is what the estimate wants.
         const choice = this._readResolutionChoice();
-        const ref = bitrateReference(choice, undefined, IS_MOBILE_OR_TABLET);
+        const ref = bitrateReference(choice, undefined, IS_HANDHELD);
         const aspect =
             choice.mode === 'fixed'
                 ? this.container.querySelector('#settings-stream-aspect')?.value ||

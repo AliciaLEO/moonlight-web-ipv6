@@ -109,6 +109,60 @@ export function isIphone() {
 export const IS_TOUCH_DEVICE = platform.isTouchDevice;
 
 /**
+ * True for a television or a TV box: Android TV, Google TV, Fire TV, a set
+ * top box. Its browser says "Android" and, as often as not, "Mobile" too —
+ * a TV Bro WebView on a Mi TV reads "Android 11; MiTV-MOSR4 … Mobile Safari"
+ * — so the platform classes it a phone, and a phone's Auto box (1440 lines,
+ * any width) asked a 720p Mi TV for 2148×1208, beyond its hardware decoder
+ * (01/10/2026): no picture at all.
+ *
+ * What tells a TV from a phone is the screen, not the user agent: every
+ * Android phone and tablet has a touchscreen and reports its touch points,
+ * a TV has none (maxTouchPoints 0, measured on that Mi TV in TV Bro and in a
+ * Chromium build alike). A few vendors also say it outright in the agent.
+ * Only the size decisions read this — a TV is driven by a remote or a pad
+ * through the same pages a phone uses, and stays a phone for everything else.
+ * @param {Navigator} [nav]
+ */
+export function detectTv(nav) {
+    const n = nav || (typeof navigator !== 'undefined' ? navigator : null);
+    if (!n) return false;
+    const ua = n.userAgent || '';
+    if (/\b(android ?tv|google ?tv|smart-?tv|bravia|mitv)\b/i.test(ua)) return true;
+    // Fire TV models: "AFTMM", "AFTKA"… — upper case, so "after" is not one.
+    if (/\bAFT[A-Z0-9]{1,6}\b/.test(ua)) return true;
+    return /android/i.test(ua) && n.maxTouchPoints === 0;
+}
+
+/** True on a television (see detectTv). */
+export const IS_TV = detectTv();
+
+/**
+ * True when the stream's size should be chosen as for a phone or a tablet —
+ * a screen held in the hand, whose Auto box and bitrate estimate are the
+ * handheld ones. A TV is neither, whatever its user agent says.
+ */
+export const IS_HANDHELD = IS_MOBILE_OR_TABLET && !IS_TV;
+
+/**
+ * True on a device with a gigabyte of memory or less, as the browser reports
+ * it (Chromium only; elsewhere unknown, so false). Chromium rounds DOWN to a
+ * power of two, so a 3 GB phone says 2 and stays out of this; a 1.4 GB Mi TV
+ * says 1. Its GPU is of the same class (a Mali-G31 there): Auto's frame rate
+ * is held lower (RefreshRate.js), and nothing optional is turned on for it
+ * behind the viewer's back.
+ * @param {Navigator} [nav]
+ */
+export function isLowMemory(nav) {
+    const n = nav || (typeof navigator !== 'undefined' ? navigator : null);
+    // Chromium only, absent from the DOM typings.
+    const gb = n && /** @type {any} */ (n).deviceMemory;
+    return typeof gb === 'number' && gb > 0 && gb <= 1;
+}
+
+export const IS_LOW_MEMORY = isLowMemory();
+
+/**
  * True when mouse gaming mode (pointer lock + relative mouse) makes sense: no
  * touch screen at all, or one alongside a mouse or trackpad — a Surface with
  * its type cover, a touchscreen laptop. A touch screen alone is not a reason

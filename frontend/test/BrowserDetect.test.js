@@ -6,6 +6,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
     decoderRidesOutGaps,
     detectPlatform,
+    detectTv,
+    isLowMemory,
     isIphone,
     physicalScreenSize,
     pickAutoEnhancer,
@@ -70,6 +72,47 @@ describe('BrowserDetect.detectPlatform', () => {
         expect(isIphone()).toBe(true);
         withNavigator({ userAgent: UA.desktop });
         expect(isIphone()).toBe(false);
+    });
+});
+
+// A TV's browser often says "Mobile": the screen tells it apart, not the agent.
+describe('BrowserDetect.detectTv', () => {
+    const MI_TV_WEBVIEW =
+        'Mozilla/5.0 (Linux; Android 11; MiTV-MOSR4 Build/RTM5.220609.003; wv) AppleWebKit/537.36 ' +
+        '(KHTML, like Gecko) Version/4.0 Chrome/153.0.8010.36 Mobile Safari/537.36';
+    const CROMITE =
+        'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 Chrome/153.0.0.0 Mobile Safari/537.36';
+
+    it('knows a TV by its missing touchscreen, whatever the agent says', () => {
+        expect(detectTv({ userAgent: CROMITE, maxTouchPoints: 0 })).toBe(true);
+        expect(detectTv({ userAgent: MI_TV_WEBVIEW, maxTouchPoints: 5 })).toBe(true);
+        expect(
+            detectTv({
+                userAgent: 'Mozilla/5.0 (Linux; Android 9; AFTMM) Silk',
+                maxTouchPoints: 5,
+            }),
+        ).toBe(true);
+    });
+
+    it('leaves phones, tablets and desktops alone', () => {
+        expect(detectTv({ userAgent: UA.androidPhone, maxTouchPoints: 5 })).toBe(false);
+        expect(detectTv({ userAgent: UA.androidTablet, maxTouchPoints: 10 })).toBe(false);
+        expect(detectTv({ userAgent: UA.desktop, maxTouchPoints: 0 })).toBe(false);
+        expect(detectTv({ userAgent: UA.iphone, maxTouchPoints: 5 })).toBe(false);
+        // "After" in an agent is not a Fire TV model.
+        expect(
+            detectTv({ userAgent: 'Mozilla/5.0 (X11; Linux) After/1.0', maxTouchPoints: 0 }),
+        ).toBe(false);
+    });
+});
+
+describe('BrowserDetect.isLowMemory', () => {
+    it('reads deviceMemory, and an unknown amount is not low', () => {
+        expect(isLowMemory({ deviceMemory: 0.5 })).toBe(true);
+        expect(isLowMemory({ deviceMemory: 1 })).toBe(true);
+        expect(isLowMemory({ deviceMemory: 2 })).toBe(false);
+        expect(isLowMemory({ deviceMemory: 4 })).toBe(false);
+        expect(isLowMemory({})).toBe(false);
     });
 });
 

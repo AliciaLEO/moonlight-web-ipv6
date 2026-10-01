@@ -62,6 +62,8 @@ import { GamepadDriverNotice } from './ui/GamepadDriverNotice.js';
 import { VersionGuard } from './util/VersionGuard.js';
 import {
     IS_MOBILE_OR_TABLET,
+    IS_HANDHELD,
+    IS_LOW_MEMORY,
     resolveTearing,
     hdrClientCapability,
     chroma444ClientCapability,
@@ -80,6 +82,11 @@ import {
     resolveStreamSize,
     fitPixelBudget,
 } from './util/StreamResolution.js';
+import {
+    hardwareDecodeLimit,
+    knownHardwareDecodeLimit,
+    capSizeToDecoder,
+} from './util/DecoderLimit.js';
 import { startAspectProbe } from './stream/AspectProbe.js';
 import * as iosAudioUnlock from './audio/iosAudioUnlock.js';
 import { init as i18nInit, applyDOM, t } from './i18n/i18n.js';
@@ -2078,7 +2085,7 @@ const MoonlightApp = {
             },
             {
                 nativeHost,
-                touch: IS_MOBILE_OR_TABLET,
+                touch: IS_HANDHELD,
                 // "MoonlightWeb Virtual Display": the screen is made for this
                 // stream, so every choice names an exact size instead of a box
                 // to fit into (see util/StreamResolution.js).
@@ -2086,7 +2093,11 @@ const MoonlightApp = {
             },
         );
         this._fpsAuto = fpsAuto;
-        const bounded = this._applyPixelBudget(streamingSettings, size, choice.mode, fpsAuto);
+        const budgeted = this._applyPixelBudget(streamingSettings, size, choice.mode, fpsAuto);
+        const bounded = this._capToDecoder(
+            budgeted,
+            await hardwareDecodeLimit(streamingSettings.video_codec),
+        );
         this._applyResolvedSize(streamingSettings, bounded);
         this._sizeFollowsScreen = size.followsScreen;
         this._sizeOnVirtualDisplay = app?.isVirtualDisplay === true;
@@ -2822,9 +2833,31 @@ const MoonlightApp = {
                 aspect,
                 settings.chroma_444_enabled === true,
                 settings.hdr_enabled === true,
-                IS_MOBILE_OR_TABLET,
+                IS_HANDHELD,
             ) * 1000
         );
+    },
+
+    /**
+     * Bring a launch size under what this browser's hardware decoder takes
+     * (util/DecoderLimit.js): beyond it a stream does not degrade, it does not
+     * start. Every choice goes through here, a named one included — the
+     * alternative to a smaller picture is none.
+     */
+    _capToDecoder(size, limit) {
+        const { size: capped, capped: changed } = capSizeToDecoder(size, limit);
+        if (changed)
+            console.log(
+                '[MW] Hardware decoder takes ' +
+                    limit.width +
+                    'x' +
+                    limit.height +
+                    ' at most: ' +
+                    (size.aspect || size.height + ' lines') +
+                    ' → ' +
+                    (capped.aspect || capped.height + ' lines'),
+            );
+        return capped;
     },
 
     /**
@@ -2873,7 +2906,7 @@ const MoonlightApp = {
             {
                 nativeHost: host.backendType === 'native',
                 device,
-                touch: IS_MOBILE_OR_TABLET,
+                touch: IS_HANDHELD,
                 virtualDisplay: this._sizeOnVirtualDisplay === true,
             },
         );
@@ -2886,7 +2919,10 @@ const MoonlightApp = {
         const fps = settings.stream_fps;
         const fpsAuto = this._fpsAuto === true;
         if (fpsAuto) settings.stream_fps = autoFps() || settings.stream_fps;
-        const bounded = this._applyPixelBudget(settings, size, choice.mode, fpsAuto);
+        const bounded = this._capToDecoder(
+            this._applyPixelBudget(settings, size, choice.mode, fpsAuto),
+            knownHardwareDecodeLimit(settings.video_codec),
+        );
         if (
             bounded.height === settings.stream_height &&
             bounded.aspect === settings.stream_aspect &&
@@ -4030,7 +4066,7 @@ const MoonlightApp = {
                     effective.stream_aspect,
                     effective.chroma_444_enabled === true,
                     effective.hdr_enabled === true,
-                    IS_MOBILE_OR_TABLET,
+                    IS_HANDHELD,
                 ) * 1000;
             newBitrate = Math.max(2000, Math.min(newBitrate, autoKbps));
             toastKey = 'stream.degradeResolution';
@@ -4045,7 +4081,16 @@ const MoonlightApp = {
             // 'sgsr', which forced the WebGPU pass on a stream the user had
             // chosen to run on Canvas2D — the pass that costs 20 ms in a worker
             // on macOS (F0), on exactly the link that was already struggling.
-            if (effective.video_enhancement !== 'on' && !onMedia && !o.transport_mode) {
+            //
+            // Not on a device of a gigabyte or less: its GPU is of the same
+            // class (a Mi TV's Mali-G31 lost the WebGL context to the pass,
+            // 01/10/2026), and the smaller stream is the relief.
+            if (
+                effective.video_enhancement !== 'on' &&
+                !onMedia &&
+                !o.transport_mode &&
+                !IS_LOW_MEMORY
+            ) {
                 o.video_enhancement = 'on';
                 o.video_enhancement_algo = 'auto';
                 this._enhancementAutoForced = true;

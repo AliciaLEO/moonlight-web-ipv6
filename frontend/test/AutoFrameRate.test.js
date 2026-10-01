@@ -10,7 +10,13 @@
  * the choice to the caller rather than inventing a rate.
  */
 import { describe, it, expect } from 'vitest';
-import { autoFps, measuredFps, AUTO_FPS_MIN, AUTO_FPS_MAX } from '../js/util/RefreshRate.js';
+import {
+    autoFps,
+    measuredFps,
+    AUTO_FPS_MIN,
+    AUTO_FPS_MAX,
+    LOW_MEMORY_AUTO_FPS_MAX,
+} from '../js/util/RefreshRate.js';
 
 describe('measuredFps', () => {
     it('rounds the measured millihertz to whole frames per second', () => {
@@ -40,6 +46,15 @@ describe('autoFps', () => {
         expect(autoFps(143900)).toBe(AUTO_FPS_MAX);
         expect(autoFps(164800)).toBe(AUTO_FPS_MAX);
         expect(AUTO_FPS_MAX).toBe(120);
+    });
+
+    it('holds a device of a gigabyte or less to 30, a slower screen to its own rate', () => {
+        // The Mi TV case: 60 asked, 34 decoded and 146 ms; 30 asked, 54 ms.
+        expect(LOW_MEMORY_AUTO_FPS_MAX).toBe(30);
+        expect(autoFps(60000, true)).toBe(30);
+        expect(autoFps(50000, true)).toBe(30);
+        expect(autoFps(25000, true)).toBe(25);
+        expect(autoFps(60000, false)).toBe(60);
     });
 
     it('answers 0 when nothing was measured, so the caller keeps its default', () => {
