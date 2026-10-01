@@ -31,6 +31,11 @@
  *
  * Ids inside the SVG are suffixed per instance: two pads on one page (the
  * settings list and an open dialog) must not share gradients.
+ *
+ * GamepadArtView also draws DeviceArt's radio, flight stick and wheel: same
+ * contract, plus parts that turn, toggle or slide (data-rotate, data-lever,
+ * data-press) and a part that stands for several targets (data-ctl="leftx
+ * lefty"). The pad has none of those, and draws as it always did.
  */
 
 let seq = 0;
@@ -229,32 +234,90 @@ export function gamepadArtSvg() {
 </svg>`;
 }
 
-/** Stick travel inside its well, in SVG units. */
+/** Stick travel inside its well, in SVG units (a drawing may say otherwise). */
 const STICK_TRAVEL = 12;
+
+/** Stick axes in W3C order, as readVirtualPad gives them. */
+const AXIS_ORDER = ['leftx', 'lefty', 'rightx', 'righty'];
 
 /**
  * Live state of one drawn controller. `root` is the element holding
- * gamepadArtSvg()'s markup.
+ * gamepadArtSvg()'s markup, or one of DeviceArt's.
  */
 export class GamepadArtView {
     constructor(root) {
         this.root = root;
         this._ctl = new Map();
         for (const g of root.querySelectorAll('.gp-ctl')) {
-            this._ctl.set(g.getAttribute('data-ctl'), g);
+            // One part may stand for several targets: a gimbal is "leftx lefty".
+            for (const name of (g.getAttribute('data-ctl') || '').split(/\s+/)) {
+                if (name) this._ctl.set(name, g);
+            }
         }
-        this._caps = {
-            left: root.querySelector('[data-stick="left"] .gp-stick-cap'),
-            right: root.querySelector('[data-stick="right"] .gp-stick-cap'),
-        };
+        this._sticks = {};
+        this._caps = {};
+        this._travel = {};
+        for (const side of ['left', 'right']) {
+            const s = root.querySelector(`[data-stick="${side}"]`);
+            this._sticks[side] = s;
+            this._caps[side] = s ? s.querySelector('.gp-stick-cap') : null;
+            this._travel[side] = (s && parseFloat(s.getAttribute('data-travel'))) || STICK_TRAVEL;
+        }
         this._fills = {
             left: root.querySelector('[data-ctl="lefttrigger"] .gp-trigger-fill'),
             right: root.querySelector('[data-ctl="righttrigger"] .gp-trigger-fill'),
         };
+        this._hooks = this._readHooks(root);
         this._target = null;
         // Last value drawn per control: the dialog redraws every frame, and a
         // filtered SVG re-rasterises on any attribute write, same value or not.
         this._drawn = new Map();
+    }
+
+    /**
+     * The parts of a device that move otherwise than a stick or a trigger
+     * (DeviceArt): a rim that turns, a toggle's lever, a pedal or a throttle
+     * that slides. A drawing without them — the pad — has none.
+     */
+    _readHooks(root) {
+        const hooks = [];
+        const num = (el, n, d = 0) => {
+            const v = parseFloat(el.getAttribute(n));
+            return Number.isFinite(v) ? v : d;
+        };
+        for (const el of root.querySelectorAll('[data-rotate]')) {
+            hooks.push({
+                kind: 'rotate',
+                el,
+                target: el.getAttribute('data-rotate'),
+                amp: num(el, 'data-amp', 30),
+                cx: num(el, 'data-cx'),
+                cy: num(el, 'data-cy'),
+            });
+        }
+        for (const el of root.querySelectorAll('[data-lever]')) {
+            hooks.push({
+                kind: 'lever',
+                el,
+                target: el.getAttribute('data-lever'),
+                cy: num(el, 'data-cy'),
+                len: num(el, 'data-len', 24),
+                stem: el.querySelector('.gp-lever-stem'),
+                knob: el.querySelector('.gp-lever-knob'),
+            });
+        }
+        for (const el of root.querySelectorAll('[data-press]')) {
+            hooks.push({
+                kind: 'press',
+                el,
+                target: el.getAttribute('data-press'),
+                dx: num(el, 'data-dx'),
+                dy: num(el, 'data-dy'),
+            });
+        }
+        // Each its own entry in _drawn: two parts may follow the same target.
+        hooks.forEach((h, i) => (h.key = `h:${i}`));
+        return hooks;
     }
 
     _changed(k, v) {
@@ -264,15 +327,18 @@ export class GamepadArtView {
     }
 
     _el(ctl) {
-        // Stick axes are drawn on their stick.
+        const own = this._ctl.get(ctl);
+        if (own) return own;
+        // A pad draws its stick axes on the stick.
         if (ctl === 'leftx' || ctl === 'lefty') return this._ctl.get('leftstick');
         if (ctl === 'rightx' || ctl === 'righty') return this._ctl.get('rightstick');
-        return this._ctl.get(ctl);
+        return null;
     }
 
     /**
      * Draw a standard pad's state: `pad` = {buttons:[{pressed,value}], axes:[4]}
-     * in W3C order (gamepadMapping.readVirtualPad, or a standard Gamepad).
+     * in W3C order (gamepadMapping.readVirtualPad, or a standard Gamepad) —
+     * what the game receives, whatever the drawing.
      */
     render(pad, buttonTargets) {
         if (!pad) return this.clear();
@@ -284,6 +350,7 @@ export class GamepadArtView {
         this.setTrigger('right', pad.buttons[7] ? pad.buttons[7].value : 0);
         this.setStick('left', pad.axes[0] || 0, pad.axes[1] || 0);
         this.setStick('right', pad.axes[2] || 0, pad.axes[3] || 0);
+        for (const h of this._hooks) this._drawHook(h, this._value(pad, buttonTargets, h.target));
     }
 
     clear() {
@@ -292,6 +359,44 @@ export class GamepadArtView {
         this.setTrigger('right', 0);
         this.setStick('left', 0, 0);
         this.setStick('right', 0, 0);
+        for (const h of this._hooks) this._drawHook(h, 0);
+    }
+
+    /** What the game receives on `target`: an axis -1..1, a button or trigger 0..1. */
+    _value(pad, buttonTargets, target) {
+        const a = AXIS_ORDER.indexOf(target);
+        if (a >= 0) return pad.axes[a] || 0;
+        const b = pad.buttons[buttonTargets.indexOf(target)];
+        return b ? b.value || (b.pressed ? 1 : 0) : 0;
+    }
+
+    /**
+     * One hook at value `v`. A turn and a lever read a button or a trigger
+     * from one end to the other (released = one end), an axis from its centre;
+     * a press moves by v times its offset, full travel at 1.
+     */
+    _drawHook(h, v) {
+        const axis = AXIS_ORDER.includes(h.target);
+        const s = Math.max(-1, Math.min(1, axis ? v : 2 * v - 1));
+        if (h.kind === 'rotate') {
+            const tf = `rotate(${(s * h.amp).toFixed(1)} ${h.cx} ${h.cy})`;
+            if (this._changed(h.key, tf)) h.el.setAttribute('transform', tf);
+        } else if (h.kind === 'lever') {
+            // The stem is drawn pointing down from the pivot: flipped by s.
+            const k = s.toFixed(2);
+            if (!this._changed(h.key, k)) return;
+            if (h.stem) {
+                h.stem.setAttribute(
+                    'transform',
+                    `translate(0 ${h.cy}) scale(1 ${k}) translate(0 ${-h.cy})`,
+                );
+            }
+            if (h.knob) h.knob.setAttribute('transform', `translate(0 ${(s * h.len).toFixed(1)})`);
+        } else {
+            const p = Math.max(-1, Math.min(1, v));
+            const tf = `translate(${(p * h.dx).toFixed(1)} ${(p * h.dy).toFixed(1)})`;
+            if (this._changed(h.key, tf)) h.el.setAttribute('transform', tf);
+        }
     }
 
     setPressed(ctl, on) {
@@ -303,12 +408,13 @@ export class GamepadArtView {
     setStick(side, x, y) {
         const cap = this._caps[side];
         if (!cap) return;
-        const cx = Math.max(-1, Math.min(1, x)) * STICK_TRAVEL;
-        const cy = Math.max(-1, Math.min(1, y)) * STICK_TRAVEL;
+        const travel = this._travel[side];
+        const cx = Math.max(-1, Math.min(1, x)) * travel;
+        const cy = Math.max(-1, Math.min(1, y)) * travel;
         const tf = `translate(${cx.toFixed(1)} ${cy.toFixed(1)})`;
         if (!this._changed(`s:${side}`, tf)) return;
         cap.setAttribute('transform', tf);
-        const g = this._ctl.get(`${side}stick`);
+        const g = this._sticks[side];
         if (g) g.classList.toggle('is-moved', Math.hypot(x, y) > 0.35);
     }
 

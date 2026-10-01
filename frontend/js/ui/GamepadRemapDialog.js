@@ -19,7 +19,9 @@
 /**
  * GamepadRemapDialog — check a controller, and map it control by control.
  *
- * Two modes over the same drawn pad (GamepadArt):
+ * Two modes over the drawn device (GamepadArt for a pad, DeviceArt for a
+ * radio, a flight stick or a wheel), each control labelled with what the
+ * game receives from it:
  *   - test:   the pad as MoonlightWeb reads it right now (user mapping,
  *             standard layout, or a guessed one), lit live;
  *   - wizard: one control at a time — "Press A", "Pull LT", "Push the left
@@ -40,6 +42,7 @@ import { t } from '../i18n/i18n.js';
 import { escapeHtml } from '../util/escapeHtml.js';
 import { Toast } from './Toast.js';
 import { gamepadArtSvg, GamepadArtView } from './GamepadArt.js';
+import { deviceArtSvg } from './DeviceArt.js';
 import {
     BUTTON_TARGETS,
     PAD_KINDS,
@@ -298,6 +301,8 @@ export class GamepadRemapDialog {
         this._container.appendChild(overlay);
         this._overlay = overlay;
         this._art = new GamepadArtView(overlay.querySelector('.gamepad-remap-stage'));
+        // The pad until the device in hand is known (_mountArt, from _syncPads).
+        this._artKind = 'gamepad';
         /** @type {Object<string, HTMLElement>} */
         this._els = {
             pad: overlay.querySelector('.gamepad-remap-pad'),
@@ -358,6 +363,7 @@ export class GamepadRemapDialog {
         }
 
         const res = pads.length ? resolvePad(this._selectedPad() || pads[0]) : null;
+        this._mountArt(res ? res.kind : this._artKind);
         // What the device is: deduced, and the user's to correct.
         const kindPicker = res
             ? `<label class="gamepad-remap-kind">
@@ -403,6 +409,24 @@ export class GamepadRemapDialog {
             );
         }
         this._enterMode();
+    }
+
+    /**
+     * Draw the device in hand — the pad, a radio, a flight stick, a wheel —
+     * when its kind changes: another device picked, or the kind corrected.
+     */
+    _mountArt(kind) {
+        if (!this._overlay || kind === this._artKind) return;
+        const stage = this._els.stage;
+        const old = stage.querySelector('svg.gp-art');
+        if (old) old.remove();
+        stage.insertAdjacentHTML('afterbegin', deviceArtSvg(kind));
+        this._art = new GamepadArtView(stage);
+        this._artKind = kind;
+        // The steps a wizard under way has done, marked on the new drawing.
+        if (this._wiz) {
+            for (const target of Object.keys(this._wiz.bindings)) this._art.setMapped(target, true);
+        }
     }
 
     /**

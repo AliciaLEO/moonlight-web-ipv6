@@ -180,6 +180,159 @@
     }
 }
 
+/* ── The other devices (DeviceArt.js): radio, flight stick, wheel ────── */
+
+/* What the game receives from a control. */
+.gp-label rect {
+    fill: rgba(0, 0, 0, 0.62);
+    stroke: var(--neon-cyan);
+    stroke-opacity: 0.35;
+    stroke-width: 1;
+}
+.gp-label text {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-anchor: middle;
+    fill: var(--text-2);
+    pointer-events: none;
+}
+
+.gp-label-arrow {
+    fill: none;
+    stroke: var(--text-2);
+    stroke-width: 1.4;
+    stroke-linecap: round;
+}
+
+.gp-key-text {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    text-anchor: middle;
+    fill: rgba(234, 253, 255, 0.78);
+    pointer-events: none;
+}
+.gp-key-text.gp-face-a {
+    fill: var(--c-success);
+}
+.gp-key-text.gp-face-b {
+    fill: var(--neon-magenta);
+}
+.gp-key-text.gp-face-x {
+    fill: var(--neon-cyan);
+}
+.gp-key-text.gp-face-y {
+    fill: var(--accent-1);
+}
+.gp-key.is-pressed .gp-key-text {
+    fill: var(--on-accent);
+}
+
+.gp-handle {
+    stroke: #2a3440;
+    stroke-width: 10;
+    stroke-linecap: round;
+}
+
+.gp-gimbal-plate {
+    stroke: rgba(255, 255, 255, 0.06);
+    stroke-width: 1;
+}
+.gp-gimbal-cross {
+    stroke: rgba(255, 255, 255, 0.06);
+    stroke-width: 1;
+}
+.gp-gimbal.is-moved .gp-stick-cap {
+    filter: drop-shadow(0 0 5px rgba(252, 238, 10, 0.35));
+}
+
+.gp-switch-base {
+    fill: #0e141b;
+    stroke: rgba(255, 255, 255, 0.08);
+}
+.gp-switch-pivot {
+    fill: #3a4654;
+}
+.gp-lever-stem {
+    stroke: #a7b4c1;
+    stroke-width: 6;
+    stroke-linecap: round;
+}
+.gp-lever-knob {
+    fill: #d5dee7;
+    stroke: rgba(0, 0, 0, 0.5);
+}
+.gp-switch.is-pressed .gp-lever-knob {
+    fill: var(--accent-1);
+}
+/* A lever shows its position, not a flat light. */
+.gp-switch.is-pressed .gp-hot {
+    opacity: 0.25;
+}
+
+.gp-screen {
+    fill: #0a1116;
+    stroke: var(--neon-cyan);
+    stroke-opacity: 0.22;
+}
+.gp-screen-lines {
+    stroke: var(--neon-cyan);
+    stroke-opacity: 0.25;
+    stroke-width: 2;
+    stroke-linecap: round;
+}
+
+.gp-hat-mark {
+    fill: rgba(255, 255, 255, 0.12);
+}
+
+.gp-twist-band {
+    fill: none;
+    stroke: #1c2531;
+    stroke-width: 10;
+    stroke-linecap: round;
+}
+.gp-twist-notch {
+    fill: var(--neon-cyan);
+}
+
+.gp-rim-edge {
+    stroke: rgba(255, 255, 255, 0.07);
+    stroke-width: 1;
+}
+.gp-rim-mark {
+    fill: var(--accent-1);
+}
+.gp-spoke {
+    stroke: rgba(0, 0, 0, 0.7);
+}
+
+.gp-pedal-grip {
+    stroke: rgba(0, 0, 0, 0.45);
+    stroke-width: 3;
+    stroke-linecap: round;
+}
+.gp-pedal-text {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 700;
+    text-anchor: middle;
+    fill: #0b0f14;
+    pointer-events: none;
+}
+/* A pedal shows how far it is down; only a full press lights it. */
+.gp-pedal.is-pressed .gp-hot {
+    opacity: 0.35;
+}
+
+/* A control the game cannot receive (a wheel's clutch). */
+.gp-unbound {
+    opacity: 0.32;
+    filter: grayscale(1);
+}
+
 /* ── The dialog ───────────────────────────────────────────────────────── */
 
 .gamepad-remap-overlay {
