@@ -24,6 +24,7 @@ import {
     ClockEstimator,
     ContentAgeProbe,
     lumaOf,
+    refreshCounts,
     shownAges,
 } from '../js/stream/ContentAgeProbe.js';
 
@@ -470,5 +471,44 @@ describe('ContentAgeProbe — the age of what is shown', () => {
         ];
         const ageOf = new Map([[2, 3]]);
         expect(shownAges(draws, ageOf, [5, 15, 25])).toEqual([8]);
+    });
+});
+
+describe('ContentAgeProbe — what the refreshes showed', () => {
+    const ticks = (n, period, from = 0) => Array.from({ length: n }, (_, k) => from + k * period);
+
+    it('one frame per refresh: nothing repeated, nothing unseen', () => {
+        const draws = ticks(60, 8, 3).map((t, k) => [t, k]);
+        expect(refreshCounts(draws, ticks(60, 8))).toEqual({
+            repeats: 0,
+            unseen: 0,
+            refreshes: 58, // from the refresh after the one that showed the first frame
+        });
+    });
+
+    it('a frame missing: one refresh shows the picture again', () => {
+        const draws = ticks(60, 8, 3)
+            .filter((_, k) => k !== 30)
+            .map((t, k) => [t, k]);
+        expect(refreshCounts(draws, ticks(60, 8)).repeats).toBe(1);
+    });
+
+    it('two frames a refresh: one of each pair is never at a refresh', () => {
+        const draws = ticks(120, 4, 1).map((t, k) => [t, k]);
+        const seen = refreshCounts(draws, ticks(60, 8));
+        expect(seen.repeats).toBe(0);
+        expect(seen.unseen).toBe(58);
+    });
+
+    it('counts from the first draw on', () => {
+        const draws = [
+            [50, 1],
+            [58, 2],
+        ];
+        expect(refreshCounts(draws, ticks(10, 8))).toEqual({
+            repeats: 1,
+            unseen: 0,
+            refreshes: 2,
+        });
     });
 });

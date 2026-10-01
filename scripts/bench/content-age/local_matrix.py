@@ -30,6 +30,8 @@ WORKER_LOGS = os.path.join(os.environ["APPDATA"], "MoonlightWeb", "MoonlightWeb-
 VDD_XML = r"C:\VirtualDisplayDriver\vdd_settings.xml"
 HOST_LINES = ("[native] cadence", "decode credit", "capture wake-ups", "capture loop",
               "frames arrive at", "MW_NATIVE_TUNING", "[native] deadline")
+# "[native] cadence" also catches the detection's lines: the steps applied or
+# refused, and "cadence steps: … asked, … applied" at the end.
 
 
 def monitors():
@@ -53,7 +55,9 @@ def launch_dev(rate, cadence, log):
     env.pop("MW_VDD_REFRESH", None)
     if rate > 0:  # 0: the rate the product chooses
         env["MW_VDD_REFRESH"] = str(rate)
-    if cadence != "client":
+    # "client" is today's Auto; "detect" the same host, the client's
+    # detection on (pass.py --autostep): neither is a host key.
+    if cadence not in ("client", "detect"):
         env["MW_NATIVE_TUNING"] = "cadence=" + cadence
     subprocess.Popen([EXE, "--dev", "--log", log], env=env,
                      creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
@@ -92,7 +96,7 @@ def host_lines(tag, since):
     with open(os.path.join(OUT, tag + ".host.txt"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     for l in lines:
-        if "cadence:" in l or "decode credit" in l or "deadline:" in l:
+        if any(k in l for k in ("cadence:", "cadence step", "decode credit", "deadline:")):
             print("   ", l[l.find("[native]"):][:240], flush=True)
 
 
@@ -100,9 +104,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rates", default="60,240,500",
                     help="the virtual display's rates (MW_VDD_REFRESH); 0 = the product's own")
-    ap.add_argument("--cadences", default="client,host,host-ceiling,host-guarded")
+    ap.add_argument("--cadences", default="client,host,host-ceiling,host-guarded",
+                    help="client = today's Auto; detect = Auto with detection "
+                         "(design §33.10); host, host-ceiling, host-guarded, deadline = the "
+                         "bench keys")
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--secs", type=float, default=30)
+    ap.add_argument("--settle", type=float, default=6,
+                    help="seconds between the page's calibration and the window (pass.py "
+                         "--settle); 14 lets the detection settle first")
     ap.add_argument("--bitrate", type=int, default=0, help="kbps (pass.py --bitrate)")
     ap.add_argument("--vsync", choices=["on", "off"], default="off",
                     help="on = tearing off: the client paints on its refresh (pass.py --vsync)")
@@ -165,7 +175,9 @@ def main():
                     r = subprocess.run([sys.executable, os.path.join(HERE, "pass.py"), "--tag", tag,
                                         "--target", "vdisplay", "--secs", str(a.secs),
                                         "--every", str(a.every), "--vsync", a.vsync,
-                                        "--bitrate", str(a.bitrate)] + client,
+                                        "--bitrate", str(a.bitrate), "--settle", str(a.settle)]
+                                       + (["--autostep"] if cadence == "detect" else [])
+                                       + client,
                                        capture_output=True, text=True)
                     tail = (r.stdout + r.stderr).strip().splitlines()
                     print("\n".join("   " + l for l in tail[-12:]), flush=True)

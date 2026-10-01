@@ -150,10 +150,12 @@ def line(d):
     med = lambda k: (d.get(k) or {}).get("medianMs")
     p99 = lambda k: (d.get(k) or {}).get("p99Ms")
     return ("%-26s shown %6s (p99 %6s) at refresh %6s  since capture %6s  drawn %6s  capture %6s  "
-            "before %6s ms  %s draws/s on %s Hz  invalid %s  rtt %.2f ms%s" % (
+            "before %6s ms  %s draws/s on %s Hz  %s repeated, %s unseen /min  invalid %s  "
+            "rtt %.2f ms%s" % (
                 d.get("tag", "?"), med("shown"), p99("shown"), med("atRefresh"),
                 med("shownSinceCapture"), d.get("medianMs"),
                 med("capture"), med("beforeCapture"), d.get("drawsPerSecond"), d.get("refreshHz"),
+                d.get("repeatsPerMinute"), d.get("unseenPerMinute"),
                 ",".join("%s=%s" % kv for kv in (d.get("invalid") or {}).items() if kv[1]) or "0",
                 c.get("rttMinMs") or 0,
                 "" if d.get("clockErrorMs") is None else "  clock %+.2f" % d["clockErrorMs"]))
@@ -181,6 +183,8 @@ def table(args):
         held = re.search(r"decode credit: (\d+) presents held back \((\d+)/s\)", host)
         aimed = re.search(r"deadline: (\d+) client refreshes aimed at \((\d+)/s\)", host)
         grid = d.get("grid") or {}
+        stepper = d.get("stepper") or {}
+        st = stepper.get("summary") or {}
         rows.setdefault((int(m.group(1)), m.group(2)), []).append({
             "shown": (d.get("shown") or {}).get("medianMs"),
             "p99": (d.get("shown") or {}).get("p99Ms"),
@@ -188,28 +192,35 @@ def table(args):
             "capture": (d.get("capture") or {}).get("medianMs"),
             "before": (d.get("beforeCapture") or {}).get("medianMs"),
             "draws": d.get("drawsPerSecond"),
+            "rep": d.get("repeatsPerMinute"),
             "pres": int(pres.group(1)) / float(pres.group(2)) if pres else None,
             "held": int(held.group(2)) if held else None,
             "atRef": (d.get("atRefresh") or {}).get("medianMs"),
             "aimed": int(aimed.group(2)) if aimed else None,
             "miss": (100.0 * grid["missRate"]) if grid.get("missRate") is not None else None,
             "lead": grid.get("leadMs"),
+            # "Auto" with detection: the step it ended on (its base when none
+            # held), and when it was kept after the content began to move.
+            "step": (st.get("stepFps") or st.get("base")) if st else None,
+            "keptAt": stepper.get("keptAtS"),
+            "trips": st.get("trips") if st else None,
         })
-    order = {c: i for i, c in enumerate(["client", "host", "host-ceiling", "host-guarded",
-                                         "deadline"])}
+    order = {c: i for i, c in enumerate(["client", "detect", "host", "host-ceiling",
+                                         "host-guarded", "deadline"])}
     mean = lambda xs: (sum(xs) / len(xs)) if xs else None
     fmt = lambda v, w=6: ("%*.1f" % (w, v)) if isinstance(v, (int, float)) else " " * (w - 1) + "-"
-    print("%5s %-14s %2s %6s %6s %6s %6s %6s %6s %6s %6s %5s %5s %6s %5s" % (
+    print("%5s %-14s %2s %6s %6s %6s %6s %6s %6s %6s %6s %6s %5s %5s %6s %5s %5s %5s %5s" % (
         "Hz", "cadence", "n", "shown", "p99", "atRef", "since", "capt", "before", "draw/s",
-        "pres/s", "held", "aim/s", "miss%", "lead"))
+        "rep/m", "pres/s", "held", "aim/s", "miss%", "lead", "step", "kept", "trips"))
     for (rate, cad) in sorted(rows, key=lambda k: (k[0], order.get(k[1], 9), k[1])):
         rs = rows[(rate, cad)]
         col = lambda k: mean([r[k] for r in rs if r[k] is not None])
-        print("%5d %-14s %2d %s %s %s %s %s %s %s %s %s %s %s %s" % (
+        print("%5d %-14s %2d %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s" % (
             rate, cad, len(rs), fmt(col("shown")), fmt(col("p99")), fmt(col("atRef")),
             fmt(col("since")), fmt(col("capture")), fmt(col("before")), fmt(col("draws")),
-            fmt(col("pres")), fmt(col("held"), 5), fmt(col("aimed"), 5), fmt(col("miss")),
-            fmt(col("lead"), 5)))
+            fmt(col("rep")), fmt(col("pres")), fmt(col("held"), 5), fmt(col("aimed"), 5), fmt(col("miss")),
+            fmt(col("lead"), 5), fmt(col("step"), 5), fmt(col("keptAt"), 5),
+            fmt(col("trips"), 5)))
 
 
 def summary(args):

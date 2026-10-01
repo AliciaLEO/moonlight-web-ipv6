@@ -3,6 +3,7 @@ band on the captured screen, and the client's probe reading it back.
 
     python pass.py --tag d1-auto --secs 30
     python pass.py --tag d1-120 --fps 120 --vsync on --every 2
+    python pass.py --tag d1-detect --autostep --settle 14    # "Auto" with detection
 
 Driven like ../cadence/cadence.py — the acceptance run's environment
 (MW_BENCH_LOCAL_PORTS for a --dev instance; MW_BENCH_CLIENT_POS /
@@ -68,6 +69,37 @@ def click_flag(d, n, every_ms=800):
     return {"summary": summary, "samples": samples}
 
 
+def stepper_state(d, content_ms):
+    """"Auto" with detection (frontend CadenceStepper.js, design §33.10): its
+    state and its decisions, each timed from the moment the content began to
+    move (@p content_ms, the client's clock) — the gate wants the final step
+    within ten seconds. None when it did not run on this pass."""
+    st = d.json_eval("JSON.stringify(window.mwCadenceStepper ? {summary: "
+                     "window.mwCadenceStepper.summary, events: window.mwCadenceStepper.events}"
+                     " : null)")
+    if not st:
+        return None
+    for e in st.get("events") or []:
+        e["sinceContentS"] = (round((e["at"] - content_ms) / 1000, 2)
+                              if isinstance(content_ms, (int, float)) else None)
+    after = [e for e in st["events"] if (e.get("sinceContentS") or 0) >= 0]
+    decided = [e for e in after if e["what"] in ("kept", "rejected", "refused", "fallback")]
+    kept = [e for e in after if e["what"] == "kept"]
+    s = st["summary"]
+    st["firstDecisionS"] = decided[0]["sinceContentS"] if decided else None
+    st["keptAtS"] = kept[-1]["sinceContentS"] if kept and s.get("stepFps") else None
+    print("  steps: %s fps on a ladder %s, %d trials (%d kept, %d given up, %d refused, "
+          "%d trips); first decision %s s, last kept %s s after the content moved" % (
+              s.get("stepFps") or s.get("base"), s.get("levels"), s.get("trials", 0),
+              s.get("kept", 0), s.get("rejected", 0), s.get("refused", 0), s.get("trips", 0),
+              _ms(st["firstDecisionS"]), _ms(st["keptAtS"])), flush=True)
+    for e in decided:
+        facts = ", ".join("%s=%s" % (k, round(v, 2) if isinstance(v, float) else v)
+                          for k, v in e.items() if k not in ("at", "what", "sinceContentS"))
+        print("    %6.2f s  %-9s %s" % (e["sinceContentS"] or 0, e["what"], facts), flush=True)
+    return st
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fps", type=int, default=0, help="stream_fps; 0 = Auto")
@@ -95,6 +127,10 @@ def main():
                          "latency_flag_enabled in the instance's settings.json)")
     ap.add_argument("--local-storage", action="append", default=[], metavar="KEY=VALUE",
                     help="a bench switch the page reads at launch (mw_decodequeue=pending)")
+    ap.add_argument("--autostep", action="store_true",
+                    help="\"Auto\" with detection on (localStorage mw_autostep=1; design "
+                         "§33.10): the stream may step above the client's rate. Off otherwise, "
+                         "even if an earlier pass left it on")
     a = ap.parse_args()
     remote = a.client_port > 0
 
@@ -123,6 +159,9 @@ def main():
         # The bench profile keeps its localStorage from one pass to the next:
         # a switch not asked for this time is taken away.
         d.eval("localStorage.removeItem('mw_decodequeue')")
+        d.eval("localStorage.removeItem('mw_autostep')")
+        if a.autostep:
+            d.eval("localStorage.setItem('mw_autostep', '1')")
         for kv in a.local_storage:
             k, _, v = kv.partition("=")
             d.eval("localStorage.setItem(%s, %s)" % (json.dumps(k), json.dumps(v)))
@@ -169,6 +208,10 @@ def main():
                               a.px, "&fps=" + a.game_fps if a.game_fps else ""), probe=False,
                           debug_port=CONTENT_PORT)
         shown = True
+        # When the content began to move, on the client's clock: what the
+        # detection's decisions are timed from (it tries nothing on a still
+        # desktop).
+        content_ms = d.eval("performance.now()")
         time.sleep(4)
         age.calibrate(argparse.Namespace(port=CONTENT_PORT, tries=40))
         time.sleep(a.settle)
@@ -179,6 +222,9 @@ def main():
         # followed it, the lead it asked for, and how many frames came late.
         grid = d.eval("window.mwVsyncGrid && window.mwVsyncGrid.running ? "
                       "window.mwVsyncGrid.summary : null")
+        # "Auto" with detection: where it stands and what it decided, read
+        # before the clicks (they move nothing on the screen's content).
+        stepper = stepper_state(d, content_ms)
         clicks = click_flag(d, a.clicks) if a.clicks > 0 else None
         d.expand_latency_detail()
         stats = d.stats()
@@ -187,6 +233,7 @@ def main():
             data = json.load(f)
         data["overlay"] = stats
         data["grid"] = grid
+        data["stepper"] = stepper
         data["clicks"] = clicks
         if grid:
             print("  grid: followed %s, lead %s ms, margin %s ms, %s misses in %s frames, "

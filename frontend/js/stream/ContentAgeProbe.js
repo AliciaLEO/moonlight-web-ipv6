@@ -231,6 +231,35 @@ export function shownAges(draws, ageOf, times) {
     return out;
 }
 
+/**
+ * What the client's refreshes showed (sorted @p draws: [drawn at, frame]; @p
+ * ticks: its refreshes): `repeats`, refreshes with no frame drawn since the
+ * one before — the picture shown twice; `unseen`, frames replaced before any
+ * refresh came — drawn for nothing on vsync, a band of the screen when the
+ * canvas tears; `refreshes`, those counted, from the first draw on.
+ */
+export function refreshCounts(draws, ticks) {
+    let i = 0;
+    let started = false;
+    let repeats = 0;
+    let unseen = 0;
+    let refreshes = 0;
+    for (const t of ticks) {
+        let j = i;
+        while (j < draws.length && draws[j][0] <= t) j++;
+        const fresh = j - i;
+        i = j;
+        if (!started) {
+            started = j > 0;
+            continue;
+        }
+        refreshes++;
+        if (fresh === 0) repeats++;
+        else unseen += fresh - 1;
+    }
+    return { repeats, unseen, refreshes };
+}
+
 /** @p n events from @p first to @p last (ms), per second; null without a span. */
 function rate(n, first, last) {
     return n > 1 && last > first ? Math.round(((n - 1) * 10000) / (last - first)) / 10 : null;
@@ -470,6 +499,13 @@ export class ContentAgeProbe {
         if (draws.length > 1)
             for (let t = draws[0][0]; t <= draws[draws.length - 1][0]; t += 0.5) grid.push(t);
         const ticks = run.ticks.filter((t) => draws.length && t >= draws[0][0]);
+        // Repeated pictures and frames no refresh showed, per minute: the
+        // fluidity side of a cadence (plan POC Ultra, gate UA).
+        const seen = refreshCounts(draws, run.ticks);
+        const perMinute = (n) =>
+            ticks.length > 1
+                ? Math.round((n * 600000) / (ticks[ticks.length - 1] - ticks[0])) / 10
+                : null;
         const summary = {
             seconds: Math.round((performance.now() - run.startedMs) / 10) / 100,
             decoded: run.decoded,
@@ -486,6 +522,8 @@ export class ContentAgeProbe {
                 draws.length && draws[0][0],
                 draws.length && draws[draws.length - 1][0],
             ),
+            repeatsPerMinute: perMinute(seen.repeats),
+            unseenPerMinute: perMinute(seen.unseen),
             capture: describe(run.capture),
             beforeCapture: describe(run.before),
             clock: this._clock.summary,
