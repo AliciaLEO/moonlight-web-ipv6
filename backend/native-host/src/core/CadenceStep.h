@@ -101,10 +101,13 @@ inline FpsStep decideStep(const StepInputs& in)
     const bool capped = displayHz > 0 && fps > displayHz;
     if (capped) fps = displayHz;
     if (fps <= in.baseFps) return refuse("the display refreshes no faster than the stream");
-    // p95 longer than one frame at that rate: the loop could not take one
-    // present per interval, and the step would only load the GPU.
-    if (in.encodeP95Us > 0 && in.encodeP95Us * fps > 1000000)
-        return refuse("the encoder takes longer than a frame at that rate");
+    // p95 longer than two frames at that rate: even with two frames in flight
+    // the loop could not take one present per interval, and the step would
+    // only load the GPU. One frame was the bound until the UA.3 bench
+    // (01/10/2026): the Arc's 4.4 to 6.9 ms refused 240, while
+    // cadence=host-guarded streamed 238 frames a second through it to the Mac.
+    if (in.encodeP95Us > 0 && in.encodeP95Us * fps > 2 * 1000000)
+        return refuse("the encoder takes longer than two frames at that rate");
 
     out.verdict = capped ? FpsStep::Verdict::Capped : FpsStep::Verdict::Applied;
     out.fps = fps;

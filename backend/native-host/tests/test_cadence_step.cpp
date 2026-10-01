@@ -97,22 +97,26 @@ void run_cadence_step_tests()
         CHECK(contains(s.why, "display"));
     }
 
-    SECTION("CadenceStep — an encoder slower than a frame at that rate refuses it");
+    SECTION("CadenceStep — an encoder slower than two frames at that rate refuses it");
     {
-        // 5 ms at the p95 against 4.17 ms a frame at 240.
+        // 9 ms at the p95 against 8.33 ms, two frames at 240.
         StepInputs in = ask(240);
-        in.encodeP95Us = 5000;
+        in.encodeP95Us = 9000;
         const FpsStep s = mw::native::decideStep(in);
         CHECK(s.verdict == Verdict::Refused);
         CHECK_EQ(s.fps, 0);
         CHECK(contains(s.why, "encoder"));
-        // The same encoder holds 120 for a 60 Hz client: 5 ms < 8.33.
+        // The same encoder holds 120 for a 60 Hz client: 9 ms < 16.67.
         StepInputs half = ask(120);
         half.baseFps = 60;
-        half.encodeP95Us = 5000;
+        half.encodeP95Us = 9000;
         CHECK(mw::native::decideStep(half).verdict == Verdict::Applied);
-        // Exactly one frame is held: 4166 µs × 240 < 1 s.
-        in.encodeP95Us = 4166;
+        // Exactly two frames are held: 8333 µs × 240 < 2 s.
+        in.encodeP95Us = 8333;
+        CHECK(mw::native::decideStep(in).verdict == Verdict::Applied);
+        // The Arc on the UA.3 bench: 6.9 ms, longer than a frame at 240,
+        // and cadence=host-guarded streamed 238 a second through it.
+        in.encodeP95Us = 6900;
         CHECK(mw::native::decideStep(in).verdict == Verdict::Applied);
     }
 
@@ -120,7 +124,7 @@ void run_cadence_step_tests()
     {
         StepInputs in = ask(288);
         in.baseFps = 144;
-        in.encodeP95Us = 4500; // holds 222 a second, not 240
+        in.encodeP95Us = 9000; // two in flight hold 222 a second, not 240
         const FpsStep s = mw::native::decideStep(in);
         CHECK(s.verdict == Verdict::Refused);
         CHECK(contains(s.why, "encoder"));
