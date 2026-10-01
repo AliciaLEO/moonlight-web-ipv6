@@ -135,6 +135,31 @@ function axisToShort(v) {
 const REEMIT_MS = 500;
 
 /**
+ * A TV remote that Android calls a joystick — the Freebox Player POP's "B16C"
+ * has a volume axis, and that is enough (measured 01/10/2026). Once the page
+ * reads the pads, Chromium hands its arrows to the Gamepad API (buttons 12-15)
+ * instead of the keyboard. It is no controller for a game: StreamView gets its
+ * direction pad as arrow keys instead (onRemoteKey), like any remote of the
+ * keyboard kind, and the host is never told a pad is there.
+ * @param {{id?: string}} gp
+ */
+export function isTvRemotePad(gp) {
+    return /\bB16C\b|remote|t[ée]l[ée]commande|\brcu?\b/i.test((gp && gp.id) || '');
+}
+
+/** Standard-mapping direction pad buttons, as the arrows they stand for. */
+const REMOTE_DIRS = { 12: 'up', 13: 'down', 14: 'left', 15: 'right' };
+/**
+ * A remote's arrow held this long repeats, then this often — the typematic a
+ * keyboard's controller would make: a key injected on the host presses once
+ * however long it is held (see StreamView.handleKeyDown).
+ */
+const REMOTE_REPEAT_DELAY_MS = 420;
+const REMOTE_REPEAT_MS = 40;
+/** The menu chord on a real pad: Select + Start + LB + RB (moonlight-qt's quit chord). */
+const MENU_CHORD = [8, 9, 4, 5];
+
+/**
  * How often a forwarded pad is read between two frames. Chrome samples pads
  * at 250 Hz; read once a frame, a stick or a button waited for the next frame
  * — 8 ms on average at 60 Hz, sticks and buttons alike. Read every 4 ms, it
@@ -189,9 +214,19 @@ export class GamepadManager {
      *   `probe` (diagnostics only, PipelineDiag's MainThreadProbe) is told how
      *   far apart the reads of a forwarded pad are, and of every state sent.
      *   `platform`, `db` and `user` replace the live sources (tests).
+     *   `onRemoteKey(dir, down, repeat)` is told the arrows of a TV remote seen
+     *   as a pad (isTvRemotePad), which is then never forwarded as a pad.
+     *   `onMenuChord()` is told when a forwarded pad presses Select + Start +
+     *   LB + RB together (StreamView opens the remote's menu with it on a TV).
      */
     constructor(sendFn, options = {}) {
         this._send = sendFn;
+        this._onRemoteKey = typeof options.onRemoteKey === 'function' ? options.onRemoteKey : null;
+        this._onMenuChord = typeof options.onMenuChord === 'function' ? options.onMenuChord : null;
+        // Browser index → { buttonIndex → {since, lastAt} } for a remote's held arrows.
+        this._remotes = new Map();
+        // Pads whose menu chord is down, so it fires once per press.
+        this._chordDown = new Set();
         this._profile = options.profile || 'auto';
         this._onIgnored = typeof options.onIgnored === 'function' ? options.onIgnored : null;
         this._onMapped = typeof options.onMapped === 'function' ? options.onMapped : null;
@@ -252,6 +287,8 @@ export class GamepadManager {
         if (this._rafId !== null) cancelAnimationFrame(this._rafId);
         this._rafId = null;
         this._armPoll();
+        this._releaseRemotes();
+        this._chordDown.clear();
         // Motors first: a pad still shaking after the stream closed would be
         // shaking for nobody.
         for (const index of Array.from(this._rumble.keys())) this._stopRumble(index);
@@ -286,6 +323,7 @@ export class GamepadManager {
         this._paused = paused;
         this._armPoll();
         if (paused) {
+            this._releaseRemotes();
             const rest = { buttons: 0, lt: 0, rt: 0, lx: 0, ly: 0, rx: 0, ry: 0 };
             for (const entry of this._pads.values()) {
                 entry.last = rest;
@@ -469,8 +507,63 @@ export class GamepadManager {
     }
 
     _handleConnect(gp) {
-        if (!gp) return;
+        if (!gp || isTvRemotePad(gp)) return;
         this._consider(gp);
+    }
+
+    /**
+     * A TV remote's arrows, out of a pad read: each press and release, and
+     * the repeats of one held, to onRemoteKey. Nothing else of it is read.
+     */
+    _readRemote(gp) {
+        let held = this._remotes.get(gp.index);
+        if (!held) {
+            held = new Map();
+            this._remotes.set(gp.index, held);
+        }
+        const now = performance.now();
+        for (const b of Object.keys(REMOTE_DIRS)) {
+            const i = Number(b);
+            const down = !!(gp.buttons[i] && gp.buttons[i].pressed);
+            const was = held.get(i);
+            if (down && !was) {
+                held.set(i, { since: now, lastAt: now });
+                if (this._onRemoteKey) this._onRemoteKey(REMOTE_DIRS[b], true, false);
+            } else if (down && was) {
+                if (
+                    now - was.since >= REMOTE_REPEAT_DELAY_MS &&
+                    now - was.lastAt >= REMOTE_REPEAT_MS
+                ) {
+                    was.lastAt = now;
+                    if (this._onRemoteKey) this._onRemoteKey(REMOTE_DIRS[b], true, true);
+                }
+            } else if (!down && was) {
+                held.delete(i);
+                if (this._onRemoteKey) this._onRemoteKey(REMOTE_DIRS[b], false, false);
+            }
+        }
+    }
+
+    /** Let go of every arrow a remote holds (pause, stop): the host must not keep one down. */
+    _releaseRemotes() {
+        for (const held of this._remotes.values()) {
+            for (const i of held.keys()) {
+                if (this._onRemoteKey) this._onRemoteKey(REMOTE_DIRS[i], false, false);
+            }
+            held.clear();
+        }
+    }
+
+    /** Select + Start + LB + RB on a forwarded pad: tell once per press. */
+    _checkChord(gp) {
+        if (!this._onMenuChord) return;
+        const all = MENU_CHORD.every((i) => gp.buttons[i] && gp.buttons[i].pressed);
+        if (all && !this._chordDown.has(gp.index)) {
+            this._chordDown.add(gp.index);
+            this._onMenuChord();
+        } else if (!all) {
+            this._chordDown.delete(gp.index);
+        }
     }
 
     _handleDisconnect(gp) {
@@ -497,10 +590,16 @@ export class GamepadManager {
         const pads = navigator.getGamepads ? navigator.getGamepads() : [];
         for (const gp of pads) {
             if (!gp) continue;
+            // A TV remote: its arrows as keys, and never a pad on the host.
+            if (isTvRemotePad(gp)) {
+                if (!this._paused) this._readRemote(gp);
+                continue;
+            }
             // Also seen here, not only on the connect event: a pad plugged in
             // before start() never fires one, and a mapping may have changed.
             const entry = this._consider(gp);
             if (!entry || this._paused) continue;
+            this._checkChord(gp);
 
             const src = entry.bindings ? readVirtualPad(gp, entry.bindings) : gp;
             let buttons = 0;

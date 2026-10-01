@@ -3,7 +3,7 @@
  * GPLv3 — see repository LICENSE.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { GamepadManager } from '../js/stream/GamepadManager.js';
+import { GamepadManager, isTvRemotePad } from '../js/stream/GamepadManager.js';
 
 let rafCb = null;
 
@@ -498,5 +498,108 @@ describe('GamepadManager', () => {
             'dual-rumble',
             expect.objectContaining({ strongMagnitude: 1 }),
         );
+    });
+});
+
+/**
+ * A TV remote that Android calls a joystick (the Freebox's B16C): once the
+ * page reads the pads, its arrows come as pad buttons 12-15. It is no
+ * controller for a game — its arrows go out as keys, and the host never
+ * hears of a pad.
+ */
+describe('GamepadManager and a TV remote seen as a pad', () => {
+    const remote = (pressed = []) =>
+        fakePad({
+            index: 1,
+            id: 'B16C (Vendor: 7545 Product: 0183)',
+            buttons: Array.from({ length: 17 }, (_, i) => (pressed.includes(i) ? 1 : 0)),
+        });
+
+    beforeEach(() => {
+        setPads([]);
+        rafCb = null;
+        vi.stubGlobal('requestAnimationFrame', (cb) => {
+            rafCb = cb;
+            return 1;
+        });
+        vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    });
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    it('knows the Freebox remote, and not a game pad', () => {
+        expect(isTvRemotePad({ id: 'B16C (Vendor: 7545 Product: 0183)' })).toBe(true);
+        expect(isTvRemotePad({ id: 'SHIELD Remote' })).toBe(true);
+        expect(isTvRemotePad({ id: 'Xbox Wireless Controller' })).toBe(false);
+        expect(isTvRemotePad({ id: 'DualSense Wireless Controller' })).toBe(false);
+    });
+
+    it('sends its arrows as keys and never announces it as a pad', () => {
+        const send = vi.fn();
+        const onRemoteKey = vi.fn();
+        const gm = new GamepadManager(send, { onRemoteKey, platform: 'win', user: () => null });
+        setPads([remote()]);
+        gm.start();
+        setPads([remote([13])]);
+        rafCb();
+        expect(onRemoteKey).toHaveBeenCalledWith('down', true, false);
+        setPads([remote()]);
+        rafCb();
+        expect(onRemoteKey).toHaveBeenLastCalledWith('down', false, false);
+        expect(send.mock.calls.find((c) => /^gamepad/.test(c[0].type))).toBeUndefined();
+        // Its connect event is no pad either.
+        const evt = new window.Event('gamepadconnected');
+        evt.gamepad = remote();
+        window.dispatchEvent(evt);
+        expect(send).not.toHaveBeenCalled();
+        gm.stop();
+    });
+
+    it('repeats an arrow held down, as a keyboard would', () => {
+        let now = 1000;
+        vi.spyOn(performance, 'now').mockImplementation(() => now);
+        const onRemoteKey = vi.fn();
+        const gm = new GamepadManager(vi.fn(), { onRemoteKey, platform: 'win', user: () => null });
+        setPads([remote([15])]);
+        gm.start();
+        expect(onRemoteKey).toHaveBeenCalledTimes(1);
+        now += 200;
+        rafCb();
+        expect(onRemoteKey).toHaveBeenCalledTimes(1);
+        now += 300;
+        rafCb();
+        expect(onRemoteKey).toHaveBeenLastCalledWith('right', true, true);
+        gm.stop();
+        // Stopping lets go of it on the host.
+        expect(onRemoteKey).toHaveBeenLastCalledWith('right', false, false);
+    });
+
+    it('lets go of a held arrow when paused', () => {
+        const onRemoteKey = vi.fn();
+        const gm = new GamepadManager(vi.fn(), { onRemoteKey, platform: 'win', user: () => null });
+        setPads([remote([12])]);
+        gm.start();
+        gm.setPaused(true);
+        expect(onRemoteKey).toHaveBeenLastCalledWith('up', false, false);
+        gm.stop();
+    });
+
+    it('tells the menu chord of a real pad once per press', () => {
+        const onMenuChord = vi.fn();
+        const gm = new GamepadManager(vi.fn(), { onMenuChord });
+        const chord = Array(17).fill(0);
+        for (const i of [4, 5, 8, 9]) chord[i] = 1;
+        setPads([fakePad({ buttons: chord })]);
+        gm.start();
+        rafCb();
+        expect(onMenuChord).toHaveBeenCalledTimes(1);
+        setPads([fakePad({ buttons: Array(17).fill(0) })]);
+        rafCb();
+        setPads([fakePad({ buttons: chord })]);
+        rafCb();
+        expect(onMenuChord).toHaveBeenCalledTimes(2);
+        gm.stop();
     });
 });

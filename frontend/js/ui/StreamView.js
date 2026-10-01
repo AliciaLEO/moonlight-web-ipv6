@@ -4573,6 +4573,13 @@ export class StreamView {
                         // mw_perf_diag only: the pad's reads and states in
                         // the [perf] line.
                         probe: this._mainThreadProbe,
+                        // A TV remote seen as a pad (the Freebox's): its
+                        // arrows are arrow keys for the host, as a remote of
+                        // the keyboard kind sends them.
+                        onRemoteKey: (dir, down, repeat) => this._remoteArrow(dir, down, repeat),
+                        // On a TV a pad has no Stop button either: its
+                        // Select + Start + LB + RB opens the remote's menu.
+                        onMenuChord: RemoteNav.isActive() ? () => this._openRemoteMenu() : null,
                         // A pad nothing maps is not forwarded; say so, or the
                         // player pushes buttons at a game that never hears
                         // them — and offer the wizard that fixes it. Longer
@@ -10784,6 +10791,32 @@ export class StreamView {
             this._sendKeyEvent({ type: 'keyup', ...tap });
         }
         return true;
+    }
+
+    /**
+     * An arrow of a TV remote that reaches the page as a pad (GamepadManager's
+     * onRemoteKey): pressed, repeated while held, released — as a keyboard's
+     * arrow would be, so a remote of either kind does the same on the host.
+     */
+    _remoteArrow(dir, down, repeat) {
+        const keys = {
+            up: ['ArrowUp', 0x26],
+            down: ['ArrowDown', 0x28],
+            left: ['ArrowLeft', 0x25],
+            right: ['ArrowRight', 0x27],
+        };
+        const k = keys[dir];
+        if (!k || this._quitting) return;
+        if (!down && !this._heldPhysKeys.has(k[0])) return;
+        if (down && repeat && !this._heldPhysKeys.has(k[0])) return;
+        this._sendKeyEvent({
+            type: down ? 'keydown' : 'keyup',
+            keyCode: k[1],
+            code: k[0],
+            key: k[0],
+            char: null,
+            nonUs: false,
+        });
     }
 
     /** Keep the pads from reaching the host for as long as `who` asks. */

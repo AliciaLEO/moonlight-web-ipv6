@@ -207,3 +207,24 @@ describe('an Enter with no code on a desktop', () => {
         expect(v.sent.map((m) => [m.type, m.keyCode])).toEqual([['keydown', 13]]);
     });
 });
+
+describe('the arrows of a remote that reaches the page as a pad', () => {
+    it('press, repeat and release the arrow keys on the host', () => {
+        const v = view({ _remoteArrow: P._remoteArrow });
+        v._remoteArrow('down', true, false);
+        v._remoteArrow('down', true, true);
+        v._remoteArrow('down', false, false);
+        expect(v.sent.map((m) => [m.type, m.code, m.keyCode])).toEqual([
+            ['keydown', 'ArrowDown', 0x28],
+            ['keydown', 'ArrowDown', 0x28],
+            ['keyup', 'ArrowDown', 0x28],
+        ]);
+    });
+
+    it('send no release for an arrow the host never got', () => {
+        const v = view({ _remoteArrow: P._remoteArrow });
+        v._remoteArrow('left', false, false);
+        v._remoteArrow('left', true, true);
+        expect(v.sent).toEqual([]);
+    });
+});
