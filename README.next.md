@@ -68,6 +68,8 @@ The browser decodes with **WebCodecs + WebGPU/canvas** and plays audio in an **A
 
 > The engine also runs under the Windows service, in the logged‑on user's session. Where it cannot run (no usable encoder, Windows ARM64), the card is hidden and the app offers a host to pair with. A **headless** PC keeps its card through **"MoonlightWeb Virtual Display"**, a signed virtual monitor offered by the installer (a Mac creates its own). It turns on for a stream and your displays are restored when it ends. On Windows it runs at 240 Hz whatever your screen: what the PC draws reaches the stream sooner (6 to 17 ms less behind an Intel or AMD GPU), while the stream keeps your screen's rate.
 
+**On Linux, Steam gets a screen of its own.** With gamescope 3.16.22 or later (Fedora 43+, Arch, Bazzite, SteamOS, Ubuntu 26.10+), a **Steam Big Picture** card opens Steam in its own screen, at the size of the device that streams it, without touching the desktop — an X11 session included. The apps you list in **Admin → Apps in their own screen** get a card each.
+
 ### Stream settings
 
 From the in‑app overlay: **bitrate** (1–150 Mbps or auto), **resolution** (720p–2160p),\

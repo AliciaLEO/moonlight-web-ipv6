@@ -5770,6 +5770,74 @@ avec gamescope.
 - envoyer les entrées par libei (MIT, chargé au premier usage) au lieu d'uinput ;
 - un gamescope récent chez l'utilisateur : SteamOS, Bazzite, Arch ou Fedora, pas Ubuntu LTS.
 
+### 8s.14 Chapitre G : gamescope dans le produit (01/10/2026)
+
+Porte C5 franchie le 01/10 au soir : carte « Steam Big Picture », puis les apps de l'owner, gamescope de
+la distribution (3.16.22 au moins), Steam du bureau passé dans le stream, session gardée 10 min.
+`bdd7370b` (route, Steam), `e46c3992` (apps de l'owner).
+
+**G0, gamescope sur l'UM790Pro** (Ubuntu 24.04 n'en a pas) : la 3.16.31 compilée dans
+`~/.local/opt/gamescope`, lien `~/.local/bin/gamescope`.
+- Paquets `-dev` par apt (élévation annoncée), dont `libei-dev` et `libeis-dev`.
+- En sous-projets statiques, car la 24.04 est trop ancienne : libwayland 1.24, xkbcommon 1.8.1 (sa tête
+  veut meson 1.4), pixman 0.46, wayland-protocols 1.47.
+- Pièges de compilation :
+  - un `--force-fallback-for` remplace la liste de gamescope, qui veut `libliftoff,vkroots` ;
+  - les wraps de wlroots doivent être copiés et recevoir un `[provide]` ;
+  - le scanner wayland lu par nom (`get_variable('wayland_scanner')`) ;
+  - un dossier qui fournit `pixman-1/pixman.h` ;
+  - `meson install --skip-subprojects` (un sous-projet visait `/usr/lib/udev`).
+- Sa couche WSI est retirée du chargeur Vulkan : elle embarque sa propre libwayland à côté de celle de
+  l'app, et vkcube restait figé à 0,1 % de CPU. Le gamescope d'une distribution n'a pas ce mélange.
+
+| hors conteneur, en unité utilisateur | livré | écart max |
+|---|---|---|
+| 2560×1440 à 240 Hz (vkcube sans couche WSI, glxgears) | 240 i/s | 4,3 ms |
+| 1920×1080 à 120 Hz | 120 i/s | 8,4 ms |
+
+- L'auxiliaire `gamescopereaper` doit être sur le PATH de l'unité. Le produit y met le dossier de
+  gamescope en tête.
+- gamescope donne à son app `LIBEI_SOCKET=gamescope-0-ei` et `DISPLAY=:2`, que l'enveloppe d'une
+  ligne relaie dans un fichier.
+- `GAMESCOPE_CURSOR_VISIBLE_FEEDBACK` passe à 0 après un déplacement absolu et à 1 après un relatif. Le
+  pointeur dessiné par le client se règle donc sur l'encre de la forme XFixes (vide = jeu qui le cache).
+
+**Steam sur l'UM790Pro** :
+- deux installations : le snap, en service, 31 Go ; le `.deb`, 2,4 Go, jamais connecté ;
+- le snap n'écoute plus son canal de commandes depuis 13:20, aucun descripteur sur `steam.pipe` ;
+  `-shutdown` passe par le lanceur du snap comme par `steam-runtime-steam-remote` sans rien faire ;
+- le 30/09, un `-shutdown` relayé par `steam-runtime-steam-remote` l'avait fermé ;
+- le `.deb` lancé dans gamescope ouvre `steamdeps` dans un terminal « Package Install » qui demande sudo
+  (fermé sans rien installer) ;
+- d'où la règle : le Steam en service, sinon le dernier connecté, et un refus net quand il ne quitte
+  pas.
+
+**Vrai stream DualRTX (Chrome sans fenêtre, H.264) → DEV de l'UM790Pro**, app de banc
+`MW_GAMESCOPE_APP="vkcube --wsi xcb"` à la place de Steam :
+
+| essai | résultat |
+|---|---|
+| carte « Steam Big Picture », 1280×720 à 60 | première image en 2,5 s à froid, latence 6-9 ms |
+| relancée dans les 10 min, 1600×900 demandé | session retrouvée, première image en 1,1-1,6 s, à sa taille d'origine 1280×720 |
+| invité (rangée de partage) | même session, 1,5 s, son propre encodeur (HEVC) |
+| souris (absolu), pointeur | atteint gamescope ; position et forme renvoyées au client, visibles |
+| app quittée | gamescope suit, session finie 0,2 s après : « vkcube quit, and its gamescope with it », retour à la bibliothèque |
+| fin du stream, attente de 45 s (`MW_GAMESCOPE_LINGER_S`) | unité arrêtée par sa minuterie, 45 s après le dernier signe de vie |
+| vrai Steam, Steam du bureau sourd | refus après l'attente : « Steam is open on the host's desktop and did not quit when asked — close it there, then start again » |
+| app de l'owner « Cube » (G5) | carte 1100, 1600×900 à la taille du client, unité `moonlightweb-gamescope-app-cube` |
+
+Corrigés en route :
+- Xlib terminait le worker quand l'Xwayland de gamescope partait (gestionnaire de Qt → sortie par
+  défaut) → gestionnaire chaîné et sortie par connexion (`XSetIOErrorExitHandler`, libX11 1.7 et plus) ;
+- le flux PipeWire se met en pause quand gamescope part, sans erreur → la capture surveille le PID de
+  gamescope.
+
+**Limites vues** :
+- une fenêtre plus petite que l'écran (vkcube, 500×500) est mise à l'échelle par gamescope : absolu et
+  pointeur décalés. Big Picture et les jeux plein écran sont justes ;
+- clavier en US dans gamescope (amont ; Punktfunk porte un correctif) ;
+- pas encore vu : le vrai Steam dans gamescope, Steam rendu au bureau, un jeu.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session

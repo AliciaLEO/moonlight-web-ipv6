@@ -7161,12 +7161,80 @@ il en demandait 17 et 22 en 24 et 42 s.
 - KDE : un invité garde sa propre sortie (`stream_output` de KWin non utilisé) ;
   60 Hz avant KWin 6.6 ; pas d'écran principal.
 - GNOME 49 et après : non mesuré.
-- gamescope sans écran (une app sur son propre écran, à la taille et à la
-  cadence du client, entrées par libei) : sondé (banc §8s.13), pas construit.
+- gamescope : §35.7.
+
+### 35.7 Une app sur son propre écran : gamescope (chapitre G)
+
+Une carte de l'hôte Linux ouvre une app dans un gamescope sans écran
+(`--backend headless`), à la taille et à la cadence du client, à côté du
+bureau : ni écran ajouté ni disposition touchée, le clavier et la souris du
+bureau à part. Aucune session de bureau n'est nécessaire : une session X11, ou
+pas de session du tout, a la carte aussi. Mesures : banc §8s.13 et §8s.14.
+
+- **Les cartes** :
+  - « Steam Big Picture », quand un gamescope 3.16.22 ou plus récent (avant,
+    interblocage avec PipeWire 1.6) et un Steam utilisé sont là ;
+  - une carte par app de l'owner (`gamescope_apps` : nom et commande, lancée
+    par `/bin/sh`), quand gamescope est là. Les commandes s'écrivent depuis
+    l'hôte seulement ; elles tournent avec l'utilisateur de l'hôte.
+- **gamescope de la distribution** (décision du 01/10) :
+  - le binaire vient de `MW_GAMESCOPE_BIN`, du PATH, de `~/.local/bin` ou de
+    `/usr/games` ;
+  - il est accepté s'il a 3.16.22 ou plus (Fedora 43+, Arch, Bazzite, SteamOS,
+    Debian 13 backports, Ubuntu 26.10+) ;
+  - Ubuntu 24.04 n'en a pas, et la 26.04 a la 3.16.20 : la carte n'y apparaît
+    pas.
+- **La session** (`GamescopeSession.{h,cpp}`) :
+  - unité utilisateur transitoire (`systemd-run --user`), sans `DISPLAY` ni
+    `WAYLAND_DISPLAY`, le dossier de gamescope en tête du PATH
+    (`gamescopereaper`) ;
+  - une enveloppe d'une ligne relaie le socket EIS et le display X que gamescope
+    donne à son app ; le nœud PipeWire vient de son journal ;
+  - registre et verrou dans `XDG_RUNTIME_DIR`. Le stream suivant retrouve la
+    session, à sa taille d'origine, cadrée comme un invité filme l'écran du
+    owner. L'owner et les invités partagent la session ;
+  - minuterie de 10 min, réarmée chaque minute par chaque stream : la session
+    s'arrête 10 min après le dernier, même s'il est mort sans prévenir.
+- **Steam** : un seul par utilisateur. La carte démarre le Steam en service,
+  sinon celui connecté en dernier (paquet, snap ou Flatpak).
+  - Un Steam ouvert sur le bureau est prié de quitter, par le relais de son
+    runtime (`steam-runtime-steam-remote -shutdown`, son HOME). La demande est
+    refusée si un jeu y tourne, ou s'il n'a pas quitté en 20 s (le navigateur
+    abandonne à 25).
+  - À l'arrêt de l'unité, `ExecStop` fait quitter Steam proprement, puis
+    `ExecStopPost` le rouvre sur le bureau s'il y était.
+- **Capture** (`PortalCapture::setGamescope`) :
+  - le nœud de gamescope sur le PipeWire de la session, sans portail ;
+  - son flux se met en pause quand gamescope part, sans erreur : la capture
+    surveille donc son PID. L'app quittée termine le stream avec une phrase.
+- **Entrées** (`EiInput`) : libei, chargée au premier usage, en émetteur sur le
+  socket EIS de gamescope (clavier, souris relative et absolue, molette,
+  boutons). gamescope ne lit aucun périphérique sans écran ; les manettes
+  restent en uinput, et les jeux les lisent directement. Le texte est tapé sur
+  une disposition US, celle de gamescope.
+- **Pointeur** (`XFixesCursor`) : hors de l'image de gamescope. Il est relu sur
+  son Xwayland : la forme par XFixes, la position par `XQueryPointer`. Il est
+  visible quand sa forme a de l'encre, et le client le dessine. Le gestionnaire
+  d'erreurs d'Xlib de Qt terminait le processus quand cet Xwayland partait ; un
+  gestionnaire chaîné et une sortie par connexion (libX11 1.7 et plus) l'en
+  empêchent.
+- **Limites** :
+  - une fenêtre plus petite que l'écran est mise à l'échelle par gamescope :
+    l'absolu et le pointeur sont alors décalés ; Big Picture et un jeu plein
+    écran sont justes ;
+  - clavier US (amont) ;
+  - pas de HDR ;
+  - pas de changement de taille en cours de session.
 
 **Concrètement, pour l'utilisateur** : sous Linux Wayland, la carte « écran
 virtuel » montre un bureau à la taille de l'appareil qui regarde, à 240 Hz, sans
 fenêtre à valider sur l'hôte, même sur un mini-PC sans écran. Sous GNOME, il
 devient l'écran principal le temps du stream, et un invité voit le même bureau
 que le owner. Sous KDE Plasma 6 aussi, à 60 Hz.
+
+Avec un gamescope récent, la carte « Steam Big Picture » ouvre Steam en mode
+console sur son propre écran, à la taille de la TV ou du téléphone, sans toucher
+au bureau. L'hôte peut servir à quelqu'un d'autre pendant ce temps, même en
+session X11. Les apps de l'owner, déclarées dans la page d'administration, font
+de même.
 - **Sunshine et Wolf** : inchangés (un encodeur par invité, trois qualités).
