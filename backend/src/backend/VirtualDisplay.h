@@ -89,8 +89,11 @@ struct DisplayInfo;
  * stream's size, the client's screen to the pixel under "Match my screen"
  * (mw::native::sizeVirtualMonitorToClient), and at 240 Hz like the Windows
  * display (SessionConfig::virtualRefreshHz) — and it is gone when the stream
- * ends — see livesInStream(). No session type but Wayland has the source: an
- * X11 session (a machine with NVIDIA's driver, often) shows no card.
+ * ends — see livesInStream(). On GNOME the owner's stream makes it the main
+ * display too, on the left of the others and none switched off, for as long
+ * as it lives (SessionConfig::virtualPrimary); a guest's stays where GNOME
+ * puts it. No session type but Wayland has the source: an X11 session (a
+ * machine with NVIDIA's driver, often) shows no card.
  *
  * ── The mode ────────────────────────────────────────────────────────────────
  *

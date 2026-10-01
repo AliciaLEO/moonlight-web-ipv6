@@ -136,6 +136,10 @@ public:
         /// will be asked; whatever comes back arrives as portalGrantReceived().
         /// Ignored on every route but the Linux portal one.
         QString portalRestoreToken;
+        /// The owner's stream on the virtual display card: the monitor the
+        /// session makes (Linux) becomes the desktop's primary while it
+        /// streams — see SessionConfig::virtualPrimary. Never a guest's.
+        bool virtualPrimary = false;
         /// The chain a Windows session carries its pictures on, as the admin
         /// chose it (Advanced) — see SessionConfig::videoPipeline. Auto unless
         /// a choice was made; ignored off Windows.

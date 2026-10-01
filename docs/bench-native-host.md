@@ -5407,6 +5407,38 @@ jusqu'à 512×512, 384×384 par défaut. Test du produit par le portail :
 Restent pour C2 : le démarrage silencieux, GNOME 42-45 (Ubuntu 22.04 LTS),
 l'entrée par RemoteDesktop. Le gain de cadence ne demande plus C2.
 
+### 8s.9 C1 bis : l'écran virtuel principal, dans le produit
+
+Après la porte C1 (01/10), le stream du owner sur la carte « écran virtuel »
+fait de l'écran du portail l'**écran principal** de GNOME, comme Windows et
+macOS le font du leur. Le bureau (barre du haut, dock) vient au stream, qui ne
+montrait qu'une extension vide.
+
+- **Comment** : `DisplayConfig.ApplyMonitorsConfig`, méthode temporaire.
+  L'écran virtuel va en 0,0, principal ; les autres écrans gardent leurs places
+  entre eux, décalés de sa largeur ; **aucun n'est éteint** (8s.5). Rien n'est
+  enregistré : Mutter remet seul la disposition d'avant quand l'écran part avec
+  le stream. Code : `MonitorLayout.h` (calcul, testé partout),
+  `MutterDisplayConfig.cpp` (sd-bus, sur la route du portail).
+- L'écran de la session se reconnaît à sa taille et à son absence avant le
+  portail. Un invité, qui a son propre écran virtuel sous Linux, ne le demande
+  pas (`virtualPrimary`, posé par le serveur pour le owner seul).
+- Le pointeur se place sur l'écran par son nom (« Meta-0 »), et non plus par
+  sa seule taille.
+- Mesuré par le test `linux_virtual_display` (28/28 sur chaque banc) :
+
+| banc | avant | pendant le stream | après |
+|---|---|---|---|
+| UM790Pro, GNOME 46 | HDMI-3 principal | Meta-0 principal en 0,0 ; HDMI-3 en 1600,0, HDMI-1 en 4160,0 | HDMI-3 principal |
+| VM, GNOME 48 | Virtual-1 principal | Meta-0 principal en 0,0 ; Virtual-1 en 1600,0 | Virtual-1 principal |
+
+  gnome-shell garde le même processus. La session sans écran principal demandé
+  (celle d'un invité) laisse l'écran au bout du bureau, comme avant.
+- Suites natives de l'UM790Pro : 6584/6584 avec capacités, 6460/6460 sans.
+  Windows : compilé, tests de disposition 104/104.
+- Pas vu : le trajet du drapeau du serveur au worker, qui demande un vrai
+  stream (C4).
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session

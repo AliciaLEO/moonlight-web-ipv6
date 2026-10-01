@@ -233,6 +233,7 @@ void NativeMediaEngine::startCapture(const StartParams& params)
     // first session of an install that captures through the portal, which is
     // the one time the user sees a dialog.
     config.portalRestoreToken = params.portalRestoreToken.toStdString();
+    config.virtualPrimary = params.virtualPrimary;
     // The picture chain the admin chose. A bench's MW_NATIVE_TUNING below
     // still wins over it with its pipeline= key (VideoPipelineChoice.h).
     config.videoPipeline = params.videoPipeline;

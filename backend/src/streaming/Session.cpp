@@ -683,6 +683,7 @@ void StreamSession::onLaunchResult(bool ok, const BackendError& err, const Media
         // The portal consent this installation already holds. Only a machine
         // that captures through the portal has one at all.
         nativeParams.portalRestoreToken = m_PortalRestoreToken;
+        nativeParams.virtualPrimary = m_VirtualPrimary;
         // The picture chain the admin chose (Advanced). A value this build
         // does not know leaves Auto in place rather than guessing.
         mw::native::parseVideoPipeline(m_NativeVideoPipeline.toStdString(),

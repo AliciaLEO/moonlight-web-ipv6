@@ -272,6 +272,15 @@ struct SessionConfig
     /// makes no display.
     int virtualRefreshHz = 0;
 
+    /// Make the display this session makes for itself — the portal's virtual
+    /// monitor on Linux — the desktop's primary while it streams, as the
+    /// server makes its own virtual display primary on Windows and macOS: on
+    /// GNOME the top bar and the dock come to the stream, which would
+    /// otherwise show an empty extension of the desktop. The owner's session
+    /// only: a guest's monitor beside it is not where the desktop goes.
+    /// Ignored where the session makes no display, and off GNOME.
+    bool virtualPrimary = false;
+
     /// The chain that carries the pictures on Windows (VideoPipeline.h). Auto,
     /// the default, is the engine's vendor table; the admin's "Advanced"
     /// setting can force one. A D3D12 the session cannot build — a display

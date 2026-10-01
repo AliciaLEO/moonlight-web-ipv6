@@ -3433,6 +3433,9 @@ int main(int argc, char* argv[])
             const bool portalVirtual = host->backendType == NativeHostBackend::typeName() &&
                                        appId == NativeHostBackend::virtualDisplayAppId();
             s->setPortalRestoreToken(appSettings.portalRestoreToken(portalVirtual));
+            // The owner's virtual display is the desktop's primary while it
+            // streams, as the server makes it on Windows and macOS.
+            s->setVirtualPrimary(portalVirtual);
             // The admin's picture chain for a native Windows session.
             s->setNativeVideoPipeline(appSettings.nativeVideoPipeline());
             // The bench's knobs, when someone added them to the settings file.
@@ -3579,6 +3582,9 @@ int main(int argc, char* argv[])
             const bool portalVirtual = host->backendType == NativeHostBackend::typeName() &&
                                        appId == NativeHostBackend::virtualDisplayAppId();
             cfg["portalRestoreToken"] = appSettings.portalRestoreToken(portalVirtual);
+            // The owner's virtual display is the desktop's primary while it
+            // streams (Linux, where the session makes it; a guest never asks).
+            cfg["virtualPrimary"] = portalVirtual;
             // The admin's picture chain for a native Windows session.
             cfg["nativeVideoPipeline"] = appSettings.nativeVideoPipeline();
             // The bench's knobs, read here: a SYSTEM worker's own AppData is

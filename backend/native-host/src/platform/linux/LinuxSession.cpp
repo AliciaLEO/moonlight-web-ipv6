@@ -18,6 +18,7 @@
 #include "../../capture/linux/KmsCapture.h"
 #include "../../capture/linux/X11Damage.h"
 #if defined(MW_NATIVE_LINUX_PORTAL)
+#include "../../capture/linux/MutterDisplayConfig.h"
 #include "../../capture/linux/PortalCapture.h"
 #endif
 #include "../../convert/linux/GlConvert.h"
@@ -890,6 +891,17 @@ private:
             // when the bench asks for shared memory (portaldmabuf=0).
             if (!m_PortalShmOnly && m_Config.tuning.portalDmabuf != EncoderTuning::Choice::Off)
                 portal->offerDmabuf(dmabufOffer());
+            // GNOME's monitors before this session's own exists: what tells it
+            // from another stream's (makeVirtualPrimary).
+            m_VirtualConnector.clear();
+            std::vector<std::string> monitorsBefore;
+            std::string notGnome;
+            const bool primaryWanted =
+                m_Target.portalVirtual && m_Config.virtualPrimary &&
+                capture::MutterDisplayConfig::connectors(monitorsBefore, notGnome);
+            if (m_Target.portalVirtual && m_Config.virtualPrimary && !primaryWanted)
+                log::info("[native] virtual display: left where the compositor put it — " +
+                          notGnome);
             if (!portal->start(error)) return false;
             // A grant only comes back from a start that raised the dialog.
             // Handing it up is what spares the user every later one — the
@@ -901,6 +913,10 @@ private:
             }
             m_PortalDmabuf = portal->dmabuf();
             m_Capture = std::move(portal);
+            // Before the modes are noted: a new layout may hand the screens
+            // other CRTCs, and the watch below is not to take that for a mode
+            // change of the user's.
+            if (primaryWanted) makeVirtualPrimary(monitorsBefore);
             m_PortalModes = capture::KmsCapture::modeSignature(m_CardPath);
             m_PortalOpenedModes = m_PortalModes;
             return true;
@@ -913,6 +929,47 @@ private:
         watchInPlaceDrawing(scanout);
         return true;
     }
+
+#if defined(MW_NATIVE_LINUX_PORTAL)
+    /// The portal's virtual monitor made the desktop's primary, on the left of
+    /// the other screens, none of them switched off (MonitorLayout.h): GNOME's
+    /// top bar and dock come to the stream, as the taskbar comes to the
+    /// virtual display on Windows. Mutter made the monitor when the format
+    /// settled (bench §8s.1), so it is there by now, or within moments; it is
+    /// told from another stream's by its size and by not being in @p before.
+    /// Nothing here undoes it: the change is Mutter's temporary kind, and the
+    /// layout comes back when the monitor goes with the portal session.
+    void makeVirtualPrimary(const std::vector<std::string>& before)
+    {
+        const int width = m_Capture->width();
+        const int height = m_Capture->height();
+        capture::DisplayLayout layout;
+        uint32_t serial = 0;
+        std::string why;
+        std::string connector;
+        for (int waitedMs = 0; connector.empty() && waitedMs <= 2000; waitedMs += 50) {
+            if (waitedMs > 0) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            if (!capture::MutterDisplayConfig::read(layout, serial, why)) break;
+            connector = capture::findSessionVirtual(layout, before, width, height);
+        }
+        if (connector.empty()) {
+            log::info("[native] virtual display: left where GNOME put it — " +
+                      (why.empty() ? "no single new " + std::to_string(width) + "x" +
+                                         std::to_string(height) + " virtual monitor in its layout"
+                                   : why));
+            return;
+        }
+        // Known from here, whatever comes of the layout: the pointer mapping
+        // finds the monitor by this name (readInputRects).
+        m_VirtualConnector = connector;
+        std::string how;
+        if (capture::MutterDisplayConfig::makePrimary(connector, how))
+            log::info("[native] virtual display: " + how);
+        else
+            log::warning("[native] virtual display: " + connector + " left where GNOME put it — " +
+                         how);
+    }
+#endif
 
     /// An X server does not always flip: it draws into the buffer it scans out
     /// when a flip cannot show the picture — a game presenting with its sync
@@ -1064,9 +1121,19 @@ private:
                 // the desktop is around it. A portal that named no position
                 // left the picture at the origin; an output of exactly that
                 // size, when there is one, is then taken as the monitor.
+                // GNOME named the virtual monitor it made for this session
+                // (makeVirtualPrimary): that output, wherever it sits.
                 std::string name;
-                bool placed = input::findWaylandOutputAt(outputs, wl.display.left, wl.display.top,
-                                                         wl.display.right, wl.display.bottom, name);
+                bool placed = !m_VirtualConnector.empty() &&
+                              input::pickWaylandRects(
+                                  outputs, m_VirtualConnector, wl.display.left, wl.display.top,
+                                  wl.display.right, wl.display.bottom, wl.desktop.left,
+                                  wl.desktop.top, wl.desktop.right, wl.desktop.bottom);
+                if (placed)
+                    name = m_VirtualConnector;
+                else
+                    placed = input::findWaylandOutputAt(outputs, wl.display.left, wl.display.top,
+                                                        wl.display.right, wl.display.bottom, name);
                 if (!placed && wl.display.left == 0 && wl.display.top == 0) {
                     const input::WaylandOutput* only = nullptr;
                     for (const input::WaylandOutput& out : outputs) {
@@ -2343,6 +2410,9 @@ private:
     /// The portal grant to replay on the next open — the session's own, then
     /// whatever the portal handed back. See openCapture.
     std::string m_PortalToken;
+    /// GNOME's name for the virtual monitor of this portal session ("Meta-0"),
+    /// found by makeVirtualPrimary; empty when there is none, or it is not known.
+    std::string m_VirtualConnector;
     /// The CRTC modes when the portal was opened (KmsCapture::modeSignature).
     std::string m_PortalModes;
     /// The same, as they were when this portal session opened: a mode change

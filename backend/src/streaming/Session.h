@@ -152,6 +152,12 @@ public:
     /// portalGrantReceived().
     void setPortalRestoreToken(const QString& token) { m_PortalRestoreToken = token; }
 
+    /// The owner streams the virtual display card: on Linux, where the session
+    /// makes that monitor itself, it becomes the desktop's primary while it
+    /// streams (SessionConfig::virtualPrimary). Only the native engine acts on
+    /// it; a guest's session never sets it.
+    void setVirtualPrimary(bool primary) { m_VirtualPrimary = primary; }
+
     /// The chain a native Windows session carries its pictures on, as the
     /// admin chose it (AppSettings::nativeVideoPipeline): "auto", "d3d11" or
     /// "d3d12". Only the native engine acts on it; empty or unknown is auto.
@@ -476,6 +482,9 @@ private:
     /// See setPortalRestoreToken. Empty is the honest default: a session that
     /// does not know of a consent asks for one.
     QString m_PortalRestoreToken;
+
+    /// See setVirtualPrimary. Off unless the owner's /start says so.
+    bool m_VirtualPrimary = false;
 
     /// See setNativeVideoPipeline. Empty — a parent that predates the setting —
     /// is auto, the engine's own table.

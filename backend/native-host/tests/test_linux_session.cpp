@@ -5,6 +5,9 @@
 #include "native_test_framework.h"
 
 #include "mw/native/NativeHost.h"
+#if defined(MW_NATIVE_LINUX_GFX) && defined(MW_NATIVE_LINUX_PORTAL)
+#include "capture/linux/MutterDisplayConfig.h"
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -819,11 +822,51 @@ void run_linux_session_tests()
 #endif
 }
 
+#if defined(MW_NATIVE_LINUX_GFX) && defined(MW_NATIVE_LINUX_PORTAL)
+namespace {
+
+/// GNOME's layout as the virtual display test reads it: the primary monitor,
+/// and the virtual monitor of a size — where it sits, whether it is primary.
+struct GnomeLayoutView
+{
+    std::string primary;
+    std::string virtualConnector;
+    int virtualX = -1;
+    bool virtualPrimary = false;
+};
+
+/// False when there is no Mutter to ask (not GNOME, no session bus).
+bool readGnomeLayout(int width, int height, GnomeLayoutView& view)
+{
+    view = GnomeLayoutView{};
+    capture::DisplayLayout layout;
+    uint32_t serial = 0;
+    std::string why;
+    if (!capture::MutterDisplayConfig::read(layout, serial, why)) return false;
+    for (const capture::LayoutLogical& l : layout.logical) {
+        if (l.primary && !l.connectors.empty()) view.primary = l.connectors[0];
+        for (const std::string& c : l.connectors) {
+            const capture::LayoutMonitor* m = capture::findLayoutMonitor(layout, c);
+            if (!m || !capture::isMutterVirtual(*m) || m->width != width || m->height != height)
+                continue;
+            view.virtualConnector = c;
+            view.virtualX = l.x;
+            view.virtualPrimary = l.primary;
+        }
+    }
+    return true;
+}
+
+} // namespace
+#endif
+
 // The portal's VIRTUAL source: a monitor the compositor makes for the session
 // at the size and cadence the stream asks for (GNOME 46+). What is checked is
 // the contract the "virtual display" card rests on — the picture comes back
-// at the client's size, not at any monitor's. Opt-in (MW_PORTAL_VIRTUAL=1):
-// the portal may raise a dialog, and a test nobody watches must not hang on it.
+// at the client's size, not at any monitor's — and, on GNOME, the owner's
+// monitor as the desktop's primary while it streams, the layout back after.
+// Opt-in (MW_PORTAL_VIRTUAL=1): the portal may raise a dialog, and a test
+// nobody watches must not hang on it.
 void run_linux_virtual_display_tests()
 {
     SECTION("Linux — the portal's virtual display, at the client's size");
@@ -860,6 +903,12 @@ void run_linux_virtual_display_tests()
     // asks, and the grant it hands back is printed for the next run.
     const char* replay = std::getenv("MW_PORTAL_VIRTUAL_TOKEN");
     if (replay && *replay) config.portalRestoreToken = replay;
+    // The owner's session: its monitor becomes GNOME's primary.
+    config.virtualPrimary = true;
+    GnomeLayoutView gnomeBefore;
+    const bool gnome = readGnomeLayout(1600, 900, gnomeBefore);
+    if (gnome)
+        std::fprintf(stderr, "  GNOME layout before: %s primary\n", gnomeBefore.primary.c_str());
 
     std::atomic<int> frames{0};
     std::string ended;
@@ -891,12 +940,33 @@ void run_linux_virtual_display_tests()
     CHECK_EQ(info.displayWidth, 1600);
     CHECK_EQ(info.displayHeight, 900);
     CHECK_EQ(static_cast<int>(info.capture), static_cast<int>(CaptureApi::PipeWire));
+    if (gnome) {
+        GnomeLayoutView during;
+        CHECK(readGnomeLayout(1600, 900, during));
+        std::fprintf(stderr, "  GNOME layout during: %s primary, virtual monitor %s at x=%d\n",
+                     during.primary.c_str(), during.virtualConnector.c_str(), during.virtualX);
+        CHECK(!during.virtualConnector.empty());
+        CHECK(during.virtualPrimary);
+        CHECK_EQ(during.virtualX, 0);
+    }
     std::this_thread::sleep_for(std::chrono::seconds(3));
     session->stop();
     std::fprintf(stderr, "  %d frame(s)%s\n", frames.load(),
                  ended.empty() ? "" : (", ended: " + ended).c_str());
     CHECK(frames.load() >= 1);
     CHECK(ended.empty());
+    if (gnome) {
+        // Mutter removes the monitor a moment after the portal session ends,
+        // and puts the layout it had back by itself.
+        GnomeLayoutView after;
+        for (int waitedMs = 0; waitedMs < 3000; waitedMs += 100) {
+            if (readGnomeLayout(1600, 900, after) && after.virtualConnector.empty()) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        std::fprintf(stderr, "  GNOME layout after: %s primary\n", after.primary.c_str());
+        CHECK(after.virtualConnector.empty());
+        CHECK_EQ(after.primary, gnomeBefore.primary);
+    }
     if (!granted.empty())
         std::fprintf(stderr, "  new grant — MW_PORTAL_VIRTUAL_TOKEN=%s\n", granted.c_str());
     // A replayed grant raises no dialog, and so hands nothing back.
@@ -914,6 +984,9 @@ void run_linux_virtual_display_tests()
     phone.fps = 60;
     phone.fitRequestedBox = phone.allowUpscale = phone.matchClientDisplay = true;
     phone.virtualRefreshHz = 240;
+    // A guest's session, as far as the layout goes: the monitor stays where
+    // GNOME put it.
+    phone.virtualPrimary = false;
     const std::string token = !granted.empty() ? granted : (replay ? replay : "");
     if (token.empty()) {
         std::fprintf(stderr, "  match session skipped: no grant to replay\n");
@@ -941,6 +1014,13 @@ void run_linux_virtual_display_tests()
     CHECK_EQ(pinfo.width, 1170);
     CHECK_EQ(pinfo.height, 2532);
     CHECK_EQ(pinfo.fps, 60);
+    if (gnome && !gnomeBefore.primary.empty()) {
+        GnomeLayoutView during;
+        CHECK(readGnomeLayout(1170, 2532, during));
+        CHECK(!during.virtualConnector.empty());
+        CHECK(!during.virtualPrimary);
+        CHECK_EQ(during.primary, gnomeBefore.primary);
+    }
     std::this_thread::sleep_for(std::chrono::seconds(3));
     phoneSession->stop();
     std::fprintf(stderr, "  %d frame(s)%s\n", phoneFrames.load(),

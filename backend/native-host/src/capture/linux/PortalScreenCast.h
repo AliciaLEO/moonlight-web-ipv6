@@ -38,7 +38,8 @@
 // copyleft or worse: libdbus is `GPL-2+ or AFL-2.1` (the GPL arm would end this
 // module's separability, the AFL arm is GPL-incompatible), GDBus and sd-bus are
 // LGPL. sd-bus was chosen on 08/09/2026 as a deliberate, BOUNDED exception —
-// one library, this file only, behind MW_NATIVE_LINUX_PORTAL. LICENSE.md
+// one library, behind MW_NATIVE_LINUX_PORTAL, in this file and in
+// MutterDisplayConfig.cpp (GNOME's layout around the virtual monitor). LICENSE.md
 // § "L'exception sd-bus" says exactly what it costs and what it does not.
 //
 // ── The shape of the conversation ───────────────────────────────────────────

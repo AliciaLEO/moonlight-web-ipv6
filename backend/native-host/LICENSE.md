@@ -92,7 +92,11 @@ condition durable sur le relicenciement du module, y compris propriétaire.
 ### L'exception sd-bus (décidée le 08/09/2026)
 
 **`libsystemd` (sd-bus), LGPL-2.1+, liée uniquement par le chemin portail de
-Linux** — `#if defined(MW_NATIVE_LINUX_PORTAL)`.
+Linux** — `#if defined(MW_NATIVE_LINUX_PORTAL)`. Deux fichiers l'appellent :
+`PortalScreenCast.cpp` (le portail) et, depuis le 01/10/2026,
+`MutterDisplayConfig.cpp` (la disposition des écrans de GNOME autour de l'écran
+virtuel du portail). Même bibliothèque, même drapeau : le coût ci-dessous ne
+change pas.
 
 Pourquoi il a fallu choisir : le portail **ScreenCast** de xdg-desktop-portal est
 la seule route de capture d'une **AppImage** (qui ne peut porter aucune capacité,
