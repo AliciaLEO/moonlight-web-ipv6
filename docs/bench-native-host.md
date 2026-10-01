@@ -5485,6 +5485,75 @@ pilote DRM : SDDM attend un poste graphique qui ne vient jamais. Le noyau
 - Pas vu : le trajet du drapeau du serveur au worker, qui demande un vrai
   stream (C4).
 
+### 8s.11 C4 : de vrais streams sur l'écran virtuel Linux, par le paquet
+
+Banc : le paquet DEV construit sur l'UM790Pro (`devpkg.sh`), installé en LAN
+seul sur trois hôtes. Le client est un Chrome sans fenêtre sur DualRTX (H.264
+en logiciel), piloté par DevTools. Le pointeur est lu deux fois : dans
+l'image (flèche repérée par différence de captures) et dans les `cursorpos`
+que l'hôte envoie au client.
+
+| hôte | route | première image | pointeur (7 points) |
+|---|---|---|---|
+| UM790Pro, GNOME 46, vrai GPU | portail, auxiliaire, Vulkan → VA-API | 1,6 s (6,1 s la 1re fois) | ±3 px |
+| VM, GNOME 48, Debian 13 | portail, auxiliaire, OpenH264 | 1,1-1,6 s | ±1 px |
+| VM, GNOME 48, **sans aucun écran** | portail, Meta-0 seul écran | 1,1 s | — |
+| VM, KDE Plasma 6.3, Debian 13 | KWin par l'auxiliaire, `.desktop` du paquet | 2,1 s | ±2 px |
+
+- **Le chemin du paquet** marche partout. Le worker à capacités passe par
+  l'auxiliaire, et `virtualPrimary` va du serveur au worker : Meta-0 devient
+  principal, les autres écrans passent à sa droite. Sous KDE, c'est le
+  `.desktop` du paquet qui obtient le droit de KWin.
+- **Clavier** : Verr. Maj. envoyé par le stream fait apparaître et disparaître
+  l'avertissement d'une fenêtre GNOME.
+- **Fin de stream** : l'écran part, la disposition revient, et gnome-shell
+  garde le même PID.
+- **Deux streams** : l'owner et un invité, chacun à 60 i/s. L'invité reçoit
+  son propre écran (Meta-1, à droite de tout), vide.
+
+Défauts trouvés et corrigés :
+
+- `bb3f11e9` — **le worker restait bloqué à la sortie**, puis le serveur le
+  tuait 2 s plus tard (code 9), à chaque fin de stream depuis Ubuntu 24.04.
+  Avec glibc 2.39, `exit()` prend le verrou de chaque flux stdio, et le fil
+  qui lit les commandes tenait celui de stdin (`std::getline` sur
+  `std::cin`). Lecture par `read(2)` sous Linux. La sortie est normale en
+  ~25 ms (24.04, Debian 13).
+- `bd4f3b83` — **le pointeur seul n'était jamais lu**. Mutter l'envoie sur un
+  tampon sans pixels, que la capture rendait sans le lire. En plus, ce
+  tampon rendait aussi l'image que le worker tenait encore. Sur GNOME 48,
+  où le pointeur n'est pas dans l'image, l'hôte envoyait une seule position
+  par session ; il en envoie maintenant une par mouvement.
+- `7e097103` — **le pointeur d'un invité tombait sur l'écran de l'owner**
+  (0,0, « no output matches it ») : son Meta-1 est maintenant retrouvé par
+  son nom.
+- `995cb779` — **un hôte sans écran perdait sa carte** : « no interactive
+  desktop session » faute de sortie KMS allumée, alors que gnome-shell
+  tournait. Une session Wayland joignable compte maintenant.
+
+Constats sans correction :
+
+- **Premier stream** : le portail ouvre « Partager l'écran » chez l'hôte. Le
+  client abandonne `/start` au bout de 25 s, et le worker démarre quand
+  quelqu'un clique. Sans écran, personne ne peut cliquer. → C2, décidé par
+  Bruno.
+- **Invité** : il voit son propre écran vide, pas celui de l'owner comme sous
+  Windows. → par C2, décision de Bruno.
+- **Pointeur dans l'image** :
+  - GNOME 46 le peint dans l'écran virtuel, et le client ne dessine rien ;
+  - GNOME 48 le laisse hors de l'image, et le client dessine la forme de
+    l'hôte.
+
+  Pas de double pointeur.
+- **Cadence** : sur un contenu à 30 Hz, Mutter peint chaque changement deux
+  fois, à un battement d'écart (5 ms puis 28 ms). La porte en garde un sur
+  deux, sans rien perdre de distinct. Une page à pleine vitesse (~200
+  images/s) passe à 60 i/s. Le premier essai à 30 i/s venait de la page de
+  l'hôte, qui peignait alors à 30 Hz.
+- Pas vu en headless : les entrées d'un invité de bout en bout (rien
+  n'arrive, pas tranché) et le pointeur peint par l'hôte en mode jeu (il
+  demande le verrouillage du pointeur).
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
