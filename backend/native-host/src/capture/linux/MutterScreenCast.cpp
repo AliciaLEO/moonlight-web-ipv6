@@ -32,6 +32,8 @@ constexpr const char* kInterface = "org.gnome.Mutter.ScreenCast";
 constexpr const char* kSessionInterface = "org.gnome.Mutter.ScreenCast.Session";
 constexpr const char* kStreamInterface = "org.gnome.Mutter.ScreenCast.Stream";
 
+/// cursor-mode 1: the pointer painted into the picture.
+constexpr uint32_t kCursorEmbedded = 1;
 /// cursor-mode 2: the pointer beside the picture, as metadata.
 constexpr uint32_t kCursorMetadata = 2;
 
@@ -73,13 +75,14 @@ int onClosed(sd_bus_message*, void* userdata, sd_bus_error*)
     return 0;
 }
 
-/// RecordVirtual's or RecordMonitor's properties: the pointer as metadata
-/// and, for a virtual monitor faster than 60 Hz, its one mode.
+/// RecordVirtual's or RecordMonitor's properties: the pointer as metadata or
+/// painted in and, for a virtual monitor faster than 60 Hz, its one mode.
 int appendProperties(sd_bus_message* m, const MutterScreenCast::Request& request)
 {
     int r = sd_bus_message_open_container(m, 'a', "{sv}");
     if (r < 0) return r;
-    if ((r = sd_bus_message_append(m, "{sv}", "cursor-mode", "u", kCursorMetadata)) < 0) return r;
+    const uint32_t cursorMode = request.embedCursor ? kCursorEmbedded : kCursorMetadata;
+    if ((r = sd_bus_message_append(m, "{sv}", "cursor-mode", "u", cursorMode)) < 0) return r;
     if (request.connector.empty() && request.refreshHz > 60 && request.width > 0 &&
         request.height > 0) {
         if ((r = sd_bus_message_open_container(m, 'e', "sv")) < 0) return r;

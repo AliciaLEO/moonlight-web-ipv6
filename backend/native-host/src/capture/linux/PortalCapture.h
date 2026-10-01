@@ -156,9 +156,10 @@ public:
     std::string renderNodePath() const override;
     DesktopRect desktopRect() const override;
     const CursorState& cursor() const override;
-    /// A GNOME virtual monitor in DMA-BUF before GNOME 48: Mutter blits the
-    /// monitor's view, pointer and all (MutterScreenCast::paintsPointerIntoDmabuf).
-    /// Shared memory never carries it, nor a monitor KWin makes.
+    /// A GNOME virtual monitor before GNOME 48: its pointer is asked painted
+    /// into every picture, DMA-BUF or shared memory, since Mutter blits it into
+    /// the DMA-BUF ones anyway (MutterScreenCast::embedsPointer). Never on a
+    /// monitor KWin makes, nor from GNOME 48.
     bool cursorInPicture() const override;
 
 private:

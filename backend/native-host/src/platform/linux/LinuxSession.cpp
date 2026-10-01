@@ -2530,8 +2530,8 @@ private:
             cursor.visible == m_ReportedVisible && painted == m_ReportedPainted)
             return;
         if (painted && !m_ReportedPainted)
-            log::info("[native] cursor: GNOME paints it into the virtual display's pictures "
-                      "(DMA-BUF) — the client is told to draw none");
+            log::info("[native] cursor: GNOME paints it into every picture of the virtual "
+                      "display (before GNOME 48) — the client is told to draw none");
         m_ReportedShape = cursor.shapeVersion;
         m_ReportedVisible = cursor.visible;
         m_ReportedPainted = painted;

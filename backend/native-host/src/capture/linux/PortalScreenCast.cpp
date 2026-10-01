@@ -223,8 +223,10 @@ std::vector<std::string> splitLines(const std::string& text, size_t parts)
 /// its handshake, the answer with the PipeWire descriptor — then the portal
 /// session held until the socket closes, which is the stream's stop() or its
 /// owner's death. The session is this connection's: closing it ends the cast.
-/// Two requests: "1" the portal (virtual or not, timeout, token), "2" KWin's
-/// virtual output (width, height, name), whose node needs no descriptor.
+/// Two requests: "1" the portal (source, timeout, token), "2" KWin's virtual
+/// output (width, height, name), whose node needs no descriptor. The source is
+/// "0" a monitor, "1" a virtual one, "2" a virtual one with the pointer painted
+/// in (setEmbedCursor).
 int helperMain(int socket)
 {
     char buffer[4096];
@@ -246,7 +248,8 @@ int helperMain(int socket)
                                   std::atoi(request[2].c_str()));
         ok = cast.start(std::string(), 0, stream, error);
     } else {
-        cast.setVirtual(request[1] == "1");
+        cast.setVirtual(request[1] != "0");
+        cast.setEmbedCursor(request[1] == "2");
         ok = cast.start(request[3], std::atoi(request[2].c_str()), stream, error);
     }
     std::string reply =
@@ -299,6 +302,8 @@ struct PortalScreenCast::Impl
     std::string session;
     int calls = 0; ///< makes each handle token unique within one session
     bool virtualMonitor = false;
+    /// The pointer painted into the pictures (setEmbedCursor).
+    bool embedCursor = false;
     pid_t helper = -1;     ///< the helper holding the session, when one does
     int helperSocket = -1; ///< its socket: closing it is the helper's cue to end
 
@@ -393,6 +398,11 @@ void PortalScreenCast::setMutter(const std::string& connector, int width, int he
     d->mutterRequest.refreshHz = refreshHz;
 }
 
+void PortalScreenCast::setEmbedCursor(bool embed)
+{
+    d->embedCursor = embed;
+}
+
 bool PortalScreenCast::ended()
 {
     return d->mutterCast && d->mutterCast->closed();
@@ -411,6 +421,7 @@ bool PortalScreenCast::start(const std::string& restoreToken, int timeoutMs, Por
     if (d->mutter) {
         out = PortalStream{};
         d->mutterCast = std::make_unique<MutterScreenCast>();
+        d->mutterRequest.embedCursor = d->embedCursor;
         uint32_t node = 0;
         if (!d->mutterCast->start(d->mutterRequest, node, error)) {
             d->mutterRefused = d->mutterCast->refused();
@@ -423,7 +434,8 @@ bool PortalScreenCast::start(const std::string& restoreToken, int timeoutMs, Por
         log::info("[native] GNOME: " +
                   (connector.empty() ? std::string("a virtual monitor")
                                      : "monitor " + connector + ", recorded as it is") +
-                  ", node " + std::to_string(node) + " — Mutter's own screen cast, no dialog");
+                  ", node " + std::to_string(node) + " — Mutter's own screen cast, no dialog" +
+                  (d->embedCursor ? ", the pointer painted in" : ""));
         return true;
     }
     const bool helper = !g_InHelper.load() && unreadableByPortal();
@@ -441,19 +453,19 @@ bool PortalScreenCast::start(const std::string& restoreToken, int timeoutMs, Por
                           : ""));
         return true;
     }
-    log::info(std::string("[native] portal: ") + (d->virtualMonitor ? "virtual monitor, " : "") +
-              "node " + std::to_string(out.nodeId) +
-              (out.width > 0
-                   ? " (" + std::to_string(out.width) + "x" + std::to_string(out.height) + ")"
-                   : std::string()) +
-              (out.hasPosition ? " at " + std::to_string(out.x) + "," + std::to_string(out.y) +
-                                     " in the compositor's space"
-                               : std::string()) +
-              (out.restoreToken.empty() ? " — no restore token, the dialog will come back"
-                                        : " — restore token kept, later sessions are silent") +
-              (helper ? " (asked through a helper without capabilities, which the portal would "
-                        "refuse)"
-                      : ""));
+    log::info(
+        std::string("[native] portal: ") + (d->virtualMonitor ? "virtual monitor, " : "") +
+        (d->embedCursor ? "the pointer painted in, " : "") + "node " + std::to_string(out.nodeId) +
+        (out.width > 0 ? " (" + std::to_string(out.width) + "x" + std::to_string(out.height) + ")"
+                       : std::string()) +
+        (out.hasPosition ? " at " + std::to_string(out.x) + "," + std::to_string(out.y) +
+                               " in the compositor's space"
+                         : std::string()) +
+        (out.restoreToken.empty() ? " — no restore token, the dialog will come back"
+                                  : " — restore token kept, later sessions are silent") +
+        (helper ? " (asked through a helper without capabilities, which the portal would "
+                  "refuse)"
+                : ""));
     return true;
 }
 
@@ -514,11 +526,11 @@ bool PortalScreenCast::startInHelper(const std::string& restoreToken, int timeou
     d->helper = pid;
     d->helperSocket = pair[0];
 
-    const std::string request = d->kwin
-                                    ? "2\n" + std::to_string(d->kwinWidth) + "\n" +
-                                          std::to_string(d->kwinHeight) + "\n" + d->kwinName
-                                    : std::string("1\n") + (d->virtualMonitor ? "1" : "0") + "\n" +
-                                          std::to_string(timeoutMs) + "\n" + restoreToken;
+    const char* source = !d->virtualMonitor ? "0" : d->embedCursor ? "2" : "1";
+    const std::string request = d->kwin ? "2\n" + std::to_string(d->kwinWidth) + "\n" +
+                                              std::to_string(d->kwinHeight) + "\n" + d->kwinName
+                                        : std::string("1\n") + source + "\n" +
+                                              std::to_string(timeoutMs) + "\n" + restoreToken;
     if (::send(d->helperSocket, request.data(), request.size(), MSG_NOSIGNAL) < 0) {
         error = std::string("the portal helper took no request: ") + std::strerror(errno);
         stopHelper();
@@ -723,19 +735,21 @@ bool PortalScreenCast::startHere(const std::string& restoreToken, int timeoutMs,
                 // host). cursor_mode 4 = METADATA, so the pointer arrives
                 // beside the picture rather than burnt into it — the same
                 // contract CursorState carries everywhere else, which is what
-                // lets the client keep drawing its own.
+                // lets the client keep drawing its own. 2 = EMBEDDED where
+                // GNOME paints it into the pictures anyway (setEmbedCursor).
                 // persist_mode 2 = remember until the user revokes it, which is
                 // what buys a restore token and, with it, silence next time.
                 // types 4 = VIRTUAL instead: a monitor made for this session.
                 const uint32_t types = d->virtualMonitor ? kSourceVirtual : kSourceMonitor;
+                const uint32_t cursorMode = d->embedCursor ? 2 : 4;
                 if (restoreToken.empty())
                     return sd_bus_message_append(m, "a{sv}", 5, "handle_token", "s", token.c_str(),
                                                  "types", "u", types, "multiple", "b", 0,
-                                                 "cursor_mode", "u", uint32_t{4}, "persist_mode",
+                                                 "cursor_mode", "u", cursorMode, "persist_mode",
                                                  "u", uint32_t{2});
                 return sd_bus_message_append(m, "a{sv}", 6, "handle_token", "s", token.c_str(),
                                              "types", "u", types, "multiple", "b", 0, "cursor_mode",
-                                             "u", uint32_t{4}, "persist_mode", "u", uint32_t{2},
+                                             "u", cursorMode, "persist_mode", "u", uint32_t{2},
                                              "restore_token", "s", restoreToken.c_str());
             },
             selected, 15000))

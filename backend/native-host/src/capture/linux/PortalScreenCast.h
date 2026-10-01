@@ -167,6 +167,12 @@ public:
     /// The node is on the session's own PipeWire. Before start().
     void setMutter(const std::string& connector, int width, int height, int refreshHz);
 
+    /// The pointer painted into the pictures rather than sent beside them:
+    /// cursor_mode 2 instead of 4 on the portal, 1 instead of 2 on Mutter's
+    /// route. A GNOME virtual monitor before GNOME 48, whose pictures carry it
+    /// anyway (MutterScreenCast::embedsPointer). Before start().
+    void setEmbedCursor(bool embed);
+
     /// Whether the compositor has ended the stream of its own accord since
     /// start(): the monitor it recorded went, the desktop was locked. Mutter's
     /// route says so; the others never do, and this is false there.

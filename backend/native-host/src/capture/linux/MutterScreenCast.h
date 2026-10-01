@@ -39,8 +39,9 @@
 //
 // The pointer comes as metadata (cursor-mode 2), as the portal's handshake
 // asks: Mutter 48 paints no pointer into a virtual monitor's DMA-BUF frames
-// when a physical screen shows a hardware one (Punktfunk, mutter#4939). The
-// node is on the session's own PipeWire. No RemoteDesktop session beside it:
+// when a physical screen shows a hardware one (Punktfunk, mutter#4939). Before
+// GNOME 48 it comes painted into the pictures (cursor-mode 1, embedsPointer).
+// The node is on the session's own PipeWire. No RemoteDesktop session beside it:
 // the input goes through uinput, as everywhere else, and a screen cast alone
 // is what GNOME's portal backend asks of Mutter.
 //
@@ -77,17 +78,22 @@ public:
     /// session bus; 0 when no GNOME Shell answers. Mutter shares its numbers.
     static int shellMajor();
 
-    /// Whether a virtual monitor's DMA-BUF frames carry the pointer under this
-    /// GNOME: Mutter blits the monitor's view into them, and until GNOME 48
-    /// that view holds the pointer GNOME paints itself, whatever cursor mode
-    /// was asked for (Mutter 46, meta-screen-cast-virtual-stream-src.c). Its
-    /// shared-memory frames are painted again without it. From GNOME 48 the
-    /// pointer leaves the view while a screen shows a hardware one
-    /// (Punktfunk) — taken as the rule, a headless GNOME 48 not measured.
-    static bool paintsPointerIntoDmabuf(int shellMajor)
-    {
-        return shellMajor > 0 && shellMajor < 48;
-    }
+    /// Whether a virtual monitor's pointer is asked painted into its pictures
+    /// (cursor-mode 1) under this GNOME, rather than beside them as metadata.
+    ///
+    /// Until GNOME 48, Mutter blits the monitor's view into its DMA-BUF frames,
+    /// and that view holds the pointer GNOME paints itself, whatever cursor
+    /// mode was asked for (Mutter 46, meta-screen-cast-virtual-stream-src.c).
+    /// Asked as metadata, a move of the pointer alone brings its new position
+    /// and seldom a picture: the pointer in the pictures stays put, then jumps
+    /// with whatever else repaints the monitor — it blinks under a moving hand
+    /// (gate C, UM790Pro, GNOME 46, 01/10/2026: 93 to 109 position-only updates
+    /// a second, up to 59 ms without a picture). Asked painted, every move is a
+    /// picture with the pointer in it (112 to 145 a second, 13 ms apart at
+    /// most), in shared memory too. From GNOME 48 the pointer leaves the view
+    /// while a screen shows a hardware one (Punktfunk): metadata, the client
+    /// draws it — taken as the rule, a headless GNOME 48 not measured.
+    static bool embedsPointer(int shellMajor) { return shellMajor > 0 && shellMajor < 48; }
 
     struct Request
     {
@@ -101,6 +107,9 @@ public:
         int width = 0;
         int height = 0;
         int refreshHz = 0;
+        /// The pointer painted into every picture (cursor-mode 1) rather than
+        /// sent beside them (2): see embedsPointer.
+        bool embedCursor = false;
     };
 
     /// Open the session and wait for its PipeWire @p node. False, with
