@@ -18,6 +18,7 @@ import {
     BACKOFF_MS,
     BASE_MS,
     CadenceStepper,
+    FASTER_STATS,
     ladder,
     QUEUE_HOLD_MS,
 } from '../js/stream/CadenceStepper.js';
@@ -168,7 +169,10 @@ describe('CadenceStepper', () => {
         const s = setup();
         s.run(10000);
         expect(s.steps().map((m) => m.fps)).toEqual([240]);
-        expect(s.steps()[0].at).toBeLessThan(5000);
+        // Asked once the host has said FASTER_STATS times, a second apart,
+        // that the content is faster.
+        expect(s.steps()[0].at).toBeGreaterThanOrEqual(FASTER_STATS * 1000);
+        expect(s.steps()[0].at).toBeLessThan(FASTER_STATS * 1000 + 200);
         expect(s.stepper.stepFps).toBe(240);
         expect(s.stepper.kept).toBe(1);
         expect(s.hostStep).toBe(240);
@@ -183,7 +187,7 @@ describe('CadenceStepper', () => {
 
     it('climbs 60 → 120 → 240 on a client that keeps up', () => {
         const s = setup({ base: 60 });
-        s.run(11000);
+        s.run(12000);
         expect(s.steps().map((m) => m.fps)).toEqual([120, 240]);
         expect(s.stepper.stepFps).toBe(240);
         expect(s.stepper.kept).toBe(2);
@@ -260,6 +264,64 @@ describe('CadenceStepper', () => {
             expect(s.steps()).toEqual([]);
             expect(s.stepper.trials).toBe(0);
         }
+    });
+
+    it('tries nothing for a few faster seconds over a slower game', () => {
+        // The bench, 01/10/2026: a kiosk opening over a 50-frame page — 169
+        // presents a second, a pause, 84 for four reports, then the game's 51.
+        const reports = [169, 169, 0, 0, 84, 84, 84, 84];
+        const s = setup({
+            base: 60,
+            presents: (t) => reports[Math.floor(t / 1000) - 1] ?? 51,
+        });
+        s.run(60000);
+        expect(s.steps()).toEqual([]);
+        expect(s.stepper.trials).toBe(0);
+    });
+
+    it('takes a trial back without blame when the content slows under it', () => {
+        let presents = 240;
+        const s = setup({ base: 60, presents: () => presents });
+        s.run(FASTER_STATS * 1000 + 200);
+        expect(s.steps().map((m) => m.fps)).toEqual([120]);
+        presents = 50;
+        s.run(FASTER_STATS * 1000 + 1500);
+        expect(s.steps().map((m) => m.fps)).toEqual([120, 0]);
+        expect(s.stepper.events.at(-1)).toMatchObject({
+            what: 'inconclusive',
+            why: 'the content slowed',
+        });
+        expect(s.stepper.rejected).toBe(0);
+        expect(s.stepper.trips).toBe(0);
+        expect(s.stepper.stepFps).toBe(0);
+        // No backoff: faster again, tried again as soon as it has been long
+        // enough.
+        presents = 240;
+        s.run(FASTER_STATS * 1000 + 1500 + (FASTER_STATS + 1) * 1000);
+        expect(s.steps().map((m) => m.fps)).toEqual([120, 0, 120]);
+    });
+
+    it('lets a kept step go when the content stops using it', () => {
+        let presents = 240;
+        const s = setup({ base: 60, presents: () => presents });
+        s.run(13000);
+        expect(s.stepper.stepFps).toBe(240);
+        // The game drops to 100 frames a second: 120 is enough.
+        presents = 100;
+        s.run(15600);
+        expect(s.steps().map((m) => m.fps)).toEqual([120, 240, 120]);
+        expect(s.stepper.stepFps).toBe(120);
+        // Then to 50: the client's own rate.
+        presents = 50;
+        s.run(17600);
+        expect(s.steps().map((m) => m.fps)).toEqual([120, 240, 120, 0]);
+        expect(s.stepper.stepFps).toBe(0);
+        expect(s.stepper.trips).toBe(0);
+        expect(s.stepper.rejected).toBe(0);
+        expect(s.stepper.events.filter((e) => e.what === 'stepdown')).toHaveLength(2);
+        // And it stays there while the content is slow.
+        s.run(60000);
+        expect(s.steps()).toHaveLength(4);
     });
 
     it('a game at 80 fps on a 60 Hz client: 120, and no further', () => {

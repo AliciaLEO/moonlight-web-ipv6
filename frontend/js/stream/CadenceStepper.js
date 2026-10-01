@@ -38,7 +38,12 @@
  * refresh (240 on the product's virtual display), each capped at that refresh
  * (ladder()). A step is tried only while the host says its display presents
  * clearly faster than the current one — `stats.cadence.presents` above FASTER
- * times it: a game at 50 frames a second on a 60 Hz client never starts one.
+ * times it — in FASTER_STATS of its reports in a row: a game at 50 frames a
+ * second on a 60 Hz client never starts one, nor do the few faster seconds of
+ * a window opening over it (a kiosk's launch on the bench, 01/10/2026). A
+ * trial during which the content slows is taken back without blame, and a
+ * kept step the content stops using, CONTENT_STABLE reports in a row, is let
+ * go down to the one it uses.
  *
  * ── A trial ──────────────────────────────────────────────────────────────────
  *
@@ -103,6 +108,14 @@ export const QUEUE_HOLD_MS = 150;
 export const BACKOFF_MS = [30000, 60000, 120000, 240000, 480000, 960000];
 /** Stats in a row before the content counts as changed. */
 export const CONTENT_STABLE = 2;
+/**
+ * Stats in a row with the content faster before a step is asked: about five
+ * seconds. A kiosk opening over a 50-frame page on the bench presented 84 to
+ * 169 times a second for four of them, and was tried (01/10/2026).
+ */
+export const FASTER_STATS = 5;
+/** How many of the host's reports are kept. */
+const SAMPLES_KEPT = 12;
 /** Stats older than this say nothing about the content. */
 export const STATS_STALE_MS = 3000;
 /** Stats in a row before a step the host no longer runs is let go. */
@@ -181,6 +194,8 @@ export class CadenceStepper {
         this._display = 0;
         this._levels = ladder(this._base, 0);
         this._presents = 0;
+        /** @type {number[]} the display's presents a second, the host's latest reports last */
+        this._samples = [];
         this._statsAt = -Infinity;
         this._hostStep = 0;
         this._mismatch = 0;
@@ -265,6 +280,8 @@ export class CadenceStepper {
         if (!cadence || typeof cadence !== 'object') return;
         this._statsAt = now;
         this._presents = cadence.presents > 0 ? cadence.presents : 0;
+        this._samples.push(this._presents);
+        if (this._samples.length > SAMPLES_KEPT) this._samples.shift();
         this._hostStep = cadence.step > 0 ? cadence.step : 0;
         const base = cadence.base > 0 ? Math.round(cadence.base) : 0;
         const display = cadence.display > 0 ? Math.round(cadence.display) : 0;
@@ -277,6 +294,7 @@ export class CadenceStepper {
             else if (this._level >= this._levels.length) this._fallBack('no such step', now);
         }
         this._noteBand(now);
+        this._stepDown(now);
         this._reconcile(now);
     }
 
@@ -355,7 +373,17 @@ export class CadenceStepper {
                 }
                 break;
             case 'base':
-                if (now - this._baseFrom >= BASE_MS) this._askNext(now);
+                if (!this._fasterRun(this._rate()) || now - this._statsAt > STATS_STALE_MS) {
+                    // The content slowed before a step was asked: nothing
+                    // tried, nothing to blame.
+                    this._phase = 'idle';
+                    break;
+                }
+                if (
+                    now - this._baseFrom >= BASE_MS &&
+                    this._fasterRun(this._rate()) >= FASTER_STATS
+                )
+                    this._askNext(now);
                 break;
             case 'asking':
                 if (now - this._askedAt >= REPLY_TIMEOUT_MS) {
@@ -368,6 +396,16 @@ export class CadenceStepper {
                 break;
             case 'settling':
             case 'trial':
+                if (this._statsAt > this._askedAt && !this._fasterRun(this._rate())) {
+                    // The content slowed under the trial: what it would
+                    // measure is the content, not the step. Taken back, no
+                    // blame.
+                    this._event('inconclusive', now, { why: 'the content slowed' });
+                    this._ask(this.stepFps);
+                    this._phase = 'idle';
+                    this._nextTrialAt = now + 1000;
+                    break;
+                }
                 if (now >= this._trialFrom) this._phase = 'trial';
                 if (now >= this._trialFrom + TRIAL_MS) this._judge(now);
                 break;
@@ -397,7 +435,43 @@ export class CadenceStepper {
         if (!this._clock.ready || !this._firstPaintAt) return false;
         if (now - this._firstPaintAt < WARMUP_MS) return false;
         if (now - this._statsAt > STATS_STALE_MS) return false;
-        return this._presents > this._rate() * FASTER;
+        // The base window opens on the first faster report; the step is asked
+        // once FASTER_STATS of them are in (tick, 'base').
+        return this._fasterRun(this._rate()) > 0;
+    }
+
+    /** How many of the host's latest reports, in a row, show content faster than @p fps. */
+    _fasterRun(fps) {
+        let n = 0;
+        for (let i = this._samples.length - 1; i >= 0 && this._samples[i] > fps * FASTER; i--) n++;
+        return n;
+    }
+
+    /** …and how many, in a row, show it no faster. */
+    _slowerRun(fps) {
+        let n = 0;
+        for (let i = this._samples.length - 1; i >= 0 && this._samples[i] <= fps * FASTER; i--) n++;
+        return n;
+    }
+
+    /**
+     * A kept step the content no longer uses, CONTENT_STABLE reports in a
+     * row: down to the step it does use — the content's doing, nothing to
+     * blame, and the next trial waits for it to be faster again.
+     */
+    _stepDown(now) {
+        if (this._phase !== 'idle' || this._level === 0) return;
+        let level = this._level;
+        while (level > 0 && this._slowerRun(this._levels[level - 1]) >= CONTENT_STABLE) level--;
+        if (level === this._level) return;
+        const from = this.stepFps;
+        this._level = level;
+        this._ask(this.stepFps);
+        this._event('stepdown', now, { from, to: this._rate(), presents: this._presents });
+        this._log(
+            `[CadenceStepper] back to ${this._rate()} fps: the content presents ` +
+                `${this._presents} times a second, ${from} fps no longer used`,
+        );
     }
 
     /** Close the base window and ask for the next step. */
@@ -470,10 +544,12 @@ export class CadenceStepper {
         this._level = this._try;
         this._backoff = 0;
         this._phase = 'idle';
-        // The next step, at once, from this window, when the content asks for it.
+        // The next step from this window — at once when the content has asked
+        // for it long enough, otherwise once it has (tick, 'base').
         if (this._mayTry(now)) {
+            this._phase = 'base';
             this._baseFrom = this._trialFrom;
-            this._askNext(now);
+            if (this._fasterRun(this._rate()) >= FASTER_STATS) this._askNext(now);
         }
     }
 
@@ -652,6 +728,7 @@ export class CadenceStepper {
             base: this._base,
             display: this._display,
             presents: this._presents,
+            fasterReports: this._fasterRun(this._rate()),
             levels: this._levels.slice(),
             stepFps: this.stepFps,
             hostStep: this._hostStep,

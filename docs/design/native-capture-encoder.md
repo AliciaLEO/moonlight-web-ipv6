@@ -6862,9 +6862,13 @@ N95 (§33.7). On ne sait pas d'avance qui suit : le client le mesure, un palier
 **L'échelle.** La fréquence du flux (celle de l'Auto), puis deux fois elle,
 puis la fréquence de l'écran capturé (240 Hz sur l'écran virtuel du produit,
 §33.9), chacune plafonnée à cette dernière. Un palier n'est essayé que si
-l'écran capturé présente nettement plus vite que le palier en cours (× 1,15) :
-un jeu à 49-53 i/s sur un client à 60 Hz n'en déclenche aucun, un jeu à
-75-83 i/s monte à 120 et s'y arrête.
+l'écran capturé présente nettement plus vite que le palier en cours (× 1,15),
+et cela dans cinq relevés de l'hôte d'affilée, soit environ 5 s : un jeu à
+49-53 i/s sur un client à 60 Hz n'en déclenche aucun, un jeu à 75-83 i/s monte
+à 120 et s'y arrête. Les cinq relevés viennent du banc (UA.3, 01/10). Un kiosque
+qui s'ouvrait par-dessus la page à 50 i/s a présenté 169 puis 84 fois par
+seconde pendant quatre relevés. Avec un seul relevé comme seuil, il avait
+déclenché un essai.
 
 **L'hôte** (`core/CadenceStep.h`, Windows seulement) :
 - Le client demande un palier par `fpsstep` (0 : retour à sa fréquence). Le
@@ -6896,6 +6900,13 @@ un jeu à 49-53 i/s sur un client à 60 Hz n'en déclenche aucun, un jeu à
   recul : 30 s, 1, 2, 4, 8, 16 min, remis à zéro quand le contenu (la bande des
   présentations) ou le lien (écran, retour d'arrière-plan) change. Un palier
   gardé sert de base à l'essai suivant.
+- Le contenu commande aussi la descente, sans faute à compter ni recul. Au
+  banc du 01/10, avant cette règle, un palier gardé sur une page qui
+  ralentissait restait en place ; le filet sautait 20 à 25 s plus tard, et le
+  p99 grimpait (jusqu'à 100 ms). Désormais :
+  - un essai pendant lequel le contenu ralentit est repris (« non concluant ») ;
+  - un palier gardé que le contenu n'utilise plus, deux relevés d'affilée,
+    redescend au palier qu'il utilise.
 - Le filet est armé dès que le flux dépasse la fréquence du client, essais
   compris : médiane de capture → peinte sur les 250 dernières ms au-dessus de
   sa référence (mesurée à la fréquence du client) d'une demi-période du
@@ -6907,7 +6918,9 @@ un jeu à 49-53 i/s sur un client à 60 Hz n'en déclenche aucun, un jeu à
   canvas qui déchire (Chromium sur un ordinateur, son défaut), décodage et
   dessin sur le fil principal, sans pacer. Un client en vsync garde sa
   fréquence ; l'émission calée (§33.8) en reste la piste.
-- Simulé (Vitest) : 120 → 240 décidé en ~7 s, 60 → 120 → 240 en ~10 s.
+- Simulé (Vitest) : 120 → 240 demandé à 5 s et gardé vers 8 s ;
+  60 → 120 → 240 en ~11 s, le second palier étant demandé dès que le premier
+  est gardé.
 
 **La clé.** Coupée par défaut jusqu'à la porte UA :
 `localStorage.mw_autostep = '1'` l'active. `window.mwCadenceStepper` donne
