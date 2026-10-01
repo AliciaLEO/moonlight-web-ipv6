@@ -709,7 +709,8 @@ static int runStatusCommand(quint16 persistedHttpsPort)
     if (auth.value("remote_admin_enabled").toBool(false)) {
         if (auth.value("admin_password_set").toBool(false)) {
             out << "  Admin password set   (change it with:  moonlightweb "
-                   "--set-admin-password)\n";
+                   "--set-admin-password,\n"
+                << "                 remove it with:  moonlightweb --clear-admin-password)\n";
             if (auth.value("remote_admin_internet").toBool(false))
                 out << "                 also accepted from the internet, through the link\n";
         } else
@@ -860,6 +861,56 @@ static int runSetAdminPasswordCommand(quint16 persistedHttpsPort)
         << "  A computer on this network can now open the admin page at the server's\n"
         << "  URL and unlock it with this password. Machines that used a previous\n"
         << "  password have been signed out.\n\n";
+    out.flush();
+    return 0;
+}
+
+// `moonlightweb --clear-admin-password`: forget the password, so no other
+// computer can open the admin page until a new one is set. Asks first unless
+// --yes is given.
+static int runClearAdminPasswordCommand(quint16 persistedHttpsPort, bool assumeYes)
+{
+    QTextStream out(stdout);
+    const QString base = findRunningInstance(persistedHttpsPort);
+    if (base.isEmpty()) {
+        out << "MoonlightWeb is not running — start it first "
+               "(sudo systemctl start moonlightweb).\n";
+        out.flush();
+        return 1;
+    }
+
+    if (!assumeYes) {
+        out << "Remove the admin password? No other computer will be able to open the\n"
+               "admin page until a new one is set. Type yes to confirm: ";
+        out.flush();
+        QTextStream in(stdin);
+        if (in.readLine().trimmed().compare(QStringLiteral("yes"), Qt::CaseInsensitive) != 0) {
+            out << "Nothing was changed.\n";
+            out.flush();
+            return 1;
+        }
+    }
+
+    QJsonObject body;
+    body["clear"] = true;
+    const LoopbackReply reply = loopbackAdminPost(
+        base, "/api/admin/password", QJsonDocument(body).toJson(QJsonDocument::Compact));
+    if (!reply.ok) {
+        const QString apiError = reply.json.value("error").toString();
+        out << "Failed: "
+            << (!apiError.isEmpty()
+                    ? apiError
+                    : (reply.error.isEmpty() ? QStringLiteral("HTTP %1").arg(reply.httpStatus)
+                                             : reply.error))
+            << "\n";
+        out.flush();
+        return 1;
+    }
+
+    out << "\n  Admin password removed.\n"
+        << "\n"
+        << "  Only this machine can open the admin page now. Machines that unlocked it\n"
+        << "  with the password have been signed out of it.\n\n";
     out.flush();
     return 0;
 }
@@ -1454,6 +1505,7 @@ int main(int argc, char* argv[])
                                                    "--new-pin",
                                                    "--enable-internet",
                                                    "--set-admin-password",
+                                                   "--clear-admin-password",
                                                    "--help",
                                                    "--help-all",
                                                    "-h",
@@ -1516,8 +1568,9 @@ int main(int argc, char* argv[])
                 // Commands that print and exit. Both spellings again: --status
                 // and --native-bench=<spec>. Matching the bare prefix would also
                 // swallow a future --status-something, so require the boundary.
-                for (const char* flag : {"--native-bench", "--status", "--new-pin",
-                                         "--set-admin-password", "--enable-internet"}) {
+                for (const char* flag :
+                     {"--native-bench", "--status", "--new-pin", "--set-admin-password",
+                      "--clear-admin-password", "--enable-internet"}) {
                     const size_t n = qstrlen(flag);
                     if (qstrncmp(argv[i], flag, int(n)) == 0 &&
                         (argv[i][n] == '\0' || argv[i][n] == '='))
@@ -1675,11 +1728,17 @@ int main(int argc, char* argv[])
         "Set the password another computer on this network uses to open the admin page, then exit");
     parser.addOption(setAdminPasswordOption);
 
+    QCommandLineOption clearAdminPasswordOption(
+        "clear-admin-password",
+        "Remove the admin password, so only this machine opens the admin page, then exit");
+    parser.addOption(clearAdminPasswordOption);
+
     QCommandLineOption enableInternetOption(
         "enable-internet", "Enable the Internet link (asks for consent), then exit");
     parser.addOption(enableInternetOption);
 
-    QCommandLineOption yesOption("yes", "Accept the --enable-internet agreement non-interactively");
+    QCommandLineOption yesOption("yes", "Accept the --enable-internet agreement, or confirm "
+                                        "--clear-admin-password, non-interactively");
     parser.addOption(yesOption);
 
     // The native engine's measuring instrument: capture + encode one display
@@ -1876,6 +1935,9 @@ int main(int argc, char* argv[])
         return runNewPinCommand(appSettings.httpsPort(mw::edition::defaultHttpsPort()));
     if (parser.isSet(setAdminPasswordOption))
         return runSetAdminPasswordCommand(appSettings.httpsPort(mw::edition::defaultHttpsPort()));
+    if (parser.isSet(clearAdminPasswordOption))
+        return runClearAdminPasswordCommand(appSettings.httpsPort(mw::edition::defaultHttpsPort()),
+                                            parser.isSet(yesOption));
     if (parser.isSet(enableInternetOption))
         return runEnableInternetCommand(appSettings.httpsPort(mw::edition::defaultHttpsPort()),
                                         parser.isSet(yesOption));

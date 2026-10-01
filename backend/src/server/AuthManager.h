@@ -153,8 +153,11 @@ public:
     bool adminPasswordSet() const;
     /// Replace the password. Rejects anything shorter than
     /// MIN_ADMIN_PASSWORD_LEN (including the empty string: use
-    /// setRemoteAdminEnabled(false) to close the door).
+    /// setRemoteAdminEnabled(false) to close the door, or clearAdminPassword()).
     bool setAdminPassword(const QString& password);
+    /// Forget the password: back to "unset", the door opens for nobody until a
+    /// new one is chosen. Revokes every unlock the old one bought.
+    void clearAdminPassword();
     /// Enable or disable remote administration. Disabling revokes every unlock.
     void setRemoteAdminEnabled(bool enabled);
     /// Whether remote administration is enabled (mirrors AppSettings).

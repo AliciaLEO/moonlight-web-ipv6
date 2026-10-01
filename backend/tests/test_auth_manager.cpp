@@ -298,6 +298,21 @@ void run_auth_manager_tests()
         CHECK(auth.validateSession(office)); // still signed in, just not admin
         CHECK(!settings.remoteAdminInternet());
     }
+
+    // Removing the password shuts the door again and takes back every unlock;
+    // remote administration itself stays on, waiting for a new password.
+    {
+        const QString laptop = auth.createSession("192.168.5.40", "Laptop");
+        CHECK(auth.promoteSessionToAdmin(laptop));
+        auth.clearAdminPassword();
+        CHECK(!auth.adminPasswordSet());
+        CHECK(settings.adminPasswordDigest().isEmpty());
+        CHECK(!auth.isAdminSession(laptop));
+        CHECK(auth.validateSession(laptop));
+        CHECK(auth.remoteAdminEnabled());
+        CHECK(auth.validateAdminPassword("192.168.5.41", "another-password").result ==
+              AuthManager::InvalidPin);
+    }
     auth.destroyAllSessions();
 
     // ── LAN address classification (gates the unlock) ──────────────────────

@@ -574,6 +574,14 @@ bool AuthManager::setAdminPassword(const QString& password)
     return true;
 }
 
+void AuthManager::clearAdminPassword()
+{
+    if (!m_settings) return;
+    m_settings->setAdminPasswordDigest(QString());
+    demoteAdminSessions();
+    Logger::info("[Auth] Remote admin password removed");
+}
+
 void AuthManager::setRemoteAdminEnabled(bool enabled)
 {
     if (!m_settings) return;

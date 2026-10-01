@@ -433,7 +433,7 @@ void registerAuthRoutes(HttpServer& server, AuthManager& authManager, GeoIpServi
 
     // POST /api/admin/password — change the remote admin password and/or turn
     // remote administration on and off, from the LAN or also from the internet
-    // (admin only). Body may carry any of {password, enabled, internet}; the
+    // (admin only). Body may carry any of {password, clear, enabled, internet}; the
     // toggles are applied first so a single call can re-enable the door and set
     // a password behind it.
     server.router()->post("/api/admin/password", [&authManager](const HttpRequest& req) {
@@ -454,6 +454,8 @@ void registerAuthRoutes(HttpServer& server, AuthManager& authManager, GeoIpServi
         if (body.contains("internet"))
             authManager.setRemoteAdminInternet(body["internet"].toBool());
 
+        // {"clear": true} forgets the password; one given alongside replaces it.
+        if (body["clear"].toBool(false) && password.isEmpty()) authManager.clearAdminPassword();
         if (!password.isEmpty() && !authManager.setAdminPassword(password)) {
             QJsonObject obj;
             obj["status"] = "error";
@@ -461,7 +463,9 @@ void registerAuthRoutes(HttpServer& server, AuthManager& authManager, GeoIpServi
             obj["min_length"] = AuthManager::MIN_ADMIN_PASSWORD_LEN;
             return HttpResponse::json(obj, 400);
         }
+        // Removing the password removes the caller's way in along with everyone's.
         if (callerWasRemoteAdmin && authManager.remoteAdminEnabled() &&
+            authManager.adminPasswordSet() &&
             AuthManager::canUnlockAdmin(req.clientAddress, req.hostTrusted, req.viaTunnel,
                                         authManager.remoteAdminInternet()))
             authManager.promoteSessionToAdmin(token);

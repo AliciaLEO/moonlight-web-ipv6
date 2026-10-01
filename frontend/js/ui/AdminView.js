@@ -405,6 +405,13 @@ export class AdminView {
         await this._postRemoteAdmin({ password }, t('admin.remoteAdminSaved'));
     }
 
+    // Forget the password: the door stays advertised but opens for nobody, and
+    // every machine that unlocked with it loses its access.
+    async _clearAdminPassword() {
+        if (!confirm(t('admin.remoteAdminConfirmRemove'))) return;
+        await this._postRemoteAdmin({ clear: true }, t('admin.remoteAdminRemoved'));
+    }
+
     // Open or close the LAN door entirely. Closing it revokes every unlock.
     async _toggleRemoteAdmin(enabled) {
         await this._postRemoteAdmin(
@@ -434,6 +441,7 @@ export class AdminView {
             // Reload rather than leave an admin page whose every button 403s.
             const closedOnItself =
                 !this._remoteAdminEnabled ||
+                !this._adminPasswordSet ||
                 (body.internet === false && !this._remoteAdminInternet);
             if (closedOnItself && !this._isRealHostMachine) {
                 setTimeout(() => window.location.reload(), 600);
@@ -1400,6 +1408,10 @@ export class AdminView {
                 }
             });
         }
+        const clearPassBtn = this.container.querySelector('#btn-clear-admin-password');
+        if (clearPassBtn) {
+            clearPassBtn.addEventListener('click', () => this._clearAdminPassword());
+        }
 
         // Internet Access checkbox toggle
         const internetChk = this.container.querySelector('#chk-internet-enable');
@@ -2171,6 +2183,13 @@ export class AdminView {
                             <button class="btn btn-neutral" id="btn-set-admin-password">
                                 ${t('admin.remoteAdminChange')}
                             </button>
+                            ${
+                                this._adminPasswordSet
+                                    ? `<button class="btn btn-secondary" id="btn-clear-admin-password">
+                                ${t('admin.remoteAdminRemove')}
+                            </button>`
+                                    : ''
+                            }
                         </div>
                         <p class="settings-hint u-mt-2">${t('admin.remoteAdminHint')}</p>
                         <label class="settings-checkbox-label u-mt-2">
