@@ -71,6 +71,7 @@ void run_frame_cadence_tests();
 void run_resample_cost_tests();
 void run_cadence_align_tests();
 void run_cadence_choice_tests();
+void run_cadence_step_tests();
 void run_decode_credit_tests();
 void run_deadline_cadence_tests();
 void run_restart_backoff_tests();
@@ -154,6 +155,7 @@ int main(int argc, char** argv)
     RUN(resample_cost);
     RUN(cadence_align);
     RUN(cadence_choice);
+    RUN(cadence_step);
     RUN(decode_credit);
     RUN(deadline_cadence);
     RUN(restart_backoff);

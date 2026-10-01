@@ -976,6 +976,23 @@ void NativeMediaEngine::setClientVsyncGrid(double periodUs, int64_t phaseUs, int
         m_Session->setClientVsyncGrid(periodUs, phaseUs, leadUs, tearing, steady, budgetFps);
 }
 
+mw::native::FpsStep NativeMediaEngine::setClientFpsStep(int fps)
+{
+    if (m_Subscriber || !m_Session) {
+        mw::native::FpsStep refused;
+        refused.askedFps = fps;
+        refused.why = m_Subscriber ? "the shared feed keeps its pace" : "no session";
+        return refused;
+    }
+    return m_Session->setClientFpsStep(fps);
+}
+
+mw::native::CadenceStatus NativeMediaEngine::cadenceStatus() const
+{
+    if (m_Subscriber || !m_Session) return {};
+    return m_Session->cadenceStatus();
+}
+
 NativeMediaEngine::VsyncGridStatus NativeMediaEngine::vsyncGridStatus() const
 {
     VsyncGridStatus out;

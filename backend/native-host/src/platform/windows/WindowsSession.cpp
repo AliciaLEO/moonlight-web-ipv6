@@ -22,6 +22,7 @@
 #include "../../convert/windows/ColorConvert.h"
 #include "../../core/CadenceAlign.h"
 #include "../../core/CadenceChoice.h"
+#include "../../core/CadenceStep.h"
 #include "../../core/CursorPositionGate.h"
 #include "../../core/DeadlineCadence.h"
 #include "../../core/DecodeCredit.h"
@@ -316,6 +317,7 @@ public:
         // is for a config that bypassed it.
         m_DisplayMilliHz =
             modeChanged && m_ModeChangedHz > 0 ? m_ModeChangedHz * 1000 : display->refreshMilliHz;
+        m_DisplayMilliHzShared.store(m_DisplayMilliHz);
         m_ClientMilliHz.store(m_Config.clientRefreshMilliHz);
         m_ClientVsync.store(m_Config.clientVsync);
         {
@@ -711,9 +713,53 @@ public:
         if (fps > 0 && fps < 15) fps = 15;
         if (fps > 1000) fps = 1000;
         if (m_ClientFpsCap.exchange(fps) == fps) return;
+        // A decoder that asks for fewer frames is never stepped above its
+        // rate: the step it may have had is over (CadenceStep.h).
+        if (fps > 0 && m_StepFps.exchange(0) > 0)
+            log::info("[native] cadence step lifted: the client's decoder asked for no more than " +
+                      std::to_string(fps) + " fps");
         // Same road as a client screen that changed: the loop re-chooses the
         // gate between two frames.
         m_ClientRefreshDirty.store(true);
+    }
+
+    FpsStep setClientFpsStep(int fps) override
+    {
+        // Bounded like everything that crosses the network from a page.
+        if (fps < 0) fps = 0;
+        if (fps > 1000) fps = 1000;
+        StepInputs in;
+        in.askedFps = fps;
+        in.baseFps = m_BaseFps.load();
+        in.displayMilliHz = m_DisplayMilliHzShared.load();
+        in.encodeP95Us = m_EncodeP95Us.load();
+        in.benchCadence = m_Config.tuning.cadence != EncoderTuning::Cadence::Default;
+        in.clientCapFps = m_ClientFpsCap.load();
+        in.clientVsync = m_ClientVsync.load();
+        const FpsStep step = decideStep(in);
+        if (step.verdict != FpsStep::Verdict::Base)
+            m_StepsAsked.fetch_add(1, std::memory_order_relaxed);
+        if (step.verdict == FpsStep::Verdict::Refused) {
+            m_StepsRefused.fetch_add(1, std::memory_order_relaxed);
+            char p95[32];
+            std::snprintf(p95, sizeof(p95), "%.2f", in.encodeP95Us / 1000.0);
+            log::info("[native] cadence step to " + std::to_string(fps) + " fps refused: " +
+                      step.why + " (stream at " + std::to_string(in.baseFps) + " fps, " +
+                      hzString(in.displayMilliHz) + " Hz display, encode p95 " + p95 + " ms)");
+        }
+        // The loop re-chooses the gate between two frames and logs the line.
+        if (m_StepFps.exchange(step.fps) != step.fps) m_ClientRefreshDirty.store(true);
+        return step;
+    }
+
+    CadenceStatus cadenceStatus() const override
+    {
+        CadenceStatus status;
+        status.presentsPerSecond = m_PresentsPerSecond.load(std::memory_order_relaxed);
+        status.baseFps = m_BaseFps.load(std::memory_order_relaxed);
+        status.stepFps = m_StepFps.load(std::memory_order_relaxed);
+        status.displayHz = (m_DisplayMilliHzShared.load(std::memory_order_relaxed) + 500) / 1000;
+        return status;
     }
 
     void setClientDecodeQueue(int depth) override { m_DecodeCredit.note(depth, steadyNowUs()); }
@@ -2090,15 +2136,25 @@ private:
             // follows through the same setBitrate() everything else uses, at
             // once, so a gate that just went from 60 to 72 does not spend a
             // second handing out 60-sized frames 72 times.
+            //
+            // A step of "Auto"'s detection (CadenceStep.h) takes the same road:
+            // the gate moves to the step's rate between two frames, and the
+            // budget per frame follows, so the bitrate on the wire stays the
+            // setting's.
             if (m_ClientRefreshDirty.exchange(false)) {
                 FrameCadence chosen{0};
                 std::string line;
                 const int fps =
                     chooseCadence(m_ClientMilliHz.load(), m_ClientVsync.load(), chosen, line);
+                const int step = m_ChosenStepFps;
+                const bool stepMoved = step != m_AppliedStepFps;
+                if (stepMoved) noteStep(step);
                 if (chosen.intervalUs() != m_Cadence.intervalUs() || fps != m_CadenceFps) {
                     m_Cadence = chosen;
                     m_CadenceFps = fps;
-                    log::info(line + " (client screen changed mid-session)");
+                    log::info(line + (!stepMoved ? " (client screen changed mid-session)"
+                                      : step > 0 ? " (step asked by the client's detection)"
+                                                 : " (back to the client's own rate)"));
                     if (effective.retarget(fps))
                         applyBitrate(boosted ? encode::stillBitrateKbps(baseKbps) : baseKbps);
                 } else if (m_Config.tuning.cadence != EncoderTuning::Cadence::Default) {
@@ -2268,6 +2324,7 @@ private:
                 m_PointerWakes++;
             else if (status == capture::AcquireStatus::Timeout)
                 m_TimeoutWakes++;
+            countPresents(status);
 
             // Anything but a timeout means the screen is alive again, and the
             // frame about to be encoded is a moving one. Restore the ordinary
@@ -2571,6 +2628,27 @@ private:
         });
     }
 
+    /// The stream's interval without a step of the detection — the gate's,
+    /// or the rate's at the display's own refresh, where the gate is only a
+    /// ceiling a fiftieth shorter.
+    int64_t baseIntervalUs() const
+    {
+        if (m_BaseCadence.enabled() && !m_BaseCadence.isCeiling())
+            return m_BaseCadence.intervalUs();
+        return m_BaseCadenceFps > 0 ? 1000000 / m_BaseCadenceFps : 0;
+    }
+
+    /// How long a new picture took the encoder, for the p95 a step is weighed
+    /// against (CadenceStep.h). Deltas only: a keyframe or a re-send says
+    /// nothing about the rate the loop holds.
+    void noteEncodeTail(const EncodedFrame& out, const FrameStamps& stamps)
+    {
+        if (out.keyframe || stamps.resend) return;
+        if (out.encodedUs <= out.convertedUs) return;
+        if (m_EncodeTail.note(out.encodedUs - out.convertedUs, out.encodedUs))
+            m_EncodeP95Us.store(m_EncodeTail.p95Us(), std::memory_order_relaxed);
+    }
+
     /// What emit() does once a picture went out, for each one the encode
     /// thread delivered since the last call; the cadence counts them in the
     /// loop (m_DeliveredUncounted). A D3D12 chain lost there is taken as emit()
@@ -2597,6 +2675,7 @@ private:
             if (d.sent) {
                 noteEncodeLoad(d.frame, d.stamps);
                 noteScalerLoad(d.frame, d.stamps);
+                noteEncodeTail(d.frame, d.stamps);
             }
             m_DeliveredUncounted++;
         }
@@ -2688,6 +2767,7 @@ private:
             m_Callbacks.onVideo(out);
             noteEncodeLoad(out, stamps);
             noteScalerLoad(out, stamps);
+            noteEncodeTail(out, stamps);
         }
         m_Pipeline->releaseOutput();
         return true;
@@ -2712,10 +2792,8 @@ private:
         // The STREAM's interval, not the gate's: at the display's own rate the
         // gate is only a ceiling a fiftieth shorter than the interval — see
         // LinuxSession::noteEncodeLoad for why the stream's rate is the budget.
-        const int64_t intervalUs = m_Cadence.enabled() && !m_Cadence.isCeiling()
-                                       ? m_Cadence.intervalUs()
-                                   : m_CadenceFps > 0 ? 1000000 / m_CadenceFps
-                                                      : 0;
+        // Without a step of the detection: a trial is not a new budget.
+        const int64_t intervalUs = baseIntervalUs();
         if (m_LoadCap.note(encodedUs - convertedUs, intervalUs, encodedUs))
             m_PendingResize.store(true);
     }
@@ -2777,10 +2855,9 @@ private:
         if (m_ScalerPinned) return;
         if (out.keyframe || stamps.resend) return;
         if (out.encodedUs <= out.submittedUs) return;
-        const int64_t intervalUs = m_Cadence.enabled() && !m_Cadence.isCeiling()
-                                       ? m_Cadence.intervalUs()
-                                   : m_CadenceFps > 0 ? 1000000 / m_CadenceFps
-                                                      : 0;
+        // A step of the detection is a trial, not the stream's rate: Lanczos-2
+        // is not given up for good over a few seconds at 240.
+        const int64_t intervalUs = baseIntervalUs();
         if (intervalUs <= 0) return;
 
         m_ScalerWindowUs += out.encodedUs - out.submittedUs;
@@ -3147,8 +3224,11 @@ private:
     /// The rules are CadenceChoice.h's; this gathers what they read. Returns
     /// the cadence's rate, fills @p cadence, and writes the log line that
     /// says why.
-    int chooseCadence(int clientMilliHz, bool clientVsync, FrameCadence& cadence,
-                      std::string& line) const
+    ///
+    /// The same choice without the step in force is kept too (m_BaseCadence):
+    /// it is what a step is measured against, and what the load checks budget
+    /// against — a trial at 240 must not cost the session its resample.
+    int chooseCadence(int clientMilliHz, bool clientVsync, FrameCadence& cadence, std::string& line)
     {
         CadenceInputs in;
         in.settingFps = m_Config.fps;
@@ -3158,10 +3238,51 @@ private:
         in.clientMilliHz = clientMilliHz;
         in.clientVsync = clientVsync;
         in.mode = m_Config.tuning.cadence;
-        CadenceChoice chosen = mw::native::chooseCadence(in);
+        const CadenceChoice base = mw::native::chooseCadence(in);
+        m_BaseCadence = base.gate;
+        m_BaseCadenceFps = base.fps;
+        m_BaseFps.store(base.fps);
+        in.stepFps = m_StepFps.load();
+        m_ChosenStepFps = in.stepFps;
+        CadenceChoice chosen = in.stepFps > 0 ? mw::native::chooseCadence(in) : base;
         cadence = chosen.gate;
         line = std::move(chosen.line);
         return chosen.fps;
+    }
+
+    /// How fast the content changes, for the client's detection
+    /// (CadenceStep.h): the present an acquire returned and those Desktop
+    /// Duplication folded into it, whatever the gate then does with them.
+    /// Every other turn of the loop only moves the clock. Capture thread.
+    void countPresents(capture::AcquireStatus status)
+    {
+        const int64_t nowUs = steadyNowUs();
+        if (status == capture::AcquireStatus::Ok) {
+            int64_t presents = 1;
+            const int64_t folded = m_Capture ? m_Capture->foldedPresents() : -1;
+            if (folded >= 0) {
+                // A capture opened again counts from zero.
+                if (folded >= m_FoldedSeen) presents += folded - m_FoldedSeen;
+                m_FoldedSeen = folded;
+            }
+            m_PresentRate.note(presents, nowUs);
+        } else {
+            m_PresentRate.tick(nowUs);
+        }
+        m_PresentsPerSecond.store(m_PresentRate.perSecond(), std::memory_order_relaxed);
+    }
+
+    /// A step of "Auto"'s detection came into force, or went (0): counted for
+    /// the session's last cadence line. Capture thread.
+    void noteStep(int step)
+    {
+        const int64_t nowUs = steadyNowUs();
+        if (m_AppliedStepFps > 0) m_SteppedUs += nowUs - m_SteppedSinceUs;
+        if (step > 0) {
+            m_SteppedSinceUs = nowUs;
+            m_StepsApplied++;
+        }
+        m_AppliedStepFps = step;
     }
 
     /// Report an unrecoverable end once, from the loop thread.
@@ -3247,6 +3368,19 @@ private:
                            : std::string()));
         }
 
+        // "Auto"'s detection: the steps the client asked for, and how long the
+        // stream ran above the client's own rate.
+        if (const int64_t asked = m_StepsAsked.load(); asked > 0) {
+            int64_t steppedUs = m_SteppedUs;
+            if (m_AppliedStepFps > 0) steppedUs += steadyNowUs() - m_SteppedSinceUs;
+            char above[32];
+            std::snprintf(above, sizeof(above), "%.1f", static_cast<double>(steppedUs) / 1e6);
+            log::info("[native] cadence steps: " + std::to_string(asked) + " asked, " +
+                      std::to_string(m_StepsApplied) + " applied, " +
+                      std::to_string(m_StepsRefused.load()) + " refused; " + above +
+                      " s above the client's rate");
+        }
+
         // cadence=host-guarded: what the client's decode queue held back.
         if (m_Config.tuning.cadence == EncoderTuning::Cadence::HostGuarded && seconds > 0) {
             const auto perSecond = [seconds](int64_t n) {
@@ -3300,6 +3434,31 @@ private:
     /// Frames per second the client asked not to exceed, 0 for none — see
     /// setClientFpsCap.
     std::atomic<int> m_ClientFpsCap{0};
+    /// "Auto"'s detection (CadenceStep.h): the step the client was granted —
+    /// written by setClientFpsStep, read by the loop's re-choice — and what
+    /// the session tells it (cadenceStatus): the stream's rate without a step,
+    /// the captured display's presents a second, its refresh, and the
+    /// encoder's p95 a step is weighed against.
+    std::atomic<int> m_StepFps{0};
+    std::atomic<int> m_BaseFps{0};
+    std::atomic<int> m_PresentsPerSecond{0};
+    std::atomic<int> m_DisplayMilliHzShared{0};
+    std::atomic<int64_t> m_EncodeP95Us{0};
+    std::atomic<int64_t> m_StepsAsked{0};
+    std::atomic<int64_t> m_StepsRefused{0};
+    /// The loop's own: the cadence without the step, the counters behind the
+    /// figures above, and the time spent stepped, for the log.
+    FrameCadence m_BaseCadence{0};
+    int m_BaseCadenceFps = 0;
+    /// The step the last choice was made with; the one the loop counts.
+    int m_ChosenStepFps = 0;
+    PresentRate m_PresentRate;
+    EncodeTail m_EncodeTail;
+    int64_t m_FoldedSeen = 0;
+    int m_AppliedStepFps = 0;
+    int64_t m_StepsApplied = 0;
+    int64_t m_SteppedSinceUs = 0;
+    int64_t m_SteppedUs = 0;
     /// The client's decode queue, read under cadence=host-guarded — see
     /// setClientDecodeQueue. Presents it held back, and the held pictures
     /// sent when it came back with nothing newer, for the log.

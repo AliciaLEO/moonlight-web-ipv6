@@ -20,6 +20,7 @@
 #include "FrameSentSink.h"
 #include "IMediaEngine.h"
 
+#include "mw/native/FpsStep.h"
 #include "mw/native/LinkFeedback.h"
 #include "mw/native/SessionConfig.h"
 #include "mw/native/StageStats.h"
@@ -368,6 +369,18 @@ public:
         int presentUs = 0;
     };
     VsyncGridStatus vsyncGridStatus() const;
+
+    /// "Auto"'s detection asks for the stream to run at @p fps, above the
+    /// client's own rate, or with 0 to come back to it (an `fpsstep`
+    /// message): forwarded to Session::setClientFpsStep, whose answer is the
+    /// reply. A guest on the shared feed is refused — the feed's pace is the
+    /// feed's. Safe from any thread.
+    mw::native::FpsStep setClientFpsStep(int fps);
+
+    /// What the detection reads of the cadence, for the stats (see
+    /// Session::cadenceStatus); zero-filled with no session of our own.
+    /// Safe from any thread.
+    mw::native::CadenceStatus cadenceStatus() const;
 
     /// The viewer moved its bitrate (a `clientbitrate` message): the
     /// estimate following the frame the host really streams. The session's

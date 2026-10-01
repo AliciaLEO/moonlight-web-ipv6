@@ -20,6 +20,7 @@
 #include "AudioPacket.h"
 #include "Capabilities.h"
 #include "EncodedFrame.h"
+#include "FpsStep.h"
 #include "InputEvent.h"
 #include "LinkFeedback.h"
 #include "SessionConfig.h"
@@ -409,6 +410,27 @@ public:
     };
     /// Safe from any thread.
     virtual VsyncGridStatus vsyncGridStatus() const { return {}; }
+
+    /// "Auto" with detection (an `fpsstep` message, frontend CadenceStepper.js):
+    /// the client asks for the stream to run at @p fps, above its own rate,
+    /// while it measures whether what it shows gets younger — or, with 0, to
+    /// come back to its own rate. Answered at once (FpsStep: applied, capped at
+    /// the display's refresh, or refused and why); the loop applies it between
+    /// two frames, and the bitrate does not move. Only the Windows engine steps;
+    /// elsewhere every step is refused and the stream keeps its cadence. Safe
+    /// from any thread.
+    virtual FpsStep setClientFpsStep(int fps)
+    {
+        FpsStep refused;
+        refused.askedFps = fps;
+        refused.why = "this platform keeps its cadence";
+        return refused;
+    }
+
+    /// What the client's detection reads of the cadence, once a second with
+    /// the stats: how fast the content changes, the stream's own rate, the
+    /// step in force. Zero-filled where nothing steps. Safe from any thread.
+    virtual CadenceStatus cadenceStatus() const { return {}; }
 
     /// Where to hear that the viewer's input stopped reaching the host, or
     /// started again — see InputGate. Delivered on the thread that injects,

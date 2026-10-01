@@ -43,6 +43,9 @@ struct CadenceInputs
     bool clientVsync = false;
     /// The bench key (EncoderTuning::cadence): whose rate the stream runs at.
     EncoderTuning::Cadence mode = EncoderTuning::Cadence::Default;
+    /// "Auto" with detection (CadenceStep.h): a rate above the stream's own
+    /// that the client asked for and the host granted, 0 for none.
+    int stepFps = 0;
 };
 
 /// The rate the encoder's budget answers to, the loop's gate, and the log line
@@ -125,6 +128,12 @@ inline CadenceChoice hostCadence(const CadenceInputs& in)
 /// A bench key (EncoderTuning::Cadence) may set all of that aside for the
 /// host display's own rate — see cadence_detail::hostCadence.
 ///
+/// A step (CadenceStep.h) runs the stream above the client's rate, up to the
+/// display's: Auto's detection asked for it, so the ceiling Auto states
+/// (maxFps) does not hold it down. A client whose decoder asked for fewer
+/// frames, or that paints on its vsync, is never stepped: the step is then
+/// set aside and the cadence is today's.
+///
 /// Pure, so the choice and its log line can be tested without a display.
 inline CadenceChoice chooseCadence(const CadenceInputs& in)
 {
@@ -147,6 +156,25 @@ inline CadenceChoice chooseCadence(const CadenceInputs& in)
     const int displayHz = (in.displayMilliHz + 500) / 1000;
     int fps = in.settingFps > 0 ? in.settingFps : displayHz;
     if (fps <= 0) fps = 60;
+
+    if (in.stepFps > 0 && in.clientCapFps <= 0 && !in.clientVsync) {
+        // What the stream runs at without the step: the setting under the
+        // ceiling Auto states.
+        const int own = in.maxFps > 0 && in.maxFps < fps ? in.maxFps : fps;
+        const int stepped = displayHz > 0 && in.stepFps > displayHz ? displayHz : in.stepFps;
+        if (stepped > own) {
+            out.fps = stepped;
+            out.gate = stepped < displayHz
+                           ? FrameCadence(stepped, displayHz)
+                           : FrameCadence::ceiling(1000000000LL / stepped, displayHz);
+            out.line = "[native] cadence: " + std::to_string(stepped) + " fps stream on a " +
+                       hz(in.displayMilliHz) + " Hz display" + gateText(out.gate) +
+                       "; a step above the client's " + std::to_string(own) +
+                       " fps, asked by its detection";
+            if (in.clientMilliHz > 0) out.line += "; client at " + hz(in.clientMilliHz) + " Hz";
+            return out;
+        }
+    }
     // A client whose decoder cannot keep up asks for fewer frames than the
     // viewer set (clientCapFps), and a rate chosen FOR the viewer comes with a
     // ceiling of its own (maxFps — the rate the browser's pixel budget was

@@ -1449,6 +1449,38 @@ void DataChannelRelay::onInputMessage(const std::string& message)
         return;
     }
 
+    if (type == "fpsstep") {
+        // "Auto"'s detection (frontend CadenceStepper.js): the client asks
+        // for the stream to run above its own rate while it measures whether
+        // what it shows gets younger — or, with 0, to come back. The session
+        // answers at once and the answer goes straight back, so a trial starts
+        // and ends within one round trip. See Session::setClientFpsStep.
+        //
+        // Native host only: a GameStream host's frame rate is fixed at launch.
+        if (auto* native = qobject_cast<NativeMediaEngine*>(m_Shim)) {
+            const mw::native::FpsStep step = native->setClientFpsStep(msg["fps"].toInt(0));
+            QJsonObject reply;
+            reply["type"] = "fpsstep";
+            reply["fps"] = step.fps;
+            reply["asked"] = step.askedFps;
+            reply["verdict"] = step.verdict == mw::native::FpsStep::Verdict::Applied  ? "applied"
+                               : step.verdict == mw::native::FpsStep::Verdict::Capped ? "capped"
+                               : step.verdict == mw::native::FpsStep::Verdict::Base   ? "base"
+                                                                                      : "refused";
+            if (step.why && *step.why) reply["why"] = QString::fromUtf8(step.why);
+            const QByteArray json = QJsonDocument(reply).toJson(QJsonDocument::Compact);
+            if (m_InputDc && !m_Stopping.load()) {
+                try {
+                    m_InputDc->send(std::string(json.constData(), json.size()));
+                } catch (const std::exception& e) {
+                    if (!m_Stopping.load())
+                        qWarning() << "[DataChannelRelay] fpsstep reply error:" << e.what();
+                }
+            }
+        }
+        return;
+    }
+
     if (type == "decodequeue") {
         // Frames waiting at the client's decoder, said when a second one
         // does and when it is back to one. A host streaming at its own
@@ -2050,6 +2082,21 @@ void DataChannelRelay::onStatsTimerTick()
     if (m_Shim) {
         const QJsonObject stages = m_Shim->takeStageStats();
         if (!stages.isEmpty()) stats["stages"] = stages;
+    }
+    // What "Auto"'s detection reads of the native cadence (frontend
+    // CadenceStepper.js): how fast the captured display presents, the
+    // stream's own rate, the step in force, the display's refresh. Absent
+    // from every other host, and from a guest on the shared feed.
+    if (auto* native = qobject_cast<NativeMediaEngine*>(m_Shim)) {
+        const mw::native::CadenceStatus c = native->cadenceStatus();
+        if (c.baseFps > 0) {
+            QJsonObject cadence;
+            cadence["presents"] = c.presentsPerSecond;
+            cadence["base"] = c.baseFps;
+            cadence["step"] = c.stepFps;
+            cadence["display"] = c.displayHz;
+            stats["cadence"] = cadence;
+        }
     }
 
     QByteArray statsJson = QJsonDocument(stats).toJson(QJsonDocument::Compact);
