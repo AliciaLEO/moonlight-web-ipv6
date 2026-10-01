@@ -55,6 +55,11 @@
 #include <string>
 #include <thread>
 
+#if defined(__linux__)
+#include <cerrno>
+#include <unistd.h>
+#endif
+
 namespace {
 
 /// Write one protocol event line on stdout (the only stdout writer in worker
@@ -64,6 +69,44 @@ void emitEvent(const QJsonObject& event)
     const QByteArray line = QJsonDocument(event).toJson(QJsonDocument::Compact) + "\n";
     std::fwrite(line.constData(), 1, static_cast<size_t>(line.size()), stdout);
     std::fflush(stdout);
+}
+
+/// One line from the server on stdin, without its newline; false at the end.
+///
+/// Not std::getline on std::cin under Linux: the glibc of Ubuntu 24.04 (2.39)
+/// takes every stdio stream's lock in exit() to flush it — 22.04's (2.35) did
+/// not — and std::cin reads through stdin's FILE, whose lock it holds for as
+/// long as a read blocks, which the command pump's does until the server writes
+/// again. Each worker's last return then hung in exit() until the server killed
+/// it: exit code 9 at the end of every stream. read(2) on the descriptor holds
+/// no lock. Called from one thread at a time: the config line, then the pump.
+bool readServerLine(std::string& line)
+{
+#if defined(__linux__)
+    static std::string pending;
+    for (;;) {
+        const size_t end = pending.find('\n');
+        if (end != std::string::npos) {
+            line.assign(pending, 0, end);
+            pending.erase(0, end + 1);
+            return true;
+        }
+        char buffer[4096];
+        const ssize_t got = ::read(STDIN_FILENO, buffer, sizeof buffer);
+        if (got > 0) {
+            pending.append(buffer, static_cast<size_t>(got));
+            continue;
+        }
+        if (got < 0 && errno == EINTR) continue;
+        // The end, or a broken pipe: what came before it is still a line.
+        if (pending.empty()) return false;
+        line.swap(pending);
+        pending.clear();
+        return true;
+    }
+#else
+    return static_cast<bool>(std::getline(std::cin, line));
+#endif
 }
 
 /// Holds the live relay graph pointers so stdin commands and the end-of-session
@@ -316,7 +359,7 @@ int runFeedWorker(const QJsonObject& cfg)
 
     std::thread stdinThread([finish, publisher]() {
         std::string line;
-        while (std::getline(std::cin, line)) {
+        while (readServerLine(line)) {
             const QJsonObject msg =
                 QJsonDocument::fromJson(QByteArray::fromStdString(line)).object();
             const QString cmd = msg["cmd"].toString();
@@ -369,7 +412,7 @@ int runStreamWorker(QCoreApplication& app)
 
     // ── First stdin line = session config ────────────────────────────────────
     std::string configLine;
-    if (!std::getline(std::cin, configLine)) {
+    if (!readServerLine(configLine)) {
         qWarning() << "[StreamWorker] No config on stdin — exiting";
         return 1;
     }
@@ -628,7 +671,7 @@ int runStreamWorker(QCoreApplication& app)
     // ── stdin command pump (blocking reads on a plain thread — portable) ─────
     std::thread stdinThread([]() {
         std::string line;
-        while (std::getline(std::cin, line)) {
+        while (readServerLine(line)) {
             const QJsonObject msg =
                 QJsonDocument::fromJson(QByteArray::fromStdString(line)).object();
             const QString cmd = msg["cmd"].toString();
