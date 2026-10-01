@@ -213,6 +213,7 @@
             "release": "Relâchez tous les boutons et les sticks…",
             "done": "Toutes les commandes sont réglées. Enregistrez pour utiliser cette disposition.",
             "guideHint": "Certains navigateurs se réservent ce bouton. Passez l’étape s’il ne se passe rien.",
+            "parkedHint": "Manche qui ne revient pas au centre (gaz) : bougez-le puis ramenez-le où il était.",
             "saved": "Disposition enregistrée pour « {{name}} ».",
             "remap": "Remapper",
             "start": "Configurer cette manette",
@@ -220,6 +221,7 @@
             "close": "Fermer",
             "back": "Retour",
             "skip": "Passer",
+            "skipToSticks": "Passer aux sticks",
             "cancel": "Annuler",
             "save": "Enregistrer",
             "source": {

@@ -213,6 +213,7 @@
             "release": "Release every button and stick…",
             "done": "Every control is set. Save to use this layout.",
             "guideHint": "Some browsers keep this button for themselves. Skip it if nothing happens.",
+            "parkedHint": "A stick that does not spring back (a throttle): move it, then bring it back where it was.",
             "saved": "Layout saved for “{{name}}”.",
             "remap": "Remap",
             "start": "Map this controller",
@@ -220,6 +221,7 @@
             "close": "Close",
             "back": "Back",
             "skip": "Skip",
+            "skipToSticks": "Skip to the sticks",
             "cancel": "Cancel",
             "save": "Save",
             "source": {

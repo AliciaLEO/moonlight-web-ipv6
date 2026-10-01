@@ -393,6 +393,34 @@ describe('detectInput (wizard)', () => {
         expect(detectInput(base, gp, 'leftx')).toBeNull();
     });
 
+    it('reads a parked stick by where it rests, not by the push', () => {
+        // A radio's throttle rests at the bottom, -1, and can only go up — while
+        // the step asks for "down". Its rest IS down: flipped, so up reads up.
+        const radio = pad({ axes: [0, 0, -1, 0] });
+        const atRest = snapshot(radio);
+        radio.axes[2] = 1;
+        expect(detectInput(atRest, radio, 'lefty')).toEqual({ t: 'a', i: 2, s: 0, inv: true });
+        // A device whose bottom reads +1 is left as it is.
+        const other = pad({ axes: [0, 0, 1, 0] });
+        const otherRest = snapshot(other);
+        other.axes[2] = -1;
+        expect(detectInput(otherRest, other, 'righty')).toEqual({ t: 'a', i: 2, s: 0 });
+        // A horizontal parked at an end rests at the left: -1 as it is, +1 flipped.
+        const left = pad({ axes: [-1, 0, 0, 0] });
+        const leftRest = snapshot(left);
+        left.axes[0] = 1;
+        expect(detectInput(leftRest, left, 'leftx')).toEqual({ t: 'a', i: 0, s: 0 });
+        const flipped = pad({ axes: [1, 0, 0, 0] });
+        const flippedRest = snapshot(flipped);
+        flipped.axes[0] = -1;
+        expect(detectInput(flippedRest, flipped, 'rightx')).toEqual({
+            t: 'a',
+            i: 0,
+            s: 0,
+            inv: true,
+        });
+    });
+
     it('reads a packed hat by its clean directions only', () => {
         const gp = pad({ axes: [0, 0, 0, 0, 0, 0, 0, 0, 0, HAT_CENTRED] });
         const base = snapshot(gp);

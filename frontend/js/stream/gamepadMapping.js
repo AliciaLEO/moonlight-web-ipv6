@@ -429,6 +429,11 @@ export function snapshot(gp) {
  * looks at buttons first. An axis resting at an extreme (a trigger at -1) is
  * taken whole; one resting at 9/7 is a packed hat; one resting at the centre
  * gives a half — or, for a stick target, the whole axis in the pushed sense.
+ *
+ * A stick axis PARKED at an extreme — a radio's throttle, a lever with no
+ * spring — can only be moved away from where it rests, whatever the prompt
+ * asks: its sense comes from that rest, not from the push. A vertical parked
+ * at an end rests at the bottom, a horizontal at the left.
  * Inputs in `exclude` (already bound this pass) are skipped.
  *
  * @param {{buttons:boolean[], axes:number[]}} base  snapshot at rest
@@ -466,8 +471,13 @@ export function detectInput(base, gp, target, exclude = []) {
             } else {
                 const d = v - rest;
                 if (Math.abs(d) <= AXIS_PRESS) continue;
-                if (isStick) b = { t: 'a', i, s: 0, ...(d < 0 ? { inv: true } : {}) };
-                else if (Math.abs(rest) > 0.9)
+                if (isStick) {
+                    const parked = Math.abs(rest) > 0.9;
+                    // Down is +1 and left -1 on a standard stick.
+                    const vertical = target === 'lefty' || target === 'righty';
+                    const inv = !parked ? d < 0 : vertical ? rest < 0 : rest > 0;
+                    b = { t: 'a', i, s: 0, ...(inv ? { inv: true } : {}) };
+                } else if (Math.abs(rest) > 0.9)
                     b = { t: 'a', i, s: 0, ...(rest > 0 ? { inv: true } : {}) };
                 else b = { t: 'a', i, s: d > 0 ? 1 : -1 };
             }

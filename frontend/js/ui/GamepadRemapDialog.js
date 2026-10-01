@@ -328,6 +328,21 @@ export class GamepadRemapDialog {
         this._renderStatic();
     }
 
+    /**
+     * Straight to the sticks, keeping what is bound so far: a radio or a
+     * joystick has none of the seventeen buttons before them to give.
+     */
+    _wizardSkipToSticks() {
+        const w = this._wiz;
+        const sticks = WIZARD_STEPS.indexOf('leftx');
+        if (!w || w.idx >= sticks) return;
+        for (let i = w.idx; i < sticks; i++) delete w.bindings[WIZARD_STEPS[i]];
+        w.idx = sticks;
+        w.caught = null;
+        w.waitRelease = false;
+        this._renderStatic();
+    }
+
     _save() {
         const gp = this._selectedPad();
         const w = this._wiz;
@@ -403,14 +418,18 @@ export class GamepadRemapDialog {
                 els.prompt.innerHTML = `<span class="gamepad-remap-step">${w.idx + 1}/${WIZARD_STEPS.length}</span> · ${escapeHtml(t(`gamepad.remap.steps.${target}`))}`;
                 this._art.setTarget(target);
                 if (target === 'guide') hint = t('gamepad.remap.guideHint');
+                // A throttle can only move up from where it rests.
+                if (target === 'lefty' || target === 'righty') hint = t('gamepad.remap.parkedHint');
             }
             if (w.caught) {
                 els.raw.textContent = describeBinding(w.caught);
                 els.raw.classList.add('is-caught');
             }
+            const beforeSticks = w.idx < WIZARD_STEPS.indexOf('leftx');
             actions =
                 btn('gp-back', 'gamepad.remap.back') +
                 (done ? '' : btn('gp-skip', 'gamepad.remap.skip')) +
+                (beforeSticks ? btn('gp-sticks', 'gamepad.remap.skipToSticks') : '') +
                 `<span class="gp-spacer"></span>` +
                 btn('gp-close', 'gamepad.remap.cancel') +
                 (done ? btn('gp-save', 'gamepad.remap.save', 'btn-save') : '');
@@ -428,6 +447,7 @@ export class GamepadRemapDialog {
         on('gp-reset', () => this._reset());
         on('gp-back', () => this._wizardBack());
         on('gp-skip', () => this._wizardSkip());
+        on('gp-sticks', () => this._wizardSkipToSticks());
         on('gp-save', () => this._save());
         const back = els.actions.querySelector('.gp-back');
         if (back)
