@@ -252,10 +252,33 @@ describe('MainThreadProbe', () => {
         expect(snap.padGapMaxMs).toBe(15);
     });
 
+    it('times the mouse: report age, the gap inside a movement, and the wait', () => {
+        const probe = new MainThreadProbe(2000);
+        // One movement coalesced to 60 Hz, each motion 0.5 ms after its report.
+        for (let i = 0; i < 30; i++) {
+            probe.noteMouseSend(0.5);
+            clock += 16;
+        }
+        // The hand rests a second, then moves once more: that is no 1 s gap.
+        clock += 1000;
+        probe.noteMouseSend(2.5);
+        const snap = probe.snapshot();
+        expect(snap.mouseSendsPerSec).toBe(15.5);
+        expect(snap.mouseAgeAvgMs).toBeCloseTo(17.5 / 31, 5);
+        expect(snap.mouseAgeMaxMs).toBe(2.5);
+        expect(snap.mouseGapAvgMs).toBe(16);
+        expect(snap.mouseGapP95Ms).toBe(16);
+        // A report waits its age plus half a gap on average.
+        expect(formatMainThread(snap)).toContain(
+            ' · mouse 16/s age 0.6/2.5ms gap 16.0/16.0ms wait 8.6ms',
+        );
+    });
+
     it('says nothing about pads until one is read, and forgets them after', () => {
         const probe = new MainThreadProbe(2000);
         const quiet = formatMainThread(probe.snapshot());
         expect(quiet).not.toContain('pad');
+        expect(quiet).not.toContain('mouse');
         probe.notePadRead(16.7);
         probe.notePadSend();
         expect(formatMainThread(probe.snapshot())).toBe(

@@ -7468,6 +7468,7 @@ export class StreamView {
                 // this is the same motion summed up, a frame late.
                 if (this._rawPointerLive()) return;
                 this._sendRelativeMouse(e.movementX, e.movementY);
+                this._noteMouseSent(e);
             } else {
                 this._lastMouseClientX = e.clientX;
                 this._lastMouseClientY = e.clientY;
@@ -7494,6 +7495,7 @@ export class StreamView {
                     referenceWidth: refW,
                     referenceHeight: refH,
                 });
+                this._noteMouseSent(e);
             }
         };
         this.inputEl.addEventListener('mousemove', this._onGamingMouseMove);
@@ -8286,7 +8288,10 @@ export class StreamView {
             // Send absolute position. LiSendMousePositionEvent() on the backend
             // will scale (x, y) from the reference plane to host screen coords.
             const msg = this._absoluteMouseMessage(e.clientX, e.clientY);
-            if (msg) this._sendToHost(msg);
+            if (msg) {
+                this._sendToHost(msg);
+                this._noteMouseSent(e);
+            }
         };
 
         this._onNormalMouseDown = (e) => {
@@ -9750,7 +9755,8 @@ export class StreamView {
     }
 
     /**
-     * Mouse motion at the device's own report rate (native host only).
+     * Mouse motion at the device's own report rate (native host; GameStream
+     * hosts under a test key).
      *
      * `mousemove` is dispatched once per display frame with the motion since
      * the previous one summed up: a 1000 Hz mouse on a 60 Hz screen reaches
@@ -9759,7 +9765,10 @@ export class StreamView {
      * frame clock. The native host injects each event on the thread that
      * receives it (no per-frame batching anywhere downstream), so there the
      * extra messages buy the delay back; a GameStream host keeps the coalesced
-     * cadence its own protocol was built around — hence the gate.
+     * cadence its own protocol was built around — hence the gate. Whether it
+     * should too is being measured: mw_raw_pointer = '1' opens the gate for
+     * Sunshine, Wolf, Apollo and MultiSeat (moonlight-common-c sums the
+     * motions and sends them at most every millisecond).
      *
      * The mousemove handlers stay bound for what only they know how to do
      * (cursor styling, the pre-focus click-to-capture position) and skip the
@@ -9767,17 +9776,21 @@ export class StreamView {
      */
     _bindPointerRaw() {
         this._rawPointer = false;
-        if (!this._nativeHost || !this.inputEl) return;
+        if (!this.inputEl) return;
         if (!('onpointerrawupdate' in window)) return;
-        // Diagnostics: mw_raw_pointer = '0' keeps the coalesced mousemove
-        // cadence against a native host too — the A/B for "is it the report
+        // Diagnostics, read once here: mw_raw_pointer = '0' keeps the coalesced
+        // mousemove cadence against a native host too, '1' gives a GameStream
+        // host the raw rate — the two halves of the A/B for "is it the report
         // rate?". Not a setting, same family as mw_pacing.
+        let key = null;
         try {
-            if (localStorage.getItem('mw_raw_pointer') === '0') {
-                console.log('[StreamView] Mouse: raw report rate held off (mw_raw_pointer=0)');
-                return;
-            }
+            key = localStorage.getItem('mw_raw_pointer');
         } catch (e) {}
+        if (this._nativeHost && key === '0') {
+            console.log('[StreamView] Mouse: raw report rate held off (mw_raw_pointer=0)');
+            return;
+        }
+        if (!this._nativeHost && key !== '1') return;
         this._onPointerRaw = (e) => {
             if (e.pointerType !== 'mouse') return;
             this._lastRawPointerMs = performance.now();
@@ -9787,16 +9800,34 @@ export class StreamView {
                 if (!this._mouseFocused) return;
                 if (e.movementX || e.movementY) {
                     this._sendRelativeMouse(e.movementX, e.movementY);
+                    this._noteMouseSent(e);
                 }
                 return;
             }
             this._lastClientMoveMs = performance.now();
             const msg = this._absoluteMouseMessage(e.clientX, e.clientY);
-            if (msg) this._sendToHost(msg);
+            if (msg) {
+                this._sendToHost(msg);
+                this._noteMouseSent(e);
+            }
         };
         this.inputEl.addEventListener('pointerrawupdate', this._onPointerRaw);
         this._rawPointer = true;
-        console.log('[StreamView] Mouse: raw report rate (pointerrawupdate, native host)');
+        console.log(
+            this._nativeHost
+                ? '[StreamView] Mouse: raw report rate (pointerrawupdate, native host)'
+                : '[StreamView] Mouse: raw report rate (pointerrawupdate, GameStream host, mw_raw_pointer=1)',
+        );
+    }
+
+    /**
+     * Diagnostics (mw_perf_diag): a mouse motion went out for @p e — how old
+     * its report was, for the [perf] line's mouse part. A null check otherwise.
+     */
+    _noteMouseSent(e) {
+        if (this._mainThreadProbe) {
+            this._mainThreadProbe.noteMouseSend(performance.now() - e.timeStamp);
+        }
     }
 
     /**

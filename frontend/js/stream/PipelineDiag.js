@@ -252,11 +252,21 @@ export class PipelineDiag {
  *   - long tasks (>50ms), as the browser reports them,
  *   - the gamepads: how often a forwarded pad is read, how far apart two reads
  *     are (a pad is seen only when read, so the gap is what a stick or a
- *     button waits at worst), and how many states went out.
+ *     button waits at worst), and how many states went out,
+ *   - the mouse: how old a report is when its motion goes out (now minus the
+ *     event's timeStamp) and how far apart two motions go. A report waits on
+ *     average about age + gap / 2 — what tells the per-report cadence
+ *     (pointerrawupdate) from the per-frame one (mousemove).
  *
  * Diagnostics only (mw_perf_diag): the timer runs only between start() and
  * stop(), and each note costs a push.
  */
+/**
+ * Two mouse motions further apart than this belong to two movements: even
+ * coalesced to the frame at 30 Hz, a hand still moving reports every 33 ms.
+ */
+const MOUSE_IDLE_MS = 50;
+
 export class MainThreadProbe {
     constructor(windowMs = 2000) {
         this._windowMs = windowMs;
@@ -265,6 +275,9 @@ export class MainThreadProbe {
         this._longTasks = new DiagWindow(windowMs);
         this._padGapMs = new DiagWindow(windowMs);
         this._padSends = new DiagWindow(windowMs);
+        this._mouseAgeMs = new DiagWindow(windowMs);
+        this._mouseGapMs = new DiagWindow(windowMs);
+        this._lastMouseSendAt = 0;
         this._timer = null;
         this._observer = null;
     }
@@ -312,6 +325,19 @@ export class MainThreadProbe {
         this._padSends.push(0);
     }
 
+    /**
+     * One mouse motion went out, for a report @p ageMs old. The gap to the
+     * previous motion counts only inside one movement: past MOUSE_IDLE_MS the
+     * hand had stopped, and a pause is not a gap between two reports.
+     */
+    noteMouseSend(ageMs) {
+        const now = performance.now();
+        this._mouseAgeMs.push(ageMs);
+        const gap = now - this._lastMouseSendAt;
+        if (this._lastMouseSendAt && gap < MOUSE_IDLE_MS) this._mouseGapMs.push(gap);
+        this._lastMouseSendAt = now;
+    }
+
     snapshot() {
         const seconds = this._windowMs / 1000;
         return {
@@ -325,14 +351,22 @@ export class MainThreadProbe {
             padSendsPerSec: this._padSends.count / seconds,
             padGapP95Ms: this._padGapMs.quantile(0.95),
             padGapMaxMs: this._padGapMs.max,
+            mouseSendsPerSec: this._mouseAgeMs.count / seconds,
+            mouseAgeAvgMs: this._mouseAgeMs.avg,
+            mouseAgeMaxMs: this._mouseAgeMs.max,
+            mouseGapAvgMs: this._mouseGapMs.avg,
+            mouseGapP95Ms: this._mouseGapMs.quantile(0.95),
         };
     }
 }
 
 /**
- * Render a MainThreadProbe snapshot as the tail of the [perf] line. The pad
- * part — reads/s, states sent/s, gap between reads p95/max — appears only
- * while a pad is forwarded; without one the line is unchanged.
+ * Render a MainThreadProbe snapshot as the tail of the [perf] line. Two parts
+ * appear only while they have something to say, so a quiet session's line is
+ * unchanged:
+ *   - pad: reads/s, states sent/s, gap between reads p95/max;
+ *   - mouse: motions sent/s, report age avg/max, gap avg/p95, and the
+ *     average wait of a report, age + gap / 2.
  * @param {ReturnType<MainThreadProbe['snapshot']>|null} load
  */
 export function formatMainThread(load) {
@@ -362,6 +396,22 @@ export function formatMainThread(load) {
             n1(load.padGapP95Ms) +
             '/' +
             n1(load.padGapMaxMs) +
+            'ms';
+    }
+    if (load.mouseSendsPerSec > 0) {
+        line +=
+            ' · mouse ' +
+            Math.round(load.mouseSendsPerSec) +
+            '/s age ' +
+            n1(load.mouseAgeAvgMs) +
+            '/' +
+            n1(load.mouseAgeMaxMs) +
+            'ms gap ' +
+            n1(load.mouseGapAvgMs) +
+            '/' +
+            n1(load.mouseGapP95Ms) +
+            'ms wait ' +
+            n1(load.mouseAgeAvgMs + load.mouseGapAvgMs / 2) +
             'ms';
     }
     return line;
