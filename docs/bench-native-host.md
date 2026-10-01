@@ -5696,9 +5696,24 @@ DualRTX, Counter-Strike en 2560×1440)
 - **Pertes du lien UM790Pro → DualRTX** : des renvois SCTP sur échéance dans tous les streams, les
   miens compris à 12 Mbit/s (8 à 40 par stream). Ni la carte de DualRTX (paquets écartés inchangés) ni
   UDP sous Windows (erreurs de réception inchangées) ne les comptent ; l'UM790Pro → box : 3000 pings
-  de 1400 o sans perte. Où elles se perdent reste à trouver (commutateur, commutateur Hyper-V,
-  économies d'énergie de la Realtek de DualRTX, toutes actives). Un client sur une autre machine
-  dirait si c'est DualRTX.
+  de 1400 o sans perte. Écarté le soir même, 3 streams de 90 s à 36 Mbit/s par essai (renvois sur
+  échéance par stream) :
+
+  | essai | renvois sur échéance |
+  |---|---|
+  | référence | 5, 4, 5 |
+  | économies d'énergie de la Realtek de DualRTX coupées (EEE, Green, Power Saving), remises ensuite | 4, 9, 9 |
+  | EEE de l'UM790Pro coupé (`ethtool`, à chaud), remis ensuite | 20, 11, 9 |
+  | envoi lissé à 200 Mbit/s par flux (`fq maxrate`), `fq_codel` remis ensuite | 10, 11, 9 |
+  | échéance minimale à 60 ms (`MW_SCTP_RTO_MIN_MS`) | 31, 24, 19 |
+
+  Aucun paquet écarté nulle part : file `fq_codel` de l'UM790Pro (0), son tampon UDP (inchangé),
+  commutateur Hyper-V de DualRTX (0 sur 365 866 reçus), carte et UDP de DualRTX. Une capture sur
+  l'UM790Pro montre les deux sens qui se taisent ensemble, 13 fois en 60 s (35 à 112 ms), l'hôte
+  d'abord ; pendant les gels, jusqu'à 1,2 Mo attend d'être envoyé, et l'hôte jette des images. Les
+  streams d'hôtes Windows des journaux de DualRTX renvoient surtout vite (0 à 2 renvois sur échéance
+  pour 130 000 à 621 000 paquets), ceux de l'UM790Pro vers DualRTX presque seulement sur échéance.
+  Reste à voir : l'essai à 400 ms, et un client sur une troisième machine.
 
 **Limites**
 
@@ -5708,6 +5723,52 @@ DualRTX, Counter-Strike en 2560×1440)
   Punktfunk la passe.
 - La disposition est refaite quand l'owner revient alors qu'un invité était
   seul : l'invité perd son image environ une seconde.
+
+### 8s.13 C5 : gamescope sans écran, sonde (01/10/2026)
+
+Préparée en avance pendant la porte C, sur l'UM790Pro (780M, GNOME 46), hors produit : gamescope
+lancé dans un conteneur Docker, son flux lu par la sonde `pw_vcount` du §8s, ses entrées par libei
+depuis l'hôte.
+
+**Où trouver gamescope**
+
+- Ubuntu 24.04 n'en a pas.
+- Ubuntu 25.04 a la 3.16.1 (images Games-on-Whales de Wolf) : en `--backend headless` sur le 780M,
+  elle s'arrête sur une assertion de wlroots (`wlr_linux_dmabuf_v1.c:532`, table de formats vide).
+  Punktfunk demande la 3.16.22 au moins.
+- Arch Linux a la 3.16.31 (Mesa 26.2.3, libei 1.6) : elle marche. Image de banc `mw-c5-gamescope:3`
+  (Arch, `vulkan-radeon`, `vulkan-tools`, `xdotool`, un utilisateur 1000 : sans lui, Xwayland refuse
+  ses clients).
+
+**Le flux**, `gamescope --backend headless -W -H -w -h -r` avec `vkcube`, sur le PipeWire de la
+session (socket monté dans le conteneur) : un nœud `gamescope`, Video/Source.
+
+| demandé | livré | écart max | format |
+|---|---|---|---|
+| 1920×1080 à 120 Hz | 120 i/s | 8,5 ms | BGRx, DMA-BUF linéaire |
+| 2560×1440 à 240 Hz | 240 i/s | 4,3 ms | BGRx, DMA-BUF linéaire |
+| 1170×2532 à 60 Hz | 60 i/s | 16,9 ms | BGRx, DMA-BUF linéaire |
+
+La taille et la cadence du client, à l'image près ; aucune métadonnée de pointeur. Le nœud part
+avec gamescope.
+
+**Les entrées**
+
+- Sans écran, gamescope ne lit pas uinput : il ouvre un socket EIS (`gamescope-0-ei`).
+- libei 1.2.1 de l'hôte s'y connecte en émetteur (sonde `ei_probe.py`). Il y trouve un périphérique,
+  « Gamescope Virtual Input » : pointeur relatif et absolu, clavier, molette, boutons ; région non
+  bornée.
+- Mesuré par `xdotool` dans le conteneur :
+  - le relatif passe tel quel (+50 en y) ;
+  - l'absolu se compte depuis la fenêtre active (`vkcube`, 500×500 à 100,100 : 500,300 arrive à
+    599,400, le pointeur reste dans la fenêtre).
+
+**Ce que demanderait un chapitre produit** (porte C5) :
+- lancer une app dans son propre gamescope, à la taille et à la cadence du client : un lanceur d'app
+  comme Wolf, pas un bureau ;
+- lire le nœud par la capture PipeWire existante ;
+- envoyer les entrées par libei (MIT, chargé au premier usage) au lieu d'uinput ;
+- un gamescope récent chez l'utilisateur : SteamOS, Bazzite, Arch ou Fedora, pas Ubuntu LTS.
 
 ## 9. Pour l'A/B
 
