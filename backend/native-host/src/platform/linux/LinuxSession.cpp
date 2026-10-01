@@ -2055,8 +2055,7 @@ private:
         };
         auto reconvertHeld = [&](const FrameStamps& stamps) -> bool {
             static const capture::CursorState kNoPointer;
-            if (!convertPicture(frame, m_CompositeCursor.load() ? m_Capture->cursor() : kNoPointer,
-                                error)) {
+            if (!convertPicture(frame, drawsPointer() ? m_Capture->cursor() : kNoPointer, error)) {
                 // The portal reopened for shared memory at the next turn.
                 if (leaveDmabuf(error)) {
                     haveFrame = false;
@@ -2227,7 +2226,7 @@ private:
             reportCursorPosition();
 
             if (status == capture::AcquireStatus::Timeout) {
-                if (m_CursorDirty.exchange(false) && m_CompositeCursor.load() && haveFrame) {
+                if (m_CursorDirty.exchange(false) && drawsPointer() && haveFrame) {
                     const int64_t now = steadyNowUs();
                     if (!reconvertHeld(resendStamps(now))) return;
                     continue;
@@ -2269,7 +2268,7 @@ private:
             }
 
             if (status == capture::AcquireStatus::PointerOnly) {
-                if (!m_CompositeCursor.load() || !haveFrame) continue;
+                if (!drawsPointer() || !haveFrame) continue;
                 m_CursorDirty.store(false);
                 const int64_t submittedUs = steadyNowUs();
                 if (!reconvertHeld(
@@ -2359,7 +2358,7 @@ private:
             const int64_t submittedUs = steadyNowUs();
 
             static const capture::CursorState kNoCursor;
-            const bool composite = m_CompositeCursor.load();
+            const bool composite = drawsPointer();
             m_CursorDirty.store(false);
             if (!convertPicture(frame, composite ? m_Capture->cursor() : kNoCursor, error)) {
                 if (leaveDmabuf(error)) {
@@ -2514,19 +2513,31 @@ private:
     /// KmsCapture.h). Elsewhere it is 0,0 and the client places the image by
     /// its top-left, which for the arrow is right and for a crosshair is a few
     /// pixels off.
+    /// The pointer drawn into the picture by this session: in gaming mode, and
+    /// only where the pictures do not show one already (cursorInPicture).
+    bool drawsPointer() const { return m_CompositeCursor.load() && !m_Capture->cursorInPicture(); }
+
     void reportCursor()
     {
         if (!m_Callbacks.onCursor || m_CompositeCursor.load()) return;
         const capture::CursorState& cursor = m_Capture->cursor();
+        // GNOME's own pointer in the pictures (cursorInPicture): the client is
+        // told there is none for it to draw, or the viewer sees two, a step
+        // apart (UM790Pro, GNOME 46, 01/10/2026).
+        const bool painted = m_Capture->cursorInPicture();
         const bool forced = m_ResendCursor.exchange(false);
         if (!forced && cursor.shapeVersion == m_ReportedShape &&
-            cursor.visible == m_ReportedVisible)
+            cursor.visible == m_ReportedVisible && painted == m_ReportedPainted)
             return;
+        if (painted && !m_ReportedPainted)
+            log::info("[native] cursor: GNOME paints it into the virtual display's pictures "
+                      "(DMA-BUF) — the client is told to draw none");
         m_ReportedShape = cursor.shapeVersion;
         m_ReportedVisible = cursor.visible;
+        m_ReportedPainted = painted;
 
         CursorUpdate update;
-        update.visible = cursor.visible && cursor.width > 0 && cursor.height > 0;
+        update.visible = !painted && cursor.visible && cursor.width > 0 && cursor.height > 0;
         update.width = cursor.width;
         update.height = cursor.height;
         update.hotspotX = cursor.hotspotX;
@@ -2557,12 +2568,13 @@ private:
                 : 1.0f;
         const float fx = static_cast<float>(cursor.x + cursor.hotspotX) * scale;
         const float fy = static_cast<float>(cursor.y + cursor.hotspotY) * scale;
-        if (!m_PositionGate.due(cursor.visible, static_cast<int>(fx), static_cast<int>(fy),
-                                steadyNowUs()))
+        // Not one to draw when the pictures show it already (reportCursor).
+        const bool visible = cursor.visible && !m_Capture->cursorInPicture();
+        if (!m_PositionGate.due(visible, static_cast<int>(fx), static_cast<int>(fy), steadyNowUs()))
             return;
         CursorUpdate update;
         update.positionOnly = true;
-        update.visible = cursor.visible;
+        update.visible = visible;
         update.x = fx;
         update.y = fy;
         m_Callbacks.onCursor(update);
@@ -2817,6 +2829,8 @@ private:
     int64_t m_LoopStartUs = 0;
     uint64_t m_ReportedShape = 0;
     bool m_ReportedVisible = false;
+    /// The client was last told the pictures show the pointer themselves.
+    bool m_ReportedPainted = false;
     /// When the pointer's position last went out to a self-drawing client.
     CursorPositionGate m_PositionGate;
 };

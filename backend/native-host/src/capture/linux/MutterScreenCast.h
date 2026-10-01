@@ -73,6 +73,22 @@ public:
     /// The first version measured to make virtual monitors (bench §8s.1).
     static constexpr int kVirtualVersion = 4;
 
+    /// GNOME Shell's major version (46 for "46.0"), as the shell says on the
+    /// session bus; 0 when no GNOME Shell answers. Mutter shares its numbers.
+    static int shellMajor();
+
+    /// Whether a virtual monitor's DMA-BUF frames carry the pointer under this
+    /// GNOME: Mutter blits the monitor's view into them, and until GNOME 48
+    /// that view holds the pointer GNOME paints itself, whatever cursor mode
+    /// was asked for (Mutter 46, meta-screen-cast-virtual-stream-src.c). Its
+    /// shared-memory frames are painted again without it. From GNOME 48 the
+    /// pointer leaves the view while a screen shows a hardware one
+    /// (Punktfunk) — taken as the rule, a headless GNOME 48 not measured.
+    static bool paintsPointerIntoDmabuf(int shellMajor)
+    {
+        return shellMajor > 0 && shellMajor < 48;
+    }
+
     struct Request
     {
         /// Empty: a virtual monitor for this stream. Otherwise the monitor of

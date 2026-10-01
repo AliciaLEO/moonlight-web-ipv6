@@ -19,6 +19,7 @@
 
 #include "../../audio/linux/PipeWireLibrary.h"
 #include "../../core/Log.h"
+#include "MutterScreenCast.h"
 
 #include <drm_fourcc.h>
 #include <pipewire/pipewire.h>
@@ -139,6 +140,9 @@ struct PortalCapture::Impl
     /// Mutter makes it, or records the monitor named here (setMutter).
     bool mutter = false;
     std::string mutterConnector;
+    /// GNOME Shell's major version when the stream is one of GNOME's virtual
+    /// monitors, 0 otherwise: what says whether its frames carry the pointer.
+    int gnomeVirtualShell = 0;
     /// When acquire() next asks whether Mutter ended the screen cast.
     int64_t nextEndCheckUs = 0;
 
@@ -425,6 +429,12 @@ bool PortalCapture::start(std::string& error)
         d->portal.setMutter(d->mutterConnector, d->virtualWidth, d->virtualHeight, d->virtualFps);
     else if (virtualMonitor && !d->kwinName.empty())
         d->portal.setKwinVirtualOutput(d->kwinName, d->virtualWidth, d->virtualHeight);
+    // GNOME's virtual monitors — made by Mutter or its portal, or another
+    // stream's recorded as it is — paint the pointer into their DMA-BUF frames
+    // up to GNOME 47; the version is the shell's to say.
+    const bool gnomeVirtual =
+        (virtualMonitor && d->kwinName.empty()) || !d->mutterConnector.empty();
+    d->gnomeVirtualShell = gnomeVirtual ? MutterScreenCast::shellMajor() : 0;
     if (!d->portal.start(d->restore, 0, d->granted, error)) return false;
     if (!d->granted.valid()) {
         error = "the portal granted nothing usable";
@@ -760,6 +770,11 @@ DesktopRect PortalCapture::desktopRect() const
 const CursorState& PortalCapture::cursor() const
 {
     return d->cursor;
+}
+
+bool PortalCapture::cursorInPicture() const
+{
+    return d->isDmabuf && MutterScreenCast::paintsPointerIntoDmabuf(d->gnomeVirtualShell);
 }
 
 } // namespace mw::native::capture

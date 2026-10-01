@@ -20,6 +20,7 @@
 #include <systemd/sd-bus.h>
 
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 
 namespace mw::native::capture {
@@ -190,6 +191,22 @@ int MutterScreenCast::version(std::string& why)
     sd_bus_message_unref(reply);
     sd_bus_unref(bus);
     return version > 0 ? version : 0;
+}
+
+int MutterScreenCast::shellMajor()
+{
+    sd_bus* bus = nullptr;
+    if (sd_bus_open_user(&bus) < 0) return 0;
+    sd_bus_error error = SD_BUS_ERROR_NULL;
+    char* version = nullptr;
+    const int r = sd_bus_get_property_string(bus, "org.gnome.Shell", "/org/gnome/Shell",
+                                             "org.gnome.Shell", "ShellVersion", &error, &version);
+    int major = 0;
+    if (r >= 0 && version) major = std::atoi(version);
+    std::free(version);
+    sd_bus_error_free(&error);
+    sd_bus_unref(bus);
+    return major > 0 ? major : 0;
 }
 
 bool MutterScreenCast::start(const Request& request, uint32_t& node, std::string& error)

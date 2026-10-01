@@ -80,6 +80,12 @@ public:
 
     /// The pointer, reported beside the picture so the client can draw its own.
     virtual const CursorState& cursor() const = 0;
+
+    /// The pictures already show the pointer, painted in by the compositor:
+    /// the client is to draw none of its own, and the session none into them —
+    /// either would be a second pointer. False where the pointer only travels
+    /// beside the picture, which is every route but one (PortalCapture says).
+    virtual bool cursorInPicture() const { return false; }
 };
 
 } // namespace mw::native::capture
