@@ -5271,6 +5271,16 @@ pas la retransmission qui plafonne la vidéo sous pertes, c'est le contrôle de
 congestion de SCTP. Un FEC réparerait les trous d'un débit que SCTP ne laisse
 pas passer.
 
+### 8r.6 La décision (01/10/2026)
+
+Bruno arrête le chapitre FEC à la porte A0 : rien n'entre dans le produit
+(A1-A5 abandonnés). Restent les outils de `scripts/bench/loss/` et les clés de
+banc (`loss=`, `sctpcc=`, `flood=`), qui serviront au POC Ultra (U1, U3) ; son
+canal non ordonné (id 4) aura le même plafond, et garde donc le doublement des
+niveaux grossiers. Deux pistes notées, non ouvertes : un contrôle de congestion
+du canal vidéo qui ne lise pas une perte au hasard comme une congestion (usrsctp
+patché, le gouverneur seul juge du débit), ou la vidéo sur RTP.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
