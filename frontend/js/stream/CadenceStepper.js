@@ -62,10 +62,12 @@
  *
  * Armed whenever the stream runs above this screen's rate, trials included:
  * capture → painted over the last FILET_WINDOW_MS above its reference — the
- * same, measured at the client's own rate — by half a refresh, or QUEUE_FULL
- * frames at the decoder for QUEUE_HOLD_MS, and the stream is back at the
- * client's rate in one round trip, whatever the cause (Wi-Fi, main thread,
- * decoder).
+ * same, measured at the client's own rate — by half a refresh for
+ * FILET_HOLD_MS, or QUEUE_FULL frames at the decoder for QUEUE_HOLD_MS, and
+ * the stream is back at the client's rate in one round trip, whatever the
+ * cause (Wi-Fi, main thread, decoder). The hold lets a spike of the link pass
+ * — a Mac on Wi-Fi has them at any rate — where a client that drowns stays
+ * above.
  *
  * ── Where it runs ────────────────────────────────────────────────────────────
  *
@@ -100,6 +102,13 @@ export const MIN_FRAMES = 20;
 export const FILET_WINDOW_MS = 250;
 /** …once it holds this many frames. */
 export const FILET_MIN_FRAMES = 4;
+/**
+ * …and above its bound this long before it trips. Without it, the Mac on
+ * Wi-Fi lost each 240 kept, within 0.1 s, to spikes it has at 120 as well
+ * (p99 of 140 to 240 ms), while cadence=host-guarded showed it 15 ms younger
+ * pictures at 240 (02/10/2026).
+ */
+export const FILET_HOLD_MS = 500;
 /** Frames waiting at the decoder that make a queue… */
 export const QUEUE_FULL = 2;
 /** …once it has stood this long. */
@@ -213,6 +222,7 @@ export class CadenceStepper {
         this._received = [];
         this._firstPaintAt = 0;
         this._reference = null; // capture → painted at the client's own rate, ms
+        this._overSince = 0; // since when capture → painted has stood above the net's bound
         this._queueSince = 0;
         this._backoff = 0;
         this._nextTrialAt = 0;
@@ -572,6 +582,7 @@ export class CadenceStepper {
         this._level = 0;
         this._phase = 'idle';
         this._queueSince = 0;
+        this._overSince = 0;
         this._delay(now);
     }
 
@@ -581,6 +592,7 @@ export class CadenceStepper {
         this._event('restart', now, { why });
         this._level = 0;
         this._phase = 'idle';
+        this._overSince = 0;
         this._reference = null;
         this._backoff = 0;
         this._nextTrialAt = now + WARMUP_MS;
@@ -589,7 +601,10 @@ export class CadenceStepper {
     // ── The net ─────────────────────────────────────────────────────────────
 
     _checkNet(now) {
-        if (!this._stepped()) return;
+        if (!this._stepped()) {
+            this._overSince = 0;
+            return;
+        }
         if (this._queueSince && now - this._queueSince >= QUEUE_HOLD_MS) {
             this.trips++;
             this._fallBack('a decode queue that holds', now);
@@ -606,14 +621,19 @@ export class CadenceStepper {
         if (recent.length < FILET_MIN_FRAMES) return;
         const latency = median(recent.sort((a, b) => a - b));
         const half = 500 / this._base;
-        if (latency > this._reference + half) {
-            this.trips++;
-            this._fallBack(
-                `capture → painted ${latency.toFixed(1)} ms, over ` +
-                    `${this._reference.toFixed(1)} + ${half.toFixed(1)} at the client's rate`,
-                now,
-            );
+        if (latency <= this._reference + half) {
+            this._overSince = 0;
+            return;
         }
+        if (!this._overSince) this._overSince = now;
+        if (now - this._overSince < FILET_HOLD_MS) return;
+        this.trips++;
+        this._fallBack(
+            `capture → painted ${latency.toFixed(1)} ms, over ` +
+                `${this._reference.toFixed(1)} + ${half.toFixed(1)} at the client's rate ` +
+                `for ${Math.round(now - this._overSince)} ms`,
+            now,
+        );
     }
 
     // ── The content ─────────────────────────────────────────────────────────

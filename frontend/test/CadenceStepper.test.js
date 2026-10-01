@@ -19,6 +19,7 @@ import {
     BASE_MS,
     CadenceStepper,
     FASTER_STATS,
+    FILET_HOLD_MS,
     ladder,
     QUEUE_HOLD_MS,
 } from '../js/stream/CadenceStepper.js';
@@ -240,12 +241,28 @@ describe('CadenceStepper', () => {
         const steps = s.steps();
         expect(steps.map((m) => m.fps)).toEqual([240, 0]);
         expect(s.stepper.trips).toBe(1);
-        // Once the late frames are half of the net's window: 60 ms for the
+        // Once the late frames are half of the net's window — 60 ms for the
         // first of them to be painted, ~70 more for them to outnumber the
-        // ones painted at 120 — a stall of a few frames does not trip it. A
-        // tenth of a trial.
-        expect(steps[1].at - steps[0].at).toBeLessThan(200);
+        // ones painted at 120 — and have stayed so FILET_HOLD_MS: a stall of
+        // a few frames does not trip it.
+        expect(steps[1].at - steps[0].at).toBeLessThan(200 + FILET_HOLD_MS);
         expect(s.stepper.stepFps).toBe(0);
+    });
+
+    it("rides out a spike of the link shorter than the net's hold", () => {
+        // 240 kept, then 300 ms of frames painted 60 ms late, once: the link,
+        // not the step (a Mac on Wi-Fi).
+        let spikeAt = Infinity;
+        const s = setup({
+            latency: (rate, t) => (t >= spikeAt && t < spikeAt + 300 ? 60 : 20),
+        });
+        s.run(10000);
+        expect(s.stepper.stepFps).toBe(240);
+        spikeAt = 12000;
+        s.run(20000);
+        expect(s.stepper.trips).toBe(0);
+        expect(s.stepper.stepFps).toBe(240);
+        expect(s.steps().map((m) => m.fps)).toEqual([240]);
     });
 
     it('comes back at once on a decode queue that holds', () => {

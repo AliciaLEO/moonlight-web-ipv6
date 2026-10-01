@@ -6908,10 +6908,17 @@ déclenché un essai.
   - un palier gardé que le contenu n'utilise plus, deux relevés d'affilée,
     redescend au palier qu'il utilise.
 - Le filet est armé dès que le flux dépasse la fréquence du client, essais
-  compris : médiane de capture → peinte sur les 250 dernières ms au-dessus de
-  sa référence (mesurée à la fréquence du client) d'une demi-période du
-  client, ou deux images en file au décodeur pendant 150 ms. Retour immédiat
-  à la fréquence du client, en un aller-retour.
+  compris. Il déclenche dans deux cas :
+  - la médiane de capture → peinte sur les 250 dernières ms reste 500 ms
+    au-dessus de sa référence (mesurée à la fréquence du client) d'une
+    demi-période du client ;
+  - deux images restent en file au décodeur pendant 150 ms.
+  Le flux revient alors aussitôt à la fréquence du client, en un aller-retour.
+  Les 500 ms de tenue datent du banc du 02/10. Sans elles, le Mac en Wi-Fi
+  perdait chaque 240 gardé en 0,1 s, sur des pointes qu'il a aussi à 120 (p99
+  de 140 à 240 ms). Pourtant, `host-guarded` lui montrait à 240 des images
+  plus jeunes de 15 ms. Un client qui se noie reste au-dessus et redescend
+  en moins d'une seconde.
 - Un gouverneur de décodage qui demande moins d'images (`clientfpscap`)
   l'emporte : le palier est lâché, et aucun essai n'a lieu tant qu'il plafonne.
 - Il ne tourne que là où il mesure : hôte natif, fréquence laissée à l'Auto,
