@@ -5685,7 +5685,20 @@ DualRTX, Counter-Strike en 2560×1440)
   - L'écran virtuel coûte ~2 ms (capture et conversion). Le reste : l'encodeur du 780M en 1440p, le
     lien, le décodage du client.
 - **Invité** (second onglet du même PC, 1920×1080, mode jeu, l'écran de l'owner filmé et réduit) :
-  74 demandes d'image clé en 84 s, contre 3 pour l'owner. À expliquer.
+  74 demandes d'image clé en 84 s, contre 3 pour l'owner, et une latence « plus prononcée » au
+  troisième essai (17 et 22 demandes en 24 et 42 s). Cause : la page invité ne disait pas
+  `ride_out_loss`, seul le flux commun de Windows l'allumait. Un invité qui encode seul (tout invité
+  d'un hôte Linux) avait donc des images clés à la demande, et chaque perte gelait son image jusqu'à
+  une image clé entière. Corrigé (`5dabd5ce`) : la page le demande comme celle de l'owner (pas depuis
+  Apple), la jonction le transmet. Banc : l'invité encode en intra-refresh sur 120 images et sa page
+  laisse passer la vague. Ni un onglet caché, ni la réduction 1440p → 1080p ne reproduisaient les
+  demandes sur le banc.
+- **Pertes du lien UM790Pro → DualRTX** : des renvois SCTP sur échéance dans tous les streams, les
+  miens compris à 12 Mbit/s (8 à 40 par stream). Ni la carte de DualRTX (paquets écartés inchangés) ni
+  UDP sous Windows (erreurs de réception inchangées) ne les comptent ; l'UM790Pro → box : 3000 pings
+  de 1400 o sans perte. Où elles se perdent reste à trouver (commutateur, commutateur Hyper-V,
+  économies d'énergie de la Realtek de DualRTX, toutes actives). Un client sur une autre machine
+  dirait si c'est DualRTX.
 
 **Limites**
 
