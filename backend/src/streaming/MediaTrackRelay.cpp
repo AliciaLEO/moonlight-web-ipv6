@@ -771,10 +771,11 @@ void MediaTrackRelay::onInputMessage(const std::string& message)
     } else if (type == "inputstate") {
         // Client heartbeat: its authoritative held-input state, sent while (and
         // only while) something is held. Re-presses whatever the watchdog
-        // released during a stall but the user is genuinely still holding.
-        m_Shim->syncHeldInputs(InputMsg::parseHeldKeys(msg, m_Shim->keyboardMode()),
-                               static_cast<quint32>(msg["buttons"].toInt(0)),
-                               msg["buttonsHold"].toBool(false));
+        // released during a stall but the user is genuinely still holding —
+        // filtered by the guest's policy, or a viewer could press keys with it.
+        const InputMsg::HeldState held =
+            InputMsg::readHeldState(msg, m_Shim->keyboardMode(), m_InputPolicy);
+        m_Shim->syncHeldInputs(held.keys, held.buttons, held.buttonsHold);
     } else if (type == "mousemove") {
         // Absolute mouse position (non-gaming mode)
         if (msg.contains("x") && msg.contains("y") && msg.contains("referenceWidth") &&

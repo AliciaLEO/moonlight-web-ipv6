@@ -633,10 +633,11 @@ void StreamRelay::onWsTextMessage(const QString& message)
         }
     } else if (type == "inputstate") {
         // Client heartbeat of its held-input state — full contract in
-        // IMediaEngine's input-watchdog contract.
-        m_Shim->syncHeldInputs(InputMsg::parseHeldKeys(msg, m_Shim->keyboardMode()),
-                               static_cast<quint32>(msg["buttons"].toInt(0)),
-                               msg["buttonsHold"].toBool(false));
+        // IMediaEngine's input-watchdog contract. Filtered by the guest's
+        // policy, or a viewer could press keys with it.
+        const InputMsg::HeldState held =
+            InputMsg::readHeldState(msg, m_Shim->keyboardMode(), m_InputPolicy);
+        m_Shim->syncHeldInputs(held.keys, held.buttons, held.buttonsHold);
     } else if (type == "mousemove") {
         // Absolute mouse position (non-gaming mode) — same handling as
         // DataChannelRelay, otherwise the host cursor never moves in WSS.

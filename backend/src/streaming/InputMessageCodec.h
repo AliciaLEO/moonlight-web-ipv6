@@ -245,6 +245,30 @@ inline QVector<IMediaEngine::HeldKey> parseHeldKeys(const QJsonObject& msg, Keyb
     return keys;
 }
 
+/// An 'inputstate' heartbeat as the host may act on it.
+struct HeldState
+{
+    QVector<IMediaEngine::HeldKey> keys;
+    quint32 buttons = 0;
+    bool buttonsHold = false;
+};
+
+/// Read a heartbeat and strip from it what @p p forbids — the one way every
+/// transport reads it. The watchdog presses whatever key or button a heartbeat
+/// lists that it does not already hold down (InputWatchdog::sync), so an
+/// unfiltered one lets a guest who may only watch press keys and click on the
+/// host. Only DataChannelRelay filtered it until 01/10/2026; webrtc-media and
+/// WSS passed it straight through.
+inline HeldState readHeldState(const QJsonObject& msg, KeyboardMode mode, const Policy& p)
+{
+    HeldState s;
+    s.keys = parseHeldKeys(msg, mode);
+    s.buttons = static_cast<quint32>(msg["buttons"].toInt(0));
+    s.buttonsHold = msg["buttonsHold"].toBool(false);
+    filterHeldState(p, s.keys, s.buttons);
+    return s;
+}
+
 // ── Diagnostics ─────────────────────────────────────────────────────────────
 //
 // A keystroke that comes out wrong looks the same from the browser whatever

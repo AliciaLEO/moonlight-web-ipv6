@@ -1590,10 +1590,9 @@ void DataChannelRelay::onInputMessage(const std::string& message)
         // Client heartbeat: its authoritative held-input state, sent while (and
         // only while) something is held. Re-presses whatever the watchdog
         // released during a stall but the user is genuinely still holding.
-        QVector<IMediaEngine::HeldKey> held = InputMsg::parseHeldKeys(msg, m_Shim->keyboardMode());
-        quint32 buttons = static_cast<quint32>(msg["buttons"].toInt(0));
-        InputMsg::filterHeldState(m_InputPolicy, held, buttons);
-        m_Shim->syncHeldInputs(held, buttons, msg["buttonsHold"].toBool(false));
+        const InputMsg::HeldState held =
+            InputMsg::readHeldState(msg, m_Shim->keyboardMode(), m_InputPolicy);
+        m_Shim->syncHeldInputs(held.keys, held.buttons, held.buttonsHold);
     } else if (type == "mousemove") {
         // Absolute mouse position (non-gaming mode)
         if (msg.contains("x") && msg.contains("y") && msg.contains("referenceWidth") &&

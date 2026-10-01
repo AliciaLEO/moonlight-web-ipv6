@@ -245,6 +245,37 @@ void run_keyboard_layout_tests()
         CHECK_EQ(nativeHeld[0].keyCode, static_cast<short>(kVkUp));
     }
 
+    // ── The heartbeat of a guest who may only watch ──────────────────────────
+    //
+    // The watchdog presses whatever a heartbeat lists that it does not hold
+    // yet, so a heartbeat is input like any key: what the guest's policy
+    // forbids comes out of it, on every transport (all three read it through
+    // readHeldState). Until 01/10/2026 webrtc-media and WSS did not filter it,
+    // and a viewer could press keys and click on the host.
+    {
+        QJsonObject beat;
+        QJsonArray keys;
+        keys.append(key(kVkUp, "ArrowUp"));
+        beat["keys"] = keys;
+        beat["buttons"] = 1;
+        beat["buttonsHold"] = true;
+
+        InputMsg::Policy viewer;
+        viewer.keyboardMouse = false;
+        viewer.gamepad = false;
+        const InputMsg::HeldState none =
+            InputMsg::readHeldState(beat, KeyboardMode::Native, viewer);
+        CHECK_EQ(none.keys.size(), 0);
+        CHECK_EQ(none.buttons, 0u);
+
+        // A guest allowed the keyboard keeps their held keys and buttons.
+        const InputMsg::HeldState full =
+            InputMsg::readHeldState(beat, KeyboardMode::Native, InputMsg::Policy{});
+        CHECK_EQ(full.keys.size(), 1);
+        CHECK_EQ(full.buttons, 1u);
+        CHECK(full.buttonsHold);
+    }
+
     // ── The diagnostic line ──────────────────────────────────────────────────
     //
     // A keystroke that comes out wrong looks identical from the browser however
