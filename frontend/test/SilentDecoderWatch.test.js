@@ -56,6 +56,15 @@ describe('SilentDecoderWatch', () => {
         expect(w.observe(170, 5, 3200)).not.toBe(null);
     });
 
+    it('says how often the decoder failed in the stretch', () => {
+        const w = new SilentDecoderWatch();
+        w.observe(0, 9, 0, 2);
+        expect(w.observe(80, 9, 1600, 2)).toEqual({ chunks: 80, ms: 1600, faults: 0 });
+        expect(w.observe(170, 9, 3200, 5)).toEqual({ chunks: 90, ms: 1600, faults: 3 });
+        // Counted from the stretch it answered: none since.
+        expect(w.observe(250, 9, 4800, 5)).toEqual({ chunks: 80, ms: 1600, faults: 0 });
+    });
+
     it('starts over when the counters do (a new decoder), or when told to', () => {
         const w = new SilentDecoderWatch();
         w.observe(500, 200, 0);

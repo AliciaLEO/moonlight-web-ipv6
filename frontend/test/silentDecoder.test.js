@@ -17,7 +17,8 @@ const P = StreamView.prototype;
 
 function view(over = {}) {
     return {
-        stats: { received: 0, decoded: 0 },
+        // A decoder that worked: it gave pictures before going silent.
+        stats: { received: 0, decoded: 40, recoveries: 0 },
         webrtc: { rideOutLoss: true },
         videoCodec: 'hevc',
         _hdrEnabled: false,
@@ -126,6 +127,25 @@ describe('StreamView — a decoder gone silent', () => {
         // host made none (NVENC with dpb=1, a GameStream host).
         expect(decoderRidesOutGaps('Linux; Android 10')).toBe(true);
         expect(decoderTakesReferenceRepairs()).toBe(true);
+    });
+
+    // The Mi TV's decoder, stuck in "Decoding error" until a reboot (01/10/2026),
+    // blamed the wave and the repairs that way: a failing decoder is no verdict.
+    it('keeps no verdict for a decoder that failed, or never gave a picture', () => {
+        const failed = view({ webrtc: { rideOutLoss: true }, _refInvalidation: true });
+        failed._checkSilentDecoder(0);
+        failed.stats.recoveries = 3; // errors and recoveries in the stretch
+        goSilent(failed);
+        const never = view({ stats: { received: 0, decoded: 0, recoveries: 0 } });
+        goSilent(never);
+        const recovering = view({ _recoveryStartedPerf: 123 });
+        goSilent(recovering);
+        expect(decoderRidesOutGaps('Linux; Android 10')).toBe(true);
+        expect(decoderTakesReferenceRepairs()).toBe(true);
+        for (const v of [failed, never, recovering]) {
+            expect(v.quit).not.toHaveBeenCalled();
+            expect(v._handleDecoderError).toHaveBeenCalledOnce();
+        }
     });
 
     it('says nothing while pictures come out', () => {

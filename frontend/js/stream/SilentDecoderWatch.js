@@ -43,6 +43,7 @@ export class SilentDecoderWatch {
     reset() {
         this._received = -1;
         this._decoded = -1;
+        this._faults = 0;
         this._since = 0;
     }
 
@@ -50,22 +51,28 @@ export class SilentDecoderWatch {
      * @param {number} received chunks handed to the decoder so far
      * @param {number} decoded pictures it gave back so far
      * @param {number} now ms, any monotonic clock
-     * @returns {{chunks: number, ms: number} | null} the silence, when it is
-     *   one — once per stretch: the next answer needs as much again
+     * @param {number} [faults] the decoder's failures so far (recoveries): a
+     *   silence with one in it is a decoder failing, which the answer says
+     * @returns {{chunks: number, ms: number, faults: number} | null} the
+     *   silence, when it is one — once per stretch: the next answer needs as
+     *   much again
      */
-    observe(received, decoded, now) {
+    observe(received, decoded, now, faults = 0) {
         // A picture came out, or the counters started over (a new decoder).
         if (decoded !== this._decoded || received < this._received) {
             this._received = received;
             this._decoded = decoded;
+            this._faults = faults;
             this._since = now;
             return null;
         }
         const chunks = received - this._received;
         const ms = now - this._since;
         if (chunks < this.minChunks || ms < this.minMs) return null;
+        const failed = Math.max(0, faults - this._faults);
         this._received = received;
+        this._faults = faults;
         this._since = now;
-        return { chunks, ms };
+        return { chunks, ms, faults: failed };
     }
 }

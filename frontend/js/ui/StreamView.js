@@ -3304,16 +3304,29 @@ export class StreamView {
             this._silentWatch.reset();
             return;
         }
-        const silence = this._silentWatch.observe(this.stats.received, this.stats.decoded, now);
+        const silence = this._silentWatch.observe(
+            this.stats.received,
+            this.stats.decoded,
+            now,
+            this.stats.recoveries || 0,
+        );
         if (!silence) return;
-        const ridingOut = !!(this.webrtc && this.webrtc.rideOutLoss);
-        const repaired = !ridingOut && this._refInvalidation === true;
+        // A decoder that failed in the stretch (an error, a recovery still
+        // under way) or never gave a picture is broken, not silent: the stream
+        // is not to blame, and no verdict is kept. A Mi TV whose decoder said
+        // "Decoding error" to everything until a reboot blamed the wave and
+        // the repairs that way (01/10/2026).
+        const broken =
+            this.stats.decoded === 0 || silence.faults > 0 || !!this._recoveryStartedPerf;
+        const ridingOut = !broken && !!(this.webrtc && this.webrtc.rideOutLoss);
+        const repaired = !broken && !ridingOut && this._refInvalidation === true;
         console.warn(
             '[StreamView] Decoder went silent: ' +
                 silence.chunks +
                 ' chunks in, no picture for ' +
                 Math.round(silence.ms) +
                 ' ms' +
+                (broken ? ' — a failing decoder, no verdict' : '') +
                 (ridingOut ? ' — under the refresh wave' : '') +
                 (repaired ? " — under the host's reference repairs" : ''),
         );
