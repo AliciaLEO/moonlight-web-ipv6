@@ -4547,6 +4547,9 @@ export class StreamView {
                         // controller 0 (see GamepadManager's single mode).
                         single: this._playerMode,
                         preferredKey: this._padKey,
+                        // mw_perf_diag only: the pad's reads and states in
+                        // the [perf] line.
+                        probe: this._mainThreadProbe,
                         // A pad nothing maps is not forwarded; say so, or the
                         // player pushes buttons at a game that never hears
                         // them — and offer the wizard that fixes it. Longer

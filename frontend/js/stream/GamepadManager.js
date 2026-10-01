@@ -20,8 +20,11 @@
  *
  * The Gamepad API exposes "standard mapping" controllers (Xbox, PlayStation,
  * most modern pads) with a fixed layout that maps 1:1 to Limelight's button
- * flags and axes. We poll the live state every frame and send a snapshot over
- * the input transport only when it changes (anti-spam).
+ * flags and axes. A pad is never an event — not even its buttons, unlike a key
+ * or a click: it is seen when it is read. The frame loop finds the pads; once
+ * one is forwarded it is also read every POLL_MS, the rate Chrome samples pads
+ * at. A snapshot goes over the input transport only when it changes
+ * (anti-spam).
  *
  * A controller the browser reports without a standard layout is read through
  * a mapping (gamepadMapping.resolveMapping): the user's own, Chrome Android's
@@ -125,6 +128,18 @@ function axisToShort(v) {
 const REEMIT_MS = 500;
 
 /**
+ * How often a forwarded pad is read between two frames. Chrome samples pads
+ * at 250 Hz; read once a frame, a stick or a button waited for the next frame
+ * — 8 ms on average at 60 Hz, sticks and buttons alike. Read every 4 ms, it
+ * waits 2. Not a setting: latency comes first, and a pad that does not move
+ * still sends nothing (see REEMIT_MS for the one exception).
+ *
+ * Armed only while a pad is forwarded, the page is visible and the stream not
+ * paused (_armPoll); the frame loop alone keeps looking for pads otherwise.
+ */
+const POLL_MS = 4;
+
+/**
  * Whether a snapshot is away from rest (button, trigger or stick). The
  * threshold matches the backend's (InputWatchdog::padAtRest): deliberately
  * loose, since a barely-drifted stick counted as active costs a message and
@@ -150,6 +165,7 @@ export class GamepadManager {
      *           onIgnored?: (gp: Gamepad) => void,
      *           onMapped?: (gp: Gamepad, res: object) => void,
      *           single?: boolean, preferredKey?: string|null,
+     *           probe?: {notePadRead: (gapMs: number) => void, notePadSend: () => void}|null,
      *           platform?: string, db?: object|null, user?: (key: string) => object|null }} [options]
      *   `profile` forces the pad the host presents instead of following what we
      *   detect. It is offered in debug builds only (see SettingsView): in
@@ -163,6 +179,8 @@ export class GamepadManager {
      *   (Chrome Android, SDL database), so the user can check it.
      *   `single` forwards one pad only, as controller 0 (share-link guests);
      *   `preferredKey` is the pad (gamepadMapping.padKey) to take when present.
+     *   `probe` (diagnostics only, PipelineDiag's MainThreadProbe) is told how
+     *   far apart the reads of a forwarded pad are, and of every state sent.
      *   `platform`, `db` and `user` replace the live sources (tests).
      */
     constructor(sendFn, options = {}) {
@@ -187,6 +205,11 @@ export class GamepadManager {
         this._paused = false;
         this._running = false;
         this._rafId = null;
+        // The POLL_MS reader, while armed (_armPoll).
+        this._pollTimer = null;
+        this._probe = options.probe || null;
+        // When the previous read of a forwarded pad happened (diagnostics).
+        this._lastReadAt = 0;
         // Browser index → { last: {buttons,lt,rt,lx,ly,rx,ry}, sentAt,
         //   hasRumble, bindings, hostIndex, key }
         this._pads = new Map();
@@ -195,6 +218,9 @@ export class GamepadManager {
         this._onConnect = (e) => this._handleConnect(e.gamepad);
         this._onDisconnect = (e) => this._handleDisconnect(e.gamepad);
         this._onMappingsChanged = () => this.refreshMappings();
+        // A hidden page stops the frame loop and the reads with it, as it
+        // always did; StreamView repeats every pad on the way back (resendAll).
+        this._onVisibility = () => this._armPoll();
     }
 
     start() {
@@ -203,6 +229,7 @@ export class GamepadManager {
         window.addEventListener('gamepadconnected', this._onConnect);
         window.addEventListener('gamepaddisconnected', this._onDisconnect);
         window.addEventListener(CHANGED_EVENT, this._onMappingsChanged);
+        document.addEventListener('visibilitychange', this._onVisibility);
         // Pads connected before start() won't fire an event — pick them up on
         // the first poll.
         this._loop();
@@ -214,8 +241,10 @@ export class GamepadManager {
         window.removeEventListener('gamepadconnected', this._onConnect);
         window.removeEventListener('gamepaddisconnected', this._onDisconnect);
         window.removeEventListener(CHANGED_EVENT, this._onMappingsChanged);
+        document.removeEventListener('visibilitychange', this._onVisibility);
         if (this._rafId !== null) cancelAnimationFrame(this._rafId);
         this._rafId = null;
+        this._armPoll();
         // Motors first: a pad still shaking after the stream closed would be
         // shaking for nobody.
         for (const index of Array.from(this._rumble.keys())) this._stopRumble(index);
@@ -248,6 +277,7 @@ export class GamepadManager {
         paused = !!paused;
         if (paused === this._paused) return;
         this._paused = paused;
+        this._armPoll();
         if (paused) {
             const rest = { buttons: 0, lt: 0, rt: 0, lx: 0, ly: 0, rx: 0, ry: 0 };
             for (const entry of this._pads.values()) {
@@ -296,6 +326,28 @@ export class GamepadManager {
         if (this._profile === 'x360') return CTYPE.XBOX;
         if (this._profile === 'ds4') return CTYPE.PS;
         return detectType(gp.id);
+    }
+
+    /**
+     * Arm the POLL_MS reader while a pad is forwarded, the page is visible and
+     * the stream is not paused — disarm it as soon as one of the three fails.
+     * Called wherever one of them changes. With nothing to forward, the frame
+     * loop alone keeps watching for pads.
+     */
+    _armPoll() {
+        const wanted =
+            this._running &&
+            this._pads.size > 0 &&
+            !this._paused &&
+            document.visibilityState !== 'hidden';
+        // Diagnostics: a stretch without reads is not a gap between two.
+        if (!wanted) this._lastReadAt = 0;
+        if (wanted && this._pollTimer === null) {
+            this._pollTimer = setInterval(() => this._poll(), POLL_MS);
+        } else if (!wanted && this._pollTimer !== null) {
+            clearInterval(this._pollTimer);
+            this._pollTimer = null;
+        }
     }
 
     /** Active controllers as a bitmask (one bit per host index). */
@@ -384,6 +436,7 @@ export class GamepadManager {
             key: res.key,
         };
         this._pads.set(gp.index, entry);
+        this._armPoll();
         this._send({
             type: 'gamepadconnect',
             index: hostIndex,
@@ -404,6 +457,7 @@ export class GamepadManager {
         if (!entry) return;
         this._stopRumble(index);
         this._pads.delete(index);
+        this._armPoll();
         this._send({ type: 'gamepaddisconnect', index: entry.hostIndex, mask: this._mask() });
     }
 
@@ -428,6 +482,10 @@ export class GamepadManager {
         this._rafId = requestAnimationFrame(() => this._loop());
     }
 
+    /**
+     * One read of every pad — from the frame loop, and every POLL_MS while a
+     * pad is forwarded. The two interleave; neither sends what has not changed.
+     */
     _poll() {
         const pads = navigator.getGamepads ? navigator.getGamepads() : [];
         for (const gp of pads) {
@@ -474,7 +532,24 @@ export class GamepadManager {
             entry.last = cur;
             entry.sentAt = now;
             this._send({ type: 'gamepad', index: entry.hostIndex, mask: this._mask(), ...cur });
+            if (this._probe) this._probe.notePadSend();
         }
+        if (this._probe) this._noteRead();
+    }
+
+    /**
+     * Diagnostics: the gap since the previous read, counted only while it
+     * matters — a pad forwarded and not paused. Any other read starts over, so
+     * a quiet stretch never reads as one long gap.
+     */
+    _noteRead() {
+        if (this._pads.size === 0 || this._paused) {
+            this._lastReadAt = 0;
+            return;
+        }
+        const now = performance.now();
+        if (this._lastReadAt) this._probe.notePadRead(now - this._lastReadAt);
+        this._lastReadAt = now;
     }
 
     /**

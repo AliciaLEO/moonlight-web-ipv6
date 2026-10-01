@@ -302,6 +302,117 @@ describe('GamepadManager', () => {
         gm.stop();
     });
 
+    describe('between two frames', () => {
+        function setVisibility(state) {
+            Object.defineProperty(document, 'visibilityState', {
+                value: state,
+                configurable: true,
+            });
+            document.dispatchEvent(new window.Event('visibilitychange'));
+        }
+
+        beforeEach(() => {
+            vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+        });
+        afterEach(() => {
+            vi.useRealTimers();
+            // Back to jsdom's own getter.
+            delete document.visibilityState;
+        });
+
+        it('reads a forwarded pad every 4 ms, and sends only what changed', () => {
+            const send = vi.fn();
+            const pad = fakePad({ index: 0 });
+            setPads([pad]);
+            const gm = new GamepadManager(send, { platform: 'win', user: () => null });
+            gm.start();
+            send.mockClear();
+
+            // The stick moves; no frame comes: the next read, 4 ms on, sends it.
+            pad.axes = [1, 0, 0, 0];
+            vi.advanceTimersByTime(4);
+            expect(send).toHaveBeenCalledWith(
+                expect.objectContaining({ type: 'gamepad', index: 0, lx: 32767 }),
+            );
+
+            // Ten more reads of the same state: nothing.
+            send.mockClear();
+            vi.advanceTimersByTime(40);
+            expect(send).not.toHaveBeenCalled();
+            gm.stop();
+        });
+
+        it('leaves the frame loop alone while no pad is forwarded', () => {
+            // A pad nothing maps is seen, not forwarded.
+            setPads([fakePad({ mapping: '' })]);
+            const gm = new GamepadManager(vi.fn(), { platform: 'win', db: null, user: () => null });
+            gm.start();
+            expect(vi.getTimerCount()).toBe(0);
+            gm.stop();
+        });
+
+        it('stops on pause, on a hidden page, on the last pad gone and on stop()', () => {
+            const pad = fakePad({ index: 0 });
+            setPads([pad]);
+            const gm = new GamepadManager(vi.fn(), { platform: 'win', user: () => null });
+            gm.start();
+            expect(vi.getTimerCount()).toBe(1);
+
+            gm.setPaused(true);
+            expect(vi.getTimerCount()).toBe(0);
+            gm.setPaused(false);
+            expect(vi.getTimerCount()).toBe(1);
+
+            setVisibility('hidden');
+            expect(vi.getTimerCount()).toBe(0);
+            setVisibility('visible');
+            expect(vi.getTimerCount()).toBe(1);
+
+            const gone = new window.Event('gamepaddisconnected');
+            gone.gamepad = pad;
+            setPads([]);
+            window.dispatchEvent(gone);
+            expect(vi.getTimerCount()).toBe(0);
+
+            setPads([pad]);
+            rafCb();
+            expect(vi.getTimerCount()).toBe(1);
+            gm.stop();
+            expect(vi.getTimerCount()).toBe(0);
+        });
+
+        it('tells the probe how far apart the reads are, and each state sent', () => {
+            let now = 1000;
+            const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
+            const probe = { notePadRead: vi.fn(), notePadSend: vi.fn() };
+            const pad = fakePad({ index: 0 });
+            setPads([pad]);
+            const gm = new GamepadManager(vi.fn(), { platform: 'win', user: () => null, probe });
+
+            gm.start(); // the pad is found and its state sent: no gap yet
+            expect(probe.notePadRead).not.toHaveBeenCalled();
+            expect(probe.notePadSend).toHaveBeenCalledTimes(1);
+
+            now += 4;
+            vi.advanceTimersByTime(4);
+            expect(probe.notePadRead).toHaveBeenCalledWith(4);
+            expect(probe.notePadSend).toHaveBeenCalledTimes(1); // unchanged: nothing sent
+
+            // A pause is no gap: the reads after it start over.
+            gm.setPaused(true);
+            now += 1000;
+            gm.setPaused(false);
+            probe.notePadRead.mockClear();
+            now += 4;
+            vi.advanceTimersByTime(4);
+            now += 4;
+            vi.advanceTimersByTime(4);
+            expect(probe.notePadRead.mock.calls).toEqual([[4]]);
+            gm.stop();
+            clock.mockRestore();
+        });
+    });
+
     it('detects controller types from the id string', () => {
         const cases = [
             ['DualSense Wireless', 2],

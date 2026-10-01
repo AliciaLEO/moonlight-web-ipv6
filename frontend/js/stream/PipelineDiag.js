@@ -102,6 +102,14 @@ class DiagWindow {
         for (const s of this._samples) sum += s.value;
         return sum;
     }
+
+    /** The value under which a fraction @p q of the window lies (0 if empty). */
+    quantile(q) {
+        this._prune();
+        if (this._samples.length === 0) return 0;
+        const sorted = this._samples.map((s) => s.value).sort((a, b) => a - b);
+        return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
+    }
 }
 
 export class PipelineDiag {
@@ -236,15 +244,18 @@ export class PipelineDiag {
  * nothing in PipelineDiag can answer it: a late frame reads the same there
  * whether the network, the decoder or a busy event loop held it up.
  *
- * Three observations, all windowed like the rest:
+ * Four observations, all windowed like the rest:
  *   - input messages sent, and the time their handlers took,
  *   - event-loop lag: how late a 10ms timer fires. It fires late only when the
  *     thread was busy with something else, so its max is the longest stretch
  *     during which a frame that had arrived could not be touched,
- *   - long tasks (>50ms), as the browser reports them.
+ *   - long tasks (>50ms), as the browser reports them,
+ *   - the gamepads: how often a forwarded pad is read, how far apart two reads
+ *     are (a pad is seen only when read, so the gap is what a stick or a
+ *     button waits at worst), and how many states went out.
  *
  * Diagnostics only (mw_perf_diag): the timer runs only between start() and
- * stop(), and noteInput() costs a push.
+ * stop(), and each note costs a push.
  */
 export class MainThreadProbe {
     constructor(windowMs = 2000) {
@@ -252,6 +263,8 @@ export class MainThreadProbe {
         this._inputMs = new DiagWindow(windowMs);
         this._lag = new DiagWindow(windowMs);
         this._longTasks = new DiagWindow(windowMs);
+        this._padGapMs = new DiagWindow(windowMs);
+        this._padSends = new DiagWindow(windowMs);
         this._timer = null;
         this._observer = null;
     }
@@ -289,6 +302,16 @@ export class MainThreadProbe {
         this._inputMs.push(handlerMs);
     }
 
+    /** A forwarded pad was read, @p gapMs after the previous read. */
+    notePadRead(gapMs) {
+        this._padGapMs.push(gapMs);
+    }
+
+    /** One gamepad state went out. */
+    notePadSend() {
+        this._padSends.push(0);
+    }
+
     snapshot() {
         const seconds = this._windowMs / 1000;
         return {
@@ -298,18 +321,24 @@ export class MainThreadProbe {
             loopLagMaxMs: this._lag.max,
             longTasks: this._longTasks.count,
             longTaskMaxMs: this._longTasks.max,
+            padReadsPerSec: this._padGapMs.count / seconds,
+            padSendsPerSec: this._padSends.count / seconds,
+            padGapP95Ms: this._padGapMs.quantile(0.95),
+            padGapMaxMs: this._padGapMs.max,
         };
     }
 }
 
 /**
- * Render a MainThreadProbe snapshot as the tail of the [perf] line.
+ * Render a MainThreadProbe snapshot as the tail of the [perf] line. The pad
+ * part — reads/s, states sent/s, gap between reads p95/max — appears only
+ * while a pad is forwarded; without one the line is unchanged.
  * @param {ReturnType<MainThreadProbe['snapshot']>|null} load
  */
 export function formatMainThread(load) {
     if (!load) return '';
     const n1 = (v) => (v || 0).toFixed(1);
-    return (
+    let line =
         'input ' +
         Math.round(load.inputsPerSec) +
         '/s ' +
@@ -322,8 +351,20 @@ export function formatMainThread(load) {
         load.longTasks +
         '/' +
         Math.round(load.longTaskMaxMs) +
-        'ms'
-    );
+        'ms';
+    if (load.padReadsPerSec > 0) {
+        line +=
+            ' · pad read ' +
+            Math.round(load.padReadsPerSec) +
+            '/s sent ' +
+            Math.round(load.padSendsPerSec) +
+            '/s gap ' +
+            n1(load.padGapP95Ms) +
+            '/' +
+            n1(load.padGapMaxMs) +
+            'ms';
+    }
+    return line;
 }
 
 /**
