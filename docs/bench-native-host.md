@@ -5651,6 +5651,42 @@ depuis DualRTX :
     d'après `ShellVersion`), et n'en ajoute pas en mode jeu. Vérifié : pointeur du client masqué,
     flèche de GNOME à ±1-3 px.
 
+**Porte C, deuxième essai de Bruno** (dongle M27Q passé sur le 780M puis débranché, son Chrome sur
+DualRTX, Counter-Strike en 2560×1440)
+
+- **Cadence** : tout sur l'AMD, GNOME livre 60 i/s stables à l'écran virtuel (stream de banc
+  1600×1000, texte qui défile ; 30 à 47 quand le dongle était sur la GTX). Bruno : 55 i/s sous CS.
+- **Pointeur qui clignote**, corrigé (`192ad6b4`) :
+  - mesure : une sonde relit l'image du client à chaque rafraîchissement pendant que le pointeur
+    balaie l'écran. Sur CS, la flèche manquait sur 97 images sur 450, par trous de 1 à 6 images ;
+  - sonde Mutter (`scripts/bench/mutter`, pointeur déplacé ~125 fois par seconde sur un écran virtuel
+    immobile) : en métadonnées, 75-84 images/s et 93-109 mises à jour sans image, jusqu'à 59 ms sans
+    image ; demandé dans l'image (`cursor-mode` 1), 112-145 images/s, aucune sans image, 13 ms d'écart
+    au plus ;
+  - avant GNOME 48, le pointeur est désormais demandé dans l'image : `cursor-mode` 1 sur la route de
+    Mutter, `cursor_mode` 2 sur celle du portail, par l'auxiliaire aussi. GNOME 48 et après : inchangé ;
+  - après : la flèche est sur toutes les images du balayage (451/451 sur le bureau, 453/453 sur une
+    page animée), sur toute la course, à ±1-3 px de la cible ; 49 i/s pendant un mouvement continu ;
+  - tests : 43/43 sur GNOME 46 (UM790Pro, DMA-BUF) et 42.9 (VM, mémoire partagée), repli par le
+    portail 28/28. Paquet DEV `0.3.1.g2a2.7-dev`.
+  - ⚠️ Piège de banc : les pages de `scripts/bench/content` cachent le pointeur (`cursor: none`),
+    sauf `still.html?cursor=1`. Une mesure du pointeur faite par-dessus est fausse.
+- **Visée de CS hors mode jeu** : attendu. Le mode bureau envoie des positions (pointeur uinput
+  absolu, comme une tablette) ; un jeu de tir lit des mouvements, que seul le mode jeu envoie.
+- **Latence** relevée par Bruno (2560×1440, HEVC, 36 Mbit/s, 60 i/s) : 30,5 ms = hôte 9,1 (encodage
+  VA-API 6,8 ; capture 0,2 ; conversion 1,7) + réseau 6,6 + file du lien 7,0 + décodage 7,3 (p99 21)
+  + rendu 0,2.
+  - Ping ICMP : DualRTX → UM790Pro 2-3 ms (pointes à 25), DualRTX → box 1-2 ms, UM790Pro → box
+    0,2 ms. Le réseau de DualRTX (commutateur Hyper-V) pèse pour tout hôte.
+  - Le « réseau » est la moitié du ping du canal de données, qui attend derrière la vidéo : il
+    recoupe en partie la file du lien.
+  - Premier stream : 84 renvois SCTP, dont 21 sur échéance (T3), et 27 images jetées à l'envoi :
+    ce sont les 9 gels (2,5 s au plus). Les streams suivants : 0 à 4 renvois.
+  - L'écran virtuel coûte ~2 ms (capture et conversion). Le reste : l'encodeur du 780M en 1440p, le
+    lien, le décodage du client.
+- **Invité** (second onglet du même PC, 1920×1080, mode jeu, l'écran de l'owner filmé et réduit) :
+  74 demandes d'image clé en 84 s, contre 3 pour l'owner. À expliquer.
+
 **Limites**
 
 - **KDE** : un invité garde son propre écran à côté de celui de l'owner.
