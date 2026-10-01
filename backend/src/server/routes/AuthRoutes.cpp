@@ -488,6 +488,9 @@ void registerAuthRoutes(HttpServer& server, AuthManager& authManager, GeoIpServi
         // admin password is no longer the same thing as "is the host machine".
         obj["is_localhost"] = isLocal;
         obj["is_host_machine"] = req.isHostMachine;
+        // --noadmin: nobody administers, the browser on the host still streams.
+        obj["admin_locked"] = req.adminLocked;
+        const bool hostTrusted = isLocal || (req.adminLocked && req.isHostMachine);
 
         if (isLocal) {
             obj["authenticated"] = true; // localhost is always authenticated
@@ -499,6 +502,8 @@ void registerAuthRoutes(HttpServer& server, AuthManager& authManager, GeoIpServi
             // password has been set, so the LAN door is advertised and shut. The
             // owner is the only one who can open it, and only from here.
             obj["admin_password_set"] = authManager.adminPasswordSet();
+        } else if (hostTrusted) {
+            obj["authenticated"] = true; // the booth itself: streams, never asked a PIN
         } else {
             // Check session cookie
             bool auth = false;
@@ -539,15 +544,15 @@ void registerAuthRoutes(HttpServer& server, AuthManager& authManager, GeoIpServi
             }
         }
 
-        obj["requires_pin"] = !isLocal;
+        obj["requires_pin"] = !hostTrusted;
         obj["active_sessions"] = authManager.activeSessionCount();
         obj["cert_auth_enabled"] = authManager.certAuthEnabled();
         // Tells the frontend to offer the admin page behind a password prompt.
         // Mirrors exactly what /api/auth/admin-unlock will accept, so the
         // button never appears where the unlock would be refused.
         obj["admin_unlock_available"] =
-            !isLocal && obj["authenticated"].toBool() && authManager.remoteAdminEnabled() &&
-            authManager.adminPasswordSet() &&
+            !isLocal && !req.adminLocked && obj["authenticated"].toBool() &&
+            authManager.remoteAdminEnabled() && authManager.adminPasswordSet() &&
             AuthManager::canUnlockAdmin(req.clientAddress, req.hostTrusted, req.viaTunnel,
                                         authManager.remoteAdminInternet());
 

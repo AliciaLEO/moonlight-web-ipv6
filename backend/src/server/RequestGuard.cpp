@@ -288,16 +288,53 @@ Decision evaluate(const Request& req, const Context& ctx)
     // privileges as the host. Note that its *unlock* is gated separately (LAN
     // peer, trusted Host, rate limit) — by the time adminSession is set, that
     // check has already passed.
-    d.adminPrivilege = (d.hostMachine || ctx.adminSession) && (!mutating || ctx.adminKeyOk);
+    d.adminPrivilege =
+        !ctx.adminLocked && (d.hostMachine || ctx.adminSession) && (!mutating || ctx.adminKeyOk);
 
     return d;
 }
 
 AdminTokenReply adminTokenReply(const Decision& decision, const Context& ctx, bool authenticated)
 {
+    // The host machine keeps its place without a session, it just holds no key.
+    if (ctx.adminLocked)
+        return authenticated || decision.hostMachine ? AdminTokenReply::Empty
+                                                     : AdminTokenReply::Deny;
     if (decision.hostMachine || ctx.adminSession) return AdminTokenReply::Grant;
     if (authenticated) return AdminTokenReply::Empty;
     return AdminTokenReply::Deny;
+}
+
+bool lockedByNoAdmin(const QString& method, const QString& path)
+{
+    if (method == QLatin1String("GET") || method == QLatin1String("HEAD")) return false;
+
+    const QStringList seg = path.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    if (seg.size() < 2 || seg[0] != QLatin1String("api")) return false;
+    const QString& area = seg[1];
+
+    if (area == QLatin1String("system")) return true;
+    if (area == QLatin1String("update")) return true;
+    if (area == QLatin1String("auth")) {
+        static const QStringList doors = {QStringLiteral("validate"),
+                                          QStringLiteral("admin-unlock"),
+                                          QStringLiteral("regenerate")};
+        return seg.size() == 3 && doors.contains(seg[2]);
+    }
+    if (area == QLatin1String("share")) {
+        if (seg.size() >= 3 && seg[2] == QLatin1String("slots")) return true;
+        return seg.size() == 4 && seg[2] == QLatin1String("player") &&
+               seg[3] == QLatin1String("pin");
+    }
+    if (area == QLatin1String("hosts")) {
+        if (seg.size() == 3) return true; // scan, manual, DELETE /api/hosts/:id
+        // What a booth still does with a host it was given: wake it, play on it.
+        // An allow-list, so a route added later is locked until it says otherwise.
+        static const QStringList play = {QStringLiteral("wol"), QStringLiteral("start"),
+                                         QStringLiteral("quit"), QStringLiteral("stop-session")};
+        return seg.size() != 4 || !play.contains(seg[3]);
+    }
+    return false;
 }
 
 } // namespace RequestGuard

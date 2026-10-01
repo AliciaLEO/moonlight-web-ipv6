@@ -629,6 +629,8 @@ export class BackendClient {
         // The one place that can say so. Everything else the application does is
         // downstream of this answer.
         if (status.authenticated || status.is_localhost) this._hadSession = true;
+        // Booth mode (--noadmin): the views read it here rather than each asking.
+        this.adminLocked = status.admin_locked === true;
         return status;
     }
     /** End this browser's own session and clear its cookie. Works from anywhere

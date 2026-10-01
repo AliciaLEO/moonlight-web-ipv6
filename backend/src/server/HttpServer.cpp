@@ -1175,6 +1175,7 @@ void HttpServer::serveRequest(HttpRequest req, Arrival arrival, ResponseCallback
     // password unlock, which judged that on the ICE address before promoting.
     ctx.adminKeyOk = (!viaTunnel || tunnelHost || ctx.adminSession) && adminKeyMatches(req);
     ctx.publicDomain = m_Certs.domain();
+    ctx.adminLocked = m_AdminLocked;
 
     const RequestGuard::Decision decision =
         RequestGuard::evaluate(RequestGuard::describe(req), ctx);
@@ -1196,7 +1197,15 @@ void HttpServer::serveRequest(HttpRequest req, Arrival arrival, ResponseCallback
                             .arg(req.headers.value("host"), req.path));
     }
 
+    if (m_AdminLocked && RequestGuard::lockedByNoAdmin(req.method, req.path)) {
+        QJsonObject obj;
+        obj["error"] = "admin_locked";
+        respond(HttpResponse::json(obj, 403));
+        return;
+    }
+
     const bool localPrivilege = decision.localPrivilege;
+    req.adminLocked = m_AdminLocked;
     req.isLocal = decision.adminPrivilege;
     req.isHostMachine = decision.hostMachine;
     req.hostTrusted = decision.hostTrusted;

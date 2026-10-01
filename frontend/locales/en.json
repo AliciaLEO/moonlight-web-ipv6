@@ -88,7 +88,9 @@
         "unknownError": "Unknown error",
         "initTitle": "Initialization Error",
         "connectionTitle": "Connection Error",
-        "unableToConnect": "Unable to connect to server"
+        "unableToConnect": "Unable to connect to server",
+        "boothTitle": "Booth mode",
+        "boothBody": "This MoonlightWeb only lets in the devices it already knows. Ask its owner to add this one."
     },
     "hosts": {
         "nativeCapturePermission": "This Mac has lost its Screen Recording permission, so it cannot stream its screen. On the Mac: System Settings → Privacy & Security → Screen Recording, turn MoonlightWeb on, then quit and reopen MoonlightWeb.",

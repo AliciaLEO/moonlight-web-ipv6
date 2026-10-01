@@ -557,7 +557,7 @@ export class SettingsView {
         // Persist to server when on localhost, so settings.json is updated
         // and all other clients get these defaults on first visit.
         const host = window.location.hostname;
-        if (host === 'localhost' || host === '127.0.0.1') {
+        if ((host === 'localhost' || host === '127.0.0.1') && !BackendClient.adminLocked) {
             try {
                 await BackendClient.saveStreamingSettings(settings);
             } catch (err) {

@@ -199,6 +199,10 @@ public:
 
     /// Set the AuthManager for PIN-based authentication of remote requests.
     void setAuthManager(AuthManager* am) { m_AuthManager = am; }
+    /// --noadmin: no request is granted admin rights, and the ones that change
+    /// what the booth offers are refused (RequestGuard::lockedByNoAdmin).
+    void setAdminLocked(bool locked) { m_AdminLocked = locked; }
+    bool adminLocked() const { return m_AdminLocked; }
     AuthManager* authManager() const { return m_AuthManager; }
 
     /// Check whether the request carries a valid session cookie.
@@ -308,6 +312,7 @@ private:
 
     /// PIN-based authentication manager (nullable — auth disabled when null).
     AuthManager* m_AuthManager = nullptr;
+    bool m_AdminLocked = false;
 
     /// Per-run secret required on admin writes (see adminKeyMatches). Generated
     /// in the constructor, never written to disk.

@@ -48,6 +48,16 @@ Three states, in `AppSettings`: **unset** (remote admin on, no digest stored —
 - **Changing the password, or disabling remote administration, revokes every unlock the old one bought** (`demoteAdminSessions`) — except the caller's own when they are the remote admin doing the reset. Sessions survive; only the admin flag is dropped. Disabling and re-enabling restores the operator's password: the digest is kept. A persisted `is_admin` is discarded at load whenever the door is shut — remote administration off, or no password set.
 - An unlocked LAN admin gets `isLocal` (full admin), but **not** `isHostMachine`: it never receives the host key and never sees the first-run setup wizard, both of which belong to the machine with the local desktop.
 
+### 6.2.2 Booth mode (`--noadmin`)
+
+A pre-configured machine left to visitors: they stream the hosts already set up and change nothing. Asked for in issue #26; the point is a "launch and done" screen, not a defence against whoever sits at the machine.
+
+- **Nobody administers.** `RequestGuard::Context::adminLocked` makes `adminPrivilege` false for every caller — the host machine, an unlocked LAN session, the operator CLI — so every "localhost only" route answers 403 and `/api/admin/token` hands out no key. The admin password is not accepted either: `/api/auth/admin-unlock` is refused.
+- **The host list is frozen.** Host routes were never admin routes (any session may add, pair or remove a host), so `RequestGuard::lockedByNoAdmin` refuses them outright with `403 admin_locked`: scan, manual add, remove, rename, pair, restart a host's service, set up its backend, its seats. Under `/api/hosts/:id/` it is an allow-list — `wol`, `start`, `quit`, `stop-session` — so a route added later is locked until it says otherwise. The self-update and `/api/system/*` are refused the same way.
+- **No new device, no new guest.** PIN login (`/api/auth/validate`), share slots and a guest's PIN are refused. Devices paired before keep their sessions. A browser with none is shown "Booth mode" instead of the PIN page.
+- **The host machine still streams.** `/api/auth/status` reports `admin_locked` and keeps `authenticated` for `isHostMachine` with no PIN; `is_localhost` (admin) is false. The front hides what it can no longer use: admin button and page, setup wizard, "Add manually", the host menu but Stop session, Pair, the update banner, Share. The tray keeps Open and Streaming only.
+- **Getting admin back** is restarting without the flag. The limit is stated plainly: anyone with enough rights on the machine can do that too — run it as the service or under another account, visitors on a standard account. The installer and an update rewrite the logon task with `--autostart` alone, so the flag has to be added back after one.
+
 ## 6.3 Sessions
 
 - A successful auth issues a random token in the `mw_session` cookie. **Only its SHA-256 (base64url) is stored** — in memory and in `sessions.json` — so a stolen sessions file cannot be replayed.

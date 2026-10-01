@@ -42,6 +42,9 @@ struct HttpRequest
                                 // really is the host machine. Only for actions
                                 // that need the local desktop (setup wizard,
                                 // Sunshine install), not for admin rights.
+    bool adminLocked = false;   // Launched with --noadmin: isLocal is false for
+                                // everyone, and the host machine is trusted to
+                                // stream (isHostMachine) without administering.
     bool hostTrusted = false;   // The Host header names this machine (loopback,
                                 // a LAN address, an mDNS name, or our domain) —
                                 // false means we were reached under someone

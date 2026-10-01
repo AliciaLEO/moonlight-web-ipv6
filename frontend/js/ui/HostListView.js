@@ -550,6 +550,8 @@ export class HostListView {
     _renderUpdateBanner() {
         // An update in flight owns the banner (progress bar); never repaint over it.
         if (this._updateBusy) return;
+        // A booth's visitors can do nothing about an update: the banner stays hidden.
+        if (BackendClient.adminLocked) return;
         // Wait for the host list: painting "update the host PC by hand" and then
         // flipping it to a one-click button a second later reads as a glitch.
         if (!this._hostsLoaded) return;
@@ -795,7 +797,8 @@ export class HostListView {
     }
 
     async _autoScan() {
-        if (!this._active) return;
+        // A booth offers the hosts it was given; discovery would add others.
+        if (!this._active || BackendClient.adminLocked) return;
         try {
             await BackendClient.scanHosts();
         } catch (err) {
@@ -946,7 +949,11 @@ export class HostListView {
                 <div class="hosts-header">
                     <h2>${t('hosts.title')}</h2>
                     <div class="hosts-actions">
-                        <button class="btn btn-neutral" id="btn-manual">${t('hosts.addManually')}</button>
+                        ${
+                            BackendClient.adminLocked
+                                ? ''
+                                : `<button class="btn btn-neutral" id="btn-manual">${t('hosts.addManually')}</button>`
+                        }
                     </div>
                 </div>
                 <div class="hosts-list" id="hosts-list"></div>
@@ -1082,6 +1089,9 @@ export class HostListView {
 
     renderCard(host) {
         const cls = host.statusClass;
+        // Booth mode leaves the menu one entry, Stop session, and hides it
+        // while there is no app to stop.
+        const booth = BackendClient.adminLocked;
         return `
             <div class="host-card ${cls}" data-uuid="${host.uuid}">
                 <div class="host-card-head">
@@ -1097,12 +1107,18 @@ export class HostListView {
                         }
                     </div>
                     <span class="status-badge ${cls}">${host.statusLabel}</span>
-                    <div class="host-card-menu">
+                    <div class="host-card-menu"${
+                        booth && !(host.currentGameId > 0) ? ' style="display: none"' : ''
+                    }>
                         <button class="btn-icon btn-host-menu" data-uuid="${host.uuid}"
                                 aria-haspopup="true" aria-expanded="false"
                                 aria-label="${this.esc(t('hosts.menuAria'))}">${Icons.menu}</button>
                         <div class="host-menu" hidden>
-                            <button class="host-menu-item btn-rename" data-uuid="${host.uuid}">${t('hosts.rename')}</button>
+                            ${
+                                booth
+                                    ? ''
+                                    : `<button class="host-menu-item btn-rename" data-uuid="${host.uuid}">${t('hosts.rename')}</button>`
+                            }
                             ${
                                 // Sharing without a stream: the board opens
                                 // cold, the owner picks the app, and the first
@@ -1110,7 +1126,7 @@ export class HostListView {
                                 // Gated on the declared lobby capability, not
                                 // the product name — a co-op host manages its
                                 // own players in its own streamed UI.
-                                host.isAvailable && host.supportsLobbies !== true
+                                !booth && host.isAvailable && host.supportsLobbies !== true
                                     ? `<button class="host-menu-item btn-share" data-uuid="${host.uuid}">${t('sharing.share')}</button>`
                                     : ''
                             }
@@ -1120,7 +1136,7 @@ export class HostListView {
                                 // API that can bounce the service. It never asks
                                 // the user for a host password, so on a plain
                                 // remote host there is simply nothing to show.
-                                host.restartSupported
+                                !booth && host.restartSupported
                                     ? `<button class="host-menu-item btn-restart" data-uuid="${host.uuid}">${t('hosts.restartService')}</button>`
                                     : ''
                             }
@@ -1149,7 +1165,10 @@ export class HostListView {
                                 // such a host can ever be set up — and because
                                 // the test is a Sunshine one, a Sunshine card
                                 // still shows nothing at all.
-                                host.backendType || host.multiSeatDetected || host.mayHaveControlApi
+                                !booth &&
+                                (host.backendType ||
+                                    host.multiSeatDetected ||
+                                    host.mayHaveControlApi)
                                     ? `<button class="host-menu-item btn-backend" data-uuid="${host.uuid}">${
                                           host.backendType
                                               ? t('hosts.backendManage', { type: host.backendType })
@@ -1157,7 +1176,11 @@ export class HostListView {
                                       }</button>`
                                     : ''
                             }
-                            <button class="host-menu-item btn-remove" data-uuid="${host.uuid}">${t('common.remove')}</button>
+                            ${
+                                booth
+                                    ? ''
+                                    : `<button class="host-menu-item btn-remove" data-uuid="${host.uuid}">${t('common.remove')}</button>`
+                            }
                         </div>
                     </div>
                 </div>
@@ -1184,7 +1207,11 @@ export class HostListView {
             // one that vanished would say nothing at all.
             return `<div class="host-body-center host-empty-display">
                         <p class="host-empty-display-text">${t('hosts.nativeCapturePermission')}</p>
-                        <button class="btn btn-secondary btn-mac-perm" data-pane="screen">${t('setup.openScreenRecording')}</button>
+                        ${
+                            BackendClient.adminLocked
+                                ? ''
+                                : `<button class="btn btn-secondary btn-mac-perm" data-pane="screen">${t('setup.openScreenRecording')}</button>`
+                        }
                     </div>`;
         }
         if (host.isAvailable) {
@@ -1192,11 +1219,16 @@ export class HostListView {
             // lost Accessibility still streams, but takes no input: said above
             // the grid, since macOS says nothing.
             const inputWarn = host.lacksInputPermission
-                ? `<div class="host-perm-warn"><p>${t('hosts.nativeInputPermission')}</p>
-                       <button class="btn btn-secondary btn-mac-perm" data-pane="accessibility">${t('setup.openAccessibility')}</button></div>`
+                ? `<div class="host-perm-warn"><p>${t('hosts.nativeInputPermission')}</p>${
+                      BackendClient.adminLocked
+                          ? ''
+                          : `<button class="btn btn-secondary btn-mac-perm" data-pane="accessibility">${t('setup.openAccessibility')}</button>`
+                  }</div>`
                 : '';
             return inputWarn + `<div class="host-apps" data-uuid="${host.uuid}"></div>`;
         }
+        // A booth pairs nothing: an unpaired host just shows its badge.
+        if (host.isLocked && BackendClient.adminLocked) return '';
         if (host.isLocked) {
             return `<div class="host-body-center">
                         <button class="btn btn-secondary btn-pair" data-uuid="${host.uuid}">${t('common.pair')}</button>

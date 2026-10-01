@@ -53,6 +53,10 @@ public:
     /// than on this bare tray. Call before init().
     void setClientMode(bool on) { m_ClientMode = on; }
 
+    /// Booth mode (--noadmin): the menu keeps Open and Streaming only — no
+    /// Server Settings, Start at login, Restart or Quit. Call before init().
+    void setAdminLocked(bool on) { m_AdminLocked = on; }
+
     /// Client mode: how the menu drives the server it decorates. main.cpp wires
     /// these to a loopback POST (/api/system/restart, /api/system/quit) so the
     /// server exits on its own and its supervisor restarts it (Restart) or lets
@@ -148,6 +152,7 @@ private:
 
     HttpServer* m_Server; // null in client mode
     bool m_ClientMode = false;
+    bool m_AdminLocked = false;
     std::function<QUrl(const QString& path)> m_UrlProvider;
     std::function<QString(const QString& path)> m_RemoteLink; // see setRemoteLinkProvider
     std::function<void()> m_RestartServer; // client mode: restart the remote server

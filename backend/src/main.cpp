@@ -696,7 +696,10 @@ static int runStatusCommand(quint16 persistedHttpsPort)
     // reaches the server from another device, has to be told about it here.
     // "------" is the sentinel for "no PIN set" (AuthManager::clearPin).
     const QString pin = auth.value("pin").toString();
-    if (pin.isEmpty() || pin == QLatin1String("------"))
+    if (auth.value("admin_locked").toBool(false))
+        out << "  Booth mode     on (--noadmin) — no admin page, no new device; restart\n"
+            << "                 without the flag to change anything\n";
+    else if (pin.isEmpty() || pin == QLatin1String("------"))
         out << "  Access PIN     none set — create one with:  moonlightweb --new-pin\n";
     else if (auth.value("pin_consumed").toBool(false))
         out << "  Access PIN     already used — issue a new one with:  moonlightweb --new-pin\n";
@@ -1133,6 +1136,14 @@ static int runTrayClient(QApplication& app, quint16 persistedHttpsPort, bool own
 
     TrayManager tray(nullptr);
     tray.setClientMode(true);
+    // A service started with --noadmin: its tray offers nothing that changes it.
+    {
+        const QString base = port == 443 ? QStringLiteral("https://127.0.0.1")
+                                         : QStringLiteral("https://127.0.0.1:%1").arg(port);
+        const LoopbackReply status =
+            loopbackRequest(base, QStringLiteral("/api/auth/status"), QByteArray(), 5000);
+        tray.setAdminLocked(status.ok && status.json.value("admin_locked").toBool(false));
+    }
     tray.setUrlProvider([&port](const QString& path) { return trayClientUrl(port, path); });
 
     // The internet link has to be asked for rather than computed: this process
@@ -1676,6 +1687,11 @@ int main(int argc, char* argv[])
                                        "Started automatically at login (don't open the browser)");
     parser.addOption(autostartOption);
 
+    QCommandLineOption noAdminOption(
+        "noadmin", "Booth mode: stream the hosts already set up, with no admin page, no host "
+                   "changes and no new device, even from this machine");
+    parser.addOption(noAdminOption);
+
     // Internal: run as a per-session stream worker child process (spawned by the
     // parent server; hosts one relay graph + moonlight-common-c instance).
     QCommandLineOption streamWorkerOption("stream-worker",
@@ -2054,6 +2070,11 @@ int main(int argc, char* argv[])
     Logger::info("[Auth] Access the admin page at https://localhost/");
     Logger::info("[Auth] Remote access requires a generated PIN");
     server.setAuthManager(&authManager);
+    const bool adminLocked = parser.isSet(noAdminOption);
+    server.setAdminLocked(adminLocked);
+    if (adminLocked)
+        Logger::info("[Auth] Booth mode (--noadmin): administration is off until a restart "
+                     "without the flag");
     server.setHomeScreenIdentity([&appSettings, &authManager](const HttpRequest& req) {
         return HttpServer::HomeScreenIdentity{
             appSettings.rendezvousId(), appSettings.displayName(),
@@ -5345,7 +5366,10 @@ int main(int argc, char* argv[])
         return p == 443 ? QStringLiteral("https://localhost%1").arg(path)
                         : QStringLiteral("https://localhost:%1%2").arg(p).arg(path);
     };
-    auto adminUrl = [entryUrl]() -> QString { return entryUrl(QStringLiteral("/admin")); };
+    // In booth mode there is no admin page to point at: the app's front door.
+    auto adminUrl = [entryUrl, adminLocked]() -> QString {
+        return entryUrl(adminLocked ? QString() : QStringLiteral("/admin"));
+    };
     // First-run provisioning written by the installer (authorize Internet
     // Access, pair the local Sunshine). Runs before the auto-start below so a
     // freshly authorized instance brings Internet Access up immediately. When it
@@ -5522,7 +5546,8 @@ int main(int argc, char* argv[])
     // `pending` is true while an empty url is only "not yet" (remoteLinkPending).
     server.router()->get(
         "/api/server/remote-link", [remoteLink, remoteLinkPending](const HttpRequest& req) {
-            if (!req.isLocal) return HttpResponse::error(403, "Only available from localhost");
+            if (!req.isLocal && !(req.adminLocked && req.isHostMachine))
+                return HttpResponse::error(403, "Only available from localhost");
             const QString path = req.queryParams.value(QStringLiteral("p"));
             static const QRegularExpression shape(QStringLiteral("^/[A-Za-z0-9_-]{1,32}$"));
             if (!path.isEmpty() && !shape.match(path).hasMatch())
@@ -5541,7 +5566,7 @@ int main(int argc, char* argv[])
     // nothing outside this machine has any business asking.
     server.router()->get("/api/server/stream-activity",
                          [streamActivity](const HttpRequest& req) -> HttpResponse {
-                             if (!req.isLocal)
+                             if (!req.isLocal && !(req.adminLocked && req.isHostMachine))
                                  return HttpResponse::error(403, "Only available from localhost");
                              return HttpResponse::json(streamActivity().toJson());
                          });
@@ -5590,7 +5615,8 @@ int main(int argc, char* argv[])
                           [&controlChannel, adminUrl](const HttpRequest& req) -> HttpResponse {
                               // Loopback only: this is the private IPC surface a second local
                               // launch uses, never something a remote peer should trigger.
-                              if (!req.isLocal) return HttpResponse::error(403, "local only");
+                              if (!req.isLocal && !(req.adminLocked && req.isHostMachine))
+                                  return HttpResponse::error(403, "local only");
                               QJsonObject obj;
                               if (controlChannel.hasClients()) {
                                   controlChannel.broadcastFocusAdmin();
@@ -5661,6 +5687,7 @@ int main(int argc, char* argv[])
     trayManager.setUrlProvider([entryUrl](const QString& path) { return QUrl(entryUrl(path)); });
     trayManager.setRemoteLinkProvider(remoteLink);
     trayManager.setActivityProvider(streamActivity);
+    trayManager.setAdminLocked(adminLocked);
     if (hasGuiSession()) trayManager.init();
 
     // Click-to-photon latency flag: the overlay and its click source live on
@@ -5696,10 +5723,11 @@ int main(int argc, char* argv[])
     // item / logon task / installer) and headless sessions stay silent.
     if (hasGuiSession() && !parser.isSet(autostartOption)) {
 #ifdef Q_OS_WIN
-        const QString path = QStringLiteral("/admin");
+        const QString path = adminLocked ? QString() : QStringLiteral("/admin");
 #else
-        const QString path =
-            appSettings.setupCompleted() ? QStringLiteral("/admin") : QStringLiteral("/setup");
+        const QString path = adminLocked                    ? QString()
+                             : appSettings.setupCompleted() ? QStringLiteral("/admin")
+                                                            : QStringLiteral("/setup");
 #endif
         // The internet link when the option is on and it answers, HTTPS loopback
         // otherwise — the same rule the tray's Server Settings follows, and for

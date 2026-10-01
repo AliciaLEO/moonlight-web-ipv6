@@ -3873,6 +3873,8 @@ export class StreamView {
         // model is settled. Gate on the declared capability, not the product
         // name: the day this comes back, it comes back for every co-op backend.
         if (this.host?.supportsLobbies === true) return;
+        // Booth mode (--noadmin) lets no guest in.
+        if (BackendClient.adminLocked) return;
         const menu = new ShareMenu(header, quitBtn, this.host);
         this._shareMenu = menu;
         menu.mount().then((mounted) => {

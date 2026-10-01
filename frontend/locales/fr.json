@@ -88,7 +88,9 @@
         "unknownError": "Erreur inconnue",
         "initTitle": "Erreur d'initialisation",
         "connectionTitle": "Erreur de connexion",
-        "unableToConnect": "Impossible de se connecter au serveur"
+        "unableToConnect": "Impossible de se connecter au serveur",
+        "boothTitle": "Mode borne",
+        "boothBody": "Ce MoonlightWeb n'accepte que les appareils qu'il connaît déjà. Demandez à son propriétaire d'ajouter celui-ci."
     },
     "hosts": {
         "nativeCapturePermission": "Ce Mac a perdu son autorisation d'enregistrement de l'écran : il ne peut plus diffuser son écran. Sur le Mac : Réglages Système → Confidentialité et sécurité → Enregistrement de l'écran, activez MoonlightWeb, puis quittez et relancez MoonlightWeb.",

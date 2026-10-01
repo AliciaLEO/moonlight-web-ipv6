@@ -453,5 +453,73 @@ void run_request_guard_tests()
 
         // No session at all is the only case that counts as fishing.
         CHECK(adminTokenReply(remote, plain, false) == AdminTokenReply::Deny);
+
+        // --noadmin: nobody gets the key, not even the host or an unlocked
+        // session — and the host, which has no session, is not fishing.
+        Context locked;
+        locked.adminLocked = true;
+        locked.adminSession = true;
+        CHECK(adminTokenReply(hostMachine, locked, false) == AdminTokenReply::Empty);
+        CHECK(adminTokenReply(remote, locked, true) == AdminTokenReply::Empty);
+        CHECK(adminTokenReply(remote, locked, false) == AdminTokenReply::Deny);
     }
+
+    SECTION("RequestGuard — booth mode (--noadmin)");
+
+    {
+        // The host's own admin page, key and all, is no admin any more — but
+        // it is still the host machine, which is what lets it stream.
+        Request r;
+        r.method = "POST";
+        r.path = "/api/admin/settings";
+        r.headers = hdr({{"sec-fetch-site", "same-origin"},
+                         {"origin", "http://localhost"},
+                         {"host", "localhost"},
+                         {"content-type", "application/json"}});
+        r.bodySize = 2;
+        Context c;
+        c.peerLocal = true;
+        c.adminKeyOk = true;
+        c.adminLocked = true;
+        const Decision d = evaluate(r, c);
+        CHECK(d.outcome == Outcome::Allow);
+        CHECK(d.hostMachine);
+        CHECK(!d.adminPrivilege);
+        r.method = "GET";
+        CHECK(!evaluate(r, c).adminPrivilege);
+    }
+
+    // What the booth changes, refused.
+    CHECK(lockedByNoAdmin("POST", "/api/hosts/manual"));
+    CHECK(lockedByNoAdmin("POST", "/api/hosts/scan"));
+    CHECK(lockedByNoAdmin("DELETE", "/api/hosts/uuid-1"));
+    CHECK(lockedByNoAdmin("POST", "/api/hosts/uuid-1/name"));
+    CHECK(lockedByNoAdmin("POST", "/api/hosts/uuid-1/pair/start"));
+    CHECK(lockedByNoAdmin("POST", "/api/hosts/uuid-1/pair"));
+    CHECK(lockedByNoAdmin("POST", "/api/hosts/uuid-1/restart"));
+    CHECK(lockedByNoAdmin("POST", "/api/hosts/uuid-1/backend"));
+    CHECK(lockedByNoAdmin("DELETE", "/api/hosts/uuid-1/backend"));
+    CHECK(lockedByNoAdmin("POST", "/api/hosts/uuid-1/seats"));
+    CHECK(lockedByNoAdmin("DELETE", "/api/hosts/uuid-1/seats/2/owner"));
+    CHECK(lockedByNoAdmin("POST", "/api/hosts/uuid-1/some-future-route"));
+    CHECK(lockedByNoAdmin("POST", "/api/update/start"));
+    CHECK(lockedByNoAdmin("POST", "/api/system/restart"));
+    CHECK(lockedByNoAdmin("POST", "/api/system/gamepad-driver/install"));
+    // No new device, no new guest.
+    CHECK(lockedByNoAdmin("POST", "/api/auth/validate"));
+    CHECK(lockedByNoAdmin("POST", "/api/auth/admin-unlock"));
+    CHECK(lockedByNoAdmin("POST", "/api/auth/regenerate"));
+    CHECK(lockedByNoAdmin("POST", "/api/share/slots/2/activate"));
+    CHECK(lockedByNoAdmin("POST", "/api/share/player/pin"));
+
+    // What the booth is for, allowed: read, wake, play, stop, leave.
+    CHECK(!lockedByNoAdmin("GET", "/api/hosts"));
+    CHECK(!lockedByNoAdmin("GET", "/api/hosts/uuid-1/apps"));
+    CHECK(!lockedByNoAdmin("POST", "/api/hosts/uuid-1/wol"));
+    CHECK(!lockedByNoAdmin("POST", "/api/hosts/uuid-1/start"));
+    CHECK(!lockedByNoAdmin("POST", "/api/hosts/uuid-1/quit"));
+    CHECK(!lockedByNoAdmin("POST", "/api/hosts/uuid-1/stop-session"));
+    CHECK(!lockedByNoAdmin("POST", "/api/auth/logout"));
+    CHECK(!lockedByNoAdmin("POST", "/api/share/player/join"));
+    CHECK(!lockedByNoAdmin("POST", "/api/logs/client"));
 }

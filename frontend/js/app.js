@@ -743,7 +743,7 @@ const MoonlightApp = {
         // And, on the host machine only, say so when a controller has no driver
         // to reach the games through. The server decides who may be offered the
         // install; the check here only spares everyone else a pointless request.
-        if (this._isHostMachine()) {
+        if (this._isHostMachine() && !BackendClient.adminLocked) {
             GamepadDriverNotice.mount(document.getElementById('view-hosts'));
         }
     },
@@ -1442,6 +1442,8 @@ const MoonlightApp = {
      */
     _isHostLocal() {
         if (this._hasAdminAccess) return true;
+        // Booth mode (--noadmin): on localhost too, nobody administers.
+        if (BackendClient.adminLocked) return false;
         const hostname = window.location.hostname;
         return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
     },
@@ -1492,6 +1494,17 @@ const MoonlightApp = {
                 return true;
             }
 
+            // Booth mode (--noadmin) lets no new device in: a PIN would be refused.
+            if (status.admin_locked) {
+                main.innerHTML = `
+                    <div class="hosts-view">
+                        <div class="hosts-header"><h2>${t('appError.boothTitle')}</h2></div>
+                        <div class="hosts-error"><p>${t('appError.boothBody')}</p></div>
+                    </div>
+                `;
+                return false;
+            }
+
             // Not authenticated and not localhost — show login
             this.loginView = new LoginView(main, () => {
                 // On successful login, re-initialize the app
@@ -1538,7 +1551,7 @@ const MoonlightApp = {
     async _maybeShowSetup() {
         // Every step needs the local desktop, so this is the host machine's
         // wizard — not a password-unlocked LAN admin's.
-        if (!this._isHostMachine()) return false;
+        if (!this._isHostMachine() || BackendClient.adminLocked) return false;
 
         try {
             const status = await BackendClient.getSetupStatus();
@@ -2514,7 +2527,8 @@ const MoonlightApp = {
         const name = (host && (host.displayName || host.name)) || '';
         // The failing host is this very machine, and this browser is on it —
         // the only situation where the buttons below reach the right Sunshine.
-        const canAct = !!(info && info.local_host) && this._isHostMachine();
+        const canAct =
+            !!(info && info.local_host) && this._isHostMachine() && !BackendClient.adminLocked;
         const isMac = canAct && info.local_os === 'macOS';
         // Advice differs by whose machine (and which OS) needs the fixing.
         const bodyKey = !canAct

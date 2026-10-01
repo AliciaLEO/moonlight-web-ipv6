@@ -624,6 +624,7 @@ export class AdminView {
         // unlocked admin access with the remote admin password — not just on
         // loopback. Named for what it gates (admin), not for where we are.
         if (this._hasAdminAccess) return true;
+        if (BackendClient.adminLocked) return false; // booth mode (--noadmin)
         const hostname = window.location.hostname;
         return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
     }

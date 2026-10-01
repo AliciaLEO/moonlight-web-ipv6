@@ -88,7 +88,9 @@
         "unknownError": "未知错误",
         "initTitle": "初始化错误",
         "connectionTitle": "连接错误",
-        "unableToConnect": "无法连接到服务器"
+        "unableToConnect": "无法连接到服务器",
+        "boothTitle": "展台模式",
+        "boothBody": "此 MoonlightWeb 只允许已认识的设备连接。请联系其所有者添加此设备。"
     },
     "hosts": {
         "nativeCapturePermission": "这台 Mac 已失去“屏幕录制”权限，无法串流其屏幕。请在 Mac 上：系统设置 → 隐私与安全性 → 屏幕录制，打开 MoonlightWeb，然后退出并重新打开 MoonlightWeb。",
