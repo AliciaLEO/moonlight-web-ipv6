@@ -904,13 +904,13 @@ private:
             if (!m_PortalShmOnly && m_Config.tuning.portalDmabuf != EncoderTuning::Choice::Off)
                 portal->offerDmabuf(dmabufOffer());
             // GNOME's monitors before this session's own exists: what tells it
-            // from another stream's (makeVirtualPrimary).
+            // from another stream's (placeVirtualMonitor).
             m_VirtualConnector.clear();
             std::vector<std::string> monitorsBefore;
             std::string notGnome;
-            const bool primaryWanted =
-                m_Target.portalVirtual && m_Config.virtualPrimary && m_KwinOutputName.empty() &&
-                capture::MutterDisplayConfig::connectors(monitorsBefore, notGnome);
+            const bool onGnome = m_Target.portalVirtual && m_KwinOutputName.empty() &&
+                                 capture::MutterDisplayConfig::connectors(monitorsBefore, notGnome);
+            const bool primaryWanted = onGnome && m_Config.virtualPrimary;
             if (m_Target.portalVirtual && m_Config.virtualPrimary && !primaryWanted &&
                 m_KwinOutputName.empty())
                 log::info("[native] virtual display: left where the compositor put it — " +
@@ -944,7 +944,7 @@ private:
             // Before the modes are noted: a new layout may hand the screens
             // other CRTCs, and the watch below is not to take that for a mode
             // change of the user's.
-            if (primaryWanted) makeVirtualPrimary(monitorsBefore);
+            if (onGnome) placeVirtualMonitor(monitorsBefore, primaryWanted);
             m_PortalModes = capture::KmsCapture::modeSignature(m_CardPath);
             m_PortalOpenedModes = m_PortalModes;
             return true;
@@ -959,15 +959,18 @@ private:
     }
 
 #if defined(MW_NATIVE_LINUX_PORTAL)
-    /// The portal's virtual monitor made the desktop's primary, on the left of
-    /// the other screens, none of them switched off (MonitorLayout.h): GNOME's
-    /// top bar and dock come to the stream, as the taskbar comes to the
-    /// virtual display on Windows. Mutter made the monitor when the format
-    /// settled (bench §8s.1), so it is there by now, or within moments; it is
-    /// told from another stream's by its size and by not being in @p before.
-    /// Nothing here undoes it: the change is Mutter's temporary kind, and the
-    /// layout comes back when the monitor goes with the portal session.
-    void makeVirtualPrimary(const std::vector<std::string>& before)
+    /// The portal's virtual monitor found in GNOME's layout, for the pointer
+    /// mapping (readInputRects) — a guest's sits wherever GNOME put it, right of
+    /// every other screen, and the portal's own position for it is 0,0 — and,
+    /// when @p primary, made the desktop's primary, on the left of the other
+    /// screens, none of them switched off (MonitorLayout.h): GNOME's top bar and
+    /// dock come to the stream, as the taskbar comes to the virtual display on
+    /// Windows. Mutter made the monitor when the format settled (bench §8s.1),
+    /// so it is there by now, or within moments; it is told from another
+    /// stream's by its size and by not being in @p before. Nothing here undoes
+    /// it: the change is Mutter's temporary kind, and the layout comes back
+    /// when the monitor goes with the portal session.
+    void placeVirtualMonitor(const std::vector<std::string>& before, bool primary)
     {
         const int width = m_Capture->width();
         const int height = m_Capture->height();
@@ -990,6 +993,11 @@ private:
         // Known from here, whatever comes of the layout: the pointer mapping
         // finds the monitor by this name (readInputRects).
         m_VirtualConnector = connector;
+        if (!primary) {
+            log::info("[native] virtual display: " + connector +
+                      ", left where GNOME put it (a guest's own screen)");
+            return;
+        }
         std::string how;
         if (capture::MutterDisplayConfig::makePrimary(connector, how))
             log::info("[native] virtual display: " + how);
@@ -1150,7 +1158,7 @@ private:
                 // left the picture at the origin; an output of exactly that
                 // size, when there is one, is then taken as the monitor.
                 // GNOME named the virtual monitor it made for this session
-                // (makeVirtualPrimary): that output, wherever it sits.
+                // (placeVirtualMonitor): that output, wherever it sits.
                 std::string name;
                 bool placed = !m_VirtualConnector.empty() &&
                               input::pickWaylandRects(
@@ -2439,7 +2447,7 @@ private:
     /// whatever the portal handed back. See openCapture.
     std::string m_PortalToken;
     /// The compositor's name for the virtual monitor of this session — GNOME's
-    /// "Meta-0" (makeVirtualPrimary), KWin's "Virtual-<name>"; empty when there
+    /// "Meta-0" (placeVirtualMonitor), KWin's "Virtual-<name>"; empty when there
     /// is none, or it is not known.
     std::string m_VirtualConnector;
     /// The name KWin's virtual output was asked under (KDE Plasma 6); empty
