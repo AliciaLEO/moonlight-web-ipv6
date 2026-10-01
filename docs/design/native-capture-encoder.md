@@ -1187,7 +1187,7 @@ quelle — dans exactement ces cas :
 | Condition | Détail |
 |---|---|
 | Pas d'API de capture | DDA **et** WGC échouent |
-| Aucun display attaché | machine headless — depuis le 18/09/2026 la carte reste, avec « MoonlightWeb Virtual Display » comme unique app (Windows : VDD by MTT embarqué dans l'installeur, nœud nommé et désactivé par défaut, tâche élevée `--vdisplay-apply` pour l'allumer/éteindre ; macOS : `CGVirtualDisplay` créé par le process serveur, `mw::native::vdisplay`) ; ouvrir la carte allume l'écran, le rend primaire et le diffuse ; voir `backend/src/backend/VirtualDisplay.h` |
+| Aucun display attaché | machine headless — depuis le 18/09/2026 la carte reste, avec « MoonlightWeb Virtual Display » comme unique app (Windows : VDD by MTT embarqué dans l'installeur, nœud nommé et désactivé par défaut, tâche élevée `--vdisplay-apply` pour l'allumer/éteindre ; macOS : `CGVirtualDisplay` créé par le process serveur, `mw::native::vdisplay` ; Linux Wayland, depuis le 01/10/2026 : créé par le compositeur au démarrage du stream, Mutter sous GNOME, KWin sous KDE Plasma 6, §35) ; ouvrir la carte allume l'écran, le rend primaire et le diffuse ; voir `backend/src/backend/VirtualDisplay.h` |
 | Pas d'encodeur utilisable | aucun GPU avec encodeur **et** codec |
 | Pas de session interactive | service Windows en session 0 |
 | OS trop ancien | Windows < 10 2004 |
@@ -6370,9 +6370,10 @@ désormais par un auxiliaire : le même binaire, relancé sans aucune capacité
 (`no_new_privs`), qui tient la session du portail et rend le descripteur
 PipeWire par une paire de sockets. La capture garde ses files en priorité haute.
 Sous X11, l'écran virtuel n'est plus proposé : seul le compositeur Wayland de
-GNOME sait en créer un.
+GNOME sait en créer un (01/10/2026 : celui de KDE Plasma 6 aussi, §35).
 - Vérifié par la suite avec capacités, sous X11. Pas encore par le paquet sous
-  Wayland : l'UM790Pro n'y revient pas tant que le pilote NVIDIA y est.
+  Wayland : l'UM790Pro n'y revient pas tant que le pilote NVIDIA y est (vu le
+  01/10/2026, l'UM790Pro repassé en Wayland : banc §8s.11).
 - Le thème GNOME de Qt lit ses réglages d'apparence par le même portail, au
   démarrage de l'app et du worker. Il est refusé de la même façon, ce qu'écrit
   une ligne « dbus reply error ». Sans effet sur le stream.
@@ -7084,4 +7085,88 @@ tel quel : un nouveau mode l'enlèverait à ceux qui le regardent.
 - **N95** (quatre cœurs, Wi-Fi) : un invité le met toujours à genoux, puisque
   le owner et le flux font deux captures et deux encodages comme avant. Le
   deuxième invité rejoint désormais (impossible en S0), le troisième non.
+
+## 35. L'écran virtuel sous Linux, par compositeur (01/10/2026)
+
+L'écran virtuel Linux passait par le portail (source VIRTUAL, GNOME 46 et après,
+§32) : à 60 Hz, une fenêtre « Partager l'écran » à valider sur l'hôte au premier
+stream, ni KDE ni GNOME avant 46. Le chapitre C du plan « Idées Punktfunk » le
+fait demander au compositeur lui-même. Mesures : banc §8s.
+
+### 35.1 Les routes
+
+- **GNOME 42 et après** : l'API D-Bus de Mutter (`org.gnome.Mutter.ScreenCast`,
+  version 4), par sd-bus (`MutterScreenCast.cpp`). `RecordVirtual` crée l'écran,
+  `RecordMonitor` filme un écran qui existe.
+  - Ni fenêtre ni jeton : Mutter ne regarde pas l'appelant.
+  - Pas de session RemoteDesktop : les entrées restent par uinput.
+  - Mutter ferme la session quand l'écran filmé part ou que le bureau se
+    verrouille ; la capture le lit (`Closed`) et le stream repart.
+- **Repli, le portail** : quand Mutter refuse net (méthode inconnue, accès
+  refusé). La clé de banc `mutter=0` le force.
+- **KDE Plasma 6** : son portail n'a pas de source VIRTUAL (6.3). La sortie
+  virtuelle de KWin (`stream_virtual_output`, `KwinVirtualOutput.cpp`,
+  libwayland chargée au premier usage) est demandée par l'auxiliaire sans
+  capacités de §32, dont le binaire porte le droit de KWin (`.desktop` caché,
+  `X-KDE-Wayland-Interfaces`).
+- **X11** : aucune route, la carte n'est pas proposée.
+
+### 35.2 Taille, fréquence, place
+
+- **Taille** : celle que le stream demande, au pixel ; « Match my screen » fait
+  celle du client (un téléphone en 1170×2532 compris).
+- **Fréquence** : l'écran prend le `maxFramerate` que la capture négocie (GNOME
+  42, 46 et 48 ; `modes` n'y change rien, Mutter 50 le lirait). Il est créé à
+  240 Hz comme sous Windows (§33.9), le stream gardant la cadence du client. À
+  60 Hz servi à 60 i/s, 40 % des images manquaient ; à 240 Hz, toutes passent.
+- **Principal**, sous GNOME : l'écran du owner le devient par `DisplayConfig`,
+  en configuration temporaire. Les écrans physiques restent allumés, à sa
+  droite : en éteindre un a fait planter gnome-shell 46 (le M27Q de la GTX).
+  Mutter remet la disposition quand l'écran part. Pas sous KDE.
+
+### 35.3 Un seul écran pour tous les streams (GNOME)
+
+- Un registre et un verrou dans `XDG_RUNTIME_DIR` (`SharedMonitor.h`). Le owner
+  crée l'écran et l'inscrit ; un invité le filme tel quel. Un invité seul en
+  crée un, et passe sur celui du owner quand il arrive. L'écran part avec son
+  stream ; le premier qui revient le recrée.
+- Créations et retraits un à la fois, tenus jusqu'à ce que la disposition ne
+  bouge plus : Punktfunk a vu gnome-shell planter sur des reconstructions
+  concurrentes.
+- Le pointeur est recalé quand Mutter change ses écrans (`MonitorsChanged`). La
+  veille des modes KMS ne s'applique pas à un écran sans CRTC.
+- Sous KDE, chaque stream garde sa propre sortie.
+
+### 35.4 Le pointeur
+
+- Jusqu'à GNOME 47, Mutter recopie la vue de l'écran virtuel, pointeur compris,
+  dans ses images DMA-BUF, quel que soit le mode demandé. En métadonnées, un
+  mouvement seul n'apporte souvent qu'une position, sans image : le pointeur de
+  l'image restait figé, puis sautait avec ce qui se redessinait. Il clignotait
+  sous une main qui bouge (97 images sur 450 sans lui).
+- Avant GNOME 48, il est donc demandé dans l'image (`cursor-mode` 1 ; portail
+  `cursor_mode` 2). Chaque mouvement est une image, et l'hôte dit au client de
+  n'en dessiner aucun. Il suit la latence de l'image.
+- À partir de GNOME 48 : en métadonnées, et le client le dessine.
+
+### 35.5 Les invités
+
+Un invité d'un hôte Linux encode seul : le flux commun (§34) est réservé à
+Windows. Sa page demande maintenant `ride_out_loss` comme celle du owner, et son
+flux passe en intra-refresh : une perte ne lui coûte plus d'image clé. Avant,
+il en demandait 17 et 22 en 24 et 42 s.
+
+### 35.6 Limites
+
+- KDE : un invité garde sa propre sortie (`stream_output` de KWin non utilisé) ;
+  60 Hz avant KWin 6.6 ; pas d'écran principal.
+- GNOME 49 et après : non mesuré.
+- gamescope sans écran (une app sur son propre écran, à la taille et à la
+  cadence du client, entrées par libei) : sondé (banc §8s.13), pas construit.
+
+**Concrètement, pour l'utilisateur** : sous Linux Wayland, la carte « écran
+virtuel » montre un bureau à la taille de l'appareil qui regarde, à 240 Hz, sans
+fenêtre à valider sur l'hôte, même sur un mini-PC sans écran. Sous GNOME, il
+devient l'écran principal le temps du stream, et un invité voit le même bureau
+que le owner. Sous KDE Plasma 6 aussi, à 60 Hz.
 - **Sunshine et Wolf** : inchangés (un encodeur par invité, trois qualités).
