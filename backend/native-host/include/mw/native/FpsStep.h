@@ -38,14 +38,15 @@ struct FpsStep
         /// Above the captured display's refresh: the stream runs at that
         /// refresh instead — the host has no frames beyond it.
         Capped,
-        /// Not taken; the stream stays at its own rate. `why` says why.
+        /// Not taken; the step in force before, if any, stays. `why` says why.
         Refused
     };
 
     Verdict verdict = Verdict::Refused;
     /// The stream's rate from now on, above the client's own: the rate asked,
     /// or the display's refresh when the step is above it. 0 when the stream
-    /// is at its own rate — Base or Refused.
+    /// is at its own rate. Refused: the step still in force, 0 for none — a
+    /// client that kept 120 and asks for 240 in vain keeps its 120.
     int fps = 0;
     /// What the client asked for.
     int askedFps = 0;

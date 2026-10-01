@@ -736,16 +736,22 @@ public:
         in.benchCadence = m_Config.tuning.cadence != EncoderTuning::Cadence::Default;
         in.clientCapFps = m_ClientFpsCap.load();
         in.clientVsync = m_ClientVsync.load();
-        const FpsStep step = decideStep(in);
+        FpsStep step = decideStep(in);
         if (step.verdict != FpsStep::Verdict::Base)
             m_StepsAsked.fetch_add(1, std::memory_order_relaxed);
         if (step.verdict == FpsStep::Verdict::Refused) {
             m_StepsRefused.fetch_add(1, std::memory_order_relaxed);
+            // The step in force before, if any, stays: a 240 the encoder
+            // cannot hold does not undo the 120 the client kept.
+            step.fps = m_StepFps.load();
             char p95[32];
             std::snprintf(p95, sizeof(p95), "%.2f", in.encodeP95Us / 1000.0);
-            log::info("[native] cadence step to " + std::to_string(fps) + " fps refused: " +
-                      step.why + " (stream at " + std::to_string(in.baseFps) + " fps, " +
-                      hzString(in.displayMilliHz) + " Hz display, encode p95 " + p95 + " ms)");
+            log::info(
+                "[native] cadence step to " + std::to_string(fps) + " fps refused: " + step.why +
+                " (stream at " + std::to_string(in.baseFps) + " fps" +
+                (step.fps > 0 ? ", stepped to " + std::to_string(step.fps) : std::string()) + ", " +
+                hzString(in.displayMilliHz) + " Hz display, encode p95 " + p95 + " ms)");
+            return step;
         }
         // The loop re-chooses the gate between two frames and logs the line.
         if (m_StepFps.exchange(step.fps) != step.fps) m_ClientRefreshDirty.store(true);
