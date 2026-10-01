@@ -232,7 +232,41 @@
                 "db": "Auto",
                 "none": "Unknown"
             },
+            "kind": {
+                "label": "Type",
+                "gamepad": "Gamepad",
+                "rc": "RC radio",
+                "flightstick": "Flight stick",
+                "wheel": "Wheel"
+            },
             "steps": {
+                "button": "Press the button that will give the game {{name}}",
+                "rc": {
+                    "leftx": "Yaw: push the left stick right",
+                    "lefty": "Throttle: raise the left stick",
+                    "rightx": "Roll: push the right stick right",
+                    "righty": "Pitch: pull the right stick towards you",
+                    "lefttrigger": "Flip the switch that will give the game LT (channel 5)",
+                    "righttrigger": "Flip the switch that will give the game RT (channel 6)"
+                },
+                "flightstick": {
+                    "rightx": "Roll: tilt the stick right",
+                    "righty": "Pitch: pull the stick towards you",
+                    "leftx": "Yaw: twist the stick right (or the rudder pedals)",
+                    "lefty": "Throttle: push the throttle forward",
+                    "righttrigger": "Pull the trigger",
+                    "dpup": "Hat: up",
+                    "dpright": "Hat: right",
+                    "dpdown": "Hat: down",
+                    "dpleft": "Hat: left"
+                },
+                "wheel": {
+                    "leftx": "Steering: turn the wheel right",
+                    "righttrigger": "Accelerator: press the right pedal",
+                    "lefttrigger": "Brake: press the middle pedal",
+                    "rightshoulder": "Right paddle: pull it",
+                    "leftshoulder": "Left paddle: pull it"
+                },
                 "a": "Press A (bottom face button)",
                 "b": "Press B (right face button)",
                 "x": "Press X (left face button)",

@@ -247,6 +247,21 @@
     font-size: 13px;
 }
 
+.gamepad-remap-kind {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-3);
+}
+.gamepad-remap-kind .gamepad-remap-select {
+    padding: 4px 8px;
+    text-transform: none;
+    letter-spacing: normal;
+}
+
 .gamepad-remap-name {
     min-width: 0;
     overflow: hidden;
@@ -429,6 +444,12 @@
     background: var(--surface-2);
     clip-path: var(--notch-sm);
     box-shadow: var(--edge-cyan);
+}
+.settings-pad-kind {
+    flex: none;
+    display: inline-flex;
+    color: var(--neon-cyan);
+    opacity: 0.85;
 }
 .settings-pad-name {
     flex: 1 1 160px;

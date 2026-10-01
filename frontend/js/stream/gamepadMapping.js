@@ -337,14 +337,16 @@ export const ANDROID_NAME_FIXES = [];
  *   `db` undefined = not loaded yet (the result is then 'pending' for a pad
  *   that needs it); null = unavailable.
  * @returns {{ source: 'user'|'standard'|'builtin'|'android'|'db'|'pending'|null,
- *             bindings: object|null, key: string, name: string, dbName?: string }}
+ *             bindings: object|null, key: string, name: string, kind: string,
+ *             dbName?: string }}
  *   bindings null with source 'standard'/'android' = read the pad as is.
+ *   `kind` is what the device is (padKind), whichever source lays it out.
  */
 export function resolveMapping(gp, ctx = {}) {
     const key = padKey(gp);
     const name = padName(gp);
-    const base = { key, name };
     const saved = ctx.user ? ctx.user(key) : null;
+    const base = { key, name, kind: padKind(gp, saved) };
     if (saved && saved.bindings) return { ...base, source: 'user', bindings: saved.bindings };
     if (gp.mapping === 'standard') return { ...base, source: 'standard', bindings: null };
 
@@ -369,6 +371,49 @@ export function resolveMapping(gp, ctx = {}) {
         }
     }
     return { ...base, source: null, bindings: null };
+}
+
+/**
+ * What a device is, for how it is drawn and how the wizard speaks to it: a
+ * pad, a radio control (rc), a flight stick or a wheel. Whatever it is, the
+ * host still presents an Xbox 360 controller.
+ */
+export const PAD_KINDS = ['gamepad', 'rc', 'flightstick', 'wheel'];
+
+/** Devices whose kind their USB ids settle. */
+const KNOWN_KINDS = { '1209:4f54': 'rc', '046d:c24f': 'wheel' };
+
+/**
+ * The kind a device's name suggests, tried in this order: flight gear before
+ * wheels, so a Thrustmaster T.16000M or a rudder's pedals are not taken for
+ * racing ones. "Joystick" says nothing — cheap pads are called that too.
+ */
+const KIND_HINTS = [
+    ['rc', /edgetx|opentx|radiomaster|frsky|jumper|ethos|betafpv|flysky|\bzorro\b|\bboxer\b/i],
+    [
+        'flightstick',
+        /flight|hotas|rudder|\bx5[256]\b|t\.?16000|extreme 3d|vkb|virpil|winwing|warthog|throttle/i,
+    ],
+    [
+        'wheel',
+        /wheel|racing|driving force|\bg(25|27|29|920|923)\b|fanatec|moza|simagic|simucube|thrustmaster t(80|128|150|248|300|500|818|x|s-pc|s-xw|-?gt)\b|pedals/i,
+    ],
+];
+
+/**
+ * What `gp` is: the user's own choice first (`saved.kind`), then its USB ids,
+ * then a hint from its name — a pad otherwise, the drawing of old.
+ * @param {Gamepad|string} gpOrId
+ * @param {{kind?: string}|null} [saved]  the pad's entry in gamepadMappingsStore
+ */
+export function padKind(gpOrId, saved = null) {
+    if (saved && PAD_KINDS.includes(saved.kind)) return saved.kind;
+    const id = typeof gpOrId === 'string' ? gpOrId : gpOrId && gpOrId.id;
+    const { name, vid, pid } = parsePadId(id);
+    const known = vid && pid ? KNOWN_KINDS[`${vid}:${pid}`] : null;
+    if (known) return known;
+    const hint = KIND_HINTS.find(([, re]) => re.test(name));
+    return hint ? hint[0] : 'gamepad';
 }
 
 /**
@@ -433,15 +478,19 @@ export function snapshot(gp) {
  * A stick axis PARKED at an extreme — a radio's throttle, a lever with no
  * spring — can only be moved away from where it rests, whatever the prompt
  * asks: its sense comes from that rest, not from the push. A vertical parked
- * at an end rests at the bottom, a horizontal at the left.
+ * at an end rests at the bottom, a horizontal at the left. Any other stick
+ * takes the sense of the push: `dir` +1 when the prompt asks for right or
+ * down (a standard stick's positive sense), -1 when it asks for up ("raise
+ * the throttle").
  * Inputs in `exclude` (already bound this pass) are skipped.
  *
  * @param {{buttons:boolean[], axes:number[]}} base  snapshot at rest
  * @param {Gamepad} gp
  * @param {string} target  a BUTTON_TARGETS or AXIS_TARGETS name
  * @param {object[]} [exclude]
+ * @param {1|-1} [dir]
  */
-export function detectInput(base, gp, target, exclude = []) {
+export function detectInput(base, gp, target, exclude = [], dir = 1) {
     const used = (b) => exclude.some((e) => e && sameBinding(e, b));
     const isStick = AXIS_TARGETS.includes(target);
     const isTrigger = target === 'lefttrigger' || target === 'righttrigger';
@@ -475,7 +524,9 @@ export function detectInput(base, gp, target, exclude = []) {
                     const parked = Math.abs(rest) > 0.9;
                     // Down is +1 and left -1 on a standard stick.
                     const vertical = target === 'lefty' || target === 'righty';
-                    const inv = !parked ? d < 0 : vertical ? rest < 0 : rest > 0;
+                    let inv;
+                    if (parked) inv = vertical ? rest < 0 : rest > 0;
+                    else inv = dir > 0 ? d < 0 : d > 0;
                     b = { t: 'a', i, s: 0, ...(inv ? { inv: true } : {}) };
                 } else if (Math.abs(rest) > 0.9)
                     b = { t: 'a', i, s: 0, ...(rest > 0 ? { inv: true } : {}) };

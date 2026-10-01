@@ -232,7 +232,41 @@
                 "db": "Auto",
                 "none": "Inconnue"
             },
+            "kind": {
+                "label": "Type",
+                "gamepad": "Manette",
+                "rc": "Radiocommande",
+                "flightstick": "Joystick de vol",
+                "wheel": "Volant"
+            },
             "steps": {
+                "button": "Appuyez sur le bouton qui donnera {{name}} au jeu",
+                "rc": {
+                    "leftx": "Lacet : poussez le manche gauche vers la droite",
+                    "lefty": "Gaz : montez le manche gauche",
+                    "rightx": "Roulis : poussez le manche droit vers la droite",
+                    "righty": "Tangage : tirez le manche droit vers vous",
+                    "lefttrigger": "Basculez l’inter qui donnera LT au jeu (voie 5)",
+                    "righttrigger": "Basculez l’inter qui donnera RT au jeu (voie 6)"
+                },
+                "flightstick": {
+                    "rightx": "Roulis : inclinez le manche vers la droite",
+                    "righty": "Tangage : tirez le manche vers vous",
+                    "leftx": "Lacet : tournez le manche vers la droite (ou le palonnier)",
+                    "lefty": "Gaz : poussez la manette des gaz vers l’avant",
+                    "righttrigger": "Pressez la gâchette",
+                    "dpup": "Chapeau : haut",
+                    "dpright": "Chapeau : droite",
+                    "dpdown": "Chapeau : bas",
+                    "dpleft": "Chapeau : gauche"
+                },
+                "wheel": {
+                    "leftx": "Direction : tournez le volant vers la droite",
+                    "righttrigger": "Accélérateur : enfoncez la pédale de droite",
+                    "lefttrigger": "Frein : enfoncez la pédale du milieu",
+                    "rightshoulder": "Palette droite : tirez-la",
+                    "leftshoulder": "Palette gauche : tirez-la"
+                },
                 "a": "Appuyez sur A (bouton du bas)",
                 "b": "Appuyez sur B (bouton de droite)",
                 "x": "Appuyez sur X (bouton de gauche)",

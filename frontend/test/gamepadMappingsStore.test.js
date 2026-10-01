@@ -8,6 +8,7 @@ import {
     setMapping,
     removeMapping,
     listMappings,
+    setKind,
     CHANGED_EVENT,
     _resetForTests,
 } from '../js/util/gamepadMappingsStore.js';
@@ -55,6 +56,40 @@ describe('gamepadMappingsStore', () => {
         removeMapping('b');
         expect(getMapping('b')).toBeNull();
         expect(listMappings().map((m) => m.key)).toEqual(['a']);
+    });
+
+    it('keeps the kind of device: alone, beside a layout, and through a new layout', () => {
+        // A wheel laid out by a built-in profile: the kind alone, no layout.
+        setKind('usb:046d:c24f', 'G29', 'wheel');
+        expect(getMapping('usb:046d:c24f')).toMatchObject({ kind: 'wheel' });
+        expect(getMapping('usb:046d:c24f').bindings).toBeUndefined();
+        // Not a saved layout: Settings does not offer to forget it as one.
+        expect(listMappings()).toEqual([]);
+        // A layout saved later keeps the kind; a kind changed later keeps the layout.
+        setMapping('usb:046d:c24f', 'G29', { leftx: { t: 'a', i: 0, s: 0 } });
+        expect(getMapping('usb:046d:c24f')).toMatchObject({
+            kind: 'wheel',
+            bindings: { leftx: {} },
+        });
+        setKind('usb:046d:c24f', 'G29', 'gamepad');
+        expect(getMapping('usb:046d:c24f')).toMatchObject({
+            kind: 'gamepad',
+            bindings: { leftx: {} },
+        });
+        setMapping('usb:1209:4f54', 'TX12', {}, 'rc');
+        expect(getMapping('usb:1209:4f54').kind).toBe('rc');
+    });
+
+    it('reads an entry saved before kinds as a layout without one', () => {
+        localStorage.setItem(
+            'mw-gamepad-mappings',
+            JSON.stringify({
+                old: { name: 'Old', bindings: { a: { t: 'b', i: 0 } }, updatedAt: 1 },
+            }),
+        );
+        _resetForTests();
+        expect(getMapping('old')).toMatchObject({ name: 'Old', bindings: { a: { t: 'b', i: 0 } } });
+        expect(getMapping('old').kind).toBeUndefined();
     });
 
     it('treats unreadable storage as empty', () => {

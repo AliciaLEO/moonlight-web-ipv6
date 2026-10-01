@@ -232,7 +232,41 @@
                 "db": "自动",
                 "none": "未知"
             },
+            "kind": {
+                "label": "类型",
+                "gamepad": "手柄",
+                "rc": "遥控器",
+                "flightstick": "飞行摇杆",
+                "wheel": "方向盘"
+            },
             "steps": {
+                "button": "按下将作为游戏 {{name}} 键的按钮",
+                "rc": {
+                    "leftx": "偏航：将左摇杆推向右侧",
+                    "lefty": "油门：将左摇杆向上推",
+                    "rightx": "横滚：将右摇杆推向右侧",
+                    "righty": "俯仰：将右摇杆向自己拉",
+                    "lefttrigger": "拨动将作为游戏 LT 的开关（第 5 通道）",
+                    "righttrigger": "拨动将作为游戏 RT 的开关（第 6 通道）"
+                },
+                "flightstick": {
+                    "rightx": "横滚：将摇杆向右倾斜",
+                    "righty": "俯仰：将摇杆向自己拉",
+                    "leftx": "偏航：将摇杆向右扭转（或踩舵）",
+                    "lefty": "油门：将油门杆向前推",
+                    "righttrigger": "扣动扳机",
+                    "dpup": "苦力帽：上",
+                    "dpright": "苦力帽：右",
+                    "dpdown": "苦力帽：下",
+                    "dpleft": "苦力帽：左"
+                },
+                "wheel": {
+                    "leftx": "转向：将方向盘向右转",
+                    "righttrigger": "油门：踩下右侧踏板",
+                    "lefttrigger": "刹车：踩下中间踏板",
+                    "rightshoulder": "右拨片：拉一下",
+                    "leftshoulder": "左拨片：拉一下"
+                },
                 "a": "按 A（下方按键）",
                 "b": "按 B（右侧按键）",
                 "x": "按 X（左侧按键）",

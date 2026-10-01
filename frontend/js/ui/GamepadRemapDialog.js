@@ -27,6 +27,11 @@
  *             (gamepadMapping.detectInput), then saved for this pad in this
  *             browser (gamepadMappingsStore).
  *
+ * The wizard speaks to the device in hand (gamepadMapping.padKind): a radio
+ * is asked for its throttle, a wheel for its brake pedal, each in the order
+ * it is held. The targets stay the Xbox controls the host presents; only the
+ * order and the words change. The user can correct the kind in the dialog.
+ *
  * The dialog reads the pad itself; a stream running underneath is paused by
  * the caller (onOpen / onClose) so mapping "A" does not press A in the game.
  */
@@ -37,6 +42,7 @@ import { Toast } from './Toast.js';
 import { gamepadArtSvg, GamepadArtView } from './GamepadArt.js';
 import {
     BUTTON_TARGETS,
+    PAD_KINDS,
     resolveMapping,
     readVirtualPad,
     loadGamepadDb,
@@ -48,32 +54,162 @@ import {
     describeBinding,
     isAutoMapped,
 } from '../stream/gamepadMapping.js';
-import { getMapping, setMapping, removeMapping } from '../util/gamepadMappingsStore.js';
+import { getMapping, setMapping, setKind, removeMapping } from '../util/gamepadMappingsStore.js';
 
-/** Wizard order: face, shoulders, the small buttons, clicks, d-pad, sticks. */
-export const WIZARD_STEPS = [
-    'a',
-    'b',
-    'x',
-    'y',
-    'leftshoulder',
-    'rightshoulder',
-    'lefttrigger',
-    'righttrigger',
-    'back',
-    'start',
-    'guide',
-    'leftstick',
-    'rightstick',
-    'dpup',
-    'dpright',
-    'dpdown',
-    'dpleft',
-    'leftx',
-    'lefty',
-    'rightx',
-    'righty',
-];
+/** Wizard order per kind of device: what it has, in the order it is held. */
+export const WIZARD_STEPS = {
+    // Face, shoulders, the small buttons, clicks, d-pad, sticks.
+    gamepad: [
+        'a',
+        'b',
+        'x',
+        'y',
+        'leftshoulder',
+        'rightshoulder',
+        'lefttrigger',
+        'righttrigger',
+        'back',
+        'start',
+        'guide',
+        'leftstick',
+        'rightstick',
+        'dpup',
+        'dpright',
+        'dpdown',
+        'dpleft',
+        'leftx',
+        'lefty',
+        'rightx',
+        'righty',
+    ],
+    // Mode 2 sticks (yaw, throttle, roll, pitch), the switches for LT and RT,
+    // then buttons — the built-in radio profile's layout.
+    rc: [
+        'leftx',
+        'lefty',
+        'rightx',
+        'righty',
+        'lefttrigger',
+        'righttrigger',
+        'a',
+        'b',
+        'x',
+        'y',
+        'leftshoulder',
+        'rightshoulder',
+        'back',
+        'start',
+    ],
+    // The grip on the right stick (roll, pitch), the twist and the throttle on
+    // the left one, as a Mode 2 radio; the trigger, the hat, the buttons.
+    flightstick: [
+        'rightx',
+        'righty',
+        'leftx',
+        'lefty',
+        'righttrigger',
+        'dpup',
+        'dpright',
+        'dpdown',
+        'dpleft',
+        'a',
+        'b',
+        'x',
+        'y',
+        'leftshoulder',
+        'rightshoulder',
+        'lefttrigger',
+        'back',
+        'start',
+        'leftstick',
+        'rightstick',
+    ],
+    // Racing on a pad: steering on the left stick, accelerator RT, brake LT,
+    // the paddles on the bumpers; then the wheel's buttons and d-pad.
+    wheel: [
+        'leftx',
+        'righttrigger',
+        'lefttrigger',
+        'rightshoulder',
+        'leftshoulder',
+        'a',
+        'b',
+        'x',
+        'y',
+        'back',
+        'start',
+        'guide',
+        'rightstick',
+        'leftstick',
+        'dpup',
+        'dpright',
+        'dpdown',
+        'dpleft',
+    ],
+};
+
+/**
+ * Steps a kind says in its own words. Its other buttons are "the button that
+ * gives the game A"; a wheel's d-pad is a d-pad, worded as on a pad.
+ */
+const OWN_WORDS = {
+    rc: ['leftx', 'lefty', 'rightx', 'righty', 'lefttrigger', 'righttrigger'],
+    flightstick: [
+        'rightx',
+        'righty',
+        'leftx',
+        'lefty',
+        'righttrigger',
+        'dpup',
+        'dpright',
+        'dpdown',
+        'dpleft',
+    ],
+    wheel: ['leftx', 'righttrigger', 'lefttrigger', 'rightshoulder', 'leftshoulder'],
+};
+
+/** What the game receives, by target: the labels of an Xbox pad. */
+const GAME_NAMES = {
+    a: 'A',
+    b: 'B',
+    x: 'X',
+    y: 'Y',
+    leftshoulder: 'LB',
+    rightshoulder: 'RB',
+    lefttrigger: 'LT',
+    righttrigger: 'RT',
+    back: 'Back',
+    start: 'Start',
+    guide: 'Guide',
+    leftstick: 'L3',
+    rightstick: 'R3',
+};
+
+/** The prompt for one step, in the device's own words. */
+export function stepPrompt(kind, target) {
+    if (OWN_WORDS[kind] && OWN_WORDS[kind].includes(target)) {
+        return t(`gamepad.remap.steps.${kind}.${target}`);
+    }
+    if (kind !== 'gamepad' && GAME_NAMES[target]) {
+        return t('gamepad.remap.steps.button', { name: GAME_NAMES[target] });
+    }
+    return t(`gamepad.remap.steps.${target}`);
+}
+
+/**
+ * Which way a stick step asks to push: +1 for right or down (a standard
+ * stick's positive sense), -1 where the device's words say up — a throttle
+ * goes up, or forward.
+ */
+export function stepDir(kind, target) {
+    return target === 'lefty' && (kind === 'rc' || kind === 'flightstick') ? -1 : 1;
+}
+
+/** Steps where a stick may rest at one end: the throttle's. */
+function parkedStep(kind, target) {
+    if (kind === 'gamepad') return target === 'lefty' || target === 'righty';
+    return target === 'lefty' && kind !== 'wheel';
+}
 
 /** Badge class + label for a resolution source. */
 export function sourceBadge(source) {
@@ -222,6 +358,18 @@ export class GamepadRemapDialog {
         }
 
         const res = pads.length ? resolvePad(this._selectedPad() || pads[0]) : null;
+        // What the device is: deduced, and the user's to correct.
+        const kindPicker = res
+            ? `<label class="gamepad-remap-kind">
+                    <span>${escapeHtml(t('gamepad.remap.kind.label'))}</span>
+                    <select class="gamepad-remap-select gamepad-remap-kind-select">
+                        ${PAD_KINDS.map(
+                            (k) =>
+                                `<option value="${k}" ${k === res.kind ? 'selected' : ''}>${escapeHtml(t(`gamepad.remap.kind.${k}`))}</option>`,
+                        ).join('')}
+                    </select>
+                </label>`
+            : '';
         if (pads.length > 1) {
             this._els.pad.innerHTML = `
                 <select class="gamepad-remap-select" aria-label="${escapeHtml(t('gamepad.remap.pick'))}">
@@ -232,7 +380,8 @@ export class GamepadRemapDialog {
                         })
                         .join('')}
                 </select>
-                ${res ? sourceBadge(res.source) : ''}`;
+                ${res ? sourceBadge(res.source) : ''}
+                ${kindPicker}`;
             this._els.pad.querySelector('select').addEventListener('change', (e) => {
                 this._key = /** @type {HTMLSelectElement} */ (e.target).value;
                 this._wiz = null;
@@ -242,11 +391,33 @@ export class GamepadRemapDialog {
         } else if (pads.length === 1) {
             this._els.pad.innerHTML = `
                 <span class="gamepad-remap-name">${escapeHtml(padName(pads[0]))}</span>
-                ${sourceBadge(res.source)}`;
+                ${sourceBadge(res.source)}
+                ${kindPicker}`;
         } else {
             this._els.pad.innerHTML = '';
         }
+        const kindSelect = this._els.pad.querySelector('.gamepad-remap-kind-select');
+        if (kindSelect) {
+            kindSelect.addEventListener('change', (e) =>
+                this._setKind(/** @type {HTMLSelectElement} */ (e.target).value),
+            );
+        }
         this._enterMode();
+    }
+
+    /**
+     * The user says what the device is. Saved at once — alone, when the
+     * layout comes from elsewhere — and a wizard under way starts over in the
+     * device's own words and order.
+     */
+    _setKind(kind) {
+        const gp = this._selectedPad();
+        if (!gp || !PAD_KINDS.includes(kind)) return;
+        setKind(this._key, padName(gp), kind);
+        const wizard = !!this._wiz;
+        this._wiz = null;
+        if (wizard) this._startWizard(gp);
+        this._syncPads(true);
     }
 
     /** Pick the view for the selected pad, and draw its buttons. */
@@ -271,7 +442,10 @@ export class GamepadRemapDialog {
     // ── Wizard ───────────────────────────────────────────────────────────
 
     _startWizard(gp) {
+        const kind = resolvePad(gp).kind;
         this._wiz = {
+            kind,
+            steps: WIZARD_STEPS[kind] || WIZARD_STEPS.gamepad,
             idx: 0,
             bindings: {},
             base: snapshot(gp),
@@ -286,8 +460,8 @@ export class GamepadRemapDialog {
 
     _wizardFrame(gp) {
         const w = this._wiz;
-        if (w.idx >= WIZARD_STEPS.length) return;
-        const target = WIZARD_STEPS[w.idx];
+        if (w.idx >= w.steps.length) return;
+        const target = w.steps[w.idx];
         if (w.waitRelease) {
             if (isAtRest(w.base, gp)) {
                 w.waitRelease = false;
@@ -296,7 +470,7 @@ export class GamepadRemapDialog {
             return;
         }
         const exclude = Object.values(w.bindings);
-        const b = detectInput(w.base, gp, target, exclude);
+        const b = detectInput(w.base, gp, target, exclude, stepDir(w.kind, target));
         if (!b) return;
         w.bindings[target] = b;
         w.caught = b;
@@ -310,7 +484,7 @@ export class GamepadRemapDialog {
         const w = this._wiz;
         if (!w || w.idx === 0) return;
         w.idx--;
-        const target = WIZARD_STEPS[w.idx];
+        const target = w.steps[w.idx];
         delete w.bindings[target];
         this._art.setMapped(target, false);
         w.caught = null;
@@ -320,8 +494,8 @@ export class GamepadRemapDialog {
 
     _wizardSkip() {
         const w = this._wiz;
-        if (!w || w.idx >= WIZARD_STEPS.length) return;
-        delete w.bindings[WIZARD_STEPS[w.idx]];
+        if (!w || w.idx >= w.steps.length) return;
+        delete w.bindings[w.steps[w.idx]];
         w.idx++;
         w.caught = null;
         w.waitRelease = false;
@@ -329,14 +503,15 @@ export class GamepadRemapDialog {
     }
 
     /**
-     * Straight to the sticks, keeping what is bound so far: a radio or a
-     * joystick has none of the seventeen buttons before them to give.
+     * Straight to the sticks, keeping what is bound so far: a device taken
+     * for a pad that has none of the seventeen buttons before them to give.
+     * The other kinds start with their sticks.
      */
     _wizardSkipToSticks() {
         const w = this._wiz;
-        const sticks = WIZARD_STEPS.indexOf('leftx');
+        const sticks = w ? w.steps.indexOf('leftx') : -1;
         if (!w || w.idx >= sticks) return;
-        for (let i = w.idx; i < sticks; i++) delete w.bindings[WIZARD_STEPS[i]];
+        for (let i = w.idx; i < sticks; i++) delete w.bindings[w.steps[i]];
         w.idx = sticks;
         w.caught = null;
         w.waitRelease = false;
@@ -347,7 +522,7 @@ export class GamepadRemapDialog {
         const gp = this._selectedPad();
         const w = this._wiz;
         if (!gp || !w) return;
-        setMapping(this._key, padName(gp), w.bindings);
+        setMapping(this._key, padName(gp), w.bindings, w.kind);
         this._wiz = null;
         this._art.clearMarks();
         Toast.success(t('gamepad.remap.saved', { name: padName(gp) }));
@@ -396,8 +571,11 @@ export class GamepadRemapDialog {
                 res.source ? 'gamepad.remap.testPrompt' : 'gamepad.remap.unknown',
             );
             if (isAutoMapped(res.source)) hint = t('gamepad.remap.guessed');
+            // The user's own layout, or only the kind they picked: either
+            // way, there is something to go back from.
+            const own = this._key ? getMapping(this._key) : null;
             actions =
-                (res.source === 'user' ? btn('gp-reset', 'gamepad.remap.reset') : '') +
+                (own ? btn('gp-reset', 'gamepad.remap.reset') : '') +
                 `<span class="gp-spacer"></span>` +
                 btn('gp-close', 'gamepad.remap.close') +
                 btn(
@@ -407,25 +585,26 @@ export class GamepadRemapDialog {
                 );
         } else {
             const w = this._wiz;
-            const done = w.idx >= WIZARD_STEPS.length;
-            els.bar.style.width = `${Math.round((w.idx / WIZARD_STEPS.length) * 100)}%`;
+            const done = w.idx >= w.steps.length;
+            els.bar.style.width = `${Math.round((w.idx / w.steps.length) * 100)}%`;
             if (done) {
                 els.prompt.textContent = t('gamepad.remap.done');
             } else if (w.waitRelease) {
                 els.prompt.textContent = t('gamepad.remap.release');
             } else {
-                const target = WIZARD_STEPS[w.idx];
-                els.prompt.innerHTML = `<span class="gamepad-remap-step">${w.idx + 1}/${WIZARD_STEPS.length}</span> · ${escapeHtml(t(`gamepad.remap.steps.${target}`))}`;
+                const target = w.steps[w.idx];
+                els.prompt.innerHTML = `<span class="gamepad-remap-step">${w.idx + 1}/${w.steps.length}</span> · ${escapeHtml(stepPrompt(w.kind, target))}`;
                 this._art.setTarget(target);
                 if (target === 'guide') hint = t('gamepad.remap.guideHint');
-                // A throttle can only move up from where it rests.
-                if (target === 'lefty' || target === 'righty') hint = t('gamepad.remap.parkedHint');
+                // A throttle can only move away from where it rests.
+                if (parkedStep(w.kind, target)) hint = t('gamepad.remap.parkedHint');
             }
             if (w.caught) {
                 els.raw.textContent = describeBinding(w.caught);
                 els.raw.classList.add('is-caught');
             }
-            const beforeSticks = w.idx < WIZARD_STEPS.indexOf('leftx');
+            // Only a pad's wizard has buttons to skip before its sticks.
+            const beforeSticks = w.kind === 'gamepad' && w.idx < w.steps.indexOf('leftx');
             actions =
                 btn('gp-back', 'gamepad.remap.back') +
                 (done ? '' : btn('gp-skip', 'gamepad.remap.skip')) +

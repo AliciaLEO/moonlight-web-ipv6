@@ -40,7 +40,13 @@ import {
     sourceBadge,
 } from './GamepadRemapDialog.js';
 import { padKey, padName } from '../stream/gamepadMapping.js';
-import { listMappings, removeMapping, CHANGED_EVENT } from '../util/gamepadMappingsStore.js';
+import { kindIconSvg } from './DeviceArt.js';
+import {
+    getMapping,
+    listMappings,
+    removeMapping,
+    CHANGED_EVENT,
+} from '../util/gamepadMappingsStore.js';
 import {
     SUPPORTS_CANVAS_TEARING,
     IS_MOBILE_OR_TABLET,
@@ -711,7 +717,9 @@ export class SettingsView {
         const present = new Set(rows.map((r) => r.key));
         const absent = saved.filter((m) => !present.has(m.key));
         const sig =
-            rows.map((r) => r.key + ':' + r.res.source).join('|') +
+            rows
+                .map((r) => [r.key, r.res.source, r.res.kind, !!getMapping(r.key)].join(':'))
+                .join('|') +
             '#' +
             absent.map((m) => m.key).join('|');
         if (sig === this._padSig) return;
@@ -724,10 +732,11 @@ export class SettingsView {
                   .map(
                       ({ gp, key, res }) => `
                 <div class="settings-pad">
+                    <span class="settings-pad-kind" title="${escapeHtml(t(`gamepad.remap.kind.${res.kind}`))}">${kindIconSvg(res.kind)}</span>
                     <span class="settings-pad-name">${escapeHtml(padName(gp))}</span>
                     ${sourceBadge(res.source)}
                     ${btn('settings-pad-test', key, t('settings.controllersTest'))}
-                    ${res.source === 'user' ? btn('settings-pad-reset', key, t('settings.controllersReset')) : ''}
+                    ${getMapping(key) ? btn('settings-pad-reset', key, t('settings.controllersReset')) : ''}
                 </div>`,
                   )
                   .join('')

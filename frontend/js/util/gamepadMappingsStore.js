@@ -64,15 +64,40 @@ function all() {
     return memory;
 }
 
-/** @returns {{name: string, bindings: object, updatedAt: number}|null} */
+/**
+ * What the user saved for this pad: a layout, the kind of device it is
+ * (gamepadMapping.PAD_KINDS), or both. An entry from before kinds has none.
+ * @returns {{name: string, bindings?: object, kind?: string, updatedAt: number}|null}
+ */
 export function getMapping(key) {
     const m = all()[key];
-    return m && m.bindings && typeof m.bindings === 'object' ? m : null;
+    if (!m || typeof m !== 'object') return null;
+    const layout = m.bindings && typeof m.bindings === 'object';
+    return layout || typeof m.kind === 'string' ? m : null;
 }
 
-export function setMapping(key, name, bindings) {
+/** A layout for this pad; the kind saved with it, or the one it had before. */
+export function setMapping(key, name, bindings, kind) {
     const a = all();
-    a[key] = { name: String(name || ''), bindings, updatedAt: Date.now() };
+    const k = kind || (a[key] && a[key].kind);
+    a[key] = {
+        name: String(name || ''),
+        bindings,
+        ...(k ? { kind: k } : {}),
+        updatedAt: Date.now(),
+    };
+    writeAll(a, key);
+}
+
+/**
+ * The kind of device this pad is, as the user says: alone when its layout
+ * comes from elsewhere (a built-in profile, the database), next to their
+ * own layout otherwise.
+ */
+export function setKind(key, name, kind) {
+    const a = all();
+    const prev = a[key] || {};
+    a[key] = { ...prev, name: String(name || prev.name || ''), kind, updatedAt: Date.now() };
     writeAll(a, key);
 }
 

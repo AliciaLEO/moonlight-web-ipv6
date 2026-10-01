@@ -19,6 +19,7 @@ import {
     describeBinding,
     loadGamepadDb,
     isAutoMapped,
+    padKind,
 } from '../js/stream/gamepadMapping.js';
 
 function pad({ id = 'Pad', mapping = '', buttons = 16, axes = [0, 0, 0, 0] } = {}) {
@@ -349,6 +350,70 @@ describe('an EdgeTX / OpenTX radio, read through its built-in profile', () => {
     });
 });
 
+describe('padKind', () => {
+    it('knows a radio and the G29 by their USB ids', () => {
+        expect(padKind('Radiomaster TX12 Joystick (Vendor: 1209 Product: 4f54)')).toBe('rc');
+        expect(padKind('1209-4f54-OpenTX Joystick')).toBe('rc');
+        expect(padKind('G29 Driving Force Racing Wheel (Vendor: 046d Product: c24f)')).toBe(
+            'wheel',
+        );
+    });
+
+    it('takes a hint from the name, flight gear before wheels', () => {
+        const cases = [
+            ['FrSky Taranis Joystick', 'rc'],
+            ['BETAFPV LiteRadio 3', 'rc'],
+            ['Jumper T-Pro', 'rc'],
+            ['Saitek Pro Flight X-52 Pro Flight Control System', 'flightstick'],
+            ['Logitech Extreme 3D Pro (Vendor: 046d Product: c215)', 'flightstick'],
+            ['T.16000M (Vendor: 044f Product: b10a)', 'flightstick'],
+            ['Thrustmaster T.Flight Hotas X', 'flightstick'],
+            ['Saitek Pro Flight Rudder Pedals', 'flightstick'],
+            ['VKBsim Gladiator EVO R', 'flightstick'],
+            ['TWCS Throttle', 'flightstick'],
+            ['Thrustmaster T300RS Racing wheel', 'wheel'],
+            ['Thrustmaster T248', 'wheel'],
+            ['Logitech G923 Racing Wheel for PlayStation and PC', 'wheel'],
+            ['FANATEC ClubSport Pedals V3', 'wheel'],
+            ['MOZA R5 Base', 'wheel'],
+            ['Xbox 360 Controller (XInput STANDARD GAMEPAD)', 'gamepad'],
+            ['Generic USB Joystick (Vendor: 0079 Product: 0006)', 'gamepad'],
+            ['8BitDo Arcade Stick', 'gamepad'],
+        ];
+        for (const [id, kind] of cases) expect([id, padKind(id)]).toEqual([id, kind]);
+    });
+
+    it("puts the user's own choice first, and ignores one it does not know", () => {
+        const radio = 'Radiomaster TX12 Joystick (Vendor: 1209 Product: 4f54)';
+        expect(padKind(radio, { kind: 'flightstick' })).toBe('flightstick');
+        expect(padKind(radio, { kind: 'toaster' })).toBe('rc');
+        // An entry saved before kinds: the name decides.
+        expect(padKind('Pad', { bindings: {} })).toBe('gamepad');
+    });
+
+    it('comes with every resolution, whichever source lays the pad out', () => {
+        const radio = pad({
+            id: 'Radiomaster TX12 Joystick (Vendor: 1209 Product: 4f54)',
+            buttons: 24,
+        });
+        expect(resolveMapping(radio, { platform: 'win' })).toMatchObject({
+            source: 'builtin',
+            kind: 'rc',
+        });
+        const wheel = pad({ id: 'G29 Driving Force Racing Wheel (Vendor: 046d Product: c24f)' });
+        expect(resolveMapping(wheel, { platform: 'win', db: null })).toMatchObject({
+            source: null,
+            kind: 'wheel',
+        });
+        // The kind alone, saved for a pad another source lays out.
+        const user = () => ({ kind: 'gamepad' });
+        expect(resolveMapping(radio, { user, platform: 'win' })).toMatchObject({
+            source: 'builtin',
+            kind: 'gamepad',
+        });
+    });
+});
+
 describe('detectInput (wizard)', () => {
     it('takes the first button pressed, skipping ones already bound', () => {
         const gp = pad();
@@ -391,6 +456,17 @@ describe('detectInput (wizard)', () => {
         gp.axes[3] = 0;
         press(gp, 0);
         expect(detectInput(base, gp, 'leftx')).toBeNull();
+    });
+
+    it('reads a stick pushed up as up when the step asks to raise it', () => {
+        // A throttle left halfway: not parked, so the push decides — and the
+        // step said "raise", the negative sense of a standard stick.
+        const gp = pad({ axes: [0, 0, 0.1, 0] });
+        const base = snapshot(gp);
+        gp.axes[2] = 0.9;
+        expect(detectInput(base, gp, 'lefty', [], -1)).toEqual({ t: 'a', i: 2, s: 0, inv: true });
+        gp.axes[2] = -0.8;
+        expect(detectInput(base, gp, 'lefty', [], -1)).toEqual({ t: 'a', i: 2, s: 0 });
     });
 
     it('reads a parked stick by where it rests, not by the push', () => {
