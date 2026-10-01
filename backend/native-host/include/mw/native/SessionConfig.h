@@ -272,13 +272,17 @@ struct SessionConfig
     /// makes no display.
     int virtualRefreshHz = 0;
 
-    /// Make the display this session makes for itself — the portal's virtual
-    /// monitor on Linux — the desktop's primary while it streams, as the
-    /// server makes its own virtual display primary on Windows and macOS: on
-    /// GNOME the top bar and the dock come to the stream, which would
-    /// otherwise show an empty extension of the desktop. The owner's session
-    /// only: a guest's monitor beside it is not where the desktop goes.
-    /// Ignored where the session makes no display, and off GNOME.
+    /// The owner's session on the display a session makes for itself — the
+    /// virtual monitor on Linux: it is made the desktop's primary while it
+    /// streams, as the server makes its own virtual display primary on Windows
+    /// and macOS (on GNOME the top bar and the dock come to the stream, which
+    /// would otherwise show an empty extension of the desktop). On GNOME's own
+    /// route (Mutter's screen cast) the owner's session always makes its
+    /// monitor, at its client's size; a guest's — false — records that one, the
+    /// owner's desktop, and makes one itself, primary too, only when nobody
+    /// else streams (capture/linux/SharedMonitor.h). Through the portal a
+    /// guest's monitor stays beside the owner's. Ignored where the session
+    /// makes no display, and off GNOME.
     bool virtualPrimary = false;
 
     /// The chain that carries the pictures on Windows (VideoPipeline.h). Auto,

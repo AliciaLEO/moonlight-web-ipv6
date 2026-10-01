@@ -136,6 +136,11 @@ struct PortalCapture::Impl
     int virtualFps = 60;
     /// KWin makes the virtual monitor, under this name (setKwinVirtualOutput).
     std::string kwinName;
+    /// Mutter makes it, or records the monitor named here (setMutter).
+    bool mutter = false;
+    std::string mutterConnector;
+    /// When acquire() next asks whether Mutter ended the screen cast.
+    int64_t nextEndCheckUs = 0;
 
     int64_t nowUs() const
     {
@@ -386,6 +391,12 @@ void PortalCapture::setKwinVirtualOutput(std::string name)
     d->kwinName = std::move(name);
 }
 
+void PortalCapture::setMutter(std::string connector)
+{
+    d->mutter = true;
+    d->mutterConnector = std::move(connector);
+}
+
 void PortalCapture::offerDmabuf(DmabufOffer offer)
 {
     d->offer = std::move(offer);
@@ -406,9 +417,13 @@ bool PortalCapture::start(std::string& error)
     }
     ensurePipeWire();
 
-    const bool virtualMonitor = d->virtualWidth > 0 && d->virtualHeight > 0;
+    // A monitor recorded as it is has a size of its own: nothing is pinned.
+    const bool virtualMonitor =
+        d->virtualWidth > 0 && d->virtualHeight > 0 && d->mutterConnector.empty();
     d->portal.setVirtual(virtualMonitor);
-    if (virtualMonitor && !d->kwinName.empty())
+    if (d->mutter)
+        d->portal.setMutter(d->mutterConnector, d->virtualWidth, d->virtualHeight, d->virtualFps);
+    else if (virtualMonitor && !d->kwinName.empty())
         d->portal.setKwinVirtualOutput(d->kwinName, d->virtualWidth, d->virtualHeight);
     if (!d->portal.start(d->restore, 0, d->granted, error)) return false;
     if (!d->granted.valid()) {
@@ -433,8 +448,9 @@ bool PortalCapture::start(std::string& error)
 
     pw_thread_loop_lock(d->loop);
     // The fd the portal handed us: PipeWire takes ownership of it here, which
-    // is why start() must not close it afterwards. KWin's output streams on the
-    // session's own PipeWire, reached the ordinary way.
+    // is why start() must not close it afterwards. KWin's output and Mutter's
+    // own screen casts stream on the session's own PipeWire, reached the
+    // ordinary way.
     d->core = d->granted.pipewireFd >= 0
                   ? pw_context_connect_fd(d->context, d->granted.pipewireFd, nullptr, 0)
                   : pw_context_connect(d->context, nullptr, 0);
@@ -589,8 +605,28 @@ std::string PortalCapture::restoreToken() const
     return d->granted.restoreToken;
 }
 
+bool PortalCapture::mutterRefused() const
+{
+    return d->portal.routeRefused();
+}
+
 AcquireStatus PortalCapture::acquire(int timeoutMs, KmsFrame& frame)
 {
+    // Mutter ends a screen cast of its own accord — the monitor it records
+    // went with the stream that made it, the desktop was locked — and the
+    // PipeWire stream need not say so: asked a few times a second.
+    if (d->mutter && d->nowUs() >= d->nextEndCheckUs) {
+        d->nextEndCheckUs = d->nowUs() + 250 * 1000;
+        if (d->portal.ended()) {
+            std::lock_guard<std::mutex> lock(d->mutex);
+            if (!d->failed) {
+                d->failed = true;
+                d->failure = "GNOME ended the screen cast";
+                log::info("[native] GNOME ended the screen cast — the monitor it showed went, or "
+                          "the desktop was locked");
+            }
+        }
+    }
     std::unique_lock<std::mutex> lock(d->mutex);
     if (d->failed) return AcquireStatus::Lost;
     if (!d->frameFresh && !d->cursorFresh) {

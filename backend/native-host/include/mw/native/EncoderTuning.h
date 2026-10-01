@@ -368,6 +368,11 @@ struct EncoderTuning
     /// DMA-BUF hands over — measured on one that has it (C13.10). The engine's
     /// own is on.
     Choice portalDmabuf = Choice::Default;
+    /// GNOME's own screen cast for the virtual display (MutterScreenCast.h,
+    /// plan Idées Punktfunk C2). Off makes it through the portal, as before
+    /// C2: a dialog once, and each guest a monitor of its own. The engine's
+    /// own is on.
+    Choice mutterDirect = Choice::Default;
 
     // ── The link, on a real session (plan Idées Punktfunk, A0) ─────────────
     //
@@ -418,8 +423,8 @@ struct EncoderTuning
                pipelined == Choice::Default && keep12 == Choice::Default &&
                cadence == Cadence::Default && convertLinux == ConvertLinux::Default &&
                prioVk == PriorityVk::Default && portalDmabuf == Choice::Default &&
-               lossPermille == 0 && lossBurst == 0 && sctpCongestion < 0 && floodKbps == 0 &&
-               floodBytes == 0 && !floodLikeVideo;
+               mutterDirect == Choice::Default && lossPermille == 0 && lossBurst == 0 &&
+               sctpCongestion < 0 && floodKbps == 0 && floodBytes == 0 && !floodLikeVideo;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -509,6 +514,7 @@ struct EncoderTuning
         if (prioVk == PriorityVk::High) add("priovk=high");
         if (portalDmabuf != Choice::Default)
             add(std::string("portaldmabuf=") + choice(portalDmabuf));
+        if (mutterDirect != Choice::Default) add(std::string("mutter=") + choice(mutterDirect));
         if (lossPermille > 0) add("loss=" + std::to_string(lossPermille));
         if (lossBurst > 1) add("burst=" + std::to_string(lossBurst));
         if (sctpCongestion >= 0) add("sctpcc=" + std::to_string(sctpCongestion));

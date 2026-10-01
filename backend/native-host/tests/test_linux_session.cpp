@@ -835,6 +835,93 @@ struct GnomeLayoutView
     bool virtualPrimary = false;
 };
 
+/// GNOME's virtual monitors, as the shared monitor test counts them: how many
+/// there are, and the primary — its name, its size, whether it is virtual.
+struct VirtualCensus
+{
+    int count = 0;
+    std::string primary;
+    int primaryWidth = 0;
+    int primaryHeight = 0;
+    bool primaryVirtual = false;
+};
+
+bool readVirtualCensus(VirtualCensus& out)
+{
+    out = VirtualCensus{};
+    capture::DisplayLayout layout;
+    uint32_t serial = 0;
+    std::string why;
+    if (!capture::MutterDisplayConfig::read(layout, serial, why)) return false;
+    for (const capture::LayoutMonitor& m : layout.monitors)
+        if (capture::isMutterVirtual(m)) ++out.count;
+    for (const capture::LayoutLogical& l : layout.logical) {
+        if (!l.primary || l.connectors.empty()) continue;
+        out.primary = l.connectors[0];
+        if (const capture::LayoutMonitor* m = capture::findLayoutMonitor(layout, out.primary)) {
+            out.primaryWidth = m->width;
+            out.primaryHeight = m->height;
+            out.primaryVirtual = capture::isMutterVirtual(*m);
+        }
+    }
+    return true;
+}
+
+/// GNOME's layout read again and again until @p done, at most @p timeoutMs.
+template <typename Done> bool waitCensus(VirtualCensus& census, Done&& done, int timeoutMs)
+{
+    for (int waited = 0; waited <= timeoutMs; waited += 100) {
+        if (readVirtualCensus(census) && done(census)) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    return false;
+}
+
+std::string censusText(const VirtualCensus& c)
+{
+    return std::to_string(c.count) + " virtual, primary " + c.primary + " " +
+           std::to_string(c.primaryWidth) + "x" + std::to_string(c.primaryHeight);
+}
+
+/// One stream of the shared monitor test: its session, its frames, the display
+/// it says it shows now.
+struct SharedStream
+{
+    std::atomic<int> frames{0};
+    std::atomic<int> displayWidth{0};
+    std::atomic<int> displayHeight{0};
+    std::mutex endedMutex;
+    std::string ended;
+    /// Last, so it goes first: its callbacks reach everything above.
+    std::unique_ptr<Session> session;
+
+    bool start(const SessionConfig& config, std::string& error)
+    {
+        session = NativeHost::createSession(
+            config, [this](const EncodedFrame&) { frames.fetch_add(1); }, nullptr, nullptr, nullptr,
+            [this](const std::string& reason) {
+                std::lock_guard<std::mutex> lock(endedMutex);
+                ended = reason;
+            },
+            error);
+        if (!session) return false;
+        session->setDisplayFormatCallback([this](const DisplayFormat& f) {
+            displayWidth.store(f.displayWidth);
+            displayHeight.store(f.displayHeight);
+        });
+        if (!session->start(error)) return false;
+        displayWidth.store(session->info().displayWidth);
+        displayHeight.store(session->info().displayHeight);
+        return true;
+    }
+
+    std::string endedText()
+    {
+        std::lock_guard<std::mutex> lock(endedMutex);
+        return ended;
+    }
+};
+
 /// False when there is no Mutter to ask (not GNOME, no session bus).
 bool readGnomeLayout(int width, int height, GnomeLayoutView& view)
 {
@@ -886,6 +973,14 @@ void run_linux_virtual_display_tests()
     CHECK(virt->capture == CaptureApi::PipeWire);
     CHECK(!virt->primary || caps.displays.size() == 1);
     std::fprintf(stderr, "  listed: %s — %s\n", virt->label.c_str(), virt->detail.c_str());
+    // GNOME's own screen cast (C2): no dialog, and one monitor every stream
+    // on it shares; KWin's output (KDE Plasma 6); otherwise the portal's —
+    // which MW_PORTAL_VIRTUAL_ROUTE=portal asks for on GNOME too (mutter=0),
+    // the route behind GNOME's own.
+    const char* route = std::getenv("MW_PORTAL_VIRTUAL_ROUTE");
+    const bool portalAsked = route && std::string(route) == "portal";
+    const bool mutterRoute = virt->detail.find("Mutter") != std::string::npos && !portalAsked;
+    const bool kwinRoute = virt->detail.find("KWin") != std::string::npos;
     const char* opt = std::getenv("MW_PORTAL_VIRTUAL");
     if (!opt || std::string(opt) != "1") {
         std::fprintf(stderr, "  session skipped: set MW_PORTAL_VIRTUAL=1 (the portal may ask)\n");
@@ -905,6 +1000,7 @@ void run_linux_virtual_display_tests()
     if (replay && *replay) config.portalRestoreToken = replay;
     // The owner's session: its monitor becomes GNOME's primary.
     config.virtualPrimary = true;
+    if (portalAsked) config.tuning.mutterDirect = EncoderTuning::Choice::Off;
     GnomeLayoutView gnomeBefore;
     const bool gnome = readGnomeLayout(1600, 900, gnomeBefore);
     if (gnome)
@@ -984,15 +1080,16 @@ void run_linux_virtual_display_tests()
     phone.fps = 60;
     phone.fitRequestedBox = phone.allowUpscale = phone.matchClientDisplay = true;
     phone.virtualRefreshHz = 240;
-    // A guest's session, as far as the layout goes: the monitor stays where
-    // GNOME put it. On KWin's route (KDE Plasma 6) the owner's again instead,
-    // which reuses the output's name at another size: KWin keeps a mode per
-    // output name, and the size asked for must still be the one made.
-    const bool kwinRoute = virt->detail.find("KWin") != std::string::npos;
-    phone.virtualPrimary = kwinRoute;
+    // A guest's session, as far as the portal's layout goes: the monitor stays
+    // where GNOME put it. On KWin's route (KDE Plasma 6) the owner's again
+    // instead, which reuses the output's name at another size: KWin keeps a
+    // mode per output name, and the size asked for must still be the one
+    // made. On GNOME's own the owner's too: a guest alone makes the shared
+    // monitor primary, which the scenario below looks at.
+    phone.virtualPrimary = kwinRoute || mutterRoute;
     const std::string token = !granted.empty() ? granted : (replay ? replay : "");
-    // KWin's route asks no consent: there is nothing to replay.
-    if (token.empty() && !kwinRoute) {
+    // KWin's route and GNOME's own ask no consent: there is nothing to replay.
+    if (token.empty() && !kwinRoute && !mutterRoute) {
         std::fprintf(stderr, "  match session skipped: no grant to replay\n");
         return;
     }
@@ -1031,5 +1128,111 @@ void run_linux_virtual_display_tests()
                  phoneEnded.empty() ? "" : (", ended: " + phoneEnded).c_str());
     CHECK(phoneFrames.load() >= 1);
     CHECK(phoneEnded.empty());
+    if (!mutterRoute) return;
+
+    // GNOME's own route: one virtual display for every stream on it, as on
+    // Windows (C2, Bruno's decision of 01/10/2026). The owner's stream makes
+    // the monitor; a guest's records it; when the owner leaves, the guest's
+    // stream starts over on a monitor of its own, primary; when an owner comes
+    // back, the guest moves to its monitor. Never two monitors at once for
+    // long, never a second primary.
+    SECTION("Linux — GNOME's own route: one virtual display for the owner and a guest");
+    VirtualCensus census;
+    VirtualCensus start;
+    CHECK(waitCensus(start, [](const VirtualCensus& c) { return c.count == 0; }, 5000));
+    std::fprintf(stderr, "  before: %s\n", censusText(start).c_str());
+
+    SessionConfig ownerConfig = config; // 1600x900 at 30 fps, the owner's
+    auto owner = std::make_unique<SharedStream>();
+    if (!owner->start(ownerConfig, error)) {
+        std::fprintf(stderr, "  owner start failed: %s\n", error.c_str());
+        CHECK(false);
+        return;
+    }
+    CHECK(waitCensus(
+        census, [](const VirtualCensus& c) { return c.count == 1 && c.primaryVirtual; }, 3000));
+    std::fprintf(stderr, "  owner streaming: %s\n", censusText(census).c_str());
+    CHECK_EQ(census.primaryWidth, 1600);
+
+    SessionConfig guestConfig = config;
+    guestConfig.width = 1280;
+    guestConfig.height = 720;
+    guestConfig.fps = 60;
+    guestConfig.virtualPrimary = false;
+    guestConfig.followDisplayShape = true; // as the server asks for a guest
+    SharedStream guest;
+    if (!guest.start(guestConfig, error)) {
+        std::fprintf(stderr, "  guest start failed: %s\n", error.c_str());
+        CHECK(false);
+        return;
+    }
+    // It records the owner's monitor: no second one, the owner's size.
+    std::fprintf(stderr, "  guest on: %dx%d, streaming %dx%d\n", guest.displayWidth.load(),
+                 guest.displayHeight.load(), guest.session->info().width,
+                 guest.session->info().height);
+    CHECK_EQ(guest.displayWidth.load(), 1600);
+    CHECK_EQ(guest.displayHeight.load(), 900);
+    CHECK_EQ(guest.session->info().width, 1280);
+    CHECK_EQ(guest.session->info().height, 720);
+    CHECK(readVirtualCensus(census));
+    CHECK_EQ(census.count, 1);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    const int guestBefore = guest.frames.load();
+    CHECK(owner->frames.load() >= 1);
+    CHECK(guestBefore >= 1);
+
+    // The owner leaves: the guest's stream starts over on a monitor of its
+    // own, at its size, primary.
+    owner->session->stop();
+    owner.reset();
+    const bool alone = waitCensus(
+        census,
+        [&guest](const VirtualCensus& c) {
+            return c.count == 1 && c.primaryVirtual && c.primaryWidth == 1280 &&
+                   guest.displayWidth.load() == 1280;
+        },
+        10000);
+    std::fprintf(stderr, "  owner gone: %s, the guest on %dx%d\n", censusText(census).c_str(),
+                 guest.displayWidth.load(), guest.displayHeight.load());
+    CHECK(alone);
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    CHECK(guest.frames.load() > guestBefore);
+
+    // An owner again: the guest moves to its monitor.
+    auto back = std::make_unique<SharedStream>();
+    if (!back->start(ownerConfig, error)) {
+        std::fprintf(stderr, "  owner restart failed: %s\n", error.c_str());
+        CHECK(false);
+        guest.session->stop();
+        return;
+    }
+    const bool moved = waitCensus(
+        census,
+        [&guest](const VirtualCensus& c) {
+            return c.count == 1 && c.primaryVirtual && c.primaryWidth == 1600 &&
+                   guest.displayWidth.load() == 1600;
+        },
+        10000);
+    std::fprintf(stderr, "  owner back: %s, the guest on %dx%d\n", censusText(census).c_str(),
+                 guest.displayWidth.load(), guest.displayHeight.load());
+    CHECK(moved);
+    const int guestMoved = guest.frames.load();
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    CHECK(guest.frames.load() > guestMoved);
+
+    guest.session->stop();
+    back->session->stop();
+    std::fprintf(stderr, "  guest %d frame(s)%s; owner %d frame(s)%s\n", guest.frames.load(),
+                 guest.endedText().empty() ? "" : (", ended: " + guest.endedText()).c_str(),
+                 back->frames.load(),
+                 back->endedText().empty() ? "" : (", ended: " + back->endedText()).c_str());
+    CHECK(guest.endedText().empty());
+    CHECK(back->endedText().empty());
+    const bool restored = waitCensus(
+        census,
+        [&start](const VirtualCensus& c) { return c.count == 0 && c.primary == start.primary; },
+        5000);
+    std::fprintf(stderr, "  after: %s\n", censusText(census).c_str());
+    CHECK(restored);
 #endif
 }

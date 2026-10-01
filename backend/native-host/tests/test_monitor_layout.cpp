@@ -18,7 +18,9 @@
 #include "native_test_framework.h"
 
 #include "capture/linux/MonitorLayout.h"
+#include "capture/linux/SharedMonitor.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -26,7 +28,9 @@ using namespace mw::native::capture;
 
 // The portal's virtual monitor made GNOME's primary (MonitorLayout.h): which
 // monitor is this session's, and the layout that puts it on the left of the
-// others without switching any of them off. Pure arithmetic, so every
+// others without switching any of them off. Then the monitor the streams of a
+// desktop share (SharedMonitor.h): its record, who makes it, who records it,
+// and when a guest's stream moves to another. Pure arithmetic, so every
 // platform's run covers it; the live layout is test_linux_session's.
 
 namespace {
@@ -223,4 +227,71 @@ void run_monitor_layout_tests()
     CHECK(layoutAdjacent(0, 0, 100, 100, 50, 100, 100, 100));
     CHECK(!layoutAdjacent(0, 0, 100, 100, 100, 100, 100, 100));
     CHECK(!layoutAdjacent(0, 0, 100, 100, 101, 0, 100, 100));
+
+    SECTION("Shared monitor — every stream on the virtual display shows one desktop");
+
+    // The record, written and read back.
+    SharedMonitor owner;
+    owner.connector = "Meta-0";
+    owner.pid = 4242;
+    owner.started = 123456789ULL;
+    owner.owner = true;
+    SharedMonitor read;
+    CHECK(parseSharedMonitor(formatSharedMonitor(owner), read));
+    CHECK(sameSharedMonitor(read, owner));
+    CHECK(read.owner);
+    SharedMonitor guestMade;
+    guestMade.connector = "Meta-1";
+    guestMade.pid = 5151;
+    guestMade.started = 987;
+    CHECK(parseSharedMonitor(formatSharedMonitor(guestMade), read));
+    CHECK(sameSharedMonitor(read, guestMade));
+    CHECK(!read.owner);
+    // Anything else is no record: another version's, a torn write.
+    CHECK(!parseSharedMonitor("", read));
+    CHECK(!read.valid());
+    CHECK(!parseSharedMonitor("mw2 Meta-0 4242 1 owner\n", read));
+    CHECK(!parseSharedMonitor("mw1 Meta-0 4242", read));
+    CHECK(!parseSharedMonitor("mw1 Meta-0 -3 1 owner\n", read));
+    CHECK(!parseSharedMonitor("mw1 Meta-0 4242 1 someone\n", read));
+    // A pid the kernel has given to another process since is not the maker.
+    SharedMonitor reused = owner;
+    reused.started = owner.started + 1;
+    CHECK(!sameSharedMonitor(reused, owner));
+
+    // Who makes the monitor and who records it: the owner's stream always
+    // makes its own, at its client's size; a guest's records the one there
+    // is, and makes one only when there is none in the layout.
+    const SharedMonitor none;
+    CHECK(planSharedMonitor(true, none, false) == SharedMonitorPlan::Make);
+    CHECK(planSharedMonitor(true, guestMade, true) == SharedMonitorPlan::Make);
+    CHECK(planSharedMonitor(false, owner, true) == SharedMonitorPlan::Record);
+    CHECK(planSharedMonitor(false, guestMade, true) == SharedMonitorPlan::Record);
+    CHECK(planSharedMonitor(false, owner, false) == SharedMonitorPlan::Make);
+    CHECK(planSharedMonitor(false, none, false) == SharedMonitorPlan::Make);
+
+    // When a guest's stream starts over. Recording the owner's monitor: not
+    // while it stays; when the owner left, or another owner's took over.
+    SharedMonitor newOwner = owner;
+    newOwner.connector = "Meta-2";
+    newOwner.pid = 6000;
+    CHECK(!sharedMonitorMoved(false, false, owner, owner));
+    CHECK(sharedMonitorMoved(false, false, owner, none));
+    CHECK(sharedMonitorMoved(false, false, owner, newOwner));
+    // Having made the shared monitor itself: when the owner's came, and not
+    // while its own is the record, nor when the record is gone.
+    CHECK(sharedMonitorMoved(false, true, guestMade, owner));
+    CHECK(!sharedMonitorMoved(false, true, guestMade, guestMade));
+    CHECK(!sharedMonitorMoved(false, true, guestMade, none));
+    // Never the owner's stream, nor a guest's own monitor beside the shared one.
+    CHECK(!sharedMonitorMoved(true, true, owner, newOwner));
+    CHECK(!sharedMonitorMoved(false, false, none, owner));
+
+    // The maker's start, field 22 of /proc/<pid>/stat, read past a command
+    // that holds spaces and parentheses of its own.
+    const std::string stat = "4242 (mw (worker) 2) S 1 4242 4242 0 -1 4194560 1 0 0 0 5 2 0 0 20 0 "
+                             "9 0 123456789 1000 50";
+    CHECK_EQ(startTimeFromStat(stat), static_cast<uint64_t>(123456789));
+    CHECK_EQ(startTimeFromStat("not a stat line"), static_cast<uint64_t>(0));
+    CHECK_EQ(startTimeFromStat("1 (x) S 1 2"), static_cast<uint64_t>(0));
 }

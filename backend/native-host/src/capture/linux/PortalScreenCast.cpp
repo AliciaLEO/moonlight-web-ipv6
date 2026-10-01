@@ -19,6 +19,7 @@
 
 #include "../../core/Log.h"
 #include "KwinVirtualOutput.h"
+#include "MutterScreenCast.h"
 
 #include <fcntl.h>
 #include <linux/capability.h>
@@ -308,6 +309,13 @@ struct PortalScreenCast::Impl
     int kwinHeight = 0;
     std::unique_ptr<KwinVirtualOutput> kwinOutput;
 
+    /// Mutter's own screen cast instead of the portal (setMutter).
+    bool mutter = false;
+    MutterScreenCast::Request mutterRequest;
+    std::unique_ptr<MutterScreenCast> mutterCast;
+    /// Its last start was refused outright (routeRefused).
+    bool mutterRefused = false;
+
     ~Impl()
     {
         if (bus) sd_bus_unref(bus);
@@ -375,9 +383,49 @@ void PortalScreenCast::setKwinVirtualOutput(const std::string& name, int width, 
     d->kwinHeight = height;
 }
 
+void PortalScreenCast::setMutter(const std::string& connector, int width, int height, int refreshHz)
+{
+    d->mutter = true;
+    d->virtualMonitor = connector.empty();
+    d->mutterRequest.connector = connector;
+    d->mutterRequest.width = width;
+    d->mutterRequest.height = height;
+    d->mutterRequest.refreshHz = refreshHz;
+}
+
+bool PortalScreenCast::ended()
+{
+    return d->mutterCast && d->mutterCast->closed();
+}
+
+bool PortalScreenCast::routeRefused() const
+{
+    return d->mutterRefused;
+}
+
 bool PortalScreenCast::start(const std::string& restoreToken, int timeoutMs, PortalStream& out,
                              std::string& error)
 {
+    // Mutter's own screen cast asks nobody and looks at no caller: here,
+    // whatever this process holds.
+    if (d->mutter) {
+        out = PortalStream{};
+        d->mutterCast = std::make_unique<MutterScreenCast>();
+        uint32_t node = 0;
+        if (!d->mutterCast->start(d->mutterRequest, node, error)) {
+            d->mutterRefused = d->mutterCast->refused();
+            d->mutterCast.reset();
+            return false;
+        }
+        out.nodeId = node;
+        out.sessionPipeWire = true;
+        const std::string& connector = d->mutterRequest.connector;
+        log::info("[native] GNOME: " +
+                  (connector.empty() ? std::string("a virtual monitor")
+                                     : "monitor " + connector + ", recorded as it is") +
+                  ", node " + std::to_string(node) + " — Mutter's own screen cast, no dialog");
+        return true;
+    }
     const bool helper = !g_InHelper.load() && unreadableByPortal();
     if (!(helper ? startInHelper(restoreToken, timeoutMs, out, error)
                  : startHere(restoreToken, timeoutMs, out, error)))
@@ -755,6 +803,10 @@ bool PortalScreenCast::startHere(const std::string& restoreToken, int timeoutMs,
 
 void PortalScreenCast::stop()
 {
+    if (d->mutterCast) {
+        d->mutterCast->stop();
+        d->mutterCast.reset();
+    }
     if (d->helper > 0 || d->helperSocket >= 0) {
         stopHelper();
         return;

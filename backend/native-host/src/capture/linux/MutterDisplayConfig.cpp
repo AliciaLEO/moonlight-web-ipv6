@@ -20,7 +20,9 @@
 #include <systemd/sd-bus.h>
 
 #include <cerrno>
+#include <chrono>
 #include <cstring>
+#include <thread>
 
 namespace mw::native::capture {
 namespace {
@@ -377,6 +379,88 @@ bool MutterDisplayConfig::makePrimary(const std::string& connector, std::string&
     }
     how = "the layout kept changing under us";
     return false;
+}
+
+int MutterDisplayConfig::settle(const std::string& gone, int budgetMs)
+{
+    const auto start = std::chrono::steady_clock::now();
+    const auto waited = [&start] {
+        return static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - start)
+                                    .count());
+    };
+    DisplayLayout layout;
+    uint32_t serial = 0;
+    std::string why;
+    while (!gone.empty() && waited() < budgetMs) {
+        if (!read(layout, serial, why)) return waited();
+        if (!findLayoutMonitor(layout, gone)) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    bool seen = false;
+    uint32_t last = 0;
+    while (waited() < budgetMs) {
+        if (!read(layout, serial, why)) break;
+        if (seen && serial == last) break;
+        seen = true;
+        last = serial;
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    }
+    return waited();
+}
+
+struct MutterLayoutWatch::Impl
+{
+    sd_bus* bus = nullptr;
+    sd_bus_slot* slot = nullptr;
+    bool changed = false;
+
+    static int onChanged(sd_bus_message*, void* userdata, sd_bus_error*)
+    {
+        static_cast<Impl*>(userdata)->changed = true;
+        return 0;
+    }
+
+    ~Impl()
+    {
+        sd_bus_slot_unref(slot);
+        if (bus) sd_bus_flush_close_unref(bus);
+    }
+};
+
+MutterLayoutWatch::MutterLayoutWatch()
+    : d(std::make_unique<Impl>())
+{}
+
+MutterLayoutWatch::~MutterLayoutWatch() = default;
+
+bool MutterLayoutWatch::start(std::string& why)
+{
+    if (d->bus) return true;
+    int r = sd_bus_open_user(&d->bus);
+    if (r < 0) {
+        d->bus = nullptr;
+        why = std::string("no session bus (") + std::strerror(-r) + ")";
+        return false;
+    }
+    r = sd_bus_match_signal(d->bus, &d->slot, nullptr, kPath, kInterface, "MonitorsChanged",
+                            &Impl::onChanged, d.get());
+    if (r < 0) {
+        why = std::string("cannot listen to GNOME's monitors (") + std::strerror(-r) + ")";
+        d->bus = sd_bus_flush_close_unref(d->bus);
+        return false;
+    }
+    return true;
+}
+
+bool MutterLayoutWatch::changed()
+{
+    if (!d->bus) return false;
+    for (int i = 0; i < 64; ++i)
+        if (sd_bus_process(d->bus, nullptr) <= 0) break;
+    const bool was = d->changed;
+    d->changed = false;
+    return was;
 }
 
 } // namespace mw::native::capture

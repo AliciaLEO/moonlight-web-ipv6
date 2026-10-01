@@ -88,6 +88,14 @@ public:
     /// PipeWire. Before start().
     void setKwinVirtualOutput(std::string name);
 
+    /// Ask Mutter itself rather than the portal — GNOME's own screen cast,
+    /// with no dialog (MutterScreenCast.h): the virtual monitor
+    /// setVirtualMonitor describes or, with @p connector, the monitor of that
+    /// name as it is — another stream's virtual one, for a guest — whose
+    /// format is the monitor's own. Its stream is read on the session's own
+    /// PipeWire, and a session Mutter closes is a lost display. Before start().
+    void setMutter(std::string connector);
+
     /// What a GPU can import, offered to the compositor for DMA-BUF: its
     /// render node, and per DRM fourcc the modifiers (GlConvert::
     /// importableModifiers). Offered before shared memory, which stays the
@@ -115,6 +123,10 @@ public:
     /// The grant to store, after a start that raised the dialog. Empty when the
     /// portal issued none — in which case it will ask again next time.
     std::string restoreToken() const;
+
+    /// After a start() on Mutter's route that failed: Mutter refused the route
+    /// outright, where the portal may still serve (MutterScreenCast::refused).
+    bool mutterRefused() const;
 
     /// The last buffer that arrived, if there is a new one. Timeout when the
     /// screen has not changed — the same contract KmsCapture offers, and what

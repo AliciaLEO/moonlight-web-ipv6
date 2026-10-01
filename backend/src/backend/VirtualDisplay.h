@@ -80,22 +80,27 @@ struct DisplayInfo;
  * the main display, and the display goes away with the last stream. The seam
  * is mw::native::vdisplay (native-host/include/mw/native/VirtualDisplay.h).
  *
- * ── Linux Wayland: the portal's VIRTUAL source ─────────────────────────────
+ * ── Linux Wayland: a monitor the compositor makes ───────────────────────────
  *
- * A ScreenCast portal that lists source type 4 (GNOME 46+) creates a monitor
- * for a session that asks for one, sized by the format the stream negotiates.
  * The card is there whenever the probe lists that display (key
- * "portal-virtual"); the worker's own portal session makes it — at the
+ * "portal-virtual"); the worker's own session makes the monitor — at the
  * stream's size, the client's screen to the pixel under "Match my screen"
  * (mw::native::sizeVirtualMonitorToClient), and at 240 Hz like the Windows
  * display (SessionConfig::virtualRefreshHz) — and it is gone when the stream
- * ends — see livesInStream(). On GNOME the owner's stream makes it the main
- * display too, on the left of the others and none switched off, for as long
- * as it lives (SessionConfig::virtualPrimary); a guest's stays where GNOME
- * puts it. KDE Plasma 6's portal has no such source; KWin makes the monitor
- * itself, for a binary its installed .desktop grant names (the package ships
- * one), at 60 Hz. No session type but Wayland has either: an X11 session (a
- * machine with NVIDIA's driver, often) shows no card.
+ * that made it ends — see livesInStream().
+ *
+ * On GNOME (42 and later) Mutter makes it, asked over its own D-Bus screen
+ * cast, with no dialog: a host with no screen at all streams from the first
+ * time (plan Idées Punktfunk C2). The streams on it share it, as on Windows:
+ * the owner's makes it the main display, on the left of the others and none
+ * switched off (SessionConfig::virtualPrimary); a guest's records that same
+ * monitor, the owner's desktop; a guest with nobody else streaming makes one
+ * itself, and moves to the owner's when it comes. The portal's VIRTUAL source
+ * (GNOME 46+) stays behind it, for a Mutter that turns the direct route down.
+ * KDE Plasma 6's portal has no such source; KWin makes the monitor itself,
+ * for a binary its installed .desktop grant names (the package ships one), at
+ * 60 Hz, a guest's beside the owner's. No session type but Wayland has either:
+ * an X11 session (a machine with NVIDIA's driver, often) shows no card.
  *
  * ── The mode ────────────────────────────────────────────────────────────────
  *

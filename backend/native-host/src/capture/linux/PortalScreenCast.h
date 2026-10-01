@@ -38,9 +38,10 @@
 // copyleft or worse: libdbus is `GPL-2+ or AFL-2.1` (the GPL arm would end this
 // module's separability, the AFL arm is GPL-incompatible), GDBus and sd-bus are
 // LGPL. sd-bus was chosen on 08/09/2026 as a deliberate, BOUNDED exception —
-// one library, behind MW_NATIVE_LINUX_PORTAL, in this file and in
-// MutterDisplayConfig.cpp (GNOME's layout around the virtual monitor). LICENSE.md
-// § "L'exception sd-bus" says exactly what it costs and what it does not.
+// one library, behind MW_NATIVE_LINUX_PORTAL, in this file, in
+// MutterDisplayConfig.cpp (GNOME's layout around the virtual monitor) and in
+// MutterScreenCast.cpp (GNOME's own screen cast). LICENSE.md § "L'exception
+// sd-bus" says exactly what it costs and what it does not.
 //
 // ── The shape of the conversation ───────────────────────────────────────────
 //
@@ -158,6 +159,22 @@ public:
     /// the same helper carries the request where this process holds a
     /// capability, since KWin cannot read such a process either. Before start().
     void setKwinVirtualOutput(const std::string& name, int width, int height);
+
+    /// Ask Mutter itself instead of the portal — GNOME's own screen cast
+    /// (MutterScreenCast.h): a virtual monitor of @p width × @p height at
+    /// @p refreshHz or, with @p connector, that monitor as it is. No dialog,
+    /// no token, and never through the helper: Mutter looks at no caller.
+    /// The node is on the session's own PipeWire. Before start().
+    void setMutter(const std::string& connector, int width, int height, int refreshHz);
+
+    /// Whether the compositor has ended the stream of its own accord since
+    /// start(): the monitor it recorded went, the desktop was locked. Mutter's
+    /// route says so; the others never do, and this is false there.
+    bool ended();
+
+    /// After a start() on Mutter's route that failed: Mutter refused the
+    /// route outright (MutterScreenCast::refused), where the portal may serve.
+    bool routeRefused() const;
 
     /// Run the whole handshake. Blocking, and ⚠️ WAITS ON A HUMAN unless
     /// @p restoreToken replays an earlier grant: the portal shows a dialog and

@@ -20,14 +20,16 @@
 #include "MonitorLayout.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
 // GNOME's monitor layout, read and changed over Mutter's DisplayConfig D-Bus
-// interface — the one GNOME's own Settings use. It serves the portal's
-// virtual monitor alone (MonitorLayout.h says why it is made primary), and so
-// lives on the portal's route: sd-bus, behind MW_NATIVE_LINUX_PORTAL, under
-// the exception LICENSE.md § "L'exception sd-bus" bounds.
+// interface — the one GNOME's own Settings use. It serves the virtual display
+// alone (MonitorLayout.h says why it is made primary), whether Mutter's own
+// screen cast made it (MutterScreenCast.h) or the portal did, and so lives on
+// the portal's route: sd-bus, behind MW_NATIVE_LINUX_PORTAL, under the
+// exception LICENSE.md § "L'exception sd-bus" bounds.
 //
 // Not GNOME — KDE, wlroots, X11 — and nobody answers: every call returns
 // false with the reason, and the monitor stays where its compositor put it.
@@ -52,6 +54,37 @@ public:
     /// monitor, until it goes (Mutter's temporary configuration). @p how says
     /// what was done, or why nothing was.
     static bool makePrimary(const std::string& connector, std::string& how);
+
+    /// Wait, at most @p budgetMs, for Mutter to be done rebuilding its
+    /// monitors: @p gone out of the layout when one is named, then the
+    /// layout's serial still across two reads. A monitor added, removed or
+    /// laid out returns its D-Bus call while gnome-shell is still at it, and a
+    /// change landing then crashed it (Punktfunk). The milliseconds waited;
+    /// nothing is waited for when nobody answers.
+    static int settle(const std::string& gone, int budgetMs);
+};
+
+/// Mutter's word that its monitors changed (DisplayConfig's MonitorsChanged):
+/// a monitor came or went — another stream's, a screen plugged in — or the
+/// layout moved, and an absolute pointer mapped on the old one lands beside
+/// its mark.
+class MutterLayoutWatch
+{
+public:
+    MutterLayoutWatch();
+    ~MutterLayoutWatch();
+    MutterLayoutWatch(const MutterLayoutWatch&) = delete;
+    MutterLayoutWatch& operator=(const MutterLayoutWatch&) = delete;
+
+    /// Listen. False, with @p why, when nobody answers (not GNOME).
+    bool start(std::string& why);
+    /// Whether the monitors changed since the last call: what the bus has
+    /// brought, without a wait.
+    bool changed();
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> d;
 };
 
 } // namespace mw::native::capture

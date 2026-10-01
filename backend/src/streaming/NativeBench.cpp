@@ -197,6 +197,8 @@ const char* const kUsage =
     "                              CAP_SYS_NICE, normal without)\n"
     "  portaldmabuf=0|1            the portal asked for DMA-BUF (default 1); 0: shared memory\n"
     "                              only, what a compositor without DMA-BUF hands over\n"
+    "  mutter=0|1                  the virtual display through GNOME's own screen cast\n"
+    "                              (default 1); 0: through the portal, as before C2\n"
     "  (in the environment, MW_PORTAL_RESTORE_TOKEN=<grant>: the portal's consent replayed,\n"
     "  on a binary that cannot read the scanout; a new grant is printed as \"portal grant:\")\n"
     "the link, a real session's only (MW_NATIVE_TUNING or native_tuning; plan Idees\n"
@@ -473,6 +475,8 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
             ok = false;
     } else if (key == "portaldmabuf") {
         ok = parseChoice(value, tuning.portalDmabuf);
+    } else if (key == "mutter") {
+        ok = parseChoice(value, tuning.mutterDirect);
     } else if (key == "loss") {
         tuning.lossPermille = value.toInt(&ok);
         ok = ok && tuning.lossPermille >= 0 && tuning.lossPermille <= 1000;

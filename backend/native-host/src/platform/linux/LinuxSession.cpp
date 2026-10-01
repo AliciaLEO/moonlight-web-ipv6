@@ -19,7 +19,9 @@
 #include "../../capture/linux/X11Damage.h"
 #if defined(MW_NATIVE_LINUX_PORTAL)
 #include "../../capture/linux/MutterDisplayConfig.h"
+#include "../../capture/linux/MutterScreenCast.h"
 #include "../../capture/linux/PortalCapture.h"
+#include "../../capture/linux/SharedMonitor.h"
 #endif
 #include "../../convert/linux/GlConvert.h"
 #if defined(MW_NATIVE_LINUX_VULKAN)
@@ -573,7 +575,23 @@ public:
             log::info(line);
         }
 
-        if (!buildPipeline(m_Config.width, m_Config.height, error)) return false;
+        // The frame against the monitor the capture really shows. The Selector
+        // shaped it on the card's nominal 1920x1080, which a monitor made at
+        // the client's size matches — and another stream's, which a guest
+        // records as it is, need not: a phone held upright, say.
+        FrameSize frame{m_Config.width, m_Config.height};
+#if defined(MW_NATIVE_LINUX_PORTAL)
+        if (m_OnMutter && !m_MadeMonitor) {
+            frame = frameForDisplay({m_Capture->width(), m_Capture->height()}, frame,
+                                    policyOf(m_Config));
+            if (frame.width != m_Config.width || frame.height != m_Config.height)
+                log::info("[native] the monitor recorded is " + std::to_string(m_Capture->width()) +
+                          "x" + std::to_string(m_Capture->height()) + " — streaming " +
+                          std::to_string(frame.width) + "x" + std::to_string(frame.height) +
+                          ", its shape");
+        }
+#endif
+        if (!buildPipeline(frame.width, frame.height, error)) return false;
 
         // Input: keyboard and mouse through uinput, the gamepad beside them.
         // Either refusing is "no input of that kind this session", never no
@@ -688,13 +706,11 @@ public:
         m_Info.audio = false;
 #endif
 
-        log::info(
-            std::string("[native] session: ") + m_ConnectorName + " " +
-            std::to_string(m_Info.width) + "x" + std::to_string(m_Info.height) + "@" +
-            std::to_string(m_EncodeFps) + " " + toString(m_Info.codec) + " on " + m_Info.gpuName +
-            " " +
-            m_Pipeline->describe(m_Target.capture == CaptureApi::PipeWire ? "portal" : "KMS") +
-            (m_Info.audio ? ", with the host's audio (PipeWire, 48 kHz stereo)" : ""));
+        log::info(std::string("[native] session: ") + m_ConnectorName + " " +
+                  std::to_string(m_Info.width) + "x" + std::to_string(m_Info.height) + "@" +
+                  std::to_string(m_EncodeFps) + " " + toString(m_Info.codec) + " on " +
+                  m_Info.gpuName + " " + m_Pipeline->describe(captureName()) +
+                  (m_Info.audio ? ", with the host's audio (PipeWire, 48 kHz stereo)" : ""));
 
         m_SleepInhibit.engage();
 
@@ -730,8 +746,7 @@ public:
 #endif
         m_SleepInhibit.release();
         if (!wasRunning && !m_Pipeline && !m_Capture) return;
-        m_Pipeline.reset();
-        m_Capture.reset();
+        releaseCapture(false);
     }
 
     const SessionInfo& info() const override { return m_Info; }
@@ -847,6 +862,15 @@ public:
     }
 
 private:
+    /// Where the pictures come from, as the session's line names it.
+    const char* captureName() const
+    {
+#if defined(MW_NATIVE_LINUX_PORTAL)
+        if (m_OnMutter) return "GNOME's screen cast";
+#endif
+        return m_Target.capture == CaptureApi::PipeWire ? "portal" : "KMS";
+    }
+
     bool takeLinkFeedback(LinkFeedback& out)
     {
         std::lock_guard<std::mutex> lock(m_LinkMutex);
@@ -864,11 +888,35 @@ private:
             // portal that rotates its tokens has already spent the one the
             // session started with.
             if (m_PortalToken.empty()) m_PortalToken = m_Config.portalRestoreToken;
+            // One stream at a time makes, finds or removes the virtual display
+            // on this desktop (SharedMonitor.h): each makes the compositor
+            // rebuild its monitors, and rebuilds that overlapped crashed
+            // gnome-shell. Held until the layout has settled.
+            capture::SharedMonitorLock lock;
+            if (m_Target.portalVirtual) {
+                std::string why;
+                if (!lock.take(kSharedLockWaitMs, why))
+                    log::warning(
+                        "[native] virtual display: going on without the desktop's lock — " + why);
+            }
             // One portal session at a time: the old stream goes before the new
             // one is asked for (a restart reaches here with it still open).
-            if (m_Capture) {
-                m_Pipeline.reset();
-                m_Capture.reset();
+            if (m_Capture) releaseCapture(true);
+            m_VirtualConnector.clear();
+            // GNOME: its own screen cast, with no dialog (C2), the portal
+            // behind it for a Mutter that turns the route down outright.
+            std::string notMutter;
+            if (m_Target.portalVirtual && wantMutter(notMutter)) {
+                bool refused = false;
+                if (openMutter(error, refused)) {
+                    m_PortalModes = capture::KmsCapture::modeSignature(m_CardPath);
+                    m_PortalOpenedModes = m_PortalModes;
+                    return true;
+                }
+                if (!refused) return false;
+                m_MutterRefusal = "GNOME refused its own screen cast (" + error + ")";
+                log::warning("[native] virtual display: " + m_MutterRefusal +
+                             " — the portal makes it");
             }
             auto portal = std::make_unique<capture::PortalCapture>();
             // A monitor made for this stream, at its size, and at the rate the
@@ -905,7 +953,6 @@ private:
                 portal->offerDmabuf(dmabufOffer());
             // GNOME's monitors before this session's own exists: what tells it
             // from another stream's (placeVirtualMonitor).
-            m_VirtualConnector.clear();
             std::vector<std::string> monitorsBefore;
             std::string notGnome;
             const bool onGnome = m_Target.portalVirtual && m_KwinOutputName.empty() &&
@@ -926,6 +973,9 @@ private:
                              "the capture is asked again in shared memory");
                 m_PortalShmOnly = true;
                 portal.reset();
+                // Taken again by the call below: a lock held here would
+                // keep it waiting on itself.
+                lock.release();
                 return openCapture(error);
             }
             // KWin names its virtual outputs "Virtual-<name>": the pointer
@@ -1005,7 +1055,184 @@ private:
             log::warning("[native] virtual display: " + connector + " left where GNOME put it — " +
                          how);
     }
+
+    /// How long a stream waits for the desktop's lock: as it starts, another
+    /// stream's display being made (a second or two); as it ends, short of
+    /// the 5 s the server gives a worker to leave.
+    static constexpr int kSharedLockWaitMs = 10000;
+    static constexpr int kSharedLockTeardownMs = 2500;
+    /// How long Mutter is given to be done rebuilding its monitors.
+    static constexpr int kSettleMs = 2000;
+
+    /// Whether GNOME's own screen cast makes the virtual display (C2): Mutter
+    /// answers with an API that makes virtual monitors, the bench did not ask
+    /// for the portal (mutter=0), and Mutter did not turn this session's
+    /// route down outright. @p why says why not.
+    bool wantMutter(std::string& why) const
+    {
+        if (m_Config.tuning.mutterDirect == EncoderTuning::Choice::Off) {
+            why = "the bench asks for the portal (mutter=0)";
+            return false;
+        }
+        if (!m_MutterRefusal.empty()) {
+            why = m_MutterRefusal;
+            return false;
+        }
+        const int version = capture::MutterScreenCast::version(why);
+        if (version >= capture::MutterScreenCast::kVirtualVersion) return true;
+        if (version > 0)
+            why = "GNOME's screen cast is version " + std::to_string(version) +
+                  ", older than its virtual monitors";
+        return false;
+    }
+
+    /// One of Mutter's screen casts as the capture: a virtual monitor at the
+    /// client's size and at the rate a display made for a stream is made at
+    /// (240 Hz, as the portal's: chooseCadence keeps the stream's own) — or,
+    /// with @p connector, that monitor as it is. @p refused when Mutter turned
+    /// the route down outright.
+    bool startMutter(const std::string& connector, std::string& error, bool& refused)
+    {
+        auto cast = std::make_unique<capture::PortalCapture>();
+        if (connector.empty())
+            cast->setVirtualMonitor(m_Config.width, m_Config.height,
+                                    m_Config.virtualRefreshHz > 0 ? m_Config.virtualRefreshHz
+                                                                  : m_Config.fps);
+        cast->setMutter(connector);
+        cast->setRenderNode(capture::KmsCapture::renderNodeFor(m_CardPath));
+        if (!m_PortalShmOnly && m_Config.tuning.portalDmabuf != EncoderTuning::Choice::Off)
+            cast->offerDmabuf(dmabufOffer());
+        if (!cast->start(error)) {
+            refused = cast->mutterRefused();
+            return false;
+        }
+        m_PortalDmabuf = cast->dmabuf();
+        m_Capture = std::move(cast);
+        m_OnMutter = true;
+        return true;
+    }
+
+    /// The virtual display through GNOME's own screen cast, the desktop's lock
+    /// held (SharedMonitor.h). The owner's stream — or a guest's with no
+    /// monitor to record — makes a monitor at its client's size, makes it the
+    /// desktop's primary and records it as the shared one. A guest's records
+    /// the shared monitor as it is: the desktop the owner sees, as a guest
+    /// sees it on Windows (Bruno, 01/10/2026). @p refused when Mutter turned
+    /// the route down outright, for the portal to take over.
+    bool openMutter(std::string& error, bool& refused)
+    {
+        refused = false;
+        const bool owner = m_Config.virtualPrimary;
+        std::vector<std::string> before;
+        std::string why;
+        capture::MutterDisplayConfig::connectors(before, why);
+        capture::SharedMonitor shared;
+        const bool present =
+            capture::readSharedMonitor(shared) &&
+            std::find(before.begin(), before.end(), shared.connector) != before.end();
+        if (capture::planSharedMonitor(owner, shared, present) ==
+            capture::SharedMonitorPlan::Record) {
+            if (startMutter(shared.connector, error, refused)) {
+                m_SharedShown = shared;
+                m_SharedMade = false;
+                // The pointer lands on it by its name (readInputRects).
+                m_VirtualConnector = shared.connector;
+                log::info("[native] virtual display: " + shared.connector + ", the " +
+                          (shared.owner ? "owner's" : "first guest's") +
+                          " — recorded as it is: the same desktop");
+                watchLayout();
+                return true;
+            }
+            if (refused) return false;
+            // A monitor Mutter would not record: one of this guest's own,
+            // beside it, as a guest had before C2 — never the primary, never
+            // the shared one.
+            log::warning("[native] virtual display: " + shared.connector +
+                         " could not be recorded (" + error +
+                         ") — this guest gets a monitor of its own beside it");
+            if (!startMutter(std::string(), error, refused)) return false;
+            m_MadeMonitor = true;
+            placeVirtualMonitor(before, false);
+            capture::MutterDisplayConfig::settle(std::string(), kSettleMs);
+            watchLayout();
+            return true;
+        }
+        if (!startMutter(std::string(), error, refused)) return false;
+        m_MadeMonitor = true;
+        // Found in the layout and made its primary: the owner's or, with nobody
+        // else streaming, this guest's. Then recorded as the desktop's.
+        placeVirtualMonitor(before, true);
+        if (!m_VirtualConnector.empty()) {
+            m_SharedShown = capture::ownSharedMonitor(m_VirtualConnector, owner);
+            m_SharedMade = true;
+            if (!capture::publishSharedMonitor(m_SharedShown))
+                log::warning("[native] virtual display: " + m_VirtualConnector +
+                             " could not be recorded as the desktop's — a guest makes its own");
+        }
+        // Done rebuilding before another stream may change a thing.
+        capture::MutterDisplayConfig::settle(std::string(), kSettleMs);
+        watchLayout();
+        return true;
+    }
+
+    /// GNOME's monitors watched from here on, for the pointer's mapping: once
+    /// a session, after its own monitor settled, so its own making is not news.
+    void watchLayout()
+    {
+        if (m_LayoutWatch) return;
+        auto watch = std::make_unique<capture::MutterLayoutWatch>();
+        std::string why;
+        if (watch->start(why))
+            m_LayoutWatch = std::move(watch);
+        else
+            log::info("[native] input: GNOME's monitors not watched — " + why);
+    }
 #endif
+
+    /// The capture goes, and its screen cast with it. A monitor this stream
+    /// made through Mutter leaves the desktop's record first, Mutter removes
+    /// it, and its layout settles before another stream may change it — the
+    /// desktop's lock held, taken here unless @p locked. A monitor going makes
+    /// Mutter lay the desktop out anew, and the shared monitor of another
+    /// stream would not be the primary any more: it is made so again.
+    void releaseCapture(bool locked)
+    {
+        m_Pipeline.reset();
+#if defined(MW_NATIVE_LINUX_PORTAL)
+        const std::string made = m_OnMutter && m_MadeMonitor ? m_VirtualConnector : std::string();
+        m_OnMutter = false;
+        m_MadeMonitor = false;
+        m_SharedMade = false;
+        m_SharedShown = capture::SharedMonitor{};
+        if (made.empty()) {
+            m_Capture.reset();
+            return;
+        }
+        capture::SharedMonitorLock lock;
+        std::string why;
+        if (!locked && !lock.take(kSharedLockTeardownMs, why))
+            log::warning("[native] virtual display: " + made +
+                         " removed without the desktop's lock — " + why);
+        capture::withdrawSharedMonitor(made);
+        m_Capture.reset();
+        const int waited = capture::MutterDisplayConfig::settle(made, kSettleMs);
+        log::info("[native] virtual display: " + made + " removed (" + std::to_string(waited) +
+                  " ms for GNOME to settle)");
+        capture::SharedMonitor shared;
+        if (capture::readSharedMonitor(shared) && shared.connector != made) {
+            std::string how;
+            if (capture::MutterDisplayConfig::makePrimary(shared.connector, how))
+                log::info("[native] virtual display: " + how + " — the desktop's shared monitor");
+            else
+                log::warning("[native] virtual display: the shared monitor " + shared.connector +
+                             " was not made primary again — " + how);
+            capture::MutterDisplayConfig::settle(std::string(), kSettleMs);
+        }
+#else
+        (void)locked;
+        m_Capture.reset();
+#endif
+    }
 
     /// An X server does not always flip: it draws into the buffer it scans out
     /// when a flip cannot show the picture — a game presenting with its sync
@@ -1723,6 +1950,15 @@ private:
         std::string portalModesSeen;
         int portalFramesSince = 0;
         bool reopenPortal = false;
+        // The shared monitor's record, read this often by a guest's stream;
+        // GNOME's word on its monitors, asked this often, and the pointer
+        // mapped again this long after it.
+        [[maybe_unused]] constexpr int64_t kShareCheckUs = 1000 * 1000;
+        [[maybe_unused]] int64_t nextShareCheckUs = steadyNowUs() + kShareCheckUs;
+        [[maybe_unused]] constexpr int64_t kLayoutCheckUs = 250 * 1000;
+        [[maybe_unused]] constexpr int64_t kRemapDelayUs = 300 * 1000;
+        [[maybe_unused]] int64_t nextLayoutCheckUs = 0;
+        [[maybe_unused]] int64_t remapAtUs = 0;
         capture::KmsFrame frame;
 
         auto floorIntervalUs = [this, kIdleFloorUs]() -> int64_t {
@@ -1914,8 +2150,14 @@ private:
             // are watched, and a change is given a moment to reach the stream:
             // one that keeps delivering (a new size, or a few frames) is left
             // alone; one that falls silent is handled as a loss and reopened.
+            //
+            // Not on a virtual display: it has no CRTC, and a screen's mode
+            // changing beside it is nothing to its stream — which a static
+            // desktop leaves silent, and the wait below would have reopened,
+            // remaking the very monitor a guest records.
             bool portalModeChanged = false;
-            if (m_Target.capture == CaptureApi::PipeWire && steadyNowUs() >= nextModeCheckUs) {
+            if (m_Target.capture == CaptureApi::PipeWire && !m_Target.portalVirtual &&
+                steadyNowUs() >= nextModeCheckUs) {
                 nextModeCheckUs = steadyNowUs() + kModeCheckUs;
                 const std::string modes = capture::KmsCapture::modeSignature(m_CardPath);
                 if (!modes.empty() && !m_PortalModes.empty() && modes != m_PortalModes &&
@@ -1934,6 +2176,38 @@ private:
                 portalModesSeen.clear();
                 portalModeChanged = true;
             }
+#if defined(MW_NATIVE_LINUX_PORTAL)
+            // A guest's stream shows the desktop's shared monitor (SharedMonitor.h):
+            // when another took its place — the owner's stream came — or the one
+            // it records lost its maker, it starts over on the one there is now.
+            if (m_OnMutter && !m_Config.virtualPrimary && steadyNowUs() >= nextShareCheckUs) {
+                nextShareCheckUs = steadyNowUs() + kShareCheckUs;
+                capture::SharedMonitor now;
+                capture::readSharedMonitor(now);
+                if (capture::sharedMonitorMoved(false, m_SharedMade, m_SharedShown, now)) {
+                    log::info("[native] virtual display: the desktop's shared monitor is now " +
+                              (now.valid() ? now.connector + ", the " +
+                                                 (now.owner ? "owner's" : "first guest's")
+                                           : std::string("none")) +
+                              " — this guest's stream starts over on it");
+                    reopenPortal = true;
+                }
+            }
+            // GNOME's monitors changed beside the virtual display — another
+            // stream's came or went, a screen was plugged — and with them the
+            // desktop an absolute pointer spans: mapped again once Mutter is
+            // done, a moment after its word.
+            if (m_LayoutWatch && steadyNowUs() >= nextLayoutCheckUs) {
+                nextLayoutCheckUs = steadyNowUs() + kLayoutCheckUs;
+                if (m_LayoutWatch->changed()) remapAtUs = steadyNowUs() + kRemapDelayUs;
+            }
+            if (remapAtUs != 0 && steadyNowUs() >= remapAtUs) {
+                remapAtUs = 0;
+                const InputRects rects = readInputRects();
+                std::lock_guard<std::mutex> lock(m_InputMutex);
+                if (m_Input) applyInputRects(*m_Input, rects);
+            }
+#endif
             if (reopenPortal) {
                 reopenPortal = false;
                 portalModeChanged = true;
@@ -2453,6 +2727,26 @@ private:
     /// The name KWin's virtual output was asked under (KDE Plasma 6); empty
     /// when the portal makes the monitor, or there is none.
     std::string m_KwinOutputName;
+#if defined(MW_NATIVE_LINUX_PORTAL)
+    /// The capture is one of GNOME's own screen casts (C2): the shared
+    /// monitor's rules apply to it (SharedMonitor.h).
+    bool m_OnMutter = false;
+    /// It made a monitor rather than recording another stream's — which its
+    /// end removes, under the desktop's lock.
+    bool m_MadeMonitor = false;
+    /// That monitor is the desktop's shared one: the owner's stream's, or a
+    /// guest's with nothing to record.
+    bool m_SharedMade = false;
+    /// The shared monitor it shows: the record it made, or the one it
+    /// records. Invalid off that route, and for a guest's monitor of its own.
+    capture::SharedMonitor m_SharedShown;
+    /// Why GNOME's own screen cast is not asked again this session — Mutter
+    /// turned it down outright, the portal makes the display — or "".
+    std::string m_MutterRefusal;
+    /// GNOME's word that its monitors changed, for the pointer's mapping;
+    /// on that route only, and kept across restarts. The capture thread's.
+    std::unique_ptr<capture::MutterLayoutWatch> m_LayoutWatch;
+#endif
     /// The CRTC modes when the portal was opened (KmsCapture::modeSignature).
     std::string m_PortalModes;
     /// The same, as they were when this portal session opened: a mode change
