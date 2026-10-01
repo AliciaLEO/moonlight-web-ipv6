@@ -96,6 +96,13 @@ public:
     /// PipeWire, and a session Mutter closes is a lost display. Before start().
     void setMutter(std::string connector);
 
+    /// Read gamescope's own node @p node instead — an app in its own gamescope
+    /// (GamescopeSession.h), on the session's PipeWire, no portal, nobody to
+    /// ask — and its pointer from its Xwayland, @p xDisplay (XFixesCursor.h).
+    /// gamescope's process @p pid gone is the picture lost: its stream only
+    /// pauses. Before start().
+    void setGamescope(uint32_t node, std::string xDisplay, int pid);
+
     /// What a GPU can import, offered to the compositor for DMA-BUF: its
     /// render node, and per DRM fourcc the modifiers (GlConvert::
     /// importableModifiers). Offered before shared memory, which stays the

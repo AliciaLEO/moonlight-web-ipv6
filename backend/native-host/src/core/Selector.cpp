@@ -386,7 +386,7 @@ bool sizeVirtualMonitorToClient(Capabilities& caps, SessionConfig& config)
     if (!config.matchClientDisplay || config.width <= 0 || config.height <= 0) return false;
     DisplayInfo* made = nullptr;
     for (DisplayInfo& d : caps.displays)
-        if (d.id == config.displayId && d.key == kPortalVirtualDisplayKey) made = &d;
+        if (d.id == config.displayId && isMadeForStreamKey(d.key)) made = &d;
     if (!made) return false;
     const auto pin = [](int v) {
         return std::min(kMadeDisplayMax, std::max(kMadeDisplayMin, v)) & ~1;

@@ -271,6 +271,19 @@ struct DisplayInfo
 /// this key rather than by name — the probe does not know the edition's name.
 constexpr const char* kPortalVirtualDisplayKey = "portal-virtual";
 
+/// DisplayInfo::key of the screen Steam's Big Picture gets in its own
+/// gamescope, on Linux (GamescopeSession.h): made at the client's size when the
+/// stream starts, kept ten minutes after the last one. Recognised by this key,
+/// like the portal's virtual display.
+constexpr const char* kGamescopeSteamDisplayKey = "gamescope-steam";
+
+/// Whether @p key is a screen the stream makes for itself at the client's size
+/// — the portal's virtual display, or a gamescope's — rather than a monitor.
+inline bool isMadeForStreamKey(const std::string& key)
+{
+    return key == kPortalVirtualDisplayKey || key == kGamescopeSteamDisplayKey;
+}
+
 /// Why the native engine cannot run here. The caller maps every one of these to
 /// the SAME user-facing sentence (§23: "not available on this configuration —
 /// install Sunshine"), so the distinction exists for logs and telemetry only.

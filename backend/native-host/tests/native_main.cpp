@@ -39,6 +39,7 @@ void run_xkb_text_map_tests();
 void run_absolute_map_tests();
 void run_wayland_layout_tests();
 void run_monitor_layout_tests();
+void run_gamescope_tests();
 void run_x11_layout_tests();
 void run_scanout_window_tests();
 void run_linux_pipeline_tests();
@@ -194,6 +195,7 @@ int main(int argc, char** argv)
     RUN(absolute_map);
     RUN(wayland_layout);
     RUN(monitor_layout);
+    RUN(gamescope);
     RUN(x11_layout);
     RUN(scanout_window);
     RUN(mac_keymap);

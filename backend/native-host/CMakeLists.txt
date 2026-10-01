@@ -174,12 +174,13 @@ else()
         # itself. On a build without the graphics backend they are compiled and
         # never constructed (the stub session refuses first).
         #
-        # X11Pointer, X11Layout, WaylandLayout and XkbTextMap are unconditional
-        # for the same reason: libX11, libXrandr, libwayland-client and
-        # libxkbcommon are opened with dlopen at runtime, never linked, so no
-        # -dev package is needed to build them and a host with none of them
-        # still runs — it simply finds nothing.
+        # X11Pointer, X11Layout, WaylandLayout, XkbTextMap and EiInput are
+        # unconditional for the same reason: libX11, libXrandr,
+        # libwayland-client, libxkbcommon and libei are opened with dlopen at
+        # runtime, never linked, so no -dev package is needed to build them and
+        # a host with none of them still runs — it simply finds nothing.
         target_sources(mw-native-host PRIVATE
+            src/input/linux/EiInput.cpp
             src/input/linux/UinputGamepad.cpp
             src/input/linux/UinputInput.cpp
             src/input/linux/WaylandLayout.cpp
@@ -326,7 +327,9 @@ else()
                                                           src/capture/linux/MutterDisplayConfig.cpp
                                                           src/capture/linux/MutterScreenCast.cpp
                                                           src/capture/linux/SharedMonitor.cpp
-                                                          src/capture/linux/KwinVirtualOutput.cpp)
+                                                          src/capture/linux/KwinVirtualOutput.cpp
+                                                          src/capture/linux/GamescopeSession.cpp
+                                                          src/capture/linux/XFixesCursor.cpp)
                     target_include_directories(mw-native-host SYSTEM PRIVATE ${MW_LINUX_PORTAL_INCLUDE_DIRS})
                     target_link_libraries(mw-native-host PRIVATE ${MW_LINUX_PORTAL_LIBRARIES})
                     # PUBLIC so the tests know whether the route is built.
@@ -481,6 +484,7 @@ if(MW_BUILD_TESTS)
         tests/test_absolute_map.cpp
         tests/test_wayland_layout.cpp
         tests/test_monitor_layout.cpp
+        tests/test_gamescope.cpp
         tests/test_x11_layout.cpp
         tests/test_scanout_window.cpp
         tests/test_linux_pipeline.cpp

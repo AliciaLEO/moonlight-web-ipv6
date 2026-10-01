@@ -17,6 +17,7 @@
 
 #include "../../capture/linux/KmsCapture.h"
 #if defined(MW_NATIVE_LINUX_PORTAL)
+#include "../../capture/linux/GamescopeSession.h"
 #include "../../capture/linux/KwinVirtualOutput.h"
 #include "../../capture/linux/MutterScreenCast.h"
 #include "../../capture/linux/PortalScreenCast.h"
@@ -424,10 +425,38 @@ Unavailability enumerate(Capabilities& caps)
         }
     }
     portalVirtual = portalVirtual || kwinVirtual;
+
+    // Steam's Big Picture in its own gamescope (GamescopeSession.h, plan Idées
+    // Punktfunk, chapter G): a gamescope recent enough and a Steam someone
+    // uses. No desktop needed — an X11 session, or none, has this card too.
+    std::string gamescopeWhy;
+    std::string gamescopeDetail;
+    bool gamescopeSteam = false;
+    {
+        capture::GamescopeBinary gamescope;
+        if (capture::findGamescope(gamescope, gamescopeWhy)) {
+            const std::vector<capture::SteamInstall> installs = capture::findSteamInstalls();
+            int pid = 0;
+            const int chosen = capture::chooseSteam(installs, capture::runningDesktopSteam(pid));
+            if (chosen >= 0) {
+                gamescopeSteam = true;
+                gamescopeDetail = "Steam (" +
+                                  std::string(capture::toString(
+                                      installs[static_cast<size_t>(chosen)].packaging)) +
+                                  ") in its own gamescope " + gamescope.version.text() +
+                                  ", made at the client's size when the stream starts";
+            } else {
+                gamescopeWhy = installs.empty() ? "Steam is not installed"
+                                                : "no Steam install was ever signed in to";
+            }
+        }
+        if (!gamescopeSteam) log::debug("[native] no Steam Big Picture card: " + gamescopeWhy);
+    }
 #else
     const bool portalVirtual = false;
+    const bool gamescopeSteam = false;
 #endif
-    if (caps.displays.empty() && !portalVirtual) {
+    if (caps.displays.empty() && !portalVirtual && !gamescopeSteam) {
         caps.diagnostic = "no display is connected";
         return Unavailability::NoDisplay;
     }
@@ -523,6 +552,38 @@ Unavailability enumerate(Capabilities& caps)
                                           std::to_string(sourceTypes) + ")";
         caps.displays.push_back(virt);
         // Nothing else to capture: this display's route is the machine's.
+        if (caps.capture != CaptureApi::Kms && caps.capture != CaptureApi::PipeWire &&
+            caps.displays.size() == 1) {
+            caps.capture = CaptureApi::PipeWire;
+            caps.diagnostic.clear();
+        }
+    }
+
+    if (gamescopeSteam) {
+        // Encoded where an encoder is, like the virtual display: gamescope
+        // renders on the GPU Vulkan picks, and its node hands the picture over.
+        const GpuInfo* gpu = nullptr;
+        for (const GpuInfo& g : caps.gpus)
+            if (!gpu && !g.encoders.empty() && !g.codecs.empty()) gpu = &g;
+        if (!gpu && !caps.gpus.empty()) gpu = &caps.gpus.front();
+        int nextId = 0;
+        for (const DisplayInfo& d : caps.displays)
+            nextId = std::max(nextId, d.id + 1);
+        DisplayInfo steam;
+        steam.id = nextId;
+        steam.gpuId = gpu ? gpu->id : -1;
+        // Nominal, as the virtual display's: the size is the client's.
+        steam.width = 1920;
+        steam.height = 1080;
+        steam.refreshMilliHz = 60000;
+        steam.primary = caps.displays.empty();
+        steam.label = "Steam Big Picture";
+        steam.model = "Steam Big Picture";
+        steam.kind = DisplayKind::Virtual;
+        steam.key = kGamescopeSteamDisplayKey;
+        steam.capture = CaptureApi::PipeWire;
+        steam.detail = gamescopeDetail;
+        caps.displays.push_back(steam);
         if (caps.capture != CaptureApi::Kms && caps.capture != CaptureApi::PipeWire &&
             caps.displays.size() == 1) {
             caps.capture = CaptureApi::PipeWire;

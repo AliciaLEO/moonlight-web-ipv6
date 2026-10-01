@@ -20,13 +20,16 @@
 #include "../../audio/linux/PipeWireLibrary.h"
 #include "../../core/Log.h"
 #include "MutterScreenCast.h"
+#include "XFixesCursor.h"
 
 #include <drm_fourcc.h>
 #include <pipewire/pipewire.h>
 #include <spa/param/video/format-utils.h>
+#include <signal.h>
 #include <spa/utils/result.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -145,6 +148,12 @@ struct PortalCapture::Impl
     bool embedCursor = false;
     /// When acquire() next asks whether Mutter ended the screen cast.
     int64_t nextEndCheckUs = 0;
+    /// gamescope's node, read on the session's PipeWire with no handshake at
+    /// all (setGamescope); its pointer comes from its Xwayland.
+    uint32_t gamescopeNode = 0;
+    std::string gamescopeDisplay;
+    int gamescopePid = 0;
+    XFixesCursor gamescopeCursor;
 
     int64_t nowUs() const
     {
@@ -401,6 +410,13 @@ void PortalCapture::setMutter(std::string connector)
     d->mutterConnector = std::move(connector);
 }
 
+void PortalCapture::setGamescope(uint32_t node, std::string xDisplay, int pid)
+{
+    d->gamescopeNode = node;
+    d->gamescopeDisplay = std::move(xDisplay);
+    d->gamescopePid = pid;
+}
+
 void PortalCapture::offerDmabuf(DmabufOffer offer)
 {
     d->offer = std::move(offer);
@@ -422,23 +438,45 @@ bool PortalCapture::start(std::string& error)
     ensurePipeWire();
 
     // A monitor recorded as it is has a size of its own: nothing is pinned.
-    const bool virtualMonitor =
-        d->virtualWidth > 0 && d->virtualHeight > 0 && d->mutterConnector.empty();
-    d->portal.setVirtual(virtualMonitor);
-    if (d->mutter)
-        d->portal.setMutter(d->mutterConnector, d->virtualWidth, d->virtualHeight, d->virtualFps);
-    else if (virtualMonitor && !d->kwinName.empty())
-        d->portal.setKwinVirtualOutput(d->kwinName, d->virtualWidth, d->virtualHeight);
-    // GNOME's virtual monitors — made by Mutter or its portal, or another
-    // stream's recorded as it is — paint the pointer into their DMA-BUF frames
-    // up to GNOME 47: it is asked painted into every one, or it blinks. The
-    // version is the shell's to say.
-    const bool gnomeVirtual =
-        (virtualMonitor && d->kwinName.empty()) || !d->mutterConnector.empty();
-    d->embedCursor =
-        gnomeVirtual && MutterScreenCast::embedsPointer(MutterScreenCast::shellMajor());
-    d->portal.setEmbedCursor(d->embedCursor);
-    if (!d->portal.start(d->restore, 0, d->granted, error)) return false;
+    // Nor is gamescope's, made at the stream's size already.
+    const bool virtualMonitor = d->virtualWidth > 0 && d->virtualHeight > 0 &&
+                                d->mutterConnector.empty() && d->gamescopeNode == 0;
+    if (d->gamescopeNode != 0) {
+        // Nobody to ask: the node is gamescope's, on the session's PipeWire.
+        d->granted = PortalStream{};
+        d->granted.nodeId = d->gamescopeNode;
+        d->granted.sessionPipeWire = true;
+        std::string why;
+        const bool cursor = d->gamescopeCursor.start(
+            d->gamescopeDisplay,
+            [this](const CursorState& state) {
+                {
+                    std::lock_guard<std::mutex> lock(d->mutex);
+                    d->cursor = state;
+                    d->cursorFresh = true;
+                }
+                d->ready.notify_all();
+            },
+            why);
+        if (!cursor) log::warning("[native] gamescope: no pointer to draw for the viewer — " + why);
+    } else {
+        d->portal.setVirtual(virtualMonitor);
+        if (d->mutter)
+            d->portal.setMutter(d->mutterConnector, d->virtualWidth, d->virtualHeight,
+                                d->virtualFps);
+        else if (virtualMonitor && !d->kwinName.empty())
+            d->portal.setKwinVirtualOutput(d->kwinName, d->virtualWidth, d->virtualHeight);
+        // GNOME's virtual monitors — made by Mutter or its portal, or another
+        // stream's recorded as it is — paint the pointer into their DMA-BUF
+        // frames up to GNOME 47: it is asked painted into every one, or it
+        // blinks. The version is the shell's to say.
+        const bool gnomeVirtual =
+            (virtualMonitor && d->kwinName.empty()) || !d->mutterConnector.empty();
+        d->embedCursor =
+            gnomeVirtual && MutterScreenCast::embedsPointer(MutterScreenCast::shellMajor());
+        d->portal.setEmbedCursor(d->embedCursor);
+        if (!d->portal.start(d->restore, 0, d->granted, error)) return false;
+    }
     if (!d->granted.valid()) {
         error = "the portal granted nothing usable";
         return false;
@@ -640,6 +678,19 @@ AcquireStatus PortalCapture::acquire(int timeoutMs, KmsFrame& frame)
             }
         }
     }
+    // gamescope's stream only pauses when gamescope goes — its app quit — so
+    // gamescope itself is asked, as often.
+    if (d->gamescopePid > 0 && d->nowUs() >= d->nextEndCheckUs) {
+        d->nextEndCheckUs = d->nowUs() + 250 * 1000;
+        if (::kill(d->gamescopePid, 0) != 0 && errno == ESRCH) {
+            std::lock_guard<std::mutex> lock(d->mutex);
+            if (!d->failed) {
+                d->failed = true;
+                d->failure = "gamescope went";
+                log::info("[native] gamescope went — its app quit, or it was stopped");
+            }
+        }
+    }
     std::unique_lock<std::mutex> lock(d->mutex);
     if (d->failed) return AcquireStatus::Lost;
     if (!d->frameFresh && !d->cursorFresh) {
@@ -672,6 +723,8 @@ void PortalCapture::release()
 
 void PortalCapture::stop()
 {
+    // Its callback takes the mutex the stream's does: stopped first.
+    d->gamescopeCursor.stop();
     if (d->loop) {
         pw_thread_loop_lock(d->loop);
         if (d->held && d->stream) {

@@ -75,6 +75,10 @@ struct ResolvedTarget
     /// Linux: the display is the portal's VIRTUAL source — created by the
     /// session at the stream's size and cadence, gone when it ends.
     bool portalVirtual = false;
+    /// Linux: the display is Steam's Big Picture in its own gamescope
+    /// (GamescopeSession.h) — started or found by the session, at the stream's
+    /// size and cadence, kept ten minutes after the last stream.
+    bool gamescopeSteam = false;
 
     /// The adapter that scans the display out — where capture must happen.
     uint64_t captureAdapterHandle = 0;

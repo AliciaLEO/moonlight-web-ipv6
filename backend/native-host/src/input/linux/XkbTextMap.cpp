@@ -256,7 +256,7 @@ XkbTextMap::~XkbTextMap()
     close();
 }
 
-bool XkbTextMap::open()
+bool XkbTextMap::open(const char* layout)
 {
     if (isOpen()) return true;
 
@@ -307,7 +307,13 @@ bool XkbTextMap::open()
     }
 
     std::string source;
-    const XkbNames names = resolveNames(source);
+    XkbNames names;
+    if (layout && *layout) {
+        names.layout = layout;
+        source = "the nested compositor's own";
+    } else {
+        names = resolveNames(source);
+    }
     const RuleNames rules = {orNull(names.rules), orNull(names.model), orNull(names.layout),
                              orNull(names.variant), orNull(names.options)};
 

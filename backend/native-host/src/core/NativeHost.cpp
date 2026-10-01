@@ -240,6 +240,7 @@ std::unique_ptr<Session> NativeHost::createSession(const SessionConfig& config,
     target.capture =
         selection.display->capture != CaptureApi::None ? selection.display->capture : caps.capture;
     target.portalVirtual = selection.display->key == kPortalVirtualDisplayKey;
+    target.gamescopeSteam = selection.display->key == kGamescopeSteamDisplayKey;
 
     // Capture always happens on the adapter that scans the display out; only
     // the encoder may sit elsewhere.

@@ -18,10 +18,12 @@
 #include "../../capture/linux/KmsCapture.h"
 #include "../../capture/linux/X11Damage.h"
 #if defined(MW_NATIVE_LINUX_PORTAL)
+#include "../../capture/linux/GamescopeSession.h"
 #include "../../capture/linux/MutterDisplayConfig.h"
 #include "../../capture/linux/MutterScreenCast.h"
 #include "../../capture/linux/PortalCapture.h"
 #include "../../capture/linux/SharedMonitor.h"
+#include "../../input/linux/EiInput.h"
 #endif
 #include "../../convert/linux/GlConvert.h"
 #if defined(MW_NATIVE_LINUX_VULKAN)
@@ -66,6 +68,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -561,7 +564,9 @@ public:
                 return false;
             }
         } else {
-            m_ConnectorName = m_Target.portalVirtual ? "virtual display" : "portal";
+            m_ConnectorName = m_Target.gamescopeSteam  ? "Steam Big Picture"
+                              : m_Target.portalVirtual ? "virtual display"
+                                                       : "portal";
         }
 
         if (!openCapture(error)) return false;
@@ -581,7 +586,9 @@ public:
         // records as it is, need not: a phone held upright, say.
         FrameSize frame{m_Config.width, m_Config.height};
 #if defined(MW_NATIVE_LINUX_PORTAL)
-        if (m_OnMutter && !m_MadeMonitor) {
+        // gamescope's screen found running is the size it was started at, for
+        // the stream that started it: framed the same way.
+        if ((m_OnMutter && !m_MadeMonitor) || (m_OnGamescope && !m_GamescopeStarted)) {
             frame = frameForDisplay({m_Capture->width(), m_Capture->height()}, frame,
                                     policyOf(m_Config));
             if (frame.width != m_Config.width || frame.height != m_Config.height)
@@ -596,11 +603,20 @@ public:
         // Input: keyboard and mouse through uinput, the gamepad beside them.
         // Either refusing is "no input of that kind this session", never no
         // session — the udev rule is what grants both, and its absence is said
-        // in words a user can act on.
+        // in words a user can act on. An app in its own gamescope reads its
+        // keyboard and mouse from gamescope's EIS socket, never from a device;
+        // its games still read the gamepad's.
         const InputRects inputRects = readInputRects();
         {
             std::lock_guard<std::mutex> lock(m_InputMutex);
-            auto sink = std::make_unique<input::UinputInput>();
+            std::unique_ptr<input::IInputSink> sink;
+#if defined(MW_NATIVE_LINUX_PORTAL)
+            if (m_OnGamescope)
+                sink = std::make_unique<input::EiInput>(
+                    capture::gamescopeSocketPath(m_Gamescope.endpoints.eisSocket),
+                    m_Gamescope.width, m_Gamescope.height);
+#endif
+            if (!sink) sink = std::make_unique<input::UinputInput>();
             std::string inputError;
             if (sink->start(inputError)) {
                 applyInputRects(*sink, inputRects);
@@ -867,6 +883,7 @@ private:
     {
 #if defined(MW_NATIVE_LINUX_PORTAL)
         if (m_OnMutter) return "GNOME's screen cast";
+        if (m_OnGamescope) return "gamescope";
 #endif
         return m_Target.capture == CaptureApi::PipeWire ? "portal" : "KMS";
     }
@@ -883,6 +900,7 @@ private:
     bool openCapture(std::string& error)
     {
 #if defined(MW_NATIVE_LINUX_PORTAL)
+        if (m_Target.gamescopeSteam) return openGamescope(error);
         if (m_Target.capture == CaptureApi::PipeWire) {
             // The grant as it stands NOW: a restart reopens the portal, and a
             // portal that rotates its tokens has already spent the one the
@@ -1009,6 +1027,61 @@ private:
     }
 
 #if defined(MW_NATIVE_LINUX_PORTAL)
+    /// Steam's Big Picture in its own gamescope (GamescopeSession.h): the
+    /// session found running — by another stream, or by one that ended less
+    /// than ten minutes ago — else started at this stream's size and rate, then
+    /// read on the session's PipeWire. The rate is the stream's own: the game
+    /// sees a screen of that rate and renders no more than it.
+    bool openGamescope(std::string& error)
+    {
+        if (m_Capture) releaseCapture(true);
+        capture::GamescopeApp app;
+        app.card = "steam";
+        app.steam = true;
+        // The bench's stand-in for Steam: the same card, the same route, an
+        // app that needs no sign-in (MW_GAMESCOPE_APP="vkcube --wsi xcb").
+        if (const char* bench = std::getenv("MW_GAMESCOPE_APP"); bench && *bench) {
+            app.card = "bench";
+            app.steam = false;
+            std::istringstream words(bench);
+            for (std::string word; words >> word;)
+                app.command.push_back(word);
+            log::warning(std::string("[native] gamescope: MW_GAMESCOPE_APP in effect — \"") +
+                         bench + "\" instead of Steam");
+        }
+        m_GamescopeApp = app.steam ? "Steam" : app.command.empty() ? "the app" : app.command[0];
+        capture::GamescopeSession session;
+        if (!capture::openGamescopeSession(app, m_Config.width, m_Config.height,
+                                           m_Config.fps > 0 ? m_Config.fps : 60, session, error))
+            return false;
+        auto cast = std::make_unique<capture::PortalCapture>();
+        cast->setGamescope(session.record.node, session.record.endpoints.xDisplay, session.pid);
+        cast->setRenderNode(capture::KmsCapture::renderNodeFor(m_CardPath));
+        if (!m_PortalShmOnly && m_Config.tuning.portalDmabuf != EncoderTuning::Choice::Off)
+            cast->offerDmabuf(dmabufOffer());
+        if (!cast->start(error)) return false;
+        m_Gamescope = session.record;
+        m_GamescopeStarted = session.started;
+        m_OnGamescope = true;
+        m_PortalDmabuf = cast->dmabuf();
+        m_Capture = std::move(cast);
+        keepGamescope();
+        return true;
+    }
+
+    /// The ten-minute timer armed anew, off the capture thread: two systemctl
+    /// calls, which the frames should not wait on.
+    void keepGamescope()
+    {
+        m_NextGamescopeKeepUs = steadyNowUs() + kGamescopeKeepUs;
+        const capture::GamescopeRecord record = m_Gamescope;
+        // The bench may shorten the wait, to see it end (MW_GAMESCOPE_LINGER_S).
+        int linger = kGamescopeLingerS;
+        if (const char* bench = std::getenv("MW_GAMESCOPE_LINGER_S"); bench && std::atoi(bench) > 0)
+            linger = std::atoi(bench);
+        std::thread([record, linger] { capture::keepGamescopeSession(record, linger); }).detach();
+    }
+
     /// The portal's virtual monitor found in GNOME's layout, for the pointer
     /// mapping (readInputRects) — a guest's sits wherever GNOME put it, right of
     /// every other screen, and the portal's own position for it is 0,0 — and,
@@ -1334,6 +1407,11 @@ private:
         InputRects rects;
         rects.display = m_Capture->desktopRect();
         rects.desktop = rects.display;
+#if defined(MW_NATIVE_LINUX_PORTAL)
+        // gamescope's screen is on nobody's desktop: its input goes by libei,
+        // in its own pixels.
+        if (m_OnGamescope) return rects;
+#endif
 
         std::string listError;
         bool any = false;
@@ -1507,7 +1585,7 @@ private:
                std::to_string(r.right - r.left) + "x" + std::to_string(r.bottom - r.top);
     }
 
-    static void applyInputRects(input::UinputInput& sink, const InputRects& rects)
+    static void applyInputRects(input::IInputSink& sink, const InputRects& rects)
     {
         sink.setDisplayRect(rects.display.left, rects.display.top, rects.display.right,
                             rects.display.bottom);
@@ -2200,6 +2278,8 @@ private:
                 nextLayoutCheckUs = steadyNowUs() + kLayoutCheckUs;
                 if (m_LayoutWatch->changed()) remapAtUs = steadyNowUs() + kRemapDelayUs;
             }
+            // Still here: the gamescope session's ten minutes start over.
+            if (m_OnGamescope && steadyNowUs() >= m_NextGamescopeKeepUs) keepGamescope();
             if (remapAtUs != 0 && steadyNowUs() >= remapAtUs) {
                 remapAtUs = 0;
                 const InputRects rects = readInputRects();
@@ -2280,6 +2360,15 @@ private:
             if (status == capture::AcquireStatus::Lost) {
                 haveFrame = false;
                 closeBurst("display lost");
+#if defined(MW_NATIVE_LINUX_PORTAL)
+                // gamescope goes when its app quits — Steam left Big Picture
+                // for good. Nothing to reopen: starting it again would bring
+                // back what the viewer just closed.
+                if (m_OnGamescope && !capture::gamescopeSessionAlive(m_Gamescope)) {
+                    finish(m_GamescopeApp + " quit, and its gamescope with it");
+                    return;
+                }
+#endif
                 switch (restartCapture(error)) {
                 case Restart::Restarted: break;
                 case Restart::Stopped:
@@ -2688,7 +2777,9 @@ private:
     std::shared_ptr<capture::X11Damage> m_Damage;
 
     std::mutex m_InputMutex;
-    std::unique_ptr<input::UinputInput> m_Input;
+    /// uinput on the desktop; libei into gamescope (EiInput.h), whose app no
+    /// uinput device reaches.
+    std::unique_ptr<input::IInputSink> m_Input;
 
     /// See setDisplayFormatCallback, and the last format said. Guarded by
     /// m_FormatMutex: set on the consumer's thread, read on the capture thread.
@@ -2758,6 +2849,18 @@ private:
     /// GNOME's word that its monitors changed, for the pointer's mapping;
     /// on that route only, and kept across restarts. The capture thread's.
     std::unique_ptr<capture::MutterLayoutWatch> m_LayoutWatch;
+    /// The capture is an app's own gamescope (openGamescope): this session,
+    /// whether this stream started it, and when its timer is next re-armed.
+    bool m_OnGamescope = false;
+    bool m_GamescopeStarted = false;
+    capture::GamescopeRecord m_Gamescope;
+    /// What runs in it, for the line that ends the session: "Steam".
+    std::string m_GamescopeApp;
+    int64_t m_NextGamescopeKeepUs = 0;
+    /// How long a gamescope session outlives its last stream (Bruno,
+    /// 01/10/2026), and how often a stream on it says it is still there.
+    static constexpr int kGamescopeLingerS = 600;
+    static constexpr int64_t kGamescopeKeepUs = 60 * 1000 * 1000;
 #endif
     /// The CRTC modes when the portal was opened (KmsCapture::modeSignature).
     std::string m_PortalModes;

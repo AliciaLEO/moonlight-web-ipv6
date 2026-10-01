@@ -194,7 +194,11 @@ public:
     /// Load the library, compile the keymap and walk it into the table. False
     /// when there is no libxkbcommon, or when the keymap yields nothing typable
     /// — in both cases text injection stays off and says so once.
-    bool open();
+    ///
+    /// @p layout, when given, is the one used instead of the host's: a nested
+    /// compositor that ignores the host's layout (gamescope, which hands its
+    /// clients a US keymap) is typed into with its own.
+    bool open(const char* layout = nullptr);
     void close();
     bool isOpen() const { return !m_Table.empty(); }
 
