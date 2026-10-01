@@ -65,6 +65,7 @@ import {
     IS_MOBILE_OR_TABLET,
     IS_HANDHELD,
     IS_LOW_MEMORY,
+    IS_TV,
     resolveTearing,
     hdrClientCapability,
     chroma444ClientCapability,
@@ -2100,6 +2101,8 @@ const MoonlightApp = {
             {
                 nativeHost,
                 touch: IS_HANDHELD,
+                // A TV's Auto stops at 720 lines: latency first.
+                tv: IS_TV,
                 // "MoonlightWeb Virtual Display": the screen is made for this
                 // stream, so every choice names an exact size instead of a box
                 // to fit into (see util/StreamResolution.js).
@@ -2922,6 +2925,7 @@ const MoonlightApp = {
                 nativeHost: host.backendType === 'native',
                 device,
                 touch: IS_HANDHELD,
+                tv: IS_TV,
                 virtualDisplay: this._sizeOnVirtualDisplay === true,
             },
         );

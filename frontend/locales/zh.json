@@ -379,6 +379,7 @@
         "resolutionDevice": "匹配本屏幕",
         "resolutionCustom": "自定义",
         "resolutionAutoDesc": "远程显示器的原生尺寸；超过本屏幕（{{size}}）时缩小以适应。无法报告尺寸的主机（Sunshine、Apollo、Wolf）以 1080p 串流。",
+        "resolutionAutoDescTv": "电视上最高 720p，延迟最低；远程显示器更小时使用其原生尺寸。“匹配本屏幕”以本屏幕的完整尺寸（{{size}}）串流。",
         "resolutionDeviceDesc": "串流与本屏幕逐像素对应（{{size}}）；远程显示器在可能时切换到该尺寸。",
         "resolutionCustomDesc": "宽度和高度，各为 {{min}} 到 {{max}} 像素。不会大于远程显示器。",
         "bitrateAuto": "· 自动",

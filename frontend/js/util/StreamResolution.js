@@ -31,11 +31,12 @@
  *                pinched and zoomed there, and a stream reduced to the screen's
  *                1170 lines blurs the moment it is; so a host of up to 1440
  *                lines streams as it is and a taller one comes down to 1440,
- *                never below 1080 that way. The stream follows both screens:
- *                the host changing its mode, a computer's window moving to
- *                another monitor. On every other host, which cannot say its
- *                display's size: 1080p, the width from the Auto ratio (measured
- *                from Sunshine's bars).
+ *                never below 1080 that way. On a TV the box stops at 720 lines
+ *                (TV_AUTO_MAX_HEIGHT): latency first. The stream follows both
+ *                screens: the host changing its mode, a computer's window
+ *                moving to another monitor. On every other host, which cannot
+ *                say its display's size: 1080p (720p on a TV), the width from
+ *                the Auto ratio (measured from Sunshine's bars).
  *   - `device` — "Match my screen": this screen's size, pixel for pixel. The
  *                native host is asked to put its display in that mode for the
  *                session; when its driver lists no such mode the request falls
@@ -108,6 +109,19 @@ export const AUTO_MAX_HEIGHT = 1440;
  *  down to 1440 (a phone decoding 4K heats up for pixels it cannot show),
  *  and nothing is ever reduced below 1080 that way. */
 export const MOBILE_AUTO_BOX = { width: CUSTOM_SIZE_MAX, height: AUTO_MAX_HEIGHT };
+
+/** Auto's ceiling on a TV, on every host: 720 lines. A TV's decoder pays for
+ *  every line in time, and from a couch the frame a pad waits for is worth
+ *  more than detail seen across the room — latency first. Measured on a
+ *  Freebox Player POP, a 1080p screen at 50 Hz (01/10/2026, AMF host): Auto's
+ *  1080p50 showed 46.6 fps at 154 ms, 720p50 all 50 at 68 ms. A viewer who
+ *  wants the 1080p names it — "Match my screen", a rung, Custom. */
+export const TV_AUTO_MAX_HEIGHT = 720;
+
+/** The tallest box Auto asks for on this kind of screen. */
+function autoCeiling(tv) {
+    return tv ? TV_AUTO_MAX_HEIGHT : AUTO_MAX_HEIGHT;
+}
 
 /** How many pixels a second the whole chain is asked to carry, at most, when
  *  either half of the choice was left to us. 1920×1080 at 120 fps is 249
@@ -198,22 +212,23 @@ export function devicePixelSize(win) {
 /**
  * A size brought under Auto's ceiling, its shape kept: a 3840×2160 screen is
  * 2560×1440, a 2560×1080 ultrawide is itself. Even, as every encoder wants.
+ * @param {number} [maxHeight] the ceiling: TV_AUTO_MAX_HEIGHT on a TV
  */
-export function capAutoHeight(size) {
+export function capAutoHeight(size, maxHeight = AUTO_MAX_HEIGHT) {
     if (!size || !(size.width > 0) || !(size.height > 0)) return null;
-    if (size.height <= AUTO_MAX_HEIGHT) return { width: size.width, height: size.height };
+    if (size.height <= maxHeight) return { width: size.width, height: size.height };
     return {
-        width: Math.round((size.width * AUTO_MAX_HEIGHT) / size.height) & ~1,
-        height: AUTO_MAX_HEIGHT,
+        width: Math.round((size.width * maxHeight) / size.height) & ~1,
+        height: maxHeight,
     };
 }
 
 /** Auto's box for a native host: this screen under Auto's ceiling on a
- *  computer, MOBILE_AUTO_BOX on a phone or a tablet, null when neither is
- *  known. */
-export function autoBox(device, touch) {
+ *  computer or a TV, MOBILE_AUTO_BOX on a phone or a tablet, null when
+ *  neither is known. */
+export function autoBox(device, touch, tv) {
     if (touch) return MOBILE_AUTO_BOX;
-    return capAutoHeight(device);
+    return capAutoHeight(device, autoCeiling(tv));
 }
 
 /**
@@ -226,8 +241,9 @@ export function autoBox(device, touch) {
  * at the size the stream wants, and making it 4K to then stream 1440p would
  * only hand the compositor three million pixels to throw away. Custom is the
  * typed pair, portrait included. A rung is its lines at this screen's shape.
+ * @param {boolean} [tv] this screen is a TV's: Auto's ceiling is then 720 lines
  */
-export function virtualDisplaySize(choice, device) {
+export function virtualDisplaySize(choice, device, tv) {
     const c = choice || {};
     if (c.mode === 'custom')
         return fitModeBounds(
@@ -237,7 +253,7 @@ export function virtualDisplaySize(choice, device) {
     if (!device || !(device.width > 0) || !(device.height > 0)) return null;
     if (c.mode === 'device') return fitModeBounds(device.width, device.height);
     if (c.mode === 'auto') {
-        const box = capAutoHeight(device);
+        const box = capAutoHeight(device, autoCeiling(tv));
         return box ? fitModeBounds(box.width, box.height) : null;
     }
     const lines = c.height > 0 ? c.height : HOST_FALLBACK_HEIGHT;
@@ -249,11 +265,12 @@ export function virtualDisplaySize(choice, device) {
  *
  * @param {{mode:string, height:number, customWidth:number, customHeight:number}} choice
  *        the Settings choice; `height` is the `fixed` rung
- * @param {{nativeHost:boolean, touch?:boolean, virtualDisplay?:boolean,
+ * @param {{nativeHost:boolean, touch?:boolean, tv?:boolean, virtualDisplay?:boolean,
  *          device?: {width:number,height:number}|null}} ctx
  *        whether the host is MoonlightWeb's own native host, whether this is a
- *        phone or a tablet, whether the app launched is "MoonlightWeb Virtual
- *        Display" (every choice then names an exact size, made to order — see
+ *        phone or a tablet, or a TV (Auto's ceiling: TV_AUTO_MAX_HEIGHT),
+ *        whether the app launched is "MoonlightWeb Virtual Display" (every
+ *        choice then names an exact size, made to order — see
  *        virtualDisplaySize), and this screen (devicePixelSize() when omitted)
  * @returns {{height:number, aspect:string|null, fitBox:boolean, allowUpscale:boolean,
  *            matchDisplay:boolean, followsScreen:boolean,
@@ -271,9 +288,10 @@ export function resolveStreamSize(choice, ctx) {
     const c = choice || {};
     const nativeHost = !!(ctx && ctx.nativeHost);
     const touch = !!(ctx && ctx.touch);
+    const tv = !!(ctx && ctx.tv);
     const dev = ctx && ctx.device !== undefined ? ctx.device : devicePixelSize();
     if (nativeHost && ctx && ctx.virtualDisplay) {
-        const made = virtualDisplaySize(c, dev);
+        const made = virtualDisplaySize(c, dev, tv);
         if (made)
             return {
                 height: made.height,
@@ -302,12 +320,13 @@ export function resolveStreamSize(choice, ctx) {
     });
     switch (c.mode) {
         case 'auto': {
-            if (!nativeHost) return fixed(HOST_FALLBACK_HEIGHT);
+            if (!nativeHost) return fixed(tv ? TV_AUTO_MAX_HEIGHT : HOST_FALLBACK_HEIGHT);
             // The host's own size, brought down to fit the box — its shape
             // kept, never upscaled (frameForDisplay's box rule). No screen to
-            // read: the host's own size, whatever it is.
-            const box = autoBox(dev, touch);
-            if (!box) return { height: 0, aspect: null, ...plain };
+            // read: the host's own size, whatever it is — on a TV, still no
+            // more than its ceiling.
+            const box = autoBox(dev, touch, tv);
+            if (!box) return tv ? fixed(TV_AUTO_MAX_HEIGHT) : { height: 0, aspect: null, ...plain };
             return {
                 height: box.height,
                 aspect: box.width + ':' + box.height,
@@ -328,7 +347,7 @@ export function resolveStreamSize(choice, ctx) {
                 allowUpscale: true,
                 matchDisplay: true,
                 followsScreen: true,
-                fallback: autoBox(dev, touch),
+                fallback: autoBox(dev, touch, tv),
             };
         case 'custom': {
             // Even sizes: what every encoder takes (4:2:0 chroma is half-size).
@@ -354,18 +373,19 @@ export function resolveStreamSize(choice, ctx) {
  * height and a "W:H" aspect (see util/AutoBitrate.js). `auto` counts this
  * screen under Auto's ceiling — the most the native host will send under it —
  * 1440p 16:9 on a phone or a tablet, and 1080p 16:9 when the screen is
- * unknown, the estimate's reference. The pixel budget is applied on top by
- * the caller, which alone knows the frame rate (fitPixelBudget).
+ * unknown, the estimate's reference (720p on a TV). The pixel budget is
+ * applied on top by the caller, which alone knows the frame rate
+ * (fitPixelBudget).
  */
-export function bitrateReference(choice, device, touch) {
+export function bitrateReference(choice, device, touch, tv) {
     const c = choice || {};
     const dev = device !== undefined ? device : devicePixelSize();
     switch (c.mode) {
         case 'auto': {
             if (touch) return { height: MOBILE_AUTO_BOX.height, aspect: '16:9' };
-            const box = capAutoHeight(dev);
+            const box = capAutoHeight(dev, autoCeiling(tv));
             if (box) return { height: box.height, aspect: box.width + ':' + box.height };
-            return { height: 1080, aspect: '16:9' };
+            return { height: tv ? TV_AUTO_MAX_HEIGHT : 1080, aspect: '16:9' };
         }
         case 'device':
             if (dev) return { height: dev.height, aspect: dev.width + ':' + dev.height };

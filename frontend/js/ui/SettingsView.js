@@ -51,6 +51,7 @@ import {
     SUPPORTS_CANVAS_TEARING,
     IS_HANDHELD,
     IS_TOUCH_DEVICE,
+    IS_TV,
     resolveTearing,
     supportsDisplayHdr,
     hdrClientCapability,
@@ -455,7 +456,7 @@ export class SettingsView {
         // format at launch, which is unknown here — aspectToNumber() reads it
         // as the 16:9 baseline, which is what the estimate wants.
         const choice = this._readResolutionChoice();
-        const ref = bitrateReference(choice, undefined, IS_HANDHELD);
+        const ref = bitrateReference(choice, undefined, IS_HANDHELD, IS_TV);
         const aspect =
             choice.mode === 'fixed'
                 ? this.container.querySelector('#settings-stream-aspect')?.value ||
@@ -1127,7 +1128,9 @@ export class SettingsView {
         const sizeText = device ? device.width + '×' + device.height : '?';
         const resolutionDesc =
             resolutionMode === 'auto'
-                ? t('settings.resolutionAutoDesc', { size: sizeText })
+                ? t(IS_TV ? 'settings.resolutionAutoDescTv' : 'settings.resolutionAutoDesc', {
+                      size: sizeText,
+                  })
                 : resolutionMode === 'device'
                   ? t('settings.resolutionDeviceDesc', { size: sizeText })
                   : resolutionMode === 'custom'

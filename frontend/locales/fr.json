@@ -379,6 +379,7 @@
         "resolutionDevice": "Comme mon écran",
         "resolutionCustom": "Personnalisée",
         "resolutionAutoDesc": "La taille de l'écran distant, réduite pour tenir dans cet écran ({{size}}) quand elle est plus grande. Les hôtes qui ne peuvent pas indiquer leur taille (Sunshine, Apollo, Wolf) diffusent en 1080p.",
+        "resolutionAutoDescTv": "720p au plus sur une TV, pour la latence la plus faible : la taille de l'écran distant quand elle est plus petite. « Comme mon écran » diffuse à la pleine taille de cet écran ({{size}}).",
         "resolutionDeviceDesc": "Le flux correspond à cet écran pixel pour pixel ({{size}}) ; l'écran distant passe à cette taille quand il le peut.",
         "resolutionCustomDesc": "Largeur et hauteur, de {{min}} à {{max}} pixels chacune. Jamais plus grande que l'écran distant.",
         "bitrateAuto": "· auto",

@@ -16,6 +16,7 @@ import {
     CUSTOM_SIZE_MIN,
     HOST_FALLBACK_HEIGHT,
     AUTO_MAX_HEIGHT,
+    TV_AUTO_MAX_HEIGHT,
     PIXEL_RATE_BUDGET,
     BUDGET_MIN_HEIGHT,
     BUDGET_MIN_FPS,
@@ -348,6 +349,92 @@ describe("Auto's ceiling", () => {
             height: 2160,
             aspect: '3840:2160',
         });
+    });
+});
+
+// A TV: latency first. Its Auto stops at 720 lines on every host — a Freebox
+// Player POP's 1080p screen streamed 1080p50 at 154 ms and showed 46.6 of its
+// 50 frames, 720p50 all 50 at 68 ms. What the viewer names is still theirs.
+describe('Auto on a TV', () => {
+    // Freebox Player POP in TV Bro: 960×540 at a device pixel ratio of 2.
+    const freebox = devicePixelSize({ screen: { width: 960, height: 540 }, devicePixelRatio: 2 });
+    // Mi TV: its Android UI runs at 1280×720.
+    const miTv = { width: 1280, height: 720 };
+
+    it('asks a native host for 720 lines at most, its shape kept', () => {
+        expect(freebox).toEqual({ width: 1920, height: 1080 });
+        expect(
+            resolveStreamSize({ mode: 'auto' }, { nativeHost: true, tv: true, device: freebox }),
+        ).toEqual({
+            height: TV_AUTO_MAX_HEIGHT,
+            aspect: '1280:720',
+            fitBox: true,
+            allowUpscale: false,
+            matchDisplay: false,
+            followsScreen: true,
+            fallback: null,
+        });
+        // A screen already at 720p is the box as it is.
+        expect(
+            resolveStreamSize({ mode: 'auto' }, { nativeHost: true, tv: true, device: miTv }),
+        ).toMatchObject({ height: 720, aspect: '1280:720' });
+        // The same Freebox screen on a computer still asks for all of it.
+        expect(
+            resolveStreamSize({ mode: 'auto' }, { nativeHost: true, device: freebox }),
+        ).toMatchObject({ height: 1080, aspect: '1920:1080' });
+    });
+
+    it('streams 720p from a host that cannot say its size, and without a screen to read', () => {
+        expect(
+            resolveStreamSize({ mode: 'auto' }, { nativeHost: false, tv: true, device: freebox }),
+        ).toMatchObject({ height: 720, aspect: null });
+        expect(
+            resolveStreamSize({ mode: 'auto' }, { nativeHost: true, tv: true, device: null }),
+        ).toMatchObject({ height: 720, aspect: null });
+    });
+
+    it('leaves "Match my screen", a rung and Custom to the viewer', () => {
+        const match = resolveStreamSize(
+            { mode: 'device' },
+            { nativeHost: true, tv: true, device: freebox },
+        );
+        expect(match).toMatchObject({ height: 1080, aspect: '1920:1080', matchDisplay: true });
+        // When the host cannot take that mode, it falls back to Auto's box.
+        expect(match.fallback).toEqual({ width: 1280, height: 720 });
+        expect(
+            resolveStreamSize(
+                { mode: 'fixed', height: 1080 },
+                { nativeHost: true, tv: true, device: freebox },
+            ).height,
+        ).toBe(1080);
+        expect(
+            resolveStreamSize(
+                { mode: 'custom', customWidth: 1920, customHeight: 1080 },
+                { nativeHost: true, tv: true, device: freebox },
+            ).aspect,
+        ).toBe('1920:1080');
+    });
+
+    it('makes the virtual display at 720p under Auto, and at the screen when asked', () => {
+        const ctx = { nativeHost: true, tv: true, virtualDisplay: true, device: freebox };
+        expect(resolveStreamSize({ mode: 'auto' }, ctx)).toMatchObject({
+            height: 720,
+            aspect: '1280:720',
+            matchDisplay: true,
+        });
+        expect(resolveStreamSize({ mode: 'device' }, ctx).aspect).toBe('1920:1080');
+    });
+
+    it('estimates the bitrate for the 720p it streams', () => {
+        expect(bitrateReference({ mode: 'auto' }, freebox, false, true)).toEqual({
+            height: 720,
+            aspect: '1280:720',
+        });
+        expect(bitrateReference({ mode: 'auto' }, null, false, true)).toEqual({
+            height: 720,
+            aspect: '16:9',
+        });
+        expect(bitrateReference({ mode: 'device' }, freebox, false, true).height).toBe(1080);
     });
 });
 
