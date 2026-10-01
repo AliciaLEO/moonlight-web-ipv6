@@ -30,6 +30,8 @@ const VIEW_MESSAGES = new Set([
     'displayformat',
     // Native host, a guest on the shared feed: the feed changes codec.
     'feedcodec',
+    // Native host: its answer to a step of Auto's detection.
+    'fpsstep',
 ]);
 
 /** Whether a host message of this type goes to the stream view. */
