@@ -5554,6 +5554,96 @@ Constats sans correction :
   n'arrive, pas tranché) et le pointeur peint par l'hôte en mode jeu (il
   demande le verrouillage du pointeur).
 
+### 8s.12 C2 : l'écran virtuel demandé à Mutter, un seul pour tous les streams
+
+Deux décisions de Bruno (01/10, pendant C4) :
+
+- plus de fenêtre « Partager l'écran » au premier stream ;
+- un invité voit l'écran de l'owner, comme sous Windows.
+
+**La route**
+
+- Sous GNOME, la session demande l'écran à Mutter lui-même, par son API
+  D-Bus de screen cast (`MutterScreenCast.cpp`, sd-bus) :
+  - `RecordVirtual` crée un écran, `RecordMonitor` filme un écran existant ;
+  - pointeur en métadonnées ; pas de session RemoteDesktop, les entrées
+    restent par uinput ;
+  - au-delà de 60 Hz, la clé `modes` part aussi : Mutter 50 en tire la
+    fréquence d'après Punktfunk, 42 à 48 l'ignorent et suivent le
+    `maxFramerate`.
+- Aucune fenêtre et aucun jeton, sur GNOME 42 et après. Le portail reste
+  derrière pour un Mutter qui refuse net (méthode inconnue, accès refusé).
+  La clé de banc `mutter=0` force le portail.
+- Mutter ferme lui-même la session quand l'écran filmé disparaît ou que le
+  bureau se verrouille. La capture le lit (signal `Closed`) et repart.
+
+**Un seul écran pour tous** (`SharedMonitor.h`)
+
+- Le stream de l'owner crée l'écran à la taille de son client, le rend
+  principal et l'inscrit dans un registre de `XDG_RUNTIME_DIR` (connecteur,
+  pid et heure de départ du processus).
+- Un invité filme cet écran tel quel. Son image prend la forme de l'écran.
+- Un invité seul en crée un, principal lui aussi. Quand l'owner arrive,
+  l'invité passe sur l'écran de l'owner dans la seconde.
+- L'écran part avec le stream qui l'a créé. Ceux qui le filmaient repartent :
+  le premier revenu crée le suivant.
+- Un verrou (`flock`) ne laisse qu'un stream à la fois créer, trouver ou
+  retirer un écran. Il est tenu jusqu'à ce que la disposition ne bouge plus :
+  des reconstructions concurrentes ont fait planter gnome-shell chez
+  Punktfunk.
+- Après un retrait, l'écran partagé d'un autre stream est remis en
+  principal, car Mutter refait alors toute la disposition.
+- Le pointeur est recalé quand Mutter annonce un changement d'écrans
+  (`MonitorsChanged`). La surveillance des modes KMS ne s'applique plus à un
+  écran virtuel, qui n'a pas de CRTC : elle rouvrait un stream immobile.
+
+**Mesures**
+
+Test réel `linux_virtual_display` : owner, invité, owner parti, owner revenu.
+
+| GNOME | banc | portail | résultat |
+|---|---|---|---|
+| 42.9 | VM Ubuntu 22.04 (GCC 11, PipeWire 0.3.48, sd-bus 249) | types 3, pas d'écran virtuel | 43/43 |
+| 46.0 | UM790Pro, vrai GPU, DMA-BUF | types 7 | 43/43 |
+| 48.7 | VM Debian 13, sans aucun écran | types 7 | 43/43 |
+
+- Partout, l'invité affiche l'écran de l'owner (1600×900) sans second écran.
+  L'owner parti, l'invité refait un écran 1280×720 principal. L'owner
+  revenu, l'invité repasse sur Meta-1.
+- Retraits en 160-350 ms. gnome-shell garde le même PID.
+- Le téléphone (1170×2532 à 240 Hz) passe sur les trois versions, GNOME 42
+  compris.
+
+Paquet DEV `0.3.1.g2a2.5-dev`, jeton du portail retiré des réglages, stream
+depuis DualRTX :
+
+| hôte | première image | invité |
+|---|---|---|
+| UM790Pro, GNOME 46 | **1,6 s**, sans fenêtre (C4 : 6,1 s et un clic) | la même image que l'owner (Meta-0) ; owner parti (« Quitter ») : écran 1920×1080 à lui ; owner revenu : Meta-1 |
+| VM GNOME 48 **sans écran** | **1,1 s**, sans fenêtre | — |
+
+- Pointeur de l'owner après tous ces changements : ±3 px dans l'image,
+  position annoncée par l'hôte à ±1 px.
+- Tout arrêté : écran retiré, registre effacé, disposition revenue
+  (HDMI-3 principal).
+- **Repli par le portail** (`mutter=0`, GNOME 46) : 28/28. La fenêtre
+  s'ouvre, on y répond, le jeton revient et est rejoué. L'écran d'un invité
+  reste à côté de celui de l'owner, comme avant C2.
+- **KDE 6.3 par le paquet** : owner et invité, chacun sa sortie KWin. La
+  relance en mémoire partagée (KWin renégocie le DMA-BUF sans image) reprend
+  le verrou sans attendre.
+- Suites natives de l'UM790Pro : 6598/6598 avec capacités, 6484/6484 sans.
+  Windows compilé, tests purs 86/86. Compilé aussi sous Ubuntu 22.04 (GCC 11).
+
+**Limites**
+
+- **KDE** : un invité garde son propre écran à côté de celui de l'owner.
+  Filmer la sortie de l'owner demanderait `stream_output` de KWin, pas fait.
+- GNOME 49 et après : non mesuré. La clé `modes` y est passée comme
+  Punktfunk la passe.
+- La disposition est refaite quand l'owner revient alors qu'un invité était
+  seul : l'invité perd son image environ une seconde.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
