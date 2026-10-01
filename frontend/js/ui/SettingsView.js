@@ -58,6 +58,7 @@ import {
     supportsGamingMode,
 } from '../util/BrowserDetect.js';
 import * as RemoteNav from './RemoteNav.js';
+import { confirmAction } from './ConfirmDialog.js';
 import { aspectToNumber, computeAutoBitrate } from '../util/AutoBitrate.js';
 import { autoFps, measuredFps } from '../util/RefreshRate.js';
 import { ASPECT_VALUES, SCREEN_ASPECTS } from '../util/AspectRatio.js';
@@ -1833,7 +1834,7 @@ export class SettingsView {
      * through _checkAuth(), which now finds no session.
      */
     async _logout(btn) {
-        if (!window.confirm(t('settings.logoutConfirm'))) return;
+        if (!(await confirmAction(t('settings.logoutConfirm')))) return;
 
         btn.disabled = true;
         try {

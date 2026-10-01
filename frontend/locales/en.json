@@ -15,7 +15,8 @@
         "loading": "Loading...",
         "unknown": "Unknown",
         "verifying": "Verifying...",
-        "add": "Add"
+        "add": "Add",
+        "confirm": "Confirm"
     },
     "header": {
         "serverSettings": "Server Settings",

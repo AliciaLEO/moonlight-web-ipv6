@@ -15,7 +15,8 @@
         "loading": "加载中…",
         "unknown": "未知",
         "verifying": "正在验证…",
-        "add": "添加"
+        "add": "添加",
+        "confirm": "确认"
     },
     "header": {
         "serverSettings": "服务器设置",

@@ -48,6 +48,7 @@ import {
 } from '../util/appCache.js';
 import { noteHostUse, forgetHostUse, hostUsageRanker } from '../util/hostUsage.js';
 import * as RemoteNav from './RemoteNav.js';
+import { confirmAction } from './ConfirmDialog.js';
 
 /**
  * Where the empty host list sends someone who has nothing to stream from yet.
@@ -313,15 +314,17 @@ export class HostListView {
                 const uuid = stopSessionBtn.dataset.uuid;
                 // This closes the game for everyone, including any invited
                 // player — worth one confirmation.
-                if (!window.confirm(t('hosts.stopSessionConfirm'))) return;
-                stopSessionBtn.disabled = true;
-                stopSessionBtn.textContent = t('hosts.stopSessionWorking');
-                BackendClient.stopHostSession(uuid)
-                    .catch((err) => console.error('[MW] Stop session failed:', err))
-                    .finally(() => {
-                        this._closeAllMenus();
-                        this.refresh();
-                    });
+                confirmAction(t('hosts.stopSessionConfirm'), { danger: true }).then((yes) => {
+                    if (!yes) return;
+                    stopSessionBtn.disabled = true;
+                    stopSessionBtn.textContent = t('hosts.stopSessionWorking');
+                    BackendClient.stopHostSession(uuid)
+                        .catch((err) => console.error('[MW] Stop session failed:', err))
+                        .finally(() => {
+                            this._closeAllMenus();
+                            this.refresh();
+                        });
+                });
                 return;
             }
 
@@ -357,26 +360,28 @@ export class HostListView {
                 const host = this.hosts.find((h) => h.uuid === uuid);
                 // The service going down takes every stream on that host with
                 // it, this browser's included — same weight as "Stop session".
-                if (!window.confirm(t('hosts.restartConfirm'))) return;
-                restartBtn.disabled = true;
-                restartBtn.textContent = t('hosts.restartWorking');
-                BackendClient.restartHost(uuid)
-                    .then(() => {
-                        Toast.show(
-                            t('hosts.restartSent', { name: host ? host.displayName : uuid }),
-                            'success',
-                        );
-                    })
-                    .catch((err) => {
-                        console.error('[MW] Restart host failed:', err);
-                        Toast.show(err.message, 'error');
-                    })
-                    .finally(() => {
-                        this._closeAllMenus();
-                        // The host is mid-restart: let the poll repaint it as it
-                        // drops offline and comes back.
-                        this.refresh();
-                    });
+                confirmAction(t('hosts.restartConfirm'), { danger: true }).then((yes) => {
+                    if (!yes) return;
+                    restartBtn.disabled = true;
+                    restartBtn.textContent = t('hosts.restartWorking');
+                    BackendClient.restartHost(uuid)
+                        .then(() => {
+                            Toast.show(
+                                t('hosts.restartSent', { name: host ? host.displayName : uuid }),
+                                'success',
+                            );
+                        })
+                        .catch((err) => {
+                            console.error('[MW] Restart host failed:', err);
+                            Toast.show(err.message, 'error');
+                        })
+                        .finally(() => {
+                            this._closeAllMenus();
+                            // The host is mid-restart: let the poll repaint it as it
+                            // drops offline and comes back.
+                            this.refresh();
+                        });
+                });
                 return;
             }
 
@@ -412,21 +417,23 @@ export class HostListView {
                 const name = app ? app.displayName : '';
                 // Closes the game on the host, for everyone on it: one
                 // confirmation, as Moonlight asks.
-                if (!window.confirm(t('apps.quitConfirm', { name }))) return;
-                quitAppBtn.disabled = true;
-                quitAppBtn.textContent = t('apps.quitting');
-                BackendClient.stopHostSession(uuid)
-                    .then((res) => {
-                        if (host) host.currentGameId = Number(res && res.currentGameId) || 0;
-                    })
-                    .catch((err) => {
-                        console.error('[MW] Quit app failed:', err);
-                        Toast.error(t('apps.quitFailed', { name }));
-                    })
-                    .finally(() => {
-                        this.renderList();
-                        this.refresh();
-                    });
+                confirmAction(t('apps.quitConfirm', { name }), { danger: true }).then((yes) => {
+                    if (!yes) return;
+                    quitAppBtn.disabled = true;
+                    quitAppBtn.textContent = t('apps.quitting');
+                    BackendClient.stopHostSession(uuid)
+                        .then((res) => {
+                            if (host) host.currentGameId = Number(res && res.currentGameId) || 0;
+                        })
+                        .catch((err) => {
+                            console.error('[MW] Quit app failed:', err);
+                            Toast.error(t('apps.quitFailed', { name }));
+                        })
+                        .finally(() => {
+                            this.renderList();
+                            this.refresh();
+                        });
+                });
                 return;
             }
 

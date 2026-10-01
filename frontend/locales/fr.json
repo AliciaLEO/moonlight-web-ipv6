@@ -15,7 +15,8 @@
         "loading": "Chargement...",
         "unknown": "Inconnu",
         "verifying": "Vérification...",
-        "add": "Ajouter"
+        "add": "Ajouter",
+        "confirm": "Confirmer"
     },
     "header": {
         "serverSettings": "Paramètres serveur",
