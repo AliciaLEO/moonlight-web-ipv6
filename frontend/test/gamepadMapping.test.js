@@ -350,13 +350,87 @@ describe('an EdgeTX / OpenTX radio, read through its built-in profile', () => {
     });
 });
 
+describe("Logitech's G923 for Xbox, read through its built-in profile", () => {
+    // As Chrome gives it in G HUB's PC mode (T0, 02/10/2026): wheel, accelerator
+    // and brake on X, Y, Z, the clutch on Rz (5), all pedals resting at +1, the
+    // hat on axis 9 (9/7 when centred); 23 buttons.
+    const G923 = 'G923 Racing Wheel for Xbox One and PC (Vendor: 046d Product: c26e)';
+    const REST = [0, 1, 1, 0, 0, 1, 0, 0, 0, 9 / 7];
+    const read = (set = {}, pressed = []) => {
+        const axes = REST.slice();
+        for (const [i, v] of Object.entries(set)) axes[i] = v;
+        const gp = pad({ id: G923, buttons: 23, axes });
+        for (const i of pressed) press(gp, i);
+        const { bindings } = resolveMapping(gp, { platform: 'win', db: null });
+        return readVirtualPad(gp, bindings);
+    };
+    const pressedOf = (v) =>
+        v.buttons.map((b, i) => (b.pressed ? i : null)).filter((i) => i !== null);
+
+    it('is laid out from its built-in profile on every desktop, as a wheel', () => {
+        for (const platform of ['win', 'mac', 'linux']) {
+            expect(
+                resolveMapping(pad({ id: G923, buttons: 23, axes: REST }), { platform }),
+            ).toMatchObject({
+                source: 'builtin',
+                key: 'usb:046d:c26e',
+                kind: 'wheel',
+            });
+        }
+    });
+
+    it('sends nothing at rest: wheel centred, pedals up, d-pad centred', () => {
+        const v = read();
+        expect(v.axes.map((x) => x + 0)).toEqual([0, 0, 0, 0]);
+        expect(v.buttons[6].value).toBe(0);
+        expect(v.buttons[7].value).toBe(0);
+        expect(pressedOf(v)).toEqual([]);
+    });
+
+    it('steers with left X and drives the triggers with the pedals', () => {
+        expect(read({ 0: -1 }).axes[0]).toBe(-1);
+        expect(read({ 0: 1 }).axes[0]).toBe(1);
+        // Accelerator floored → RT; brake half way → LT.
+        expect(read({ 1: -1 }).buttons[7].value).toBe(1);
+        expect(read({ 2: 0 }).buttons[6].value).toBe(0.5);
+        // The clutch has nowhere to go.
+        expect(read({ 5: -1 })).toEqual(read());
+    });
+
+    it('puts paddles on the shoulders and the Xbox buttons where an Xbox pad has them', () => {
+        // Right paddle, left paddle, Menu, View, RSB, LSB, Xbox.
+        expect(pressedOf(read({}, [4]))).toEqual([5]);
+        expect(pressedOf(read({}, [5]))).toEqual([4]);
+        expect(pressedOf(read({}, [0, 1, 2, 3]))).toEqual([0, 1, 2, 3]);
+        expect(pressedOf(read({}, [6, 7]))).toEqual([8, 9]);
+        expect(pressedOf(read({}, [8, 9, 10]))).toEqual([10, 11, 16]);
+        // +, −, the dial: no button left for them.
+        expect(pressedOf(read({}, [18, 19, 20, 21, 22]))).toEqual([]);
+    });
+
+    it('reads the d-pad from the hat', () => {
+        // Up, right, down, left, as Chrome packs them (T0).
+        expect(pressedOf(read({ 9: -1 }))).toEqual([12]);
+        expect(pressedOf(read({ 9: -3 / 7 }))).toEqual([15]);
+        expect(pressedOf(read({ 9: 1 / 7 }))).toEqual([13]);
+        expect(pressedOf(read({ 9: 5 / 7 }))).toEqual([14]);
+    });
+
+    it('is named by its ids when Windows only gives a generic name', () => {
+        expect(padName('HID-compliant game controller (Vendor: 046d Product: c26e)')).toBe(
+            'Logitech G923 for Xbox',
+        );
+    });
+});
+
 describe('padKind', () => {
-    it('knows a radio and the G29 by their USB ids', () => {
+    it('knows a radio, the G29 and the G923 for Xbox by their USB ids', () => {
         expect(padKind('Radiomaster TX12 Joystick (Vendor: 1209 Product: 4f54)')).toBe('rc');
         expect(padKind('1209-4f54-OpenTX Joystick')).toBe('rc');
         expect(padKind('G29 Driving Force Racing Wheel (Vendor: 046d Product: c24f)')).toBe(
             'wheel',
         );
+        expect(padKind('HID-compliant game controller (Vendor: 046d Product: c26e)')).toBe('wheel');
     });
 
     it('takes a hint from the name, flight gear before wheels', () => {

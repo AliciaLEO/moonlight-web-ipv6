@@ -120,7 +120,7 @@ The **webrtc-media transport** natively renders into a `<video>` element (RTP �
 
 ## 4.8 Controller compatibility
 
-How a pad is read (`gamepadMapping.js`, first match wins): the user's own layout → the browser's `standard` mapping → a profile built in for a device SDL does not know (desktop, by USB vendor:product: EdgeTX/OpenTX radios) → Chrome Android's pre-sorted layout → SDL_GameControllerDB (desktop, by USB vendor:product) → nothing, and the remap wizard is offered. A pad Windows reports under a generic name ("HID-compliant game controller", e.g. an Xbox pad over Bluetooth) is named from its USB ids.
+How a pad is read (`gamepadMapping.js`, first match wins): the user's own layout → the browser's `standard` mapping → a profile built in for a device SDL does not know (desktop, by USB vendor:product: EdgeTX/OpenTX radios, Logitech's G923 for Xbox) → Chrome Android's pre-sorted layout → SDL_GameControllerDB (desktop, by USB vendor:product) → nothing, and the remap wizard is offered. A pad Windows reports under a generic name ("HID-compliant game controller", e.g. an Xbox pad over Bluetooth) is named from its USB ids.
 
 **Tested on 24/09/2026** — Windows 11, Chrome, Settings → Controllers then a stream, buttons, sticks and triggers checked; Firefox used as a second opinion on the failing cases.
 
@@ -147,7 +147,8 @@ They reach the game as every pad does, as an **Xbox 360 controller**: two sticks
 | Device | Connection / mode | Laid out by | Read on |
 |---|---|---|---|
 | EdgeTX and OpenTX radios: Radiomaster TX12, TX16S, Zorro, Boxer, Pocket, MT12; Jumper; BetaFPV LiteRadio 3 Pro; FrSky and Flysky under EdgeTX | USB, "USB Joystick (HID)", **Classic** mode (the default) | a **built-in profile**, on plug-in (`1209:4f54`) | Radiomaster TX12, EdgeTX, Windows 11 + Chrome 154, 01/10/2026 |
-| Logitech G29 | USB, selector on PS3 | the wizard, once, in a wheel's order (recognized as a wheel) | — |
+| Logitech G923 for Xbox One and PC | USB, **G HUB** running on the client (it puts the wheel in its PC mode, `046d:c26e`) | a **built-in profile**, on plug-in | Windows 11 + Chrome 154, 02/10/2026 |
+| Logitech G29 and G923 for PlayStation | USB (G29: selector on PS3) | the wizard, once, in a wheel's order (recognized as a wheel) | — |
 | Flight sticks and HOTAS, other wheels and pedals; Ethos and DJI radios; EdgeTX in "Advanced" USB mode | USB | the wizard, once | — |
 
 **The radio profile** reads Mode 2 in the default AETR channel order:
@@ -156,6 +157,14 @@ They reach the game as every pad does, as an **Xbox 360 controller**: two sticks
 - CH5 → LT and CH6 → RT, over the whole axis: a switch at −100, 0, +100 gives 0, 128, 255. **A channel the radio's model leaves unmixed sits at 0, a trigger half pressed**: mix CH5 and CH6 to switches in the model, or lay them out again in the wizard;
 - CH9-16 (the radio's buttons 0-7, pressed when the channel is above 0) → A, B, X, Y, LB, RB, Back, Start. CH7-8 go nowhere: an Xbox pad has six analog channels;
 - Mode 1, another channel order or the Advanced mode: the wizard.
+
+**The G923 for Xbox profile:**
+
+- the rim → left stick X; accelerator → RT, brake → LT;
+- right paddle → RB, left paddle → LB; A, B, X, Y, View → Back, Menu → Start, LSB, RSB, the Xbox button and the d-pad, where an Xbox pad has them;
+- the clutch, + and −, the dial and its Enter, a shifter's gears go nowhere: an Xbox pad has no third trigger and no button left.
+
+**Plugged in without G HUB, the G923 for Xbox stays an Xbox device** (`046d:c26d`) that neither the browser nor `joy.cpl` lists: install G HUB on the client.
 
 **The device's kind** (gamepad, RC radio, flight stick, wheel) comes from the user's choice, then the USB ids, then the name (`edgetx`, `hotas`, `rudder`, `wheel`, `fanatec`…), a gamepad otherwise. Settings → Controllers shows it as an icon. **Test** and **Remap** draw that device, each control tagged with what the game gets (LT, A, LS…): a radio's gimbals and switches, a flight stick's grip, twist and throttle, a wheel's rim, paddles and pedals (the clutch greyed: it has no place on an Xbox pad). The wizard asks in the device's words and order (yaw, throttle, roll, pitch; steering, accelerator, brake, paddles). The dialog's **Type** selector corrects a wrong guess, and is saved on its own.
 
@@ -170,7 +179,9 @@ They reach the game as every pad does, as an **Xbox 360 controller**: two sticks
 | Automobilista 2 | controller filtering off |
 | Forza Motorsport | steering "Simulation", axis dead zone inside 0, outside 100 |
 
-**On the client, Logitech G HUB:** set the wheel's rotation angle (the game sees a stick: the rim's full turn is the stick's full travel), and turn on the centering spring: no force feedback comes back from the game, and without the spring the rim stays where it was left.
+**On the client, Logitech G HUB** — where the wheel is plugged in; on the host it never sees the wheel. Set the wheel's rotation angle there (the game sees a stick: the rim's full turn is the stick's full travel), and turn on the centering spring: no force feedback comes back from the game, and without the spring the rim stays where it was left.
+
+**What the game receives** shows on a Windows host in `joy.cpl`: a "Controller (XBOX 360 For Windows)", whose axes move with the rim, the pedals or the radio's sticks.
 
 **Limits.** If the link goes silent for 3 s, or the wizard opens mid-game, sticks go back to the center and triggers to 0: a drone's throttle drops to mid-stick and the flight is lost, though arming on CH5 falls back too, which disarms; a wheel's pedals are released. A user's layout belongs to one browser (`localStorage`); built-in profiles need nothing.
 

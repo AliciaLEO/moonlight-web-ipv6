@@ -268,7 +268,10 @@ USB/Bluetooth et version du système. Détection à plusieurs niveaux :
 >   connaît pas. Bureau seulement, par vid:pid, avant même le chargement de la
 >   base SDL. Premier occupant : les radios EdgeTX/OpenTX (`1209:4f54`, mode
 >   USB « Classic »), lues en Mode 2 et dans l'ordre AETR, comme une TX12 les
->   rapporte dans Chrome sous Windows (relevé du 01/10/2026). Le mappage de
+>   rapporte dans Chrome sous Windows (relevé du 01/10/2026). Deuxième, le
+>   02/10/2026 : le volant Logitech G923 pour Xbox (`046d:c26e`, le mode PC
+>   où G HUB le met ; sans G HUB, il reste un appareil Xbox, `046d:c26d`,
+>   qu'aucun navigateur ne voit). Le mappage de
 >   l'utilisateur reste prioritaire. Une manette mise en place sans lui
 >   (`isAutoMapped` : `builtin`, Android, SDL) reçoit le toast « reconnue
 >   automatiquement » et le badge « Auto ».

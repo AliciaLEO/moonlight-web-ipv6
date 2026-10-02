@@ -36,7 +36,7 @@
  *   1. the user's own mapping for this pad (gamepadMappingsStore);
  *   2. the browser's standard layout;
  *   3. a profile built in here (BUILTIN_PADS, desktop only) for a device SDL
- *      does not know: EdgeTX / OpenTX radios;
+ *      does not know: EdgeTX / OpenTX radios, Logitech's G923 for Xbox;
  *   4. Chrome Android: an unknown pad is reported without a mapping, but
  *      Chromium (UnknownGamepadMappings) has already put its buttons and axes
  *      in the standard slots — read it as standard;
@@ -153,6 +153,7 @@ const KNOWN_PADS = {
     '054c:0df2': 'DualSense Edge',
     '057e:2009': 'Switch Pro Controller',
     '046d:c24f': 'Logitech G29',
+    '046d:c26e': 'Logitech G923 for Xbox',
     '1209:4f54': 'EdgeTX / OpenTX radio',
 };
 
@@ -178,6 +179,21 @@ const KNOWN_PADS = {
  *   - CH7-8 go nowhere: the Xbox pad has six analog channels. Chrome on
  *     Windows even folds the radio's two Sliders onto one axis (6).
  * Mode 1, another channel order or the "Advanced" USB mode: the wizard.
+ *
+ * Logitech's G923 for Xbox One and PC reports 046d:c26e once G HUB has put it
+ * in its PC mode. Plugged in without G HUB it stays an Xbox device (046d:c26d)
+ * that no browser sees. The profile lays it out the way a racing game reads an
+ * Xbox pad, as it reports in Chrome on Windows (measured 02/10/2026 with
+ * pad-probe.html?dev=g923x):
+ *   - the wheel → left X (-1 at the left stop);
+ *   - accelerator → RT and brake → LT, whole axes. The pedals rest at +1 and
+ *     read -1 floored, so they are flipped;
+ *   - the right paddle → RB, the left one → LB; A, B, X, Y, Menu → Start,
+ *     View → Back, LSB, RSB and the Xbox button where an Xbox pad has them;
+ *     the d-pad is the hat on axis 9;
+ *   - the clutch (axis 5) goes nowhere: the Xbox pad has no third trigger.
+ *     Neither do + and − (buttons 18, 19), the dial (20, 21) and its Enter,
+ *     nor a shifter's gears: it has no button left.
  */
 const BUILTIN_PADS = {
     '1209:4f54': {
@@ -195,6 +211,26 @@ const BUILTIN_PADS = {
         rightshoulder: { t: 'b', i: 5 },
         back: { t: 'b', i: 6 },
         start: { t: 'b', i: 7 },
+    },
+    '046d:c26e': {
+        leftx: { t: 'a', i: 0, s: 0 },
+        lefttrigger: { t: 'a', i: 2, s: 0, inv: true },
+        righttrigger: { t: 'a', i: 1, s: 0, inv: true },
+        a: { t: 'b', i: 0 },
+        b: { t: 'b', i: 1 },
+        x: { t: 'b', i: 2 },
+        y: { t: 'b', i: 3 },
+        rightshoulder: { t: 'b', i: 4 },
+        leftshoulder: { t: 'b', i: 5 },
+        start: { t: 'b', i: 6 },
+        back: { t: 'b', i: 7 },
+        rightstick: { t: 'b', i: 8 },
+        leftstick: { t: 'b', i: 9 },
+        guide: { t: 'b', i: 10 },
+        dpup: { t: 'h', i: 9, bit: 1 },
+        dpright: { t: 'h', i: 9, bit: 2 },
+        dpdown: { t: 'h', i: 9, bit: 4 },
+        dpleft: { t: 'h', i: 9, bit: 8 },
     },
 };
 
@@ -381,7 +417,7 @@ export function resolveMapping(gp, ctx = {}) {
 export const PAD_KINDS = ['gamepad', 'rc', 'flightstick', 'wheel'];
 
 /** Devices whose kind their USB ids settle. */
-const KNOWN_KINDS = { '1209:4f54': 'rc', '046d:c24f': 'wheel' };
+const KNOWN_KINDS = { '1209:4f54': 'rc', '046d:c24f': 'wheel', '046d:c26e': 'wheel' };
 
 /**
  * The kind a device's name suggests, tried in this order: flight gear before
