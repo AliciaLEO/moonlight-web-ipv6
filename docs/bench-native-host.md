@@ -6055,6 +6055,45 @@ le bruit du Wi-Fi.
   essai laisse une pointe, d'où le p99 ; le recul (30 s, 1, 2, 4 min…) les
   espace, et une passe de 30 s en début de stream en montre plus que la suite.
 
+### 8t.8 UA.3 ter : le filet élargi tient au moins 3 s (02/10, 22:46-23:43)
+
+Le filet élargi tient désormais au moins 3 s, et toujours 4 s au plus
+(`edfea8d2`). Même montage qu'au §8t.6, même Wi-Fi du soir que la nuit. Le
+Mac est sur secteur, ses jeux et son auto-clicker arrêtés ; Discord est resté
+ouvert (un cœur occupé). Le N95 est sur l'Arc seulement.
+
+⚠️ Une instance `--dev` élevée, lancée par une autre session à 15:27, tenait les
+ports du banc (18080/18443). Le banc ne voit pas sa ligne de commande et ne l'a
+pas arrêtée : toutes les passes ont streamé depuis elle (build `c53df9fe`,
+page servie depuis les sources, donc avec `edfea8d2`). Le bon encodeur a
+tourné sur chaque hôte (D3D12 VE, NVENC, AMF), et les modes `client` et
+`detect` sont valables. Les passes `host-guarded` ont tourné sans leur clé : ce
+sont des Auto. La colonne `host-guarded` reprend donc celle du §8t.6.
+
+| Client | Hôte | Auto | Détection | `host-guarded` (§8t.6) | Palier gardé à (s) |
+|---|---|---|---|---|---|
+| Mac M1, Wi-Fi, 120 Hz | Arc | 42,0 | **38,9** | 46,3 | 6,3 ; 42,2 |
+| | iGPU AMD | 47,9 | **33,2** | 28,4 | 5,8 ; 6,2 |
+| | RTX | 40,6 | **26,6** | 27,9 | 6,0 ; 6,0 |
+| N95, Wi-Fi, 60 Hz | Arc | 56,0 | 56,0 | 241,8 | jamais |
+
+- **Mac : le palier tient, dans les 7 passes** (clics compris). Il est gardé en
+  5,8 à 6,8 s, sans un filet jusqu'à la fin de la passe ; au §8t.6, il sautait
+  ensuite dans 5 passes sur 7. Une passe (Arc) a rendu son premier essai
+  élargi, puis gardé l'essai étroit à 42 s : elle ne passe que 7,5 s au-dessus
+  de la fréquence du client, d'où la médiane de l'Arc.
+- **Le gain du Mac** : −3,1 ms sur l'Arc, −14,7 sur l'iGPU AMD, −14,0 sur la
+  RTX. Sur la RTX et l'iGPU AMD, la détection rejoint le `host-guarded` du
+  matin, à 1 à 5 ms près, sans sa clé. Le clic → drapeau ne se dégrade pas :
+  83,3 → 82,7 ms.
+- **N95 : rien ne change.** Deux essais par passe, rendus par la file du
+  décodeur ou le filet étroit, 1,1 à 1,4 s au-dessus de sa fréquence (1,3 au
+  §8t.6), puis 16 min d'attente. Même médiane qu'Auto sur la page. La passe aux
+  clics donne 58,7 → 67,3 ms affichés et 97,2 → 129,0 ms au clic → drapeau,
+  pour les mêmes 1,4 s au-dessus de sa fréquence : une seule passe en Wi-Fi.
+- **Écran** : à la première passe, l'écran de la RTX (DISPLAY5) a quitté le
+  bureau, comme le 01/10. La série a continué sans lui.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
