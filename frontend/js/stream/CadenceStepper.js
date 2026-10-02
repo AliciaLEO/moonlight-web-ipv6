@@ -70,6 +70,16 @@
  * above. NET_STRIKES trips in a row on one link, and the next trial waits the
  * longest backoff, whatever the content does meanwhile.
  *
+ * A Mac on Wi-Fi rises above that bound a third of the time at its own rate,
+ * for 1 to 2.7 s at a stretch, and fares no worse at 240 — where an N95 on
+ * Wi-Fi drowns (02/10/2026). Nothing tells the two apart within the first
+ * second, so the net widens on trust: the first trial has FILET_HOLD_MS; once
+ * the net has tripped on a rise, while the link at the client's rate rises as
+ * long on its own (LINK_HISTORY_MS), the next trial holds through its longest
+ * rise × FILET_WIDE_FACTOR, FILET_WIDE_MAX_MS at most, and is judged on the
+ * lower quartile of capture → painted, which a rise does not move. A widened
+ * trial given up counts as a trip of the net.
+ *
  * ── Where it runs ────────────────────────────────────────────────────────────
  *
  * StreamView decides: a native host, a rate left to Auto, a canvas that tears
@@ -110,6 +120,12 @@ export const FILET_MIN_FRAMES = 4;
  * pictures at 240 (02/10/2026).
  */
 export const FILET_HOLD_MS = 500;
+/** How far back the link's own rises, at the client's rate, are remembered. */
+export const LINK_HISTORY_MS = 60000;
+/** The widened net holds through the link's longest rise times this… */
+export const FILET_WIDE_FACTOR = 1.2;
+/** …at most this long: past it, a rise is not the link's own. */
+export const FILET_WIDE_MAX_MS = 4000;
 /** Frames waiting at the decoder that make a queue… */
 export const QUEUE_FULL = 2;
 /** …once it has stood this long. */
@@ -241,6 +257,12 @@ export class CadenceStepper {
         this._firstPaintAt = 0;
         this._reference = null; // capture → painted at the client's own rate, ms
         this._overSince = 0; // since when capture → painted has stood above the net's bound
+        this._hold = FILET_HOLD_MS; // the net's hold for the trial or the step in force
+        this._wide = false; // …widened, and the trial judged on the lower quartile
+        this._widen = false; // the net last tripped on a rise: the next trial may widen
+        /** @type {{end: number, ms: number}[]} the link's rises at the client's rate */
+        this._baseRises = [];
+        this._baseRiseSince = 0;
         this._queueSince = 0;
         this._backoff = 0;
         this._strikes = 0; // trips of the net in a row on this link
@@ -353,7 +375,12 @@ export class CadenceStepper {
         this._phase = 'settling';
         this._trialFrom = now + SETTLE_MS;
         this._trialFps = fps;
-        this._event('trial', now, { from: this._rate(), to: fps, verdict: msg.verdict });
+        this._event('trial', now, {
+            from: this._rate(),
+            to: fps,
+            verdict: msg.verdict,
+            netMs: Math.round(this._hold),
+        });
     }
 
     /** A frame arrived, whole. */
@@ -516,6 +543,13 @@ export class CadenceStepper {
             return;
         }
         if (this._level === 0) this._reference = base.latency;
+        // The net of this trial: widened when it last tripped on a rise and
+        // the link, at the client's rate, rises as long on its own.
+        const rise = this._longestBaseRise(now);
+        this._wide = this._widen && rise >= FILET_HOLD_MS;
+        this._hold = this._wide
+            ? Math.min(FILET_WIDE_MAX_MS, Math.max(FILET_HOLD_MS, rise * FILET_WIDE_FACTOR))
+            : FILET_HOLD_MS;
         this._baseTo = now;
         this._try = this._level + 1;
         this._phase = 'asking';
@@ -524,7 +558,11 @@ export class CadenceStepper {
         this._ask(this._levels[this._try]);
         this._log(
             `[CadenceStepper] trying ${this._levels[this._try]} fps (from ${this._rate()}): ` +
-                `content at ${this._presents}/s, age ${base.age.toFixed(1)} ms here`,
+                `content at ${this._presents}/s, age ${base.age.toFixed(1)} ms here` +
+                (this._wide
+                    ? `, a net of ${Math.round(this._hold)} ms (the link rises ` +
+                      `${Math.round(rise)} ms at its own rate)`
+                    : ''),
         );
     }
 
@@ -540,28 +578,39 @@ export class CadenceStepper {
             this._nextTrialAt = now + 1000;
             return;
         }
-        const gain = base.age - trial.age;
+        // A widened trial is judged on the lower quartile: a rise of the link,
+        // there at any rate, moves the median of a window it falls in.
+        const baseAge = this._wide ? base.lowAge : base.age;
+        const trialAge = this._wide ? trial.lowAge : trial.age;
+        const gain = baseAge - trialAge;
         const keep = gain >= GAIN_MS && trial.ratio >= PAINTED_MIN;
         const facts = {
             from: this._rate(),
             to: this._trialFps,
-            baseAge: base.age,
-            trialAge: trial.age,
+            baseAge,
+            trialAge,
             gain,
             ratio: trial.ratio,
             baseLatency: base.latency,
             trialLatency: trial.latency,
+            measure: this._wide ? 'lower quartile' : 'median',
         };
         this._log(
             `[CadenceStepper] ${this._trialFps} fps ${keep ? 'kept' : 'given up'}: age ` +
-                `${base.age.toFixed(1)} → ${trial.age.toFixed(1)} ms, ` +
-                `${Math.round(trial.ratio * 100)} % of the frames painted`,
+                `${baseAge.toFixed(1)} → ${trialAge.toFixed(1)} ms` +
+                (this._wide ? ' (lower quartile)' : '') +
+                `, ${Math.round(trial.ratio * 100)} % of the frames painted`,
         );
         if (!keep) {
             this.rejected++;
             this._event('rejected', now, facts);
             this._ask(this.stepFps);
             this._phase = 'idle';
+            // A widened trial given up: the link had its chance — a trip.
+            if (this._wide) {
+                this._strike();
+                this._widen = false;
+            }
             this._delay(now);
             return;
         }
@@ -619,32 +668,65 @@ export class CadenceStepper {
         this._reference = null;
         this._backoff = 0;
         this._strikes = 0;
+        this._widen = false;
+        this._wide = false;
+        this._hold = FILET_HOLD_MS;
+        this._baseRises = [];
+        this._baseRiseSince = 0;
         this._nextTrialAt = now + WARMUP_MS;
     }
 
     // ── The net ─────────────────────────────────────────────────────────────
 
-    /**
-     * The net tripped: back at once. NET_STRIKES in a row on this link, and
-     * the next trial waits the longest backoff.
-     */
-    _netTrip(why, now) {
-        this.trips++;
+    /** A failed trial counted against the link: NET_STRIKES in a row, the longest wait. */
+    _strike() {
         this._strikes++;
         if (this._strikes >= NET_STRIKES) this._backoff = BACKOFF_MS.length - 1;
+    }
+
+    /**
+     * The net tripped: back at once. A trip on a rise (@p onRise) lets the
+     * next trial widen its net, a decode queue does not.
+     */
+    _netTrip(why, now, onRise) {
+        this.trips++;
+        this._strike();
+        this._widen = onRise === true;
         this._fallBack(why, now);
     }
 
     _checkNet(now) {
         if (!this._stepped()) {
             this._overSince = 0;
+            this._noteBaseRise(now);
             return;
         }
         if (this._queueSince && now - this._queueSince >= QUEUE_HOLD_MS) {
-            this._netTrip('a decode queue that holds', now);
+            this._netTrip('a decode queue that holds', now, false);
             return;
         }
-        if (this._reference === null || !this._clock.ready) return;
+        if (this._reference === null) return;
+        const latency = this._recentLatency(now);
+        if (latency === null) return;
+        const half = 500 / this._base;
+        if (latency <= this._reference + half) {
+            this._overSince = 0;
+            return;
+        }
+        if (!this._overSince) this._overSince = now;
+        if (now - this._overSince < this._hold) return;
+        this._netTrip(
+            `capture → painted ${latency.toFixed(1)} ms, over ` +
+                `${this._reference.toFixed(1)} + ${half.toFixed(1)} at the client's rate ` +
+                `for ${Math.round(now - this._overSince)} ms`,
+            now,
+            true,
+        );
+    }
+
+    /** The median of capture → painted over the last FILET_WINDOW_MS; null when too few. */
+    _recentLatency(now) {
+        if (!this._clock.ready) return null;
         const recent = [];
         for (let i = this._painted.length - 1; i >= 0; i--) {
             const s = this._painted[i];
@@ -652,21 +734,39 @@ export class CadenceStepper {
             const ms = this._latency(s);
             if (ms !== null) recent.push(ms);
         }
-        if (recent.length < FILET_MIN_FRAMES) return;
-        const latency = median(recent.sort((a, b) => a - b));
-        const half = 500 / this._base;
-        if (latency <= this._reference + half) {
-            this._overSince = 0;
+        if (recent.length < FILET_MIN_FRAMES) return null;
+        return median(recent.sort((a, b) => a - b));
+    }
+
+    /**
+     * At the client's own rate: how long the link stays above the net's
+     * bound on its own — what a widened net has to hold through.
+     */
+    _noteBaseRise(now) {
+        if (this._level > 0 || this._reference === null) {
+            this._baseRiseSince = 0;
             return;
         }
-        if (!this._overSince) this._overSince = now;
-        if (now - this._overSince < FILET_HOLD_MS) return;
-        this._netTrip(
-            `capture → painted ${latency.toFixed(1)} ms, over ` +
-                `${this._reference.toFixed(1)} + ${half.toFixed(1)} at the client's rate ` +
-                `for ${Math.round(now - this._overSince)} ms`,
-            now,
-        );
+        const latency = this._recentLatency(now);
+        if (latency === null) return;
+        if (latency > this._reference + 500 / this._base) {
+            if (!this._baseRiseSince) this._baseRiseSince = now;
+            return;
+        }
+        if (this._baseRiseSince) {
+            this._baseRises.push({ end: now, ms: now - this._baseRiseSince });
+            this._baseRiseSince = 0;
+        }
+        while (this._baseRises.length && this._baseRises[0].end < now - LINK_HISTORY_MS)
+            this._baseRises.shift();
+    }
+
+    /** The link's longest rise at the client's rate over LINK_HISTORY_MS, ms. */
+    _longestBaseRise(now) {
+        let ms = this._baseRiseSince ? now - this._baseRiseSince : 0;
+        for (const r of this._baseRises)
+            if (r.end >= now - LINK_HISTORY_MS) ms = Math.max(ms, r.ms);
+        return ms;
     }
 
     // ── The content ─────────────────────────────────────────────────────────
@@ -730,8 +830,8 @@ export class CadenceStepper {
     /**
      * What a viewer looked at between @p from and @p to: capture → painted
      * (median), the interval between painted frames, their sum as the age of
-     * what is shown, and the share of the frames received that were painted.
-     * Null under MIN_FRAMES.
+     * what is shown (and the same on the lower quartile), and the share of the
+     * frames received that were painted. Null under MIN_FRAMES.
      */
     _window(from, to) {
         const latencies = [];
@@ -749,6 +849,7 @@ export class CadenceStepper {
         if (painted < MIN_FRAMES) return null;
         latencies.sort((a, b) => a - b);
         const latency = median(latencies);
+        const low = latencies[Math.floor((painted - 1) / 4)];
         const interval = (last - first) / (painted - 1);
         let received = 0;
         for (const at of this._received) if (at >= from && at <= to) received++;
@@ -756,6 +857,7 @@ export class CadenceStepper {
             latency,
             interval,
             age: latency + interval / 2,
+            lowAge: low + interval / 2,
             painted,
             received,
             ratio: received > 0 ? Math.min(1, painted / received) : 1,
@@ -796,6 +898,9 @@ export class CadenceStepper {
             refused: this.refused,
             trips: this.trips,
             strikes: this._strikes,
+            netHoldMs: Math.round(this._hold),
+            wideNet: this._wide,
+            linkRiseMs: Math.round(this._longestBaseRise(this._now())),
             backoff: this._backoff,
             nextTrialInMs: Math.max(0, Math.round(this._nextTrialAt - this._now())),
             clock: this._clock.summary,

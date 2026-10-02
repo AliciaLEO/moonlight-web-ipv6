@@ -6918,6 +6918,19 @@ déclenché un essai.
   attend le plus long recul (16 min), même si le contenu change ; un palier
   gardé qui tient 30 s, ou un lien qui change, efface le compte. Au banc du
   02/10, le N95 a sauté au filet à chacun de ses 8 essais.
+- Le filet s'élargit sur confiance (UA.3 bis, 02/10). À sa propre fréquence,
+  un Mac en Wi-Fi passe un tiers du temps au-dessus de la borne, par hausses de
+  1 à 2,7 s, et il ne va pas plus mal à 240 ; un N95 en Wi-Fi, lui, s'y noie.
+  Rien ne les distingue dans la première seconde. D'où les règles :
+  - le premier essai garde 500 ms ;
+  - après un filet sur une hausse, si le lien à la fréquence du client a fait
+    des hausses au moins aussi longues dans la dernière minute, l'essai suivant
+    tient pendant la plus longue × 1,2 (4 s au plus). Il est jugé sur le quartile
+    bas de capture → peinte, qu'une hausse ne déplace pas ;
+  - un essai élargi rendu compte comme un filet.
+
+  Rejoué hors ligne sur les passes `host-guarded` de la nuit, le filet de
+  500 ms sautait sur les 12 passes du Mac, l'élargi sur 2.
   Les 500 ms de tenue datent du banc du 02/10. Sans elles, le Mac en Wi-Fi
   perdait chaque 240 gardé en 0,1 s, sur des pointes qu'il a aussi à 120 (p99
   de 140 à 240 ms). Pourtant, `host-guarded` lui montrait à 240 des images

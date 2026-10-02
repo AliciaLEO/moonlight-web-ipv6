@@ -342,6 +342,37 @@ describe('CadenceStepper', () => {
         expect(s.stepper.summary.nextTrialInMs).toBeLessThanOrEqual(BACKOFF_MS[0]);
     });
 
+    it('widens its net for a link that rises at any rate, and keeps the step', () => {
+        // A Mac on Wi-Fi: 2 s of frames painted 60 ms late every 5 s, at 120
+        // as at 240. The first trial trips on a rise; the second holds through
+        // them, and is judged on the lower quartile.
+        const rise = (t) => t > 3000 && t % 5000 < 2000;
+        const s = setup({ latency: (rate, t) => (rise(t) ? 80 : 20) });
+        s.run(120000);
+        const trials = s.stepper.events.filter((e) => e.what === 'trial');
+        expect(trials[0].netMs).toBe(FILET_HOLD_MS);
+        expect(trials.at(-1).netMs).toBeGreaterThan(2000);
+        expect(s.stepper.stepFps).toBe(240);
+        const kept = s.stepper.events.find((e) => e.what === 'kept');
+        expect(kept.measure).toBe('lower quartile');
+        // And it stays through the rises that follow.
+        expect(s.stepper.events.filter((e) => e.what === 'fallback' && e.at > kept.at)).toEqual([]);
+    });
+
+    it('gives a widened trial back on a link that drowns at the step, and waits the longest', () => {
+        // An N95 on Wi-Fi: the same rises at its own rate, and at 240 every
+        // frame 100 ms late.
+        const rise = (t) => t > 3000 && t % 5000 < 2000;
+        const s = setup({ latency: (rate, t) => (rate > 120 ? 120 : rise(t) ? 80 : 20) });
+        s.run(60000);
+        const trials = s.stepper.events.filter((e) => e.what === 'trial');
+        expect(trials).toHaveLength(2);
+        expect(trials[1].netMs).toBeGreaterThan(FILET_HOLD_MS);
+        expect(s.stepper.stepFps).toBe(0);
+        expect(s.stepper.summary.strikes).toBe(2);
+        expect(s.stepper.summary.nextTrialInMs).toBeGreaterThan(BACKOFF_MS.at(-2));
+    });
+
     it('comes back at once on a decode queue that holds', () => {
         const s = setup({ queue: (rate) => (rate > 120 ? 3 : 0) });
         s.run(9000);
