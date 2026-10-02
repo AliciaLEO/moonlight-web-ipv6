@@ -83,6 +83,18 @@
  * makes the next one narrow; a narrow net that trips on a rise, or a widened
  * one under a step already kept, lets the next one widen again.
  *
+ * ── What this device remembers ───────────────────────────────────────────────
+ *
+ * A step that cost this device MEMO_FAILS times in one stream — a trial the
+ * net took back, or one given up on an older picture or frames left unpainted
+ * — and was never kept, is remembered for this host at this resolution
+ * (stepMemory, localStorage). The next streams do not try it for their first
+ * MEMO_WAIT_MS: a client that cannot carry it (the N95 on Wi-Fi: its p99 211 →
+ * 350 ms on the trials alone, 02/10/2026) no longer pays for it at each
+ * launch. A step kept is forgotten, a remembered one expires after
+ * MEMO_TTL_MS, and a link that changes under the stream tries it again. A
+ * trial given up for no gain costs nothing and is not remembered.
+ *
  * ── Where it runs ────────────────────────────────────────────────────────────
  *
  * StreamView decides: a native host, a rate left to Auto, a canvas that tears
@@ -158,6 +170,15 @@ export const CONTENT_STABLE = 2;
  * 169 times a second for four of them, and was tried (01/10/2026).
  */
 export const FASTER_STATS = 5;
+/** Failures of a step in one stream, never kept, before this device remembers it. */
+export const MEMO_FAILS = 2;
+/** A remembered step is not tried in a stream's first… */
+export const MEMO_WAIT_MS = BACKOFF_MS[BACKOFF_MS.length - 1];
+/** …and is forgotten after this long: a browser, a driver, a network change. */
+export const MEMO_TTL_MS = 7 * 24 * 3600 * 1000;
+/** The localStorage key, and how many host × resolution entries it keeps. */
+export const MEMO_KEY = 'mw_autostep_failed';
+const MEMO_ENTRIES = 32;
 /** How many of the host's reports are kept. */
 const SAMPLES_KEPT = 12;
 /** Stats older than this say nothing about the content. */
@@ -214,6 +235,75 @@ export function ladder(baseFps, displayHz) {
     return levels;
 }
 
+/**
+ * The steps this device failed at, for one host at one resolution (@p key),
+ * kept in localStorage as { key: { fps: when } }. Storage refused or broken:
+ * nothing is remembered.
+ * @param {string} key e.g. the host's uuid and "1920×1080"
+ * @param {Storage|null} [storage] localStorage by default
+ * @param {() => number} [clock] Date.now by default
+ */
+export function stepMemory(key, storage, clock) {
+    let store = storage;
+    if (store === undefined) {
+        try {
+            store = localStorage;
+        } catch (e) {
+            store = null;
+        }
+    }
+    const nowMs = clock || (() => Date.now());
+    const read = () => {
+        try {
+            const all = JSON.parse(store.getItem(MEMO_KEY) || '{}');
+            return all && typeof all === 'object' ? all : {};
+        } catch (e) {
+            return {};
+        }
+    };
+    const write = (all) => {
+        try {
+            store.setItem(MEMO_KEY, JSON.stringify(all));
+        } catch (e) {
+            // Storage refused: nothing remembered.
+        }
+    };
+    const fresh = (entry, now) =>
+        Object.keys(entry || {}).filter((fps) => now - entry[fps] < MEMO_TTL_MS);
+    return {
+        /** @returns {number[]} the steps remembered as failed, not expired */
+        failed() {
+            const entry = read()[key];
+            return fresh(entry, nowMs()).map(Number);
+        },
+        /** Remember @p fps as failed here. */
+        fail(fps) {
+            const now = nowMs();
+            const all = read();
+            for (const k of Object.keys(all)) {
+                const kept = {};
+                for (const f of fresh(all[k], now)) kept[f] = all[k][f];
+                if (Object.keys(kept).length) all[k] = kept;
+                else delete all[k];
+            }
+            all[key] = { ...(all[key] || {}), [fps]: now };
+            // The oldest hosts and resolutions go first.
+            const last = (k) => Math.max(...Object.values(all[k]));
+            const keys = Object.keys(all).sort((a, b) => last(b) - last(a));
+            for (const k of keys.slice(MEMO_ENTRIES)) delete all[k];
+            write(all);
+        },
+        /** Forget @p fps: it was kept here. */
+        clear(fps) {
+            const all = read();
+            if (!all[key] || !(fps in all[key])) return;
+            delete all[key][fps];
+            if (!Object.keys(all[key]).length) delete all[key];
+            write(all);
+        },
+    };
+}
+
 /** The median of an ascending array. */
 function median(sorted) {
     const n = sorted.length;
@@ -231,8 +321,10 @@ export class CadenceStepper {
      * @param {() => number} [deps.now] this client's clock, ms
      * @param {(line: string) => void} [deps.log]
      * @param {{every: (fn: () => void, ms: number) => any, stop: (id: any) => void}} [deps.timers]
+     * @param {ReturnType<typeof stepMemory>} [deps.memory] the steps this
+     *        device failed at, for this host at this resolution
      */
-    constructor({ baseFps, send, sendPing, now, log, timers }) {
+    constructor({ baseFps, send, sendPing, now, log, timers, memory }) {
         this._send = send;
         this._sendPing = sendPing || (() => {});
         this._now = now || (() => performance.now());
@@ -285,6 +377,16 @@ export class CadenceStepper {
         this._tickTimer = null;
         this._pingTimer = null;
         this._seq = 1 << 22; // apart from the view's, the grid's and the probe's pings
+        this._memory = memory || null;
+        /** @type {Set<number>} steps failed here in earlier streams */
+        this._remembered = new Set();
+        this._memoLifted = false; // the link changed: the remembered steps are tried
+        this._memoSaid = false;
+        this._startedAt = 0;
+        /** @type {Map<number, number>} failures that cost, per step, in this stream */
+        this._fails = new Map();
+        /** @type {Set<number>} steps kept in this stream */
+        this._keptSteps = new Set();
         this.trials = 0;
         this.kept = 0;
         this.rejected = 0;
@@ -306,6 +408,8 @@ export class CadenceStepper {
     start() {
         if (this._running) return;
         this._running = true;
+        this._startedAt = this._now();
+        if (this._memory) this._remembered = new Set(this._memory.failed());
         this._pingTimer = this._timers.every(
             () => this._sendPing(this._seq++, this._now()),
             PING_EVERY_MS,
@@ -424,6 +528,8 @@ export class CadenceStepper {
 
     /** The link or the screen changed under the stream: start over. */
     linkChanged(why, now) {
+        // Another link: what failed on the last one is tried again.
+        this._memoLifted = true;
         this._restart(why || 'the link changed', now);
     }
 
@@ -505,7 +611,25 @@ export class CadenceStepper {
         if (now - this._statsAt > STATS_STALE_MS) return false;
         // The base window opens on the first faster report; the step is asked
         // once FASTER_STATS of them are in (tick, 'base').
-        return this._fasterRun(this._rate()) > 0;
+        if (this._fasterRun(this._rate()) <= 0) return false;
+        // A step this device failed at before waits, early in the stream.
+        const next = this._levels[this._level + 1];
+        if (
+            this._remembered.has(next) &&
+            !this._memoLifted &&
+            now - this._startedAt < MEMO_WAIT_MS
+        ) {
+            if (!this._memoSaid) {
+                this._memoSaid = true;
+                this._event('remembered', now, { fps: next });
+                this._log(
+                    `[CadenceStepper] ${next} fps failed on this device before — not tried ` +
+                        `in the first ${Math.round(MEMO_WAIT_MS / 60000)} min`,
+                );
+            }
+            return false;
+        }
+        return true;
     }
 
     /** How many of the host's latest reports, in a row, show content faster than @p fps. */
@@ -614,6 +738,10 @@ export class CadenceStepper {
         if (!keep) {
             this.rejected++;
             this._event('rejected', now, facts);
+            // Given up on an older picture, or frames left unpainted: the
+            // step cost. Given up for no gain, it did not.
+            if (trial.ratio < PAINTED_MIN || -gain > 500 / this._base)
+                this._failed(this._levels[this._try], now);
             this._ask(this.stepFps);
             this._phase = 'idle';
             // A widened trial given up: the link had its chance — a trip.
@@ -626,6 +754,10 @@ export class CadenceStepper {
         }
         this.kept++;
         this._event('kept', now, facts);
+        // Kept here: whatever this device remembered of it is forgotten.
+        const asked = this._levels[this._try];
+        this._keptSteps.add(asked);
+        if (this._remembered.delete(asked) && this._memory) this._memory.clear(asked);
         // The step is what the host granted: capped below the rate asked when
         // the ladder was built before the display's refresh was known.
         if (this._trialFps !== this._levels[this._try]) {
@@ -705,8 +837,25 @@ export class CadenceStepper {
             this._phase === 'asking' || this._phase === 'settling' || this._phase === 'trial';
         this.trips++;
         this._strike();
+        if (trial) this._failed(this._levels[this._try], now);
         this._widen = onRise === true && !(this._wide && trial);
         this._fallBack(why, now);
+    }
+
+    /**
+     * A trial of @p fps cost this device: MEMO_FAILS of them in this stream,
+     * the step never kept, and it is remembered for the streams to come.
+     */
+    _failed(fps, now) {
+        const n = (this._fails.get(fps) || 0) + 1;
+        this._fails.set(fps, n);
+        if (n !== MEMO_FAILS || this._keptSteps.has(fps) || !this._memory) return;
+        this._memory.fail(fps);
+        this._event('remember', now, { fps, fails: n });
+        this._log(
+            `[CadenceStepper] ${fps} fps failed ${n} times, never kept — remembered on this ` +
+                'device for this host at this resolution',
+        );
     }
 
     _checkNet(now) {
@@ -950,6 +1099,7 @@ export class CadenceStepper {
             linkRiseMs: Math.round(this._longestBaseRise(this._now())),
             backoff: this._backoff,
             nextTrialInMs: Math.max(0, Math.round(this._nextTrialAt - this._now())),
+            remembered: [...this._remembered],
             clock: this._clock.summary,
         };
     }

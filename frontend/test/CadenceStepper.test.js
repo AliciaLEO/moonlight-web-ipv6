@@ -24,7 +24,11 @@ import {
     FILET_WIDE_MIN_MS,
     HELD_MS,
     ladder,
+    MEMO_KEY,
+    MEMO_TTL_MS,
+    MEMO_WAIT_MS,
     QUEUE_HOLD_MS,
+    stepMemory,
 } from '../js/stream/CadenceStepper.js';
 
 const OFFSET_US = 5e9; // the host's clock, ahead of this one
@@ -73,6 +77,7 @@ function setup(opts = {}) {
         now: () => now,
         log: () => {},
         timers: { every: () => 0, stop: () => {} },
+        memory: o.memory,
     });
     stepper.start();
     const presentsAt = (t) => (typeof o.presents === 'function' ? o.presents(t) : o.presents);
@@ -583,5 +588,152 @@ describe('CadenceStepper', () => {
         expect(s.steps().map((m) => m.fps)).toEqual([240, 0, 240]);
         s.stepper.stop();
         expect(s.steps().map((m) => m.fps)).toEqual([240, 0, 240, 0]);
+    });
+});
+
+/** A device's memory of the steps it failed at, as CadenceStepper sees it. */
+function fakeMemory(failed = []) {
+    const m = {
+        steps: new Set(failed),
+        calls: [],
+        failed: () => [...m.steps],
+        fail: (fps) => {
+            m.steps.add(fps);
+            m.calls.push(['fail', fps]);
+        },
+        clear: (fps) => {
+            m.steps.delete(fps);
+            m.calls.push(['clear', fps]);
+        },
+    };
+    return m;
+}
+
+describe('stepMemory', () => {
+    /** A Storage of its own, and a clock to move. */
+    function store() {
+        const data = new Map();
+        return {
+            getItem: (k) => (data.has(k) ? data.get(k) : null),
+            setItem: (k, v) => data.set(k, String(v)),
+            data,
+        };
+    }
+
+    it('remembers a step per host and resolution, and forgets it when kept', () => {
+        const st = store();
+        let t = 1000;
+        const a = stepMemory('host-a|1920×1080', st, () => t);
+        const b = stepMemory('host-a|2560×1440', st, () => t);
+        a.fail(118);
+        a.fail(240);
+        expect(a.failed().sort()).toEqual([118, 240]);
+        expect(b.failed()).toEqual([]);
+        a.clear(118);
+        expect(a.failed()).toEqual([240]);
+        a.clear(240);
+        expect(JSON.parse(st.getItem(MEMO_KEY))).toEqual({});
+    });
+
+    it('lets a remembered step expire', () => {
+        const st = store();
+        let t = 1000;
+        const m = stepMemory('h|1080', st, () => t);
+        m.fail(118);
+        t += MEMO_TTL_MS - 1;
+        expect(m.failed()).toEqual([118]);
+        t += 1;
+        expect(m.failed()).toEqual([]);
+        // …and the next write sweeps it out.
+        stepMemory('other|1080', st, () => t).fail(240);
+        expect(Object.keys(JSON.parse(st.getItem(MEMO_KEY)))).toEqual(['other|1080']);
+    });
+
+    it('keeps the latest hosts and resolutions only', () => {
+        const st = store();
+        let t = 1000;
+        for (let i = 0; i < 40; i++) {
+            t += 1;
+            stepMemory('h' + i + '|1080', st, () => t).fail(118);
+        }
+        const kept = Object.keys(JSON.parse(st.getItem(MEMO_KEY)));
+        expect(kept).toHaveLength(32);
+        expect(kept).toContain('h39|1080');
+        expect(kept).not.toContain('h0|1080');
+    });
+
+    it('remembers nothing without a working storage', () => {
+        const broken = {
+            getItem: () => {
+                throw new Error('denied');
+            },
+            setItem: () => {
+                throw new Error('denied');
+            },
+        };
+        const m = stepMemory('h|1080', broken);
+        expect(() => m.fail(118)).not.toThrow();
+        expect(m.failed()).toEqual([]);
+        expect(stepMemory('h|1080', null).failed()).toEqual([]);
+    });
+});
+
+describe('CadenceStepper, what this device remembers', () => {
+    it('remembers a step that tripped the net twice in a stream, never kept', () => {
+        const memory = fakeMemory();
+        const s = setup({ memory, latency: (rate) => (rate > 120 ? 60 : 20) });
+        s.run(9000);
+        expect(memory.calls).toEqual([]);
+        const first = s.steps()[1].at;
+        s.run(first + BACKOFF_MS[0] + BASE_MS + 2000);
+        expect(s.stepper.trips).toBe(2);
+        expect(memory.calls).toEqual([['fail', 240]]);
+    });
+
+    it('does not try a remembered step early in the next stream', () => {
+        const memory = fakeMemory([240]);
+        const s = setup({ memory });
+        s.run(60000);
+        expect(s.steps()).toEqual([]);
+        expect(s.stepper.events.filter((e) => e.what === 'remembered')).toHaveLength(1);
+        expect(s.stepper.summary.remembered).toEqual([240]);
+        // Later in a long stream, it is tried again — and kept here: forgotten.
+        s.run(MEMO_WAIT_MS + 10000);
+        expect(s.steps().map((m) => m.fps)).toEqual([240]);
+        expect(s.stepper.stepFps).toBe(240);
+        expect(memory.calls).toEqual([['clear', 240]]);
+    });
+
+    it('tries a remembered step again on another link', () => {
+        const memory = fakeMemory([240]);
+        const s = setup({ memory });
+        s.run(20000);
+        expect(s.steps()).toEqual([]);
+        s.stepper.linkChanged('the link changed', 20000);
+        s.run(32000);
+        expect(s.stepper.stepFps).toBe(240);
+        expect(memory.calls).toEqual([['clear', 240]]);
+    });
+
+    it('forgets nothing for a trial given up for no gain', () => {
+        // 3.5 ms more at 240: older by less than half a refresh — it did not cost.
+        const memory = fakeMemory();
+        const s = setup({ memory, latency: (rate) => (rate > 120 ? 23.5 : 20) });
+        s.run(9000 + BACKOFF_MS[0] + 8000);
+        expect(s.stepper.rejected).toBe(2);
+        expect(memory.calls).toEqual([]);
+    });
+
+    it('does not remember a step kept earlier in the stream', () => {
+        // Kept, then the link drowns it twice later on.
+        let drown = false;
+        const memory = fakeMemory();
+        const s = setup({ memory, latency: (rate) => (drown && rate > 120 ? 60 : 20) });
+        s.run(10000);
+        expect(s.stepper.stepFps).toBe(240);
+        drown = true;
+        s.run(10000 + 2 * BACKOFF_MS[0] + BACKOFF_MS[1] + 20000);
+        expect(s.stepper.trips).toBeGreaterThanOrEqual(2);
+        expect(memory.calls).toEqual([]);
     });
 });

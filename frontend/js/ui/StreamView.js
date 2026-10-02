@@ -102,7 +102,7 @@ import {
 import { drawCapFor } from '../stream/RenderPacing.js';
 import { ContentAgeProbe } from '../stream/ContentAgeProbe.js';
 import { VsyncGrid } from '../stream/VsyncGrid.js';
-import { CadenceStepper, autostepEnabled } from '../stream/CadenceStepper.js';
+import { CadenceStepper, autostepEnabled, stepMemory } from '../stream/CadenceStepper.js';
 import { LatencyProbe } from '../stream/LatencyProbe.js';
 import { t } from '../i18n/i18n.js';
 
@@ -6789,6 +6789,8 @@ export class StreamView {
                 sendPing: (seq, ts) => {
                     if (this.webrtc) this.webrtc.send({ type: 'ping', seq, ts });
                 },
+                // The steps this device failed at, for this host at this size.
+                memory: stepMemory((this.host.uuid || '') + '|' + (this._resolution || '')),
             });
             window.mwCadenceStepper = this._stepper;
             this._stepper.start();

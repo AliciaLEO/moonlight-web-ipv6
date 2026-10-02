@@ -171,6 +171,10 @@ def main():
         # The detection is on by default (UA.4): off is said, for the
         # reference modes (client, host-guarded) to stay today's Auto.
         d.eval("localStorage.setItem('mw_autostep', %s)" % json.dumps("1" if a.autostep else "0"))
+        # Each pass is this device's first stream: the steps it failed at in
+        # the passes before are forgotten (mw_autostep_failed;
+        # --local-storage puts them back for a pass that wants them).
+        d.eval("localStorage.removeItem('mw_autostep_failed')")
         for kv in a.local_storage:
             k, _, v = kv.partition("=")
             d.eval("localStorage.setItem(%s, %s)" % (json.dumps(k), json.dumps(v)))

@@ -6949,6 +6949,20 @@ déclenché un essai.
   de 140 à 240 ms). Pourtant, `host-guarded` lui montrait à 240 des images
   plus jeunes de 15 ms. Un client qui se noie reste au-dessus et redescend
   en moins d'une seconde.
+- Ce que l'appareil retient (décision de Bruno, 02/10). Chaque essai qui
+  échoue laisse une pointe : sur le N95, le p99 passe de 211 à 350 ms à cause
+  des seuls essais (banc §8t.7).
+  - Un palier est retenu quand il a coûté deux fois dans un stream sans jamais
+    y être gardé. Coûter, c'est un essai repris par le filet, ou rendu sur une
+    image plus vieille d'une demi-période du client ou sur moins de 90 %
+    d'images peintes.
+  - Il est retenu pour cet hôte, à cette résolution, dans le `localStorage` de
+    l'appareil (`mw_autostep_failed`).
+  - Les streams suivants ne l'essaient pas pendant leurs 16 premières minutes.
+  - Un palier gardé est oublié ; l'oubli vient aussi après 7 jours, ou plus
+    tôt pour un lien qui change en cours de stream.
+  - Un essai rendu sans gain ne coûte rien et n'est pas retenu.
+  - Le banc efface la mémoire à chaque passe (`pass.py`).
 - Un gouverneur de décodage qui demande moins d'images (`clientfpscap`)
   l'emporte : le palier est lâché, et aucun essai n'a lieu tant qu'il plafonne.
 - Il ne tourne que là où il mesure : hôte natif, fréquence laissée à l'Auto,
