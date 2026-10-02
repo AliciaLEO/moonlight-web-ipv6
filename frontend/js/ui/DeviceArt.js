@@ -239,12 +239,32 @@ export function flightstickArtSvg() {
     const u = `fs${++seq}`;
     const id = (n) => `${u}-${n}`;
     const url = (n) => `url(#${id(n)})`;
-    // The grip, from its base up to under the head.
+    // The grip as the pilot sees it: straight on the thumb's side, a palm
+    // swell on the other, the trigger hooked out under a head that is a block
+    // of buttons leaning to the thumb — no smooth shaft, no rounded top.
     const GRIP =
-        'M444 320 C440 286 434 252 436 222 C438 196 446 178 452 168 L478 168 C486 178 494 196 494 222 ' +
-        'C496 252 490 286 486 320 Z';
+        'M446 278 C440 256 434 232 436 212 C437 198 440 188 444 182 L490 180 ' +
+        'C497 192 502 212 500 234 C498 254 492 268 486 278 Z';
+    const PALM = 'M452 200 C463 196 477 196 488 200 L490 246 C478 252 462 252 452 246 Z';
     const HEAD =
-        'M424 176 C420 136 438 106 465 104 C492 106 510 136 506 176 C498 188 432 188 424 176 Z';
+        'M420 142 L428 114 C430 107 435 104 442 103 L494 99 C501 99 505 103 507 109 ' +
+        'L513 140 C515 150 512 158 505 166 L494 178 C490 182 486 184 480 184 L450 184 ' +
+        'C443 184 438 181 434 175 Z';
+    const TRIGGER =
+        'M441 196 C427 195 416 205 416 219 C416 228 424 231 427 223 C429 214 434 209 442 208 Z';
+    // The rubber boot the grip goes into: folds narrowing to the top.
+    const BOOT = [
+        [46, 280],
+        [56, 291],
+        [66, 302],
+        [76, 313],
+    ]
+        .map(
+            ([w, y]) => `
+    <rect x="${465 - w / 2}" y="${y}" width="${w}" height="14" rx="7" fill="${url('shell')}" stroke="rgba(0,0,0,.85)"/>
+    <path d="M${465 - w / 2 + 6} ${y + 2.5} H${465 + w / 2 - 6}" class="gp-boot-fold"/>`,
+        )
+        .join('');
     return `
 <svg class="gp-art gp-art-flightstick" viewBox="0 0 640 440" role="img" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
   ${defs(id)}
@@ -276,37 +296,46 @@ export function flightstickArtSvg() {
   ${key(url, 'back', 104, 394, 'Back', 44, 18)}
   ${key(url, 'start', 196, 394, 'Start', 44, 18)}
 
-  <!-- Stick: base, the twist band, the grip tilting with its head. -->
+  <!-- Stick: a heavy base and its square plate; the grip tilts in its boot. -->
   <g filter="${url('drop')}">
     <rect x="330" y="340" width="270" height="66" rx="22" fill="${url('shell')}"/>
   </g>
   <rect x="330" y="340" width="270" height="66" rx="22" fill="none" class="gp-edge"/>
-  <ellipse cx="465" cy="340" rx="74" ry="16" fill="${url('plate')}" class="gp-gimbal-plate"/>
+  <path d="M408 346 L420 322 H510 L522 346 Z" fill="${url('plate')}" class="gp-gimbal-plate"/>
+  <circle cx="425" cy="339" r="2" class="gp-screw"/>
+  <circle cx="505" cy="339" r="2" class="gp-screw"/>
 
   <g class="gp-ctl gp-grip" data-ctl="rightx righty">
-    <rect class="gp-ring" x="410" y="96" width="110" height="236" rx="30"/>
+    <rect class="gp-ring" x="402" y="90" width="126" height="242" rx="28"/>
     <g class="gp-arrows">
-      <path class="gp-arrow" data-dir="x" d="M528 200 l12 9 l-12 9 z"/>
-      <path class="gp-arrow" data-dir="y" d="M456 338 l9 12 l9 -12 z"/>
+      <path class="gp-arrow" data-dir="x" d="M536 196 l12 9 l-12 9 z"/>
+      <path class="gp-arrow" data-dir="y" d="M533 232 l9 12 l9 -12 z"/>
     </g>
   </g>
-  <g data-rotate="rightx" data-amp="16" data-cx="465" data-cy="338">
-    <rect x="456" y="300" width="18" height="40" fill="${url('metal')}"/>
+  <g data-rotate="rightx" data-amp="16" data-cx="465" data-cy="318">
+    <rect x="452" y="262" width="26" height="40" rx="3" fill="${url('metal')}"/>
     <path d="${GRIP}" fill="${url('shell')}" stroke="rgba(0,0,0,.8)"/>
     <path d="${GRIP}" fill="none" class="gp-face-rim"/>
-    ${key(url, 'righttrigger', 465, 214, 'RT', 32, 26)}
+    <path d="${PALM}" class="gp-grip-pad"/>
+    <g class="gp-ctl gp-trigger-hook" data-ctl="righttrigger">
+      <path d="${TRIGGER}" fill="${url('metal')}" stroke="rgba(0,0,0,.8)"/>
+      <path class="gp-hot" d="${TRIGGER}"/>
+      <circle class="gp-ring" cx="427" cy="214" r="19"/>
+    </g>
     <g data-press="righty" data-dy="10">
       <path d="${HEAD}" fill="${url('plate')}" stroke="rgba(0,0,0,.8)"/>
       <path d="${HEAD}" fill="none" class="gp-face-rim"/>
-      ${hatWay(url, 'dpup', 465, 120, 0, 6)}
-      ${hatWay(url, 'dpright', 479, 134, 90, 6)}
-      ${hatWay(url, 'dpdown', 465, 148, 180, 6)}
-      ${hatWay(url, 'dpleft', 451, 134, 270, 6)}
-      ${key(url, 'a', 442, 168, 'A', 22, 16)}
-      ${key(url, 'b', 488, 168, 'B', 22, 16)}
+      ${hatWay(url, 'dpup', 447, 121, 0, 6)}
+      ${hatWay(url, 'dpright', 460, 134, 90, 6)}
+      ${hatWay(url, 'dpdown', 447, 147, 180, 6)}
+      ${hatWay(url, 'dpleft', 434, 134, 270, 6)}
+      ${key(url, 'a', 489, 121, 'A', 22, 16)}
+      ${key(url, 'b', 489, 147, 'B', 22, 16)}
     </g>
   </g>
-  ${label(465, 82, 'RS')}
+  ${BOOT}
+  ${label(465, 80, 'RS')}
+  ${label(384, 214, 'RT')}
 
   <g class="gp-ctl gp-twist" data-ctl="leftx">
     <path d="M410 372 Q465 392 520 372" class="gp-twist-band"/>
@@ -423,9 +452,11 @@ const KIND_ICONS = {
     rc:
         '<rect x="3" y="7.5" width="14" height="9.5" rx="2"/><path d="M10 7.5V2.5"/>' +
         '<circle cx="7" cy="12" r="1.7"/><circle cx="13" cy="12" r="1.7"/>',
+    // Seen from the side, the head jutting forward over the trigger.
     flightstick:
-        '<path d="M8.5 2.5h3a1 1 0 0 1 1 1V10a2.5 2.5 0 0 1-5 0V3.5a1 1 0 0 1 1-1Z"/>' +
-        '<path d="M10 12.5V15.5"/><rect x="4" y="15.5" width="12" height="2.5" rx="1"/>',
+        '<path d="M8.8 13.5C8.2 11 8 8.5 8.6 6.2 9 4.4 10 3.2 11.6 3l2.8-.2c1 0 1.4.8 1 1.6l-1.2 2c-.4.6-1 .8-1.6 1-.4 2-.6 4.2-.4 6.1"/>' +
+        '<path d="M12.6 8.3c1.1.2 1.6 1.2 1.2 2.2"/>' +
+        '<path d="M8.2 15.5l.6-2h3.4l.6 2"/><rect x="3.5" y="15.5" width="13" height="2.5" rx="1"/>',
     wheel:
         '<circle cx="10" cy="10" r="7.5"/><circle cx="10" cy="10" r="2"/>' +
         '<path d="M2.6 8.6 8 9.5M17.4 8.6 12 9.5M10 12v5.5"/>',

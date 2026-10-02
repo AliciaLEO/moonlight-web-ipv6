@@ -288,6 +288,19 @@
     fill: rgba(255, 255, 255, 0.12);
 }
 
+.gp-screw {
+    fill: #3a4654;
+}
+.gp-boot-fold {
+    stroke: rgba(255, 255, 255, 0.08);
+    stroke-width: 1.2;
+    stroke-linecap: round;
+}
+.gp-grip-pad {
+    fill: rgba(0, 0, 0, 0.28);
+    stroke: rgba(255, 255, 255, 0.05);
+}
+
 .gp-twist-band {
     fill: none;
     stroke: #1c2531;
