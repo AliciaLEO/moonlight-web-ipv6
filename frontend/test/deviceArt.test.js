@@ -38,13 +38,15 @@ function pad({ axes = [0, 0, 0, 0], buttons = {} } = {}) {
 }
 
 describe('device drawings', () => {
-    it('turn the rim with the steering', () => {
+    it('turn the rim as far as a 900° wheel turns', () => {
         const { root, view } = mount(wheelArtSvg());
         const rim = root.querySelector('[data-rotate="leftx"]');
-        view.render(pad({ axes: [0.5, 0, 0, 0] }), BUTTON_TARGETS);
-        expect(rim.getAttribute('transform')).toBe('rotate(60.0 320 160)');
+        // 180° to the right is 0.4 of the axis on G HUB's default 900°.
+        view.render(pad({ axes: [0.4, 0, 0, 0] }), BUTTON_TARGETS);
+        expect(rim.getAttribute('transform')).toBe('rotate(180.0 320 160)');
+        // The left stop: a turn and a quarter, as the wheel itself.
         view.render(pad({ axes: [-1, 0, 0, 0] }), BUTTON_TARGETS);
-        expect(rim.getAttribute('transform')).toBe('rotate(-120.0 320 160)');
+        expect(rim.getAttribute('transform')).toBe('rotate(-450.0 320 160)');
     });
 
     it("move a radio switch's lever with LT: up, middle, down", () => {

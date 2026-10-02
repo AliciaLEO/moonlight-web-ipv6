@@ -333,6 +333,10 @@ export function wheelArtSvg() {
     const url = (n) => `url(#${id(n)})`;
     const CX = 320;
     const CY = 160;
+    // The steering axis spans the range set in G HUB, 900° by default — the
+    // whole travel of a G29 or a G923: drawn so, the rim turns as far as the
+    // wheel in hand. A range set narrower turns it further.
+    const LOCK = 900;
     // The clutch has nowhere to go on an Xbox pad: drawn, greyed, no control.
     const pedal = (ctl, cx, w, h, text) => `
     <g class="${ctl ? 'gp-ctl ' : ''}gp-pedal${ctl ? '' : ' gp-unbound'}"${ctl ? ` data-ctl="${ctl}"` : ''}>
@@ -364,7 +368,7 @@ export function wheelArtSvg() {
 
   <!-- The rim turns with the steering; the hub and its buttons stay readable. -->
   <g class="gp-ctl gp-rim" data-ctl="leftx">
-    <g data-rotate="leftx" data-amp="120" data-cx="${CX}" data-cy="${CY}" filter="${url('drop')}">
+    <g data-rotate="leftx" data-amp="${LOCK / 2}" data-cx="${CX}" data-cy="${CY}" filter="${url('drop')}">
       <circle cx="${CX}" cy="${CY}" r="127" fill="none" stroke="${url('rim')}" stroke-width="26"/>
       <circle cx="${CX}" cy="${CY}" r="140" fill="none" class="gp-rim-edge"/>
       <circle cx="${CX}" cy="${CY}" r="114" fill="none" class="gp-rim-edge"/>
