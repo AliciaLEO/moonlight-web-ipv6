@@ -6933,8 +6933,18 @@ déclenché un essai.
 `localStorage.mw_autostep = '1'` l'active. `window.mwCadenceStepper` donne
 au banc l'état et les décisions (`events`).
 
-**Reste** : le banc (UA.3, `scripts/bench/content-age`), la porte UA (Bruno),
-puis l'« Auto » détecté par défaut (UA.4).
+**Le banc** (UA.3, nuit du 01 au 02/10, banc §8t) :
+- passé sur l'UM790Pro en Ethernet. 240 y est gardé en 4 à 10 s, au niveau
+  de `host-guarded` (−1 à −14 ms contre l'Auto) ;
+- passé aussi sur le N95 en Wi-Fi (jamais pire, chaque essai rendu en 2,6 s
+  au plus), sur le client local (−8 ms) et sur le jeu à 50 i/s (aucun
+  essai) ;
+- échoué sur le Mac en Wi-Fi. Son lien a déjà, à 120, des hausses de 1 à 2,7 s,
+  un tiers du temps, que le filet de 500 ms prend pour un échec du palier. À
+  240, son lien ne va pas plus mal qu'à 120, alors que le N95 s'y noie.
+
+**Reste** : la porte UA (Bruno), un filet jugé contre ce que le lien fait à la
+fréquence du client, puis l'« Auto » détecté par défaut (UA.4).
 
 ## 34. Le flux commun des invités (plan du 28/09 au 01/10/2026)
 

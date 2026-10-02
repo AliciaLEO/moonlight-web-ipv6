@@ -5838,6 +5838,160 @@ Corrigés en route :
 - clavier en US dans gamescope (amont ; Punktfunk porte un correctif) ;
 - pas encore vu : le vrai Steam dans gamescope, Steam rendu au bureau, un jeu.
 
+## 8t. Phase UA : l'« Auto » avec détection, UA.3 (nuit du 01 au 02/10/2026)
+
+Plan du POC Ultra, Phase UA ; design §33.10. Hôte : l'instance `--dev` de
+DualRTX, relancée à chaque passe, sur l'écran virtuel du produit à 240 Hz
+rendu tour à tour par l'Arc, l'iGPU AMD et la RTX (`local_matrix.py`,
+`--vdd-gpu`). Le client est toujours sur une autre machine, ou sur un autre GPU
+pour le client local. Trois modes alternés, deux passes chacun :
+- `client` : l'« Auto » d'aujourd'hui ;
+- `detect` : la détection (`mw_autostep=1`) ;
+- `host-guarded` : la clé de banc du plan 1.
+
+Contenus : la page à 240 i/s, le jeu à 75-83 i/s, le jeu à 49-53 i/s. Le
+clic → drapeau prend une passe de 60 clics par mode, sur le premier hôte
+seulement. Les chiffres sont l'âge affiché médian, en ms. « Gardé » donne les
+secondes entre le début du contenu et le palier gardé. Tableaux :
+`ua3_report.py` et `ua3_spikes.py` (scratchpad de la session), fichiers
+`bench-out/content-age/ua-<client>-<hôte>[-g80|-g50|-clk]-v0-<mode>-r<n>.json`.
+
+### 8t.0 Trois défauts trouvés par le banc, corrigés avant les chiffres
+
+Les premières cases sont gardées à part, dans `ua3-before-fixes/`. Après les
+corrections, tout a été refait.
+- **`e837ec18`**, deux défauts du contrôleur :
+  - un essai partait sur un contenu plus rapide pendant un seul relevé ; il en
+    faut maintenant cinq d'affilée ;
+  - un palier gardé ne redescendait jamais. Désormais, un essai pendant lequel
+    le contenu ralentit est repris sans faute, et un palier que le contenu
+    n'utilise plus redescend.
+- **`d548d3f9`** : l'hôte refusait 240 sur l'Arc, dont l'encodage (p95 de 4,4 à
+  6,9 ms) dépassait une période à 240, alors que `host-guarded` y passait
+  238 i/s. Il ne refuse plus qu'au-delà de deux images.
+- **`90af5f4b`** : le filet sautait sur les pointes du Wi-Fi du Mac. Il attend
+  maintenant que la hausse tienne 500 ms (validé par Bruno).
+
+### 8t.1 Les chiffres, page à 240 i/s
+
+| Client | Hôte | Auto | Détection | `host-guarded` | Gardé à (s) |
+|---|---|---|---|---|---|
+| UM790Pro, Windows, Ethernet, 120 Hz | Arc | 28,3 | **24,4** | 24,5 | 5,2 ; 5,5 |
+| | iGPU AMD | 28,1 | **23,8** | 23,6 | 5,5 ; 4,1 |
+| | RTX | 19,5 | **18,7** | 20,0 | 7,0 ; 5,2 |
+| UM790Pro, Ubuntu, Ethernet, 60 Hz | Arc | 29,0 | **19,2** | 20,0 | 9,4 ; 9,5 |
+| | iGPU AMD | 33,0 | **19,4** | 22,7 | 8,4 ; 8,4 |
+| | RTX | 30,1 | 23,2 | **17,3** | 9,7 ; 44,6 |
+| Client local (iGPU AMD de DualRTX), 60 Hz | Arc | 32,7 | **24,7** | 51,8 | 5,0 ; 4,8 |
+| N95, Wi-Fi, 60 Hz | Arc | 54,1 | **45,3** | 254,3 | jamais |
+| Mac M1, Wi-Fi, 120 Hz, AWDL coupé | Arc | 40,9 | 45,7 | **34,1** | jamais |
+| | iGPU AMD | 42,4 | 34,4 | **33,2** | 38,7 ; jamais |
+| | RTX | 34,9 | 33,3 | **27,0** | jamais |
+| Mac M1, Wi-Fi, 120 Hz, AWDL actif | Arc | 40,7 | 36,7 | **34,3** | 40,6 ; 41,4 |
+| | iGPU AMD | 34,5 | 35,8 | **29,0** | 40,8 ; jamais |
+| | RTX | 35,6 | 39,1 | **32,3** | jamais ; 40,3 |
+
+- **Jeu à 75-83 i/s, Auto → détection** :
+  - UM790Pro sous Ubuntu : 29,0 → 24,0 (Arc), 31,5 → 25,1 (iGPU AMD), 27,3 → 20,3
+    (RTX) ; 120 gardé en ~6 s ;
+  - client local : 30,6 → 25,8 ;
+  - N95 : 61,0 → 53,8 (aucun palier gardé) ;
+  - Mac : aucun essai, et un écart de −6 à +5 ms, dans le bruit du Wi-Fi.
+- **Jeu à 49-53 i/s** : aucun essai, sur tous les clients. Sur le N95, 52,8 → 54,2 :
+  sans aucun essai, la détection ne fait rien, donc c'est le bruit du Wi-Fi.
+- **Clic → drapeau, Auto → détection** (une passe de 60 clics par mode) :
+  - UM790Pro sous Windows : 35,0 → 33,6 ;
+  - UM790Pro sous Ubuntu : 31,8 → 24,1 ;
+  - client local : 49,2 → 51,2 ;
+  - Mac : 71,1 → 80,0, puis 76,6 → 81,9 sans AWDL ;
+  - N95 : 89,5 → 92,5, avec deux essais rendus pendant la passe.
+- **Images répétées par minute**, avec la détection : 1 590-2 266 → 384-594 sous
+  Windows ; 348-855 → 0-51 sous Ubuntu.
+- **Images non montrées** : elles montent (1 600 → 7 700 par minute à 240 sur
+  un écran à 120 Hz). Ce sont les images envoyées entre deux rafraîchissements,
+  le prix du palier, pas des sauts visibles.
+
+### 8t.2 Ce que la détection a décidé
+
+| Client | Essais | Gardés | Filet | Gain d'un palier gardé |
+|---|---|---|---|---|
+| UM790Pro, Windows | 7 | 7 | 0 | 4,4 à 5,9 ms |
+| UM790Pro, Ubuntu | 21 | 20 | 1 | 3,0 à 8,9 ms |
+| Client local | 6 | 5 | 1 | 3,8 à 5,6 ms |
+| N95 | 8 | 0 | 8, de 0,55 à 2,6 s après la demande | — |
+| Mac, AWDL coupé | 14 | 5 | 13 : 9 pendant l'essai, 4 juste après le palier gardé | 6,8 à 29,4 ms |
+
+Sur le N95, chaque essai saute au filet avec capture → peinte entre 44 et
+189 ms, et le flux revient à 59 i/s. Sur le Mac, le palier qui tient gagne gros
+(médiane des gains : 18 ms). Mais le lien y fait à 240 des pointes de 70 à
+136 ms qui tiennent plus de 500 ms, et le filet rend le palier.
+`host-guarded`, qui n'a pas de filet, traverse ces pointes (p99 de 117 à
+236 ms) et garde la meilleure médiane.
+
+Ce que fait le lien sans aucun palier (`ua3_spikes.py`). Une « hausse » est
+une période où la médiane glissante sur 250 ms de capture → montrée dépasse la
+borne du filet : la référence à la fréquence du client, plus une
+demi-période.
+
+| Client | En hausse, à la fréquence du client | Plus longues hausses | En hausse, à 240 (`host-guarded`) |
+|---|---|---|---|
+| UM790Pro, Windows | 0 à 6 % du temps | 0,3 s au plus | 0 à 10 % |
+| Mac, AWDL coupé | 37 à 43 % | 1,8 à 2,6 s | 26 à 36 % |
+| N95 | 37 % | 2,7 à 3,5 s | 100 % |
+
+À 240, le lien du Mac ne va pas plus mal qu'à 120. Le N95, lui, s'y noie. Un
+filet tenu 500 ms ne distingue pas les deux cas.
+
+### 8t.3 La porte, client par client
+
+- **UM790Pro en Ethernet : passée.**
+  - Sous Windows à 120 Hz, 240 est gardé en 4 à 7 s, et la détection rejoint
+    `host-guarded` (−0,8 à −4,3 ms contre l'Auto).
+  - Sous Ubuntu à 60 Hz, 240 est gardé en 8 à 10 s sur l'Arc et l'iGPU AMD
+    (−9,8 et −13,7 ms).
+  - Sur la RTX, une passe sur deux garde le palier tard (44,6 s), et
+    `host-guarded` reste 6 ms devant.
+  - Le clic → drapeau n'est pas pire.
+- **N95 en Wi-Fi : passée.** Aucun palier n'est gardé. La détection fait
+  −8,8 et −7,2 ms contre l'Auto ; le +1,4 ms du jeu à 50 i/s, sans aucun essai,
+  vient du bruit. Là où `host-guarded` monte à 254 ms, elle redescend en
+  moins de 2,6 s. Le clic → drapeau prend +3,0 ms (une passe).
+- **Client local : passée, au-delà de l'attendu.** 120 est gardé en ~5 s,
+  pour −8,0 ms. Ce client partage le compositeur de l'hôte (§10 du plan).
+  Le clic → drapeau (+2,0 ms, une passe) reste dans le bruit.
+- **Mac en Wi-Fi : échouée.**
+  - 240 n'est gardé qu'au second essai (~40 s, après le recul de 30 s), ou
+    jamais.
+  - La médiane va de −8,0 à +4,8 ms contre l'Auto selon les cases, alors que
+    `host-guarded` gagne 6 à 8 ms partout.
+  - Le clic → drapeau est pire de 5 à 9 ms (une passe).
+  - Couper AWDL n'y a rien changé.
+- **Jeu à 49-53 i/s : passée.** Aucun essai, nulle part.
+
+### 8t.4 Incidents
+
+- L'écran de la RTX (DISPLAY5) a quitté le bureau deux fois en passant à
+  l'écran virtuel du produit. C'était connu (01/10 à 15:44), et la série a
+  continué. Il n'est pas revenu depuis 23:30 : Bruno le rallume.
+- Le classifieur de Claude Code a refusé le redémarrage de l'UM790Pro vers
+  Windows : Bruno l'a fait lui-même.
+- Le clip d'une autre session a occupé l'écran du client pendant la première
+  phase sous Ubuntu. Elle a été refaite (lx2).
+- Une phase coupée en pleine passe a laissé l'écran virtuel allumé et
+  `vdd_settings.xml` modifié. `ua3-stop.ps1` les remet, à partir de la copie de
+  référence.
+- Le Chrome d'une autre session tenait le port 9333 du kiosque :
+  `MW_BENCH_DEBUG_PORT` (`fadabb78`).
+- Le lien Wi-Fi du Mac ne se vide pas au débit automatique (60 Mbit/s) : file du
+  lien et images clés redemandées, dans tous les modes.
+
+### 8t.5 Ce qui reste
+
+- **Le filet en Wi-Fi.** Il devrait se juger contre ce que le lien fait déjà à
+  la fréquence du client : la part du temps en hausse, la plus longue hausse.
+  Le correctif est à mesurer sur le Mac et sur le N95.
+- **La porte UA** : la décision revient à Bruno.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
