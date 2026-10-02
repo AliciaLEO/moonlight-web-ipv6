@@ -33,6 +33,8 @@
  * is asked for its throttle, a wheel for its brake pedal, each in the order
  * it is held. The targets stay the Xbox controls the host presents; only the
  * order and the words change. The user can correct the kind in the dialog.
+ * A radio sends only the channels its model mixes: the dialog says where the
+ * profile reads its switches, and which channel to mix when one stays silent.
  *
  * The dialog reads the pad itself; a stream running underneath is paused by
  * the caller (onOpen / onClose) so mapping "A" does not press A in the game.
@@ -212,6 +214,32 @@ export function stepDir(kind, target) {
 function parkedStep(kind, target) {
     if (kind === 'gamepad') return target === 'lefty' || target === 'righty';
     return target === 'lefty' && kind !== 'wheel';
+}
+
+/** Where the radio profile reads each switch and button (BUILTIN_PADS). */
+const RC_CHANNELS = {
+    lefttrigger: 5,
+    righttrigger: 6,
+    a: 9,
+    b: 10,
+    x: 11,
+    y: 12,
+    leftshoulder: 13,
+    rightshoulder: 14,
+    back: 15,
+    start: 16,
+};
+
+/** How long a radio's switch step waits for anything before saying why. */
+const UNMIXED_AFTER_MS = 4000;
+
+/**
+ * The channel to mix for a radio's step that nothing answers: a radio sends
+ * its channels only, so a switch its model leaves unmixed sends nothing, and
+ * no wizard or driver can catch it. 0 where there is nothing to mix.
+ */
+export function unmixedChannel(kind, target) {
+    return kind === 'rc' ? RC_CHANNELS[target] || 0 : 0;
 }
 
 /** Badge class + label for a resolution source. */
@@ -493,9 +521,22 @@ export class GamepadRemapDialog {
             }
             return;
         }
+        // Each step's own clock, for a radio's switch that stays silent.
+        const now = performance.now();
+        if (w.stepIdx !== w.idx) {
+            w.stepIdx = w.idx;
+            w.stepAt = now;
+            w.silent = false;
+        }
         const exclude = Object.values(w.bindings);
         const b = detectInput(w.base, gp, target, exclude, stepDir(w.kind, target));
-        if (!b) return;
+        if (!b) {
+            if (!w.silent && unmixedChannel(w.kind, target) && now - w.stepAt > UNMIXED_AFTER_MS) {
+                w.silent = true;
+                this._renderStatic();
+            }
+            return;
+        }
         w.bindings[target] = b;
         w.caught = b;
         this._art.setMapped(target, true);
@@ -595,6 +636,10 @@ export class GamepadRemapDialog {
                 res.source ? 'gamepad.remap.testPrompt' : 'gamepad.remap.unknown',
             );
             if (isAutoMapped(res.source)) hint = t('gamepad.remap.guessed');
+            // A radio laid out by its profile: where its switches must be mixed.
+            if (res.kind === 'rc' && res.source === 'builtin') {
+                hint = `${hint} ${t('gamepad.remap.rcMixHint')}`;
+            }
             // The user's own layout, or only the kind they picked: either
             // way, there is something to go back from.
             const own = this._key ? getMapping(this._key) : null;
@@ -622,6 +667,12 @@ export class GamepadRemapDialog {
                 if (target === 'guide') hint = t('gamepad.remap.guideHint');
                 // A throttle can only move away from where it rests.
                 if (parkedStep(w.kind, target)) hint = t('gamepad.remap.parkedHint');
+                // A radio's switch that sends nothing: its model does not mix it.
+                if (w.silent && w.stepIdx === w.idx) {
+                    hint = t('gamepad.remap.rcUnmixedHint', {
+                        ch: unmixedChannel(w.kind, target),
+                    });
+                }
             }
             if (w.caught) {
                 els.raw.textContent = describeBinding(w.caught);

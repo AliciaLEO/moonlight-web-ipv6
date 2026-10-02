@@ -217,6 +217,8 @@
             "done": "Every control is set. Save to use this layout.",
             "guideHint": "Some browsers keep this button for themselves. Skip it if nothing happens.",
             "parkedHint": "A stick that does not spring back (a throttle): move it, then bring it back where it was.",
+            "rcMixHint": "A radio sends a switch only once its model mixes it onto a channel: channels 5 and 6 give LT and RT, channels 9 to 16 give A, B, X, Y, LB, RB, Back and Start.",
+            "rcUnmixedHint": "Nothing comes? A radio sends a switch only once its model mixes it onto a channel: on the radio, mix this one onto channel {{ch}}, then try again.",
             "saved": "Layout saved for “{{name}}”.",
             "remap": "Remap",
             "start": "Map this controller",

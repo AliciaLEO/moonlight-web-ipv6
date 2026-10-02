@@ -8,8 +8,14 @@ import {
     WIZARD_STEPS,
     stepPrompt,
     stepDir,
+    unmixedChannel,
 } from '../js/ui/GamepadRemapDialog.js';
-import { BUTTON_TARGETS, AXIS_TARGETS } from '../js/stream/gamepadMapping.js';
+import {
+    BUTTON_TARGETS,
+    AXIS_TARGETS,
+    resolveMapping,
+    snapshot,
+} from '../js/stream/gamepadMapping.js';
 
 /**
  * "Skip to the sticks": a device taken for a pad, with none of the seventeen
@@ -89,5 +95,143 @@ describe('remap wizard, in the words of the device', () => {
         expect(stepDir('gamepad', 'lefty')).toBe(1);
         expect(stepDir('wheel', 'leftx')).toBe(1);
         expect(stepDir('rc', 'righty')).toBe(1);
+    });
+});
+
+/**
+ * A radio sends its channels and nothing else: a switch its model does not
+ * mix never reaches the browser. Bruno's TX12 (02/10/2026), on a model that
+ * mixed only the sticks, gave the wizard nothing to catch past them.
+ */
+describe('remap wizard, a radio switch that stays silent', () => {
+    /** A TX12 at rest as Chrome reports it: 8 channel axes, 24 buttons. */
+    const radio = () => ({
+        id: 'Radiomaster TX12 Joystick (Vendor: 1209 Product: 4f54)',
+        mapping: '',
+        connected: true,
+        axes: new Array(8).fill(0),
+        buttons: Array.from({ length: 24 }, () => ({ pressed: false, value: 0 })),
+    });
+
+    /** The dialog's own elements, for _renderStatic run on a stand-in. */
+    function dialogEls() {
+        const root = document.createElement('div');
+        root.innerHTML = `
+            <div class="stage"></div><div class="empty"></div>
+            <span class="prompt"></span><span class="raw"></span>
+            <div class="progress"><span></span></div>
+            <p class="hint" hidden></p><div class="actions"></div>`;
+        const q = (s) => root.querySelector(s);
+        return {
+            stage: q('.stage'),
+            empty: q('.empty'),
+            prompt: q('.prompt'),
+            raw: q('.raw'),
+            progress: q('.progress'),
+            bar: q('.progress > span'),
+            hint: q('.hint'),
+            actions: q('.actions'),
+        };
+    }
+
+    it('names the channel the radio profile reads each switch on', () => {
+        const { bindings } = resolveMapping(radio(), { platform: 'win' });
+        const sticks = ['leftx', 'lefty', 'rightx', 'righty'];
+        for (const target of WIZARD_STEPS.rc) {
+            const b = bindings[target];
+            // CH1-8 are the axes 0-7, CH9 and up the buttons 0 and up.
+            const ch = b.t === 'a' ? b.i + 1 : b.i + 9;
+            expect([target, unmixedChannel('rc', target)]).toEqual([
+                target,
+                sticks.includes(target) ? 0 : ch,
+            ]);
+        }
+        // Only a radio has switches to mix.
+        expect(unmixedChannel('wheel', 'a')).toBe(0);
+        expect(unmixedChannel('gamepad', 'lefttrigger')).toBe(0);
+    });
+
+    it('says which channel to mix after 4 s on a silent switch, once', () => {
+        const gp = radio();
+        const fake = wizardAt('a', {}, 'rc');
+        Object.assign(fake._wiz, { waitRelease: false, caught: null, base: snapshot(gp) });
+        const now = vi.spyOn(performance, 'now');
+        const frameAt = (ms) => {
+            now.mockReturnValue(ms);
+            GamepadRemapDialog.prototype._wizardFrame.call(fake, gp);
+        };
+        try {
+            frameAt(1000);
+            frameAt(4900);
+            expect(fake._wiz.silent).toBe(false);
+            expect(fake._renderStatic).not.toHaveBeenCalled();
+            frameAt(5100);
+            expect(fake._wiz.silent).toBe(true);
+            frameAt(9000);
+            expect(fake._renderStatic).toHaveBeenCalledTimes(1);
+            // The next step starts its own clock.
+            GamepadRemapDialog.prototype._wizardSkip.call(fake);
+            frameAt(9100);
+            expect(fake._wiz.silent).toBe(false);
+        } finally {
+            now.mockRestore();
+        }
+    });
+
+    it('never on a stick, nor on a device other than a radio', () => {
+        const gp = radio();
+        const now = vi.spyOn(performance, 'now');
+        try {
+            for (const [target, kind] of [
+                ['leftx', 'rc'],
+                ['lefttrigger', 'gamepad'],
+                ['a', 'wheel'],
+            ]) {
+                const fake = wizardAt(target, {}, kind);
+                Object.assign(fake._wiz, { waitRelease: false, base: snapshot(gp) });
+                now.mockReturnValue(0);
+                GamepadRemapDialog.prototype._wizardFrame.call(fake, gp);
+                now.mockReturnValue(60000);
+                GamepadRemapDialog.prototype._wizardFrame.call(fake, gp);
+                expect([target, kind, fake._wiz.silent]).toEqual([target, kind, false]);
+            }
+        } finally {
+            now.mockRestore();
+        }
+    });
+
+    it('shows the hint under the step, and the mixing in Test', () => {
+        const art = { setTarget: vi.fn(), setMapped: vi.fn() };
+        const wizard = {
+            _els: dialogEls(),
+            _art: art,
+            _view: 'wizard',
+            _selectedPad: () => null,
+            _wiz: { ...wizardAt('a', {}, 'rc')._wiz, waitRelease: false, caught: null },
+        };
+        wizard._wiz.stepIdx = wizard._wiz.idx;
+        wizard._wiz.silent = true;
+        GamepadRemapDialog.prototype._renderStatic.call(wizard);
+        expect(wizard._els.hint.hidden).toBe(false);
+        expect(wizard._els.hint.textContent).toBe('gamepad.remap.rcUnmixedHint');
+
+        // Test reads the radio through its profile: a desktop browser's.
+        const ua = vi
+            .spyOn(navigator, 'userAgent', 'get')
+            .mockReturnValue('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/154.0');
+        const gp = radio();
+        const test = {
+            _els: dialogEls(),
+            _art: art,
+            _view: 'test',
+            _key: 'usb:1209:4f54',
+            _selectedPad: () => gp,
+        };
+        try {
+            GamepadRemapDialog.prototype._renderStatic.call(test);
+        } finally {
+            ua.mockRestore();
+        }
+        expect(test._els.hint.textContent).toBe('gamepad.remap.guessed gamepad.remap.rcMixHint');
     });
 });

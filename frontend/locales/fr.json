@@ -217,6 +217,8 @@
             "done": "Toutes les commandes sont réglées. Enregistrez pour utiliser cette disposition.",
             "guideHint": "Certains navigateurs se réservent ce bouton. Passez l’étape s’il ne se passe rien.",
             "parkedHint": "Manche qui ne revient pas au centre (gaz) : bougez-le puis ramenez-le où il était.",
+            "rcMixHint": "Une radio n’envoie un inter qu’une fois mixé sur une voie par son modèle : les voies 5 et 6 donnent LT et RT, les voies 9 à 16 donnent A, B, X, Y, LB, RB, Back et Start.",
+            "rcUnmixedHint": "Rien ne vient ? Une radio n’envoie un inter qu’une fois mixé sur une voie par son modèle : sur la radio, mixez celui-ci sur la voie {{ch}}, puis réessayez.",
             "saved": "Disposition enregistrée pour « {{name}} ».",
             "remap": "Remapper",
             "start": "Configurer cette manette",
