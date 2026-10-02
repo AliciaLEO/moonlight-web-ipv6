@@ -25,9 +25,19 @@
  * The result is in millihertz, unrounded: the host multiplies the exact
  * measured period, and 164 800 mHz for a 165 Hz panel is a better number for
  * that than a snapped 165 000 would be if the panel really runs at 164.8.
+ *
+ * ── On a TV ─────────────────────────────────────────────────────────────────
+ *
+ * A TV is measured once: its first good reading stands for the page's
+ * lifetime. It has one panel, and a stream fills its main thread — rAF then
+ * ticks at the page's pace, with more than half the refreshes skipped, which
+ * no median sorts out. Under a stream on 01/10/2026 the Mi TV's 60 Hz panel
+ * read 34 Hz and the Freebox Player POP's 50 Hz read 29.4; the host took the
+ * 34 for a new screen and ran a stream set to 30 at 34 fps, at the ceiling of
+ * that TV's decoder.
  */
 
-import { IS_LOW_MEMORY } from './BrowserDetect.js';
+import { IS_LOW_MEMORY, IS_TV } from './BrowserDetect.js';
 
 /** @type {number} Last good measurement, millihertz. 0 = none yet. */
 let _milliHz = 0;
@@ -43,13 +53,15 @@ const CHANGE_THRESHOLD = 0.01;
 
 /**
  * Measure the refresh rate now. Resolves with millihertz, or with the last
- * good value (possibly 0) when the tab is hidden or the sampling times out.
+ * good value (possibly 0) when the tab is hidden or the sampling times out —
+ * and on a TV, as soon as there is one ("On a TV" above).
  * Concurrent callers share one measurement.
  * @param {{frames?: number, timeoutMs?: number}} [opts]
  * @returns {Promise<number>}
  */
 export function measureRefreshRate(opts = {}) {
     if (_inFlight) return _inFlight;
+    if (IS_TV && _milliHz > 0) return Promise.resolve(_milliHz);
     const frames = opts.frames || 90;
     const timeoutMs = opts.timeoutMs || 2500;
     if (typeof document !== 'undefined' && document.hidden) return Promise.resolve(_milliHz);
@@ -204,7 +216,8 @@ export function onRefreshRateChange(cb) {
  * Measure once now and again whenever the window may have changed screen: a
  * resize (a move between monitors of different geometry always resizes; one
  * between identical monitors is caught by the screen change event where the
- * browser has it), a `Screen.change`, and the tab becoming visible again.
+ * browser has it), a `Screen.change`, and the tab becoming visible again —
+ * except on a TV, whose first good reading stands (measureRefreshRate).
  * Idempotent; the first call is enough for the page's lifetime.
  */
 export function startRefreshRateMonitor() {
