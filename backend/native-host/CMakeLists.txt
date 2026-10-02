@@ -28,6 +28,9 @@ add_library(mw-native-host STATIC
     # diagonal). Building it on every platform is what lets the tests check it
     # without a driver or a pad.
     src/input/Ds4Mapping.cpp
+    # The HID passthrough's descriptor, rebuilt from WebHID's collections and
+    # checked before the host creates anything. Pure as well, so tested anywhere.
+    src/input/HidDescriptor.cpp
 )
 
 # ── Platform backend selection ──────────────────────────────────────────────
@@ -497,6 +500,7 @@ if(MW_BUILD_TESTS)
         tests/test_openh264.cpp
         tests/test_bgra_to_i420.cpp
         tests/test_ds4_mapping.cpp
+        tests/test_hid_descriptor.cpp
         tests/test_stage_stats.cpp
         tests/test_frame_cadence.cpp
         tests/test_resample_cost.cpp
