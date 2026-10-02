@@ -5985,12 +5985,48 @@ filet tenu 500 ms ne distingue pas les deux cas.
 - Le lien Wi-Fi du Mac ne se vide pas au débit automatique (60 Mbit/s) : file du
   lien et images clés redemandées, dans tous les modes.
 
-### 8t.5 Ce qui reste
+### 8t.5 Ce qui restait
 
 - **Le filet en Wi-Fi.** Il devrait se juger contre ce que le lien fait déjà à
   la fréquence du client : la part du temps en hausse, la plus longue hausse.
   Le correctif est à mesurer sur le Mac et sur le N95.
-- **La porte UA** : la décision revient à Bruno.
+- **La porte UA** : tranchée par Bruno le 02/10 (option 1). L'« Auto » détecté
+  devient le défaut (`79457514`), et le filet du Mac est corrigé avant le push
+  (§8t.6).
+
+### 8t.6 UA.3 bis : le filet élargi, sur le Mac et le N95 (02/10, 10:55-11:52)
+
+Le filet s'élargit quand le lien, à la fréquence du client, a déjà fait des
+hausses plus longues que 500 ms (`1c4fe238`, `8e3c0c11`, design §33.10). Même
+montage que la nuit. Le Mac est sur secteur, AWDL tel quel, les jeux de Léo
+arrêtés pendant la phase. Le N95 est sur l'Arc seulement. Wi-Fi de jour, plus
+chargé : l'Auto du Mac sur l'Arc est à 52 ms, contre 41 la nuit.
+
+| Client | Hôte | Auto | Détection | `host-guarded` | Palier gardé à (s) |
+|---|---|---|---|---|---|
+| Mac M1, Wi-Fi, 120 Hz | Arc | 52,3 | **38,0** | 46,3 | 7,4 ; 7,8 |
+| | iGPU AMD | 42,9 | 32,5 | **28,4** | 7,0 ; 6,5 |
+| | RTX | 35,9 | 36,0 | **27,9** | 7,0 ; 6,9 |
+| N95, Wi-Fi, 60 Hz | Arc | 54,7 | **52,4** | 241,8 | jamais |
+
+- **Mac : le palier est gardé en moins de 10 s, dans les 7 passes** (clics
+  compris). Le premier essai y prend le filet élargi, de 1,2 à 2,9 s, et il est
+  gardé sur le quartile bas avec 1,8 à 12,2 ms de gain. La nuit, c'était vers
+  40 s ou jamais. Le clic → drapeau ne se dégrade pas : 76,5 → 75,1 ms.
+- **Mais il ne tient pas.** Dans 5 passes sur 7, une hausse plus longue que le
+  filet calculé sur les premières secondes le fait sauter, de 0,3 à 21 s après
+  le palier. Sans palier, le lien du Mac monte jusqu'à 1,8 s ; à 240
+  (`host-guarded`), jusqu'à 2,8 s. Sur la RTX, le palier perdu vers 19 s laisse
+  la médiane au niveau de l'Auto.
+- **N95 : jamais pire.** −2,2 ms sur la page, clic → drapeau 113,2 → 114,0 ms
+  (une passe).
+  - Le premier essai prend aussi le filet élargi (0,7 à 2,0 s), car le lien du
+    N95 monte lui aussi sans palier. Mais la file du décodeur le rend en 0,6 à
+    1,3 s, avant le filet.
+  - Le second essai, étroit, est rendu en 0,5 à 0,7 s, puis 16 min d'attente.
+- **Suite proposée** : un filet élargi d'au moins 3 s (4 s au plus), qui
+  couvre les hausses du Mac à 240. Le N95 n'y perd rien : sa file de décodeur,
+  ou son essai jugé à 2,9 s, le rend avant. À refaire sur le Mac.
 
 ## 9. Pour l'A/B
 
