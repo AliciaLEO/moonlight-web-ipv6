@@ -158,6 +158,16 @@ They reach the game as every pad does, as an **Xbox 360 controller**: two sticks
 - CH9-16 (the radio's buttons 0-7, pressed when the channel is above 0) → A, B, X, Y, LB, RB, Back, Start. CH7-8 go nowhere: an Xbox pad has six analog channels;
 - Mode 1, another channel order or the Advanced mode: the wizard.
 
+**A switch reaches the computer only through a channel.** A radio sends its channels and nothing else: a switch or a button its model does not mix onto a channel sends nothing, and neither the wizard nor any driver on the client can see it. A model made for the USB link often mixes the sticks only (CH1-4). Mix the rest in the model's **Mixes** page:
+
+| Channel | Source, for instance | The game receives |
+|---|---|---|
+| CH5 | a 2-position switch (arming) | LT: 0 or full |
+| CH6 | a 3-position switch (flight mode) | RT: 0, half or full |
+| CH9 to CH16 | a switch or a button each | A, B, X, Y, LB, RB, Back, Start, pressed above 0 |
+
+For a radio, **Test** says where its switches are read, and the wizard says which channel to mix a switch on when it stays silent for 4 s.
+
 **The G923 for Xbox profile:**
 
 - the rim → left stick X; accelerator → RT, brake → LT;
@@ -166,7 +176,7 @@ They reach the game as every pad does, as an **Xbox 360 controller**: two sticks
 
 **Plugged in without G HUB, the G923 for Xbox stays an Xbox device** (`046d:c26d`) that neither the browser nor `joy.cpl` lists: install G HUB on the client.
 
-**The device's kind** (gamepad, RC radio, flight stick, wheel) comes from the user's choice, then the USB ids, then the name (`edgetx`, `hotas`, `rudder`, `wheel`, `fanatec`…), a gamepad otherwise. Settings → Controllers shows it as an icon. **Test** and **Remap** draw that device, each control tagged with what the game gets (LT, A, LS…): a radio's gimbals and switches, a flight stick's grip, twist and throttle, a wheel's rim, paddles and pedals (the clutch greyed: it has no place on an Xbox pad). The wizard asks in the device's words and order (yaw, throttle, roll, pitch; steering, accelerator, brake, paddles). The dialog's **Type** selector corrects a wrong guess, and is saved on its own.
+**The device's kind** (gamepad, RC radio, flight stick, wheel) comes from the user's choice, then the USB ids, then the name (`edgetx`, `hotas`, `rudder`, `wheel`, `fanatec`…), a gamepad otherwise. Settings → Controllers shows it as an icon. **Test** and **Remap** draw that device, each control tagged with what the game gets (LT, A, LS…): a radio's gimbals and switches, a flight stick's grip, twist and throttle, a wheel's rim, paddles and pedals (the clutch greyed: it has no place on an Xbox pad). The drawn rim turns as far as the wheel on G HUB's default 900°; on a narrower range it turns further. The wizard asks in the device's words and order (yaw, throttle, roll, pitch; steering, accelerator, brake, paddles). The dialog's **Type** selector corrects a wrong guess, and is saved on its own.
 
 **An axis without a spring** (a throttle, a pedal) rests at an end stop. The wizard reads its direction from that rest, not from the move, so a throttle parked down never comes out inverted. The rest is taken when the wizard starts: start it with the throttle down.
 
@@ -179,7 +189,7 @@ They reach the game as every pad does, as an **Xbox 360 controller**: two sticks
 | Automobilista 2 | controller filtering off |
 | Forza Motorsport | steering "Simulation", axis dead zone inside 0, outside 100 |
 
-**On the client, Logitech G HUB** — where the wheel is plugged in; on the host it never sees the wheel. Set the wheel's rotation angle there (the game sees a stick: the rim's full turn is the stick's full travel), and turn on the centering spring: no force feedback comes back from the game, and without the spring the rim stays where it was left.
+**On the client, Logitech G HUB** — where the wheel is plugged in; on the host it never sees the wheel. Set the wheel's rotation angle there (the game sees a stick: the rim's full turn is the stick's full travel, which the game turns into the car's full lock — set the car's lock there, and the rim turns as the car's does), and turn on the centering spring: no force feedback comes back from the game, and without the spring the rim stays where it was left.
 
 **What the game receives** shows on a Windows host in `joy.cpl`: a "Controller (XBOX 360 For Windows)", whose axes move with the rim, the pedals or the radio's sticks.
 
