@@ -6028,6 +6028,33 @@ chargé : l'Auto du Mac sur l'Arc est à 52 ms, contre 41 la nuit.
   couvre les hausses du Mac à 240. Le N95 n'y perd rien : sa file de décodeur,
   ou son essai jugé à 2,9 s, le rend avant. À refaire sur le Mac.
 
+### 8t.7 Un flux à 120 i/s fixe sur un écran à 60 Hz (N95, 02/10, 14:33-15:02)
+
+Question de Bruno : choisir 120 i/s plutôt que l'Auto sur un client à 60 Hz
+qui déchire, l'écran virtuel du produit étant à 240 Hz. Client N95 (Wi-Fi,
+tearing), hôte Arc, une image lue sur dix, `--settle 14`, deux passes
+alternées par case (`local_matrix.py --fps`), 40 clics dans la première passe
+de la page. Âge affiché médian (p99), ms, moyenne des passes :
+
+| Mode | Page à 240 i/s | Jeu à 75-83 i/s | Dessinées/s (page) | Clic → drapeau |
+|---|---|---|---|---|
+| Auto sans détection (59 i/s) | 62,3 (211) | 56,2 (126) | 58,8 | 97,7 (39 clics) |
+| 120 i/s fixe | 143 (458) | 127 (423) | 78,7 | 148 (21 clics sur 40) |
+| Auto avec détection (le défaut) | 61,3 (350) | 55,7 (253) | 60,2 | 119,8 ¹ (37 clics) |
+
+¹ Passe refaite une demi-heure plus tard (la première avait perdu son rapport
+sur un « → » dans un tube cp1252, corrigé) : clic → drapeau non alterné, dans
+le bruit du Wi-Fi.
+
+- **120 i/s fixe** : le N95 n'en dessine que 67 à 81 et l'image affichée vieillit
+  de 70 à 80 ms en moyenne (120 ms sur une passe). Le gouverneur de décodage plafonne l'hôte à 70-83 i/s au bout
+  de 16 à 42 s, ce qui reste au-dessus de ce que le lien et le décodeur tiennent.
+  Le jeu à ~79 i/s passe en entier sous 120 : sans plafond, 175 ms sur une passe.
+- **Détection** : deux essais par passe à 118 i/s, rendus par la file du
+  décodeur ou le filet en 0,5 à 4 s, puis 59 i/s : la médiane d'Auto. Chaque
+  essai laisse une pointe, d'où le p99 ; le recul (30 s, 1, 2, 4 min…) les
+  espace, et une passe de 30 s en début de stream en montre plus que la suite.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
