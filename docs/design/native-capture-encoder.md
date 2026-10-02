@@ -6924,7 +6924,8 @@ déclenché un essai.
   Rien ne les distingue dans la première seconde. D'où les règles :
   - si le lien, à la fréquence du client, est resté au-dessus de la borne plus
     de 500 ms (dans les images gardées avant l'essai, ou dans la dernière
-    minute), l'essai tient pendant sa plus longue hausse × 1,2 (4 s au plus). Il
+    minute), l'essai tient pendant sa plus longue hausse × 1,2, entre 3 et
+    4 s. Il
     est jugé sur le quartile bas de capture → peinte, qu'une hausse ne déplace
     pas. Sinon, 500 ms comme avant ;
   - un essai élargi qui échoue, rendu ou par le filet, compte comme un filet et
@@ -6934,6 +6935,12 @@ déclenché un essai.
 
   En simulation, le Mac garde ainsi 240 en moins de 10 s, et le N95 paie un
   essai élargi, puis un étroit, avant d'attendre 16 min.
+
+  Le plancher de 3 s vient du banc du Mac (§8t.6 du banc). Les hausses vues
+  avant l'essai, 1,2 à 2,9 s de filet, ne sont pas les plus longues : à 240,
+  le lien du Mac monte jusqu'à 2,8 s, et le palier gardé a sauté dans 5 passes
+  sur 7. Le N95 n'y perd rien : sa file de décodeur le rend en 0,6 à 1,3 s, ou
+  son essai est jugé à 2,9 s.
 
   Rejoué hors ligne sur les passes `host-guarded` de la nuit, le filet de
   500 ms sautait sur les 12 passes du Mac, l'élargi sur 2.

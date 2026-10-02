@@ -21,6 +21,7 @@ import {
     CadenceStepper,
     FASTER_STATS,
     FILET_HOLD_MS,
+    FILET_WIDE_MIN_MS,
     HELD_MS,
     ladder,
     QUEUE_HOLD_MS,
@@ -357,6 +358,24 @@ describe('CadenceStepper', () => {
         expect(kept.measure).toBe('lower quartile');
         // And it stays through the rises that follow.
         expect(s.stepper.events.filter((e) => e.what === 'fallback' && e.at > kept.at)).toEqual([]);
+    });
+
+    it('holds a widened step through rises longer than the ones seen before it', () => {
+        // The Mac at 240: rises of 0.8 s at its own rate, then of 2.5 s at
+        // the step. A net of the longest seen × 1.2 would drop the step.
+        const s = setup({
+            latency: (rate, t) => {
+                if (rate > 120) return t % 5000 < 2500 ? 80 : 20;
+                return t > 3000 && t % 5000 < 800 ? 80 : 20;
+            },
+        });
+        s.run(120000);
+        const trials = s.stepper.events.filter((e) => e.what === 'trial');
+        expect(trials.at(-1).netMs).toBe(FILET_WIDE_MIN_MS);
+        const kept = s.stepper.events.find((e) => e.what === 'kept');
+        expect(kept).toBeDefined();
+        expect(s.stepper.events.filter((e) => e.what === 'fallback' && e.at > kept.at)).toEqual([]);
+        expect(s.stepper.stepFps).toBe(240);
     });
 
     it('widens its first trial when the link already rose, and keeps the step within ten seconds', () => {

@@ -76,7 +76,8 @@
  * second, so the net widens on trust. When the link, at the client's rate,
  * has stood above the bound longer than FILET_HOLD_MS — in the frames kept
  * before the trial, or over LINK_HISTORY_MS since — the trial holds through
- * its longest rise × FILET_WIDE_FACTOR, FILET_WIDE_MAX_MS at most, and is
+ * its longest rise × FILET_WIDE_FACTOR, FILET_WIDE_MIN_MS at least and
+ * FILET_WIDE_MAX_MS at most, and is
  * judged on the lower quartile of capture → painted, which a rise does not
  * move. A widened trial that fails, given up or tripped, counts as a trip and
  * makes the next one narrow; a narrow net that trips on a rise, or a widened
@@ -126,6 +127,12 @@ export const FILET_HOLD_MS = 500;
 export const LINK_HISTORY_MS = 60000;
 /** The widened net holds through the link's longest rise times this… */
 export const FILET_WIDE_FACTOR = 1.2;
+/**
+ * …at least this long: the rises seen before a trial are not the longest the
+ * link has. The Mac on Wi-Fi rose up to 1.8 s at its own rate and 2.8 s at
+ * 240 later on, and lost its kept 240 in 5 passes of 7 (02/10/2026).
+ */
+export const FILET_WIDE_MIN_MS = 3000;
 /** …at most this long: past it, a rise is not the link's own. */
 export const FILET_WIDE_MAX_MS = 4000;
 /** Frames waiting at the decoder that make a queue… */
@@ -551,7 +558,7 @@ export class CadenceStepper {
         const rise = Math.max(this._longestBaseRise(now), this._scanBaseRises());
         this._wide = this._widen && rise >= FILET_HOLD_MS;
         this._hold = this._wide
-            ? Math.min(FILET_WIDE_MAX_MS, Math.max(FILET_HOLD_MS, rise * FILET_WIDE_FACTOR))
+            ? Math.min(FILET_WIDE_MAX_MS, Math.max(FILET_WIDE_MIN_MS, rise * FILET_WIDE_FACTOR))
             : FILET_HOLD_MS;
         this._baseTo = now;
         this._try = this._level + 1;
