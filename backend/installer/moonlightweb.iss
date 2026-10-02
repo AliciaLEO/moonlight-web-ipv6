@@ -712,6 +712,10 @@ begin
   // install never gets here at all), the box sits under the closing text.
   if CurPageID = wpFinished then begin
     if WizardForm.RunList.Visible then begin
+      // RunList draws its check glyph Offset pixels in from its own left edge;
+      // match it so both boxes stand in one column.
+      AutostartCheck.Left := WizardForm.RunList.Left + WizardForm.RunList.Offset;
+      AutostartCheck.Width := WizardForm.RunList.Width - WizardForm.RunList.Offset;
       AutostartCheck.Top := WizardForm.RunList.Top;
       WizardForm.RunList.Top := AutostartCheck.Top + AutostartCheck.Height + ScaleY(8);
     end else
