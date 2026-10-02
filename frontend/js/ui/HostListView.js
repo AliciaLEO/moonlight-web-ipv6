@@ -65,8 +65,8 @@ const SUNSHINE_DOWNLOAD_URL = 'https://github.com/LizardByte/Sunshine/releases/l
 const UPDATE_PENDING_KEY = 'mw-update-pending';
 
 /**
- * The order a host card shows its apps in: alphabetical, with "MoonlightWeb
- * Virtual Display" always last.
+ * The order a host card shows its apps in: "MoonlightWeb Virtual Display"
+ * always first, then alphabetical.
  *
  * Not the host's order: that one moves under the user — the native host lists
  * the primary display first, and the display just streamed becomes primary —
@@ -76,7 +76,7 @@ const UPDATE_PENDING_KEY = 'mw-update-pending';
 function sortApps(apps) {
     return apps.sort(
         (a, b) =>
-            (a.isVirtualDisplay ? 1 : 0) - (b.isVirtualDisplay ? 1 : 0) ||
+            (b.isVirtualDisplay ? 1 : 0) - (a.isVirtualDisplay ? 1 : 0) ||
             a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }),
     );
 }
