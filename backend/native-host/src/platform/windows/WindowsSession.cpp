@@ -733,6 +733,7 @@ public:
         in.baseFps = m_BaseFps.load();
         in.displayMilliHz = m_DisplayMilliHzShared.load();
         in.encodeP95Us = m_EncodeP95Us.load();
+        in.encoderOnePicture = m_EncoderOnePicture.load();
         in.benchCadence = m_Config.tuning.cadence != EncoderTuning::Cadence::Default;
         in.clientCapFps = m_ClientFpsCap.load();
         in.clientVsync = m_ClientVsync.load();
@@ -2651,8 +2652,11 @@ private:
     {
         if (out.keyframe || stamps.resend) return;
         if (out.encodedUs <= out.convertedUs) return;
-        if (m_EncodeTail.note(out.encodedUs - out.convertedUs, out.encodedUs))
+        if (m_EncodeTail.note(out.encodedUs - out.convertedUs, out.encodedUs)) {
             m_EncodeP95Us.store(m_EncodeTail.p95Us(), std::memory_order_relaxed);
+            m_EncoderOnePicture.store(m_Target.encoder == EncoderApi::Software,
+                                      std::memory_order_relaxed);
+        }
     }
 
     /// What emit() does once a picture went out, for each one the encode
@@ -3450,6 +3454,7 @@ private:
     std::atomic<int> m_PresentsPerSecond{0};
     std::atomic<int> m_DisplayMilliHzShared{0};
     std::atomic<int64_t> m_EncodeP95Us{0};
+    std::atomic<bool> m_EncoderOnePicture{false};
     std::atomic<int64_t> m_StepsAsked{0};
     std::atomic<int64_t> m_StepsRefused{0};
     /// The loop's own: the cadence without the step, the counters behind the

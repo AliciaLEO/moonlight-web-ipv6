@@ -6874,7 +6874,9 @@ déclenché un essai.
 - Le client demande un palier par `fpsstep` (0 : retour à sa fréquence). Le
   relais répond aussitôt : appliqué, plafonné à la fréquence de l'écran, ou
   refusé avec la raison. Les raisons : un encodage dont le p95 sur la dernière
-  fenêtre de 2 s dépasse deux images à ce rythme, une clé de banc `cadence=`, un
+  fenêtre de 2 s dépasse deux images à ce rythme (une seule pour l'encodeur
+  logiciel, OpenH264, qui n'en a jamais deux en vol : une VM sans GPU, décision
+  de Bruno du 02/10), une clé de banc `cadence=`, un
   plafond du décodeur (`clientfpscap`), un client en vsync, un écran pas plus
   rapide que le flux. Un refus laisse le palier déjà gardé.
 - La boucle applique le palier entre deux images, par le chemin d'un écran

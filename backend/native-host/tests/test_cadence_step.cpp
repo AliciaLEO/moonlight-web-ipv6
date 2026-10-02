@@ -120,6 +120,32 @@ void run_cadence_step_tests()
         CHECK(mw::native::decideStep(in).verdict == Verdict::Applied);
     }
 
+    SECTION("CadenceStep — the CPU encoder refuses a step longer than one frame");
+    {
+        // OpenH264 in a VM without a GPU: 10 ms at the p95, a client at 60 Hz.
+        StepInputs in = ask(120);
+        in.baseFps = 60;
+        in.encodeP95Us = 10000;
+        in.encoderOnePicture = true;
+        const FpsStep s = mw::native::decideStep(in);
+        CHECK(s.verdict == Verdict::Refused);
+        CHECK_EQ(s.fps, 0);
+        CHECK(contains(s.why, "CPU encoder"));
+        // A hardware encoder at the same 10 ms holds it: two frames in flight.
+        in.encoderOnePicture = false;
+        CHECK(mw::native::decideStep(in).verdict == Verdict::Applied);
+        // Within one frame, the CPU encoder takes the step: 8 ms < 8.33.
+        in.encoderOnePicture = true;
+        in.encodeP95Us = 8000;
+        CHECK(mw::native::decideStep(in).verdict == Verdict::Applied);
+        // Exactly one frame is held: 8333 µs × 120 < 1 s.
+        in.encodeP95Us = 8333;
+        CHECK(mw::native::decideStep(in).verdict == Verdict::Applied);
+        // Not measured yet: no refusal, as for any encoder.
+        in.encodeP95Us = 0;
+        CHECK(mw::native::decideStep(in).verdict == Verdict::Applied);
+    }
+
     SECTION("CadenceStep — capped, then weighed at the capped rate");
     {
         StepInputs in = ask(288);

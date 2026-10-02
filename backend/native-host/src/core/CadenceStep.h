@@ -46,7 +46,8 @@ namespace mw::native {
 ///   frames beyond it. A step above is capped there; a display no faster than
 ///   the stream leaves nothing to step to.
 /// - Nothing its encoder cannot hold: a step is refused when the encoder's p95
-///   over its last window is longer than one frame at that rate.
+///   over its last window is longer than two frames at that rate — one for
+///   the CPU encoder, which takes one picture at a time.
 /// - Nothing under a bench cadence (EncoderTuning::Cadence), which owns the
 ///   rate, nor for a client whose decoder asked for fewer frames
 ///   (`clientfpscap`) or that paints on its vsync — one frame per refresh, and
@@ -69,6 +70,9 @@ struct StepInputs
     /// The encoder's p95 over its last window of new pictures, µs (EncodeTail);
     /// 0 when not known yet.
     int64_t encodeP95Us = 0;
+    /// The encoder takes one picture at a time (the CPU encoder, OpenH264):
+    /// no second frame is ever in flight.
+    bool encoderOnePicture = false;
     /// A bench cadence is in force (MW_NATIVE_TUNING=cadence=…).
     bool benchCadence = false;
     /// The client's decoder asked for no more than this (`clientfpscap`).
@@ -108,6 +112,11 @@ inline FpsStep decideStep(const StepInputs& in)
     // cadence=host-guarded streamed 238 frames a second through it to the Mac.
     if (in.encodeP95Us > 0 && in.encodeP95Us * fps > 2 * 1000000)
         return refuse("the encoder takes longer than two frames at that rate");
+    // The CPU encoder holds nothing in flight: past one frame, the loop drops
+    // the presents of the step, and the encode time it adds to each picture
+    // costs more than the frames it gains (a VM without a GPU).
+    if (in.encoderOnePicture && in.encodeP95Us > 0 && in.encodeP95Us * fps > 1000000)
+        return refuse("the CPU encoder takes longer than a frame at that rate");
 
     out.verdict = capped ? FpsStep::Verdict::Capped : FpsStep::Verdict::Applied;
     out.fps = fps;
