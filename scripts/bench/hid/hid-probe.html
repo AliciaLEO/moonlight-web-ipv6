@@ -1,0 +1,343 @@
+<!doctype html>
+<!--
+  MoonlightWeb — WebHID probe: what Chrome hands a page about a game device
+  (plan "Passthrough HID", H0). Copyright (C) 2026 Bruno Martin. GPLv3.
+
+  For the person holding the device, so its words are French. "Choisir un
+  appareil" opens Chrome's chooser (Joystick, Game Pad, Multi-axis, Simulation);
+  each chosen device is opened and its input reports counted: rate, gap between
+  two reports (median, p95, max), size and the last bytes of each report id,
+  bytes that moved highlighted. The Gamepad API is read alongside, to show that
+  both see the device at once. "Copier le relevé" puts the whole reading on the
+  clipboard as JSON, collections included.
+
+  Permission check: reload the page. A device listed under "déjà autorisés"
+  without a new click keeps its permission across sessions, which Chrome only
+  does for a device with a serial number and a product name.
+
+  WebHID wants a secure context: serve the folder on the loopback
+  (python -m http.server 39918 --bind 127.0.0.1) and open
+  http://127.0.0.1:39918/hid-probe.html in Chrome or Edge. The reading is also in
+  globalThis.__probe (report(), text()) for a CDP driver.
+-->
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Relevé WebHID</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 14px 18px 40px; background: #121417; color: #e8e8e8;
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  h1 { font-size: 16px; margin: 0 0 6px; color: #8aa0b4; font-weight: 600; }
+  h2 { font-size: 18px; margin: 0 0 4px; color: #ffd54a; }
+  .mono { font-family: ui-monospace, Consolas, Menlo, monospace; }
+  .warn { color: #e0a060; }
+  .muted { color: #8aa0b4; font-size: 13px; }
+  .bar { display: flex; gap: 10px; flex-wrap: wrap; margin: 10px 0; }
+  button { font: inherit; font-size: 16px; padding: 8px 16px; border-radius: 8px; border: 1px solid #44505c;
+           background: #26303a; color: #eee; cursor: pointer; }
+  button.primary { background: #2f6f3f; border-color: #3f8f52; font-weight: 600; }
+  .dev { margin: 12px 0; padding: 12px 16px; border-radius: 10px; background: #1d2228; border: 1px solid #2f3a45; }
+  table { border-collapse: collapse; font-size: 13px; margin: 6px 0; }
+  td, th { border: 1px solid #333c45; padding: 2px 6px; text-align: left; }
+  th { color: #8aa0b4; font-weight: 500; }
+  .bytes span { padding: 0 1px; }
+  .bytes span.moved { background: #23462a; }
+  #result { width: 100%; height: 220px; margin-top: 10px; background: #0d0f11; color: #cfe; border: 1px solid #333;
+            font: 12px ui-monospace, Consolas, Menlo, monospace; display: none; }
+</style>
+</head>
+<body>
+<h1>Relevé WebHID — MoonlightWeb (H0)</h1>
+<div id="support"></div>
+<div class="bar">
+  <button id="pick" class="primary">Choisir un appareil</button>
+  <button id="copy">Copier le relevé</button>
+  <button id="reset">Remettre les compteurs à zéro</button>
+</div>
+<div id="persist" class="muted"></div>
+<div id="devices"></div>
+<div id="pads" class="muted mono"></div>
+<textarea id="result" readonly></textarea>
+
+<script>
+'use strict';
+
+// Usages a game device declares at the top of its report descriptor. Keyboard,
+// mouse and Consumer Control stay out: the host refuses them anyway.
+const FILTERS = [
+    { usagePage: 0x01, usage: 0x04 }, // Joystick
+    { usagePage: 0x01, usage: 0x05 }, // Game Pad
+    { usagePage: 0x01, usage: 0x08 }, // Multi-axis Controller
+    { usagePage: 0x02 }, // Simulation Controls (wheels, pedals)
+];
+
+const ITEM_FIELDS = [
+    'isAbsolute', 'isArray', 'isBufferedBytes', 'isConstant', 'isLinear', 'isRange', 'isVolatile',
+    'hasNull', 'hasPreferredState', 'wrap', 'usages', 'usageMinimum', 'usageMaximum',
+    'reportSize', 'reportCount', 'unitExponent', 'unitSystem', 'unitFactorLengthExponent',
+    'unitFactorMassExponent', 'unitFactorTimeExponent', 'unitFactorTemperatureExponent',
+    'unitFactorCurrentExponent', 'unitFactorLuminousIntensityExponent', 'logicalMinimum',
+    'logicalMaximum', 'physicalMinimum', 'physicalMaximum', 'strings',
+];
+
+const $ = (id) => document.getElementById(id);
+const hex4 = (n) => n.toString(16).padStart(4, '0');
+const hex2 = (n) => n.toString(16).padStart(2, '0');
+
+// The HID objects keep their fields on the prototype: JSON.stringify sees none.
+function plainItem(item) {
+    const o = {};
+    for (const k of ITEM_FIELDS) {
+        const v = item[k];
+        if (v === undefined) continue;
+        o[k] = Array.isArray(v) ? [...v] : v;
+    }
+    return o;
+}
+function plainReport(r) {
+    return { reportId: r.reportId, items: (r.items || []).map(plainItem) };
+}
+function plainCollection(c) {
+    return {
+        usagePage: c.usagePage,
+        usage: c.usage,
+        type: c.type,
+        children: (c.children || []).map(plainCollection),
+        inputReports: (c.inputReports || []).map(plainReport),
+        outputReports: (c.outputReports || []).map(plainReport),
+        featureReports: (c.featureReports || []).map(plainReport),
+    };
+}
+
+// Bits a report carries, by kind and id, from the collections: what the host
+// will rebuild. Compared with the bytes that really arrive.
+function reportBits(collections) {
+    const out = { input: {}, output: {}, feature: {} };
+    const walk = (c) => {
+        for (const [kind, list] of [['input', c.inputReports], ['output', c.outputReports], ['feature', c.featureReports]]) {
+            for (const r of list || []) {
+                let bits = 0;
+                for (const it of r.items || []) bits += it.reportSize * it.reportCount;
+                out[kind][r.reportId] = (out[kind][r.reportId] || 0) + bits;
+            }
+        }
+        for (const ch of c.children || []) walk(ch);
+    };
+    for (const c of collections) walk(c);
+    return out;
+}
+
+function quantile(sorted, q) {
+    if (!sorted.length) return null;
+    return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
+}
+
+const state = {
+    started: new Date().toISOString(),
+    permittedAtLoad: [], // devices getDevices() returned before any click
+    devices: new Map(), // HIDDevice -> record
+};
+
+function keyOf(d) {
+    return `${hex4(d.vendorId)}:${hex4(d.productId)}`;
+}
+
+function newRecord(device) {
+    return {
+        device,
+        key: keyOf(device),
+        name: device.productName,
+        openedAt: performance.now(),
+        collections: device.collections.map(plainCollection),
+        reports: new Map(), // reportId -> {count, size, first, last, prev}
+        lastAt: null,
+        gaps: [],
+        total: 0,
+        error: null,
+    };
+}
+
+function resetCounters() {
+    for (const rec of state.devices.values()) {
+        rec.reports.clear();
+        rec.gaps = [];
+        rec.total = 0;
+        rec.lastAt = null;
+        rec.openedAt = performance.now();
+    }
+}
+
+function onReport(rec, e) {
+    const now = e.timeStamp || performance.now();
+    if (rec.lastAt !== null) {
+        rec.gaps.push(now - rec.lastAt);
+        if (rec.gaps.length > 20000) rec.gaps.splice(0, 10000);
+    }
+    rec.lastAt = now;
+    rec.total++;
+    const bytes = new Uint8Array(e.data.buffer, e.data.byteOffset, e.data.byteLength);
+    let r = rec.reports.get(e.reportId);
+    if (!r) {
+        r = { count: 0, size: bytes.length, first: Array.from(bytes), last: null, moved: new Set() };
+        rec.reports.set(e.reportId, r);
+    }
+    r.count++;
+    r.size = bytes.length;
+    const cur = Array.from(bytes);
+    if (r.last) for (let i = 0; i < cur.length; i++) if (cur[i] !== r.last[i]) r.moved.add(i);
+    r.last = cur;
+}
+
+async function attach(device) {
+    if (state.devices.has(device)) return;
+    const rec = newRecord(device);
+    state.devices.set(device, rec);
+    try {
+        if (!device.opened) await device.open();
+        device.addEventListener('inputreport', (e) => onReport(rec, e));
+    } catch (err) {
+        rec.error = String(err && err.message || err);
+    }
+}
+
+function stats(rec) {
+    const secs = (performance.now() - rec.openedAt) / 1000;
+    const g = rec.gaps.slice().sort((a, b) => a - b);
+    return {
+        reportsPerSec: secs > 0 ? +(rec.total / secs).toFixed(1) : 0,
+        gapMs: {
+            median: g.length ? +quantile(g, 0.5).toFixed(2) : null,
+            p95: g.length ? +quantile(g, 0.95).toFixed(2) : null,
+            max: g.length ? +g[g.length - 1].toFixed(2) : null,
+        },
+        total: rec.total,
+    };
+}
+
+function gamepadView() {
+    const pads = (navigator.getGamepads ? navigator.getGamepads() : []) || [];
+    return Array.from(pads).filter(Boolean).map((p) => ({ index: p.index, id: p.id, mapping: p.mapping, axes: p.axes.length, buttons: p.buttons.length }));
+}
+
+function report() {
+    const pads = gamepadView();
+    return {
+        probe: 'hid-probe H0',
+        started: state.started,
+        at: new Date().toISOString(),
+        userAgent: navigator.userAgent,
+        permittedAtLoad: state.permittedAtLoad,
+        devices: Array.from(state.devices.values()).map((rec) => {
+            const vid = hex4(rec.device.vendorId), pid = hex4(rec.device.productId);
+            const declared = reportBits(rec.collections);
+            return {
+                vid, pid,
+                productName: rec.name,
+                permissionKept: state.permittedAtLoad.some((p) => p.vid === vid && p.pid === pid),
+                error: rec.error,
+                ...stats(rec),
+                gamepadApiSeesIt: pads.some((p) => p.id.toLowerCase().includes(vid) && p.id.toLowerCase().includes(pid)),
+                reports: Array.from(rec.reports.entries()).map(([id, r]) => ({
+                    reportId: id,
+                    count: r.count,
+                    bytes: r.size,
+                    declaredBits: declared.input[id] ?? null,
+                    first: r.first.map(hex2).join(' '),
+                    last: r.last ? r.last.map(hex2).join(' ') : null,
+                    movedBytes: Array.from(r.moved).sort((a, b) => a - b),
+                })),
+                declaredBits: declared,
+                collections: rec.collections,
+            };
+        }),
+        gamepadApi: pads,
+    };
+}
+
+function text() {
+    return JSON.stringify(report(), null, 2);
+}
+
+globalThis.__probe = { report, text, state };
+
+function render() {
+    const host = $('devices');
+    const parts = [];
+    for (const rec of state.devices.values()) {
+        const s = stats(rec);
+        const declared = reportBits(rec.collections);
+        const kept = state.permittedAtLoad.some((p) => `${p.vid}:${p.pid}` === rec.key);
+        let rows = '';
+        for (const [id, r] of rec.reports) {
+            const cells = (r.last || []).map((b, i) => `<span class="${r.moved.has(i) ? 'moved' : ''}">${hex2(b)}</span>`).join(' ');
+            const bits = declared.input[id];
+            rows += `<tr><td>${id}</td><td>${r.count}</td><td>${r.size}${bits != null ? ` (déclaré ${bits / 8})` : ''}</td><td class="mono bytes">${cells}</td></tr>`;
+        }
+        const tops = rec.collections.map((c) => `page 0x${hex2(c.usagePage)} usage 0x${hex2(c.usage)}`).join(', ');
+        parts.push(`<div class="dev">
+            <h2>${rec.name || '(sans nom)'} <span class="mono muted">${rec.key}</span></h2>
+            <div class="muted">Collections : ${tops || 'aucune'} · permission ${kept ? 'gardée au rechargement' : 'donnée dans cette page'}</div>
+            ${rec.error ? `<div class="warn">Ouverture refusée : ${rec.error}</div>` : ''}
+            <div class="mono">${s.reportsPerSec} rapports/s · écart médian ${s.gapMs.median ?? '–'} ms · p95 ${s.gapMs.p95 ?? '–'} ms · max ${s.gapMs.max ?? '–'} ms · ${s.total} reçus</div>
+            <table><tr><th>id</th><th>reçus</th><th>octets</th><th>derniers octets (vert = a bougé)</th></tr>${rows || '<tr><td colspan="4" class="muted">Bougez un manche ou appuyez sur un bouton.</td></tr>'}</table>
+        </div>`);
+    }
+    host.innerHTML = parts.join('') || '<div class="muted">Aucun appareil ouvert.</div>';
+    const pads = gamepadView();
+    $('pads').textContent = pads.length
+        ? 'API Gamepad en même temps : ' + pads.map((p) => `#${p.index} ${p.id}`).join(' · ')
+        : 'API Gamepad : rien (appuyez sur un bouton de l\'appareil, page visible).';
+}
+
+async function init() {
+    if (!('hid' in navigator)) {
+        $('support').innerHTML = '<div class="warn">Ce navigateur n\'a pas WebHID : il faut Chrome ou Edge sur ordinateur, dans une page en https ou en 127.0.0.1.</div>';
+        $('pick').disabled = true;
+        return;
+    }
+    const already = await navigator.hid.getDevices();
+    state.permittedAtLoad = already.map((d) => ({ vid: hex4(d.vendorId), pid: hex4(d.productId), productName: d.productName }));
+    $('persist').textContent = already.length
+        ? 'Déjà autorisés au chargement (permission gardée) : ' + already.map((d) => `${d.productName} ${keyOf(d)}`).join(' · ')
+        : 'Aucun appareil autorisé au chargement. Après un choix, rechargez la page : s\'il réapparaît ici, Chrome garde la permission.';
+    for (const d of already) await attach(d);
+    navigator.hid.addEventListener('disconnect', (e) => {
+        const rec = state.devices.get(e.device);
+        if (rec) rec.error = 'débranché';
+    });
+    setInterval(render, 250);
+    render();
+}
+
+$('pick').addEventListener('click', async () => {
+    try {
+        const chosen = await navigator.hid.requestDevice({ filters: FILTERS });
+        for (const d of chosen) await attach(d);
+    } catch (err) {
+        $('support').innerHTML = `<div class="warn">${String(err && err.message || err)}</div>`;
+    }
+    render();
+});
+
+$('copy').addEventListener('click', async () => {
+    const t = text();
+    const area = $('result');
+    area.style.display = 'block';
+    area.value = t;
+    try {
+        await navigator.clipboard.writeText(t);
+        $('copy').textContent = 'Relevé copié';
+    } catch {
+        area.select();
+        $('copy').textContent = 'Copiez le texte ci-dessous';
+    }
+});
+
+$('reset').addEventListener('click', () => { resetCounters(); render(); });
+
+init();
+</script>
+</body>
+</html>
