@@ -10,7 +10,8 @@
   values held for 300 ms or more, and every button flip. "Copier le relevé"
   puts the whole reading on the clipboard as JSON.
 
-  ?dev=tx12 (default) | g29 | generic — the step list. ?pad=N forces a browser
+  ?dev=tx12 (default) | g29 | g923x | generic — the step list (g923x: Logitech's
+  Xbox wheels, G923 for Xbox One and PC or G920). ?pad=N forces a browser
   index. The Gamepad API wants a secure context and a visible page: serve the
   folder on the loopback (python -m http.server 39917 --bind 127.0.0.1) and open
   http://127.0.0.1:39917/pad-probe.html. A browser only shows a pad after a
@@ -79,6 +80,7 @@
   const MATCH = {
     tx12: /1209|4f54|edgetx|opentx|radiomaster|tx12|jumper|frsky/i,
     g29: /046d|c24f|c260|c266|g29|logitech|driving force/i,
+    g923x: /046d|c26d|c26e|c261|c262|g923|g920|logitech/i,
   };
 
   const swStep = (name, where) => ({
@@ -152,6 +154,34 @@
       btnStep('Bouton Entrée (au centre de la molette)'),
       btnStep('Croix directionnelle : HAUT'), btnStep('Croix directionnelle : DROITE'),
       btnStep('Croix directionnelle : BAS'), btnStep('Croix directionnelle : GAUCHE'),
+      btnStep('Levier de vitesses (s’il est branché)',
+        'Passez la 1ʳᵉ, puis la 2ᵉ, 3ᵉ, 4ᵉ, 5ᵉ, 6ᵉ et la marche arrière, une seconde sur chaque rapport, puis le point mort. Sans levier, passez.'),
+      { kind: 'rate', title: 'Cadence des rapports',
+        hint: 'Tournez le volant de gauche à droite sans arrêt pendant 5 secondes, puis ramenez-le au centre et Espace.' },
+      { kind: 'end', title: 'Fin', hint: 'Terminé. Le résumé est en bas de la page ; vous pouvez le copier.' },
+    ],
+    g923x: [
+      { kind: 'info', title: 'Préparation',
+        hint: 'G HUB ouvert sur ce PC (il passe le volant en mode PC). Pédalier branché au volant. Tournez un peu le ' +
+          'volant : il doit s\'afficher en vert en haut. Cliquez une fois dans cette page, puis Espace.' },
+      { kind: 'rest', title: 'Repos',
+        hint: 'Volant au centre, pieds hors des pédales, aucun bouton appuyé. Ne touchez plus à rien 2 secondes, puis Espace.' },
+      { kind: 'axis', title: 'Volant', dirs: ['gauche', 'droite'],
+        hint: "Tournez-le jusqu'en butée à GAUCHE, puis jusqu'en butée à DROITE, puis ramenez-le au centre." },
+      pedalStep('Accélérateur (pédale de droite)'),
+      pedalStep('Frein (pédale du milieu)'),
+      pedalStep('Embrayage (pédale de gauche)'),
+      btnStep('Palette DROITE (derrière le volant)', 'Tirez-la une fois, puis lâchez-la.'),
+      btnStep('Palette GAUCHE (derrière le volant)', 'Tirez-la une fois, puis lâchez-la.'),
+      btnStep('Bouton A'), btnStep('Bouton B'), btnStep('Bouton X'), btnStep('Bouton Y'),
+      btnStep('Bouton LSB'), btnStep('Bouton RSB'),
+      btnStep('Bouton View (deux rectangles)'), btnStep('Bouton Menu (trois traits)'),
+      btnStep('Bouton Xbox (le logo)', 'Appuyez une fois, puis relâchez. Si la Game Bar de Windows s\'ouvre, fermez-la par Échap et revenez sur cette page.'),
+      btnStep('Croix directionnelle : HAUT'), btnStep('Croix directionnelle : DROITE'),
+      btnStep('Croix directionnelle : BAS'), btnStep('Croix directionnelle : GAUCHE'),
+      { kind: 'free', title: 'Les autres boutons du volant',
+        hint: 'Ceux qui restent (par exemple + et −, une molette et son bouton), un par un, de gauche à droite, une seconde ' +
+          "d'écart. Dites-moi leur ordre. S'il n'en reste aucun, passez." },
       btnStep('Levier de vitesses (s’il est branché)',
         'Passez la 1ʳᵉ, puis la 2ᵉ, 3ᵉ, 4ᵉ, 5ᵉ, 6ᵉ et la marche arrière, une seconde sur chaque rapport, puis le point mort. Sans levier, passez.'),
       { kind: 'rate', title: 'Cadence des rapports',
@@ -282,9 +312,16 @@
       start: rec.start.axes[i], end: end ? end.axes[i] : null,
     }));
     const moved = axes.filter((a) => a.range >= 0.1).sort((x, y) => y.range - x.range).map((a) => ({ ...a, runs: stableRuns(rec, 'a', a.i) }));
+    // In the order they were first pressed: a step that takes several buttons
+    // ("free") then reads in the order the person pressed them.
+    const firstPress = (j) => {
+      const e = rec.ev.find((x) => x[1] === 'b' && x[2] === j && x[3] === 1);
+      return e ? e[0] : Infinity;
+    };
     const buttons = rec.buttons.map((b, j) => ({ i: j, ...b }))
       .filter((b) => b.flips > 0 || b.maxValue - b.minValue > 0.1)
-      .map((b) => ({ i: b.i, flips: b.flips, startPressed: b.startPressed, min: +b.minValue.toFixed(3), max: +b.maxValue.toFixed(3), runs: stableRuns(rec, 'b', b.i) }));
+      .map((b) => ({ i: b.i, flips: b.flips, startPressed: b.startPressed, min: +b.minValue.toFixed(3), max: +b.maxValue.toFixed(3), runs: stableRuns(rec, 'b', b.i), first: firstPress(b.i) }))
+      .sort((x, y) => x.first - y.first);
     const out = { step: rec.step, title: rec.title, kind: rec.kind, ms: Math.round((rec.t1 ?? now()) - rec.t0), moved, buttons, verdict: '' };
     const lines = [];
     if (step.kind === 'rest') {
@@ -313,7 +350,7 @@
       lines.push(`mises à jour : ${rec.rateMax}/s au plus ; intervalle médian ${out.rate.medianMs} ms, p95 ${out.rate.p95Ms} ms, min ${out.rate.minMs} ms (${d.length} écarts)`);
     } else if (step.kind !== 'info' && step.kind !== 'end') {
       for (const a of moved) lines.push(`axe ${a.i} : ${fmt(a.min)} → ${fmt(a.max)}, départ ${fmt(a.start)}, fin ${fmt(a.end)}, paliers [${a.runs.map(fmt).join(', ')}]`);
-      for (const b of buttons) lines.push(`bouton ${b.i} : ${b.flips} bascule(s), appuyé au départ = ${b.startPressed ? 'oui' : 'non'}, valeur ${b.min}→${b.max}, paliers [${b.runs.join(', ')}]`);
+      for (const b of buttons) lines.push(`bouton ${b.i} : ${b.flips} bascule(s), appuyé au départ = ${b.startPressed ? 'oui' : 'non'}, valeur ${b.min}→${b.max}, paliers [${b.runs.join(', ')}]` + (Number.isFinite(b.first) ? `, 1er appui à ${b.first} ms` : ''));
     }
     if (!lines.length && step.kind !== 'info' && step.kind !== 'end') lines.push('aucun changement');
     out.verdict = lines.join('\n');
