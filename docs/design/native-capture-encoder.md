@@ -6922,12 +6922,18 @@ déclenché un essai.
   un Mac en Wi-Fi passe un tiers du temps au-dessus de la borne, par hausses de
   1 à 2,7 s, et il ne va pas plus mal à 240 ; un N95 en Wi-Fi, lui, s'y noie.
   Rien ne les distingue dans la première seconde. D'où les règles :
-  - le premier essai garde 500 ms ;
-  - après un filet sur une hausse, si le lien à la fréquence du client a fait
-    des hausses au moins aussi longues dans la dernière minute, l'essai suivant
-    tient pendant la plus longue × 1,2 (4 s au plus). Il est jugé sur le quartile
-    bas de capture → peinte, qu'une hausse ne déplace pas ;
-  - un essai élargi rendu compte comme un filet.
+  - si le lien, à la fréquence du client, est resté au-dessus de la borne plus
+    de 500 ms (dans les images gardées avant l'essai, ou dans la dernière
+    minute), l'essai tient pendant sa plus longue hausse × 1,2 (4 s au plus). Il
+    est jugé sur le quartile bas de capture → peinte, qu'une hausse ne déplace
+    pas. Sinon, 500 ms comme avant ;
+  - un essai élargi qui échoue, rendu ou par le filet, compte comme un filet et
+    rend le suivant étroit ;
+  - un filet étroit qui saute sur une hausse, ou un filet élargi sous un palier
+    déjà gardé, laisse le suivant s'élargir.
+
+  En simulation, le Mac garde ainsi 240 en moins de 10 s, et le N95 paie un
+  essai élargi, puis un étroit, avant d'attendre 16 min.
 
   Rejoué hors ligne sur les passes `host-guarded` de la nuit, le filet de
   500 ms sautait sur les 12 passes du Mac, l'élargi sur 2.

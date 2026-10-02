@@ -359,6 +359,33 @@ describe('CadenceStepper', () => {
         expect(s.stepper.events.filter((e) => e.what === 'fallback' && e.at > kept.at)).toEqual([]);
     });
 
+    it('widens its first trial when the link already rose, and keeps the step within ten seconds', () => {
+        // The same Mac, its first rise before the content asks for a step.
+        const rise = (t) => t % 4000 >= 1000 && t % 4000 < 2500;
+        const s = setup({ latency: (rate, t) => (rise(t) ? 80 : 20) });
+        s.run(60000);
+        const trials = s.stepper.events.filter((e) => e.what === 'trial');
+        expect(trials[0].netMs).toBeGreaterThan(1500);
+        const kept = s.stepper.events.find((e) => e.what === 'kept');
+        expect(kept.at).toBeLessThan(10000);
+        expect(s.stepper.trips).toBe(0);
+        expect(s.stepper.stepFps).toBe(240);
+    });
+
+    it('narrows the next trial after a widened one failed, then waits the longest', () => {
+        // An N95 whose link rose before its first trial: widened, it drowns;
+        // the second is narrow and trips at once.
+        const rise = (t) => t % 4000 >= 1000 && t % 4000 < 2500;
+        const s = setup({ latency: (rate, t) => (rate > 120 ? 120 : rise(t) ? 80 : 20) });
+        s.run(60000);
+        const trials = s.stepper.events.filter((e) => e.what === 'trial');
+        expect(trials).toHaveLength(2);
+        expect(trials[0].netMs).toBeGreaterThan(FILET_HOLD_MS);
+        expect(trials[1].netMs).toBe(FILET_HOLD_MS);
+        expect(s.stepper.summary.strikes).toBe(2);
+        expect(s.stepper.summary.nextTrialInMs).toBeGreaterThan(BACKOFF_MS.at(-2));
+    });
+
     it('gives a widened trial back on a link that drowns at the step, and waits the longest', () => {
         // An N95 on Wi-Fi: the same rises at its own rate, and at 240 every
         // frame 100 ms late.
