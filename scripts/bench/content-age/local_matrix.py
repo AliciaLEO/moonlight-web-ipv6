@@ -114,6 +114,8 @@ def main():
                     help="seconds between the page's calibration and the window (pass.py "
                          "--settle); 14 lets the detection settle first")
     ap.add_argument("--bitrate", type=int, default=0, help="kbps (pass.py --bitrate)")
+    ap.add_argument("--fps", type=int, default=0,
+                    help="a frame rate the viewer named (pass.py --fps); 0 = Auto")
     ap.add_argument("--vsync", choices=["on", "off"], default="off",
                     help="on = tearing off: the client paints on its refresh (pass.py --vsync)")
     ap.add_argument("--every", type=int, default=1,
@@ -175,7 +177,8 @@ def main():
                     r = subprocess.run([sys.executable, os.path.join(HERE, "pass.py"), "--tag", tag,
                                         "--target", "vdisplay", "--secs", str(a.secs),
                                         "--every", str(a.every), "--vsync", a.vsync,
-                                        "--bitrate", str(a.bitrate), "--settle", str(a.settle)]
+                                        "--bitrate", str(a.bitrate), "--settle", str(a.settle),
+                                        "--fps", str(a.fps)]
                                        + (["--autostep"] if cadence == "detect" else [])
                                        + client,
                                        capture_output=True, text=True)

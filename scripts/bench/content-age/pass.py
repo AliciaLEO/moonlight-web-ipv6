@@ -96,7 +96,10 @@ def stepper_state(d, content_ms):
     for e in decided:
         facts = ", ".join("%s=%s" % (k, round(v, 2) if isinstance(v, float) else v)
                           for k, v in e.items() if k not in ("at", "what", "sinceContentS"))
-        print("    %6.2f s  %-9s %s" % (e["sinceContentS"] or 0, e["what"], facts), flush=True)
+        # ASCII only: a reason may carry "→", and under local_matrix.py this
+        # goes through a cp1252 pipe.
+        line = "    %6.2f s  %-9s %s" % (e["sinceContentS"] or 0, e["what"], facts)
+        print(line.replace("→", "->").encode("ascii", "replace").decode(), flush=True)
     return st
 
 
