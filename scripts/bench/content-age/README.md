@@ -65,6 +65,10 @@ and keeps a step only when what is shown gets younger. Its gate:
 - no worse click → flag, no more repeated pictures a minute (`rep/m`);
 - the page at a game's 49-53 frames a second starts no trial at all.
 
+The night of 01-02/10/2026 (`docs/bench-native-host.md` §8t): passed on the
+UM790Pro in Ethernet, the N95, the local client and the 50 fps game; failed on
+the Mac in Wi-Fi, whose link already rises for seconds at its own rate.
+
 **The matrix.** Two passes per cell, alternated (`--repeat 2`); every mode with
 the same `--settle 14`, so the windows start at the same moment.
 
@@ -72,7 +76,7 @@ the same `--settle 14`, so the windows start at the same moment.
 |---|---|
 | hosts | DualRTX, the product's virtual display at 240 Hz (`--rates 0`) rendered in turn by the Arc, the iGPU AMD and the RTX (`--vdd-gpu`) |
 | clients | UM790Pro under Windows, Ethernet, 120 Hz (`um790-chrome.ps1`, tunnel 9424); Mac M1, 120 Hz; N95, Wi-Fi, 60 Hz (`n95-chrome.ps1`, tunnel 9423, `--every 10`); the local iGPU AMD, for tuning only |
-| modes | `client` (today's Auto), `detect` (`--autostep`), `host-guarded` |
+| modes | `client` (the Auto from before the detection: `pass.py` sets `mw_autostep=0`, since the detection is on by default), `detect` (`--autostep`), `host-guarded` |
 | contents | the page at the display's rate; `--game-fps 75-83`; `--game-fps 49-53` |
 | clicks | `--clicks 60` on the page at the display's rate, `client` against `detect` (`latency_flag_enabled` in the instance's settings.json) |
 

@@ -13,13 +13,15 @@
  * younger, given up when it does not, the backoff, the net, and no trial for
  * content no faster than the client.
  */
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect } from 'vitest';
 import {
+    autostepEnabled,
     BACKOFF_MS,
     BASE_MS,
     CadenceStepper,
     FASTER_STATS,
     FILET_HOLD_MS,
+    HELD_MS,
     ladder,
     QUEUE_HOLD_MS,
 } from '../js/stream/CadenceStepper.js';
@@ -145,6 +147,27 @@ function setup(opts = {}) {
     };
 }
 
+describe('autostepEnabled', () => {
+    const set = (v) => localStorage.setItem('mw_autostep', v);
+    afterEach(() => localStorage.removeItem('mw_autostep'));
+
+    it("is on by default, and mw_autostep = '0' turns it off", () => {
+        expect(autostepEnabled()).toBe(true);
+        set('0');
+        expect(autostepEnabled()).toBe(false);
+        set('1');
+        expect(autostepEnabled()).toBe(true);
+    });
+
+    it("is off on a TV unless mw_autostep = '1'", () => {
+        expect(autostepEnabled(true)).toBe(false);
+        set('1');
+        expect(autostepEnabled(true)).toBe(true);
+        set('0');
+        expect(autostepEnabled(true)).toBe(false);
+    });
+});
+
 describe('ladder', () => {
     it("is the stream's rate, twice it, then the display's refresh", () => {
         expect(ladder(60, 240)).toEqual([60, 120, 240]);
@@ -263,6 +286,60 @@ describe('CadenceStepper', () => {
         expect(s.stepper.trips).toBe(0);
         expect(s.stepper.stepFps).toBe(240);
         expect(s.steps().map((m) => m.fps)).toEqual([240]);
+    });
+
+    it('waits the longest backoff after two trips of the net in a row', () => {
+        // A client that drowns at every step: each trial trips the net.
+        const s = setup({ latency: (rate) => (rate > 120 ? 60 : 20) });
+        s.run(9000);
+        expect(s.stepper.trips).toBe(1);
+        expect(s.stepper.summary.nextTrialInMs).toBeLessThanOrEqual(BACKOFF_MS[0]);
+        const first = s.steps()[1].at;
+        s.run(first + BACKOFF_MS[0] + BASE_MS + 2000);
+        expect(s.steps().map((m) => m.fps)).toEqual([240, 0, 240, 0]);
+        expect(s.stepper.trips).toBe(2);
+        // Not the second backoff: the longest.
+        expect(s.stepper.summary.nextTrialInMs).toBeGreaterThan(BACKOFF_MS.at(-2));
+        s.run(first + BACKOFF_MS[0] + BACKOFF_MS[1] + 2 * BASE_MS + 4000);
+        expect(s.steps()).toHaveLength(4);
+    });
+
+    it('keeps that wait when the content changes meanwhile', () => {
+        let presents = 240;
+        const s = setup({ presents: () => presents, latency: (rate) => (rate > 120 ? 60 : 20) });
+        s.run(9000);
+        const first = s.steps()[1].at;
+        s.run(first + BACKOFF_MS[0] + BASE_MS + 2000);
+        expect(s.stepper.trips).toBe(2);
+        const second = s.steps()[3].at;
+        // The content stops, then comes back: a new band, the same link.
+        presents = 0;
+        s.run(second + 4000);
+        presents = 240;
+        s.run(second + 20000);
+        expect(s.stepper.events.some((e) => e.what === 'content' && e.at > second)).toBe(true);
+        expect(s.steps()).toHaveLength(4);
+        expect(s.stepper.summary.nextTrialInMs).toBeGreaterThan(BACKOFF_MS.at(-2));
+    });
+
+    it('forgets its trips once a kept step has held', () => {
+        // The first trial drowns; the second holds; then, much later, one
+        // spike of the link long enough for the net.
+        let spikeAt = Infinity;
+        const s = setup({
+            latency: (rate, t) =>
+                rate > 120 && (t < 20000 || (t >= spikeAt && t < spikeAt + 1000)) ? 60 : 20,
+        });
+        s.run(60000);
+        expect(s.stepper.trips).toBe(1);
+        expect(s.stepper.stepFps).toBe(240);
+        const kept = s.stepper.events.find((e) => e.what === 'kept');
+        spikeAt = kept.at + HELD_MS + 5000;
+        s.run(spikeAt + 3000);
+        expect(s.stepper.trips).toBe(2);
+        expect(s.stepper.summary.strikes).toBe(1);
+        // The first backoff again, not the longest.
+        expect(s.stepper.summary.nextTrialInMs).toBeLessThanOrEqual(BACKOFF_MS[0]);
     });
 
     it('comes back at once on a decode queue that holds', () => {

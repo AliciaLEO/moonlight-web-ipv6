@@ -6914,6 +6914,10 @@ déclenché un essai.
     demi-période du client ;
   - deux images restent en file au décodeur pendant 150 ms.
   Le flux revient alors aussitôt à la fréquence du client, en un aller-retour.
+  Deux filets d'affilée sur un même lien (`NET_STRIKES`), et l'essai suivant
+  attend le plus long recul (16 min), même si le contenu change ; un palier
+  gardé qui tient 30 s, ou un lien qui change, efface le compte. Au banc du
+  02/10, le N95 a sauté au filet à chacun de ses 8 essais.
   Les 500 ms de tenue datent du banc du 02/10. Sans elles, le Mac en Wi-Fi
   perdait chaque 240 gardé en 0,1 s, sur des pointes qu'il a aussi à 120 (p99
   de 140 à 240 ms). Pourtant, `host-guarded` lui montrait à 240 des images
@@ -6929,9 +6933,12 @@ déclenché un essai.
   60 → 120 → 240 en ~11 s, le second palier étant demandé dès que le premier
   est gardé.
 
-**La clé.** Coupée par défaut jusqu'à la porte UA :
-`localStorage.mw_autostep = '1'` l'active. `window.mwCadenceStepper` donne
-au banc l'état et les décisions (`events`).
+**La clé.** Allumée par défaut depuis la porte UA (02/10) :
+`localStorage.mw_autostep = '0'` la coupe. Une TV la garde coupée, sauf
+`'1'` : son « peinte » est la remise de l'image au `<video>`, pas ce que montre
+son écran, et une TV qui en montre 30 garderait 60. Le banc pose `'0'` pour ses
+modes de référence (`pass.py`). `window.mwCadenceStepper` donne au banc l'état
+et les décisions (`events`).
 
 **Le banc** (UA.3, nuit du 01 au 02/10, banc §8t) :
 - passé sur l'UM790Pro en Ethernet. 240 y est gardé en 4 à 10 s, au niveau
@@ -6943,8 +6950,9 @@ au banc l'état et les décisions (`events`).
   un tiers du temps, que le filet de 500 ms prend pour un échec du palier. À
   240, son lien ne va pas plus mal qu'à 120, alors que le N95 s'y noie.
 
-**Reste** : la porte UA (Bruno), un filet jugé contre ce que le lien fait à la
-fréquence du client, puis l'« Auto » détecté par défaut (UA.4).
+**La porte** (Bruno, 02/10) : l'« Auto » détecté par défaut, avec la sûreté
+des deux filets. Reste un filet jugé contre ce que le lien fait à la fréquence
+du client (UA.3 bis), à mesurer sur le Mac et le N95 avant le push.
 
 ## 34. Le flux commun des invités (plan du 28/09 au 01/10/2026)
 

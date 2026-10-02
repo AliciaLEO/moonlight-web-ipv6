@@ -67,7 +67,8 @@
  * the stream is back at the client's rate in one round trip, whatever the
  * cause (Wi-Fi, main thread, decoder). The hold lets a spike of the link pass
  * — a Mac on Wi-Fi has them at any rate — where a client that drowns stays
- * above.
+ * above. NET_STRIKES trips in a row on one link, and the next trial waits the
+ * longest backoff, whatever the content does meanwhile.
  *
  * ── Where it runs ────────────────────────────────────────────────────────────
  *
@@ -115,6 +116,15 @@ export const QUEUE_FULL = 2;
 export const QUEUE_HOLD_MS = 150;
 /** Waits before the next trial, after each failed one. */
 export const BACKOFF_MS = [30000, 60000, 120000, 240000, 480000, 960000];
+/**
+ * Trips of the net in a row on one link before the next trial waits the
+ * longest backoff, whatever the content does meanwhile. A link that drops
+ * every step (the N95 on Wi-Fi: 8 trials, 8 trips, 02/10/2026) is then not
+ * tried again every 30 s, nor each time the content changes.
+ */
+export const NET_STRIKES = 2;
+/** A kept step that holds this long clears the trips counted. */
+export const HELD_MS = 30000;
 /** Stats in a row before the content counts as changed. */
 export const CONTENT_STABLE = 2;
 /**
@@ -140,16 +150,24 @@ const EVENTS_KEPT = 200;
 const WRAP_MS = 2 ** 32;
 
 /**
- * Whether the detection runs: the switch `mw_autostep` in localStorage, '1'
- * for on. Off otherwise until the bench has judged it (plan, porte UA).
+ * Whether the detection runs. On by default since the bench judged it (porte
+ * UA, 02/10/2026); the switch `mw_autostep` in localStorage turns it off ('0')
+ * or on ('1'). A TV keeps it off unless switched on: what it calls painted is
+ * the frame handed to its <video>, not what its screen shows, and a TV that
+ * shows 30 frames a second would keep 60.
+ * @param {boolean} [tv] this screen is a TV's
  * @returns {boolean}
  */
-export function autostepEnabled() {
+export function autostepEnabled(tv = false) {
+    let v = null;
     try {
-        return localStorage.getItem('mw_autostep') === '1';
+        v = localStorage.getItem('mw_autostep');
     } catch (e) {
-        return false;
+        // Storage refused: the default.
     }
+    if (v === '0') return false;
+    if (v === '1') return true;
+    return !tv;
 }
 
 /**
@@ -225,6 +243,8 @@ export class CadenceStepper {
         this._overSince = 0; // since when capture → painted has stood above the net's bound
         this._queueSince = 0;
         this._backoff = 0;
+        this._strikes = 0; // trips of the net in a row on this link
+        this._keptAt = 0;
         this._nextTrialAt = 0;
         this._band = 0;
         this._bandSeen = 0;
@@ -375,6 +395,8 @@ export class CadenceStepper {
     tick(now) {
         if (!this._running) return;
         this._prune(now);
+        // A kept step that holds: the link carries it, its trips are forgotten.
+        if (this._strikes && this._level > 0 && now - this._keptAt >= HELD_MS) this._strikes = 0;
         switch (this._phase) {
             case 'idle':
                 if (this._mayTry(now)) {
@@ -553,6 +575,7 @@ export class CadenceStepper {
         }
         this._level = this._try;
         this._backoff = 0;
+        this._keptAt = now;
         this._phase = 'idle';
         // The next step from this window — at once when the content has asked
         // for it long enough, otherwise once it has (tick, 'base').
@@ -595,10 +618,22 @@ export class CadenceStepper {
         this._overSince = 0;
         this._reference = null;
         this._backoff = 0;
+        this._strikes = 0;
         this._nextTrialAt = now + WARMUP_MS;
     }
 
     // ── The net ─────────────────────────────────────────────────────────────
+
+    /**
+     * The net tripped: back at once. NET_STRIKES in a row on this link, and
+     * the next trial waits the longest backoff.
+     */
+    _netTrip(why, now) {
+        this.trips++;
+        this._strikes++;
+        if (this._strikes >= NET_STRIKES) this._backoff = BACKOFF_MS.length - 1;
+        this._fallBack(why, now);
+    }
 
     _checkNet(now) {
         if (!this._stepped()) {
@@ -606,8 +641,7 @@ export class CadenceStepper {
             return;
         }
         if (this._queueSince && now - this._queueSince >= QUEUE_HOLD_MS) {
-            this.trips++;
-            this._fallBack('a decode queue that holds', now);
+            this._netTrip('a decode queue that holds', now);
             return;
         }
         if (this._reference === null || !this._clock.ready) return;
@@ -627,8 +661,7 @@ export class CadenceStepper {
         }
         if (!this._overSince) this._overSince = now;
         if (now - this._overSince < FILET_HOLD_MS) return;
-        this.trips++;
-        this._fallBack(
+        this._netTrip(
             `capture → painted ${latency.toFixed(1)} ms, over ` +
                 `${this._reference.toFixed(1)} + ${half.toFixed(1)} at the client's rate ` +
                 `for ${Math.round(now - this._overSince)} ms`,
@@ -658,8 +691,11 @@ export class CadenceStepper {
         if (this._bandCount < CONTENT_STABLE) return;
         this._band = band;
         this._bandCount = 0;
-        this._backoff = 0;
-        if (this._phase === 'idle') this._nextTrialAt = Math.min(this._nextTrialAt, now);
+        // A net that keeps tripping says the link, not the content: its wait stays.
+        if (this._strikes < NET_STRIKES) {
+            this._backoff = 0;
+            if (this._phase === 'idle') this._nextTrialAt = Math.min(this._nextTrialAt, now);
+        }
         this._event('content', now, { presents: this._presents, band });
     }
 
@@ -759,6 +795,7 @@ export class CadenceStepper {
             rejected: this.rejected,
             refused: this.refused,
             trips: this.trips,
+            strikes: this._strikes,
             backoff: this._backoff,
             nextTrialInMs: Math.max(0, Math.round(this._nextTrialAt - this._now())),
             clock: this._clock.summary,

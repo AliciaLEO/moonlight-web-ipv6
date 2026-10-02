@@ -933,8 +933,8 @@ export class StreamView {
         // "Auto" with detection (stream/CadenceStepper.js): a native host's
         // stream may run above this screen's rate while what it shows gets
         // younger. Built by the first stats that carry the host's cadence, and
-        // only for a rate left to Auto — see _noteHostCadence.
-        this._autostep = opts.fpsAuto === true && autostepEnabled();
+        // only for a rate left to Auto — see _noteHostCadence. Off on a TV.
+        this._autostep = opts.fpsAuto === true && autostepEnabled(IS_TV);
         this._stepper = null;
         // Native host: mouse motion goes out on `pointerrawupdate` — every
         // report the device makes, not the one-per-display-frame sum that

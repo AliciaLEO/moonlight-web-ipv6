@@ -129,8 +129,9 @@ def main():
                     help="a bench switch the page reads at launch (mw_decodequeue=pending)")
     ap.add_argument("--autostep", action="store_true",
                     help="\"Auto\" with detection on (localStorage mw_autostep=1; design "
-                         "§33.10): the stream may step above the client's rate. Off otherwise, "
-                         "even if an earlier pass left it on")
+                         "§33.10): the stream may step above the client's rate. Off otherwise "
+                         "(mw_autostep=0): on is the product's default, and a pass without this "
+                         "flag stays the Auto from before it, the bench's reference")
     a = ap.parse_args()
     remote = a.client_port > 0
     # Another session's Chrome may already hold the client kiosk's debugging
@@ -164,9 +165,9 @@ def main():
         # The bench profile keeps its localStorage from one pass to the next:
         # a switch not asked for this time is taken away.
         d.eval("localStorage.removeItem('mw_decodequeue')")
-        d.eval("localStorage.removeItem('mw_autostep')")
-        if a.autostep:
-            d.eval("localStorage.setItem('mw_autostep', '1')")
+        # The detection is on by default (UA.4): off is said, for the
+        # reference modes (client, host-guarded) to stay today's Auto.
+        d.eval("localStorage.setItem('mw_autostep', %s)" % json.dumps("1" if a.autostep else "0"))
         for kv in a.local_storage:
             k, _, v = kv.partition("=")
             d.eval("localStorage.setItem(%s, %s)" % (json.dumps(k), json.dumps(v)))
