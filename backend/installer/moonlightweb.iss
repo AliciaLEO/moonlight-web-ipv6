@@ -824,6 +824,53 @@ begin
   InstallVigemBus();
 end;
 
+// --- Visual C++ runtime ----------------------------------------------------
+//
+// MoonlightWeb.exe links against Microsoft's C++ runtime (VCRUNTIME140.dll,
+// MSVCP140.dll, MSVCP140_1.dll). windeployqt puts Microsoft's own
+// vc_redist.<arch>.exe in the payload but installs nothing, and on a Windows
+// that never received the runtime from anything else — a fresh install, a VM —
+// the exe dies at load with "VCRUNTIME140.dll was not found": the server, and
+// every helper this installer runs through it (worker service, virtual
+// display). Seen on a fresh Windows 11 in October 2026; every bench machine
+// already had the runtime, and so does the CI runner whose smoke test starts
+// the exe.
+//
+// The redistributable's file version is the runtime version it installs, and
+// it records that version under Runtimes\<arch>. Installed only when missing
+// or older than ours: an exe built with a newer toolset than the runtime it
+// finds can still load and then fail, so "present" alone is not enough.
+
+function VCRuntimeAtLeast(Wanted: Int64): Boolean;
+var
+  installed, major, minor, bld: Cardinal;
+  key: String;
+begin
+  Result := False;
+  key := 'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\{#MyArch}';
+  if not RegQueryDWordValue(HKLM64, key, 'Installed', installed) or (installed <> 1) then Exit;
+  if not RegQueryDWordValue(HKLM64, key, 'Major', major) then Exit;
+  if not RegQueryDWordValue(HKLM64, key, 'Minor', minor) then Exit;
+  if not RegQueryDWordValue(HKLM64, key, 'Bld', bld) then Exit;
+  Result := ComparePackedVersion(PackVersionComponents(major, minor, bld, 0), Wanted) >= 0;
+end;
+
+procedure InstallVCRuntime();
+var
+  redist: String;
+  wanted: Int64;
+  rc: Integer;
+begin
+  redist := ExpandConstant('{app}\vc_redist.{#MyArch}.exe');
+  if not FileExists(redist) then Exit;
+  if not GetPackedVersion(redist, wanted) then wanted := 0;
+  if VCRuntimeAtLeast(wanted) then Exit;
+  // /norestart: the DLLs are usable at once on a machine that had none, which
+  // is the case this is for. Exit codes (3010 = reboot wanted, 1638 = newer
+  // already there) change nothing for us, so none is reported.
+  Exec(redist, '/install /quiet /norestart', '', SW_HIDE, ewWaitUntilTerminated, rc);
+end;
+
 // --- Auto-start: logon scheduled task (keeps the tray icon, native) -------
 
 // Escape a value for embedding in the task XML. SaveStringToFile writes ANSI
@@ -1507,6 +1554,9 @@ begin
   end;
 
   if CurStep <> ssPostInstall then Exit;
+
+  // First: everything below that runs MoonlightWeb.exe needs its runtime.
+  InstallVCRuntime();
 
   // Register the elevated on-demand task that lets the (unprivileged) server
   // apply the next update by itself, with no UAC prompt. Refreshed on every

@@ -270,6 +270,10 @@ jobs:
           foreach ($dll in "libssl-3-${{ matrix.arch }}.dll", "libcrypto-3-${{ matrix.arch }}.dll") {
             if (-not (Test-Path "dist/$dll")) { throw "dist/$dll is missing: the OpenSSL DLLs were not staged" }
           }
+          # The runner has the VC++ runtime, so the start below cannot notice its
+          # absence; a fresh Windows can. The installer runs this redistributable
+          # (InstallVCRuntime in moonlightweb.iss) — make sure it is there to run.
+          if (-not (Test-Path "dist/vc_redist.${{ matrix.arch }}.exe")) { throw "dist/vc_redist.${{ matrix.arch }}.exe is missing: windeployqt did not stage the VC++ runtime" }
           $t0 = Get-Date
           $server = Start-Process $exe -ArgumentList '--dev', '--autostart' -PassThru
           $up = $false
