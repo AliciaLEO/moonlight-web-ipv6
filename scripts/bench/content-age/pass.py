@@ -133,6 +133,11 @@ def main():
                          "even if an earlier pass left it on")
     a = ap.parse_args()
     remote = a.client_port > 0
+    # Another session's Chrome may already hold the client kiosk's debugging
+    # port (9333 on 01/10/2026): the kiosk would not get it, and this pass would
+    # drive that other browser. MW_BENCH_DEBUG_PORT moves the kiosk's.
+    if os.environ.get("MW_BENCH_DEBUG_PORT"):
+        run.DEBUG_PORT = int(os.environ["MW_BENCH_DEBUG_PORT"])
 
     access = dict(run.access_map().get("local") or {})
     probe = fleet.probe("local")

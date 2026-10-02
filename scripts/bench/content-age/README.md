@@ -10,6 +10,7 @@ So the content carries its own time.
 # --dev instance on 18080/18443; the client on another screen and another GPU
 set MW_BENCH_LOCAL_PORTS=18080,18443
 set MW_BENCH_CLIENT_POS=secondary
+set MW_BENCH_DEBUG_PORT=9353   # only if another Chrome already holds the kiosk's 9333
 python pass.py --tag d1-auto --secs 30            # a whole self-stream pass
 python age.py summary ../../../bench-out/content-age/*.json
 ```
