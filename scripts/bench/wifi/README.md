@@ -93,6 +93,34 @@ bursts. Only a lower bitrate did (213 drops at 20 Mbit/s): that is W2 B, the
 rate governor cutting on SCTP's retransmissions (`retrcut=`). On the N95,
 pacing changed nothing measurable.
 
+## The rate that follows SCTP, and the picture held (W2 B, W2 C)
+
+- `retrcut=<‰>` (W2 B): the native host's rate governor also cuts when SCTP
+  retransmits at least that many chunks in a thousand over a report window
+  (`report.py`: `gRetr`, `gMin`). On the Mac, 03/10/2026: click 73.6 → 62.6 ms,
+  kernel drops 1,016 → 366, a frame's age p90 86 → 29 ms, 23 → 20 Mbit/s. On
+  Ethernet (UM790Pro, `w2b-um-run.sh`): 39.8 → 39.0 ms, SCTP sending 1 to 8
+  chunks again a session; one cut, 8 retransmits in one report window, 40 → 32
+  Mbit/s for 3.5 s. **The Windows host's default since `55dd9cde`** (3; the
+  baseline of any later A/B carries it, `retrcut=0` takes it off).
+- usrsctp's send buffer has always been **256 KiB**: libdatachannel raises
+  `SO_SNDBUF` to its largest message right after the sysctl, so the relay's
+  "100 ms of bitrate" never took. `sctpbuf=<KB>` (W2 C) really sets it, by
+  lowering the largest message with it; what usrsctp cannot take then waits in
+  `bufferedAmount`.
+- `linkhold=<ms>` (W2 C, Windows host): once the video channel's
+  `bufferedAmount` has stayed above zero that long, the capture loop holds its
+  picture unencoded and sends the freshest once it drained: no frame thrown
+  away, no keyframe asked for. The session ends with `[native] link hold: …`
+  (`hold/s`). Not at the first byte: on Ethernet, with `sctpbuf=48`, 44 % of
+  frames overflow usrsctp for a millisecond or two; holding on that took the
+  stream from 223 to 87 fps (03/10/2026), the held frames coming out bigger.
+
+```bash
+bash ../../../bench-out/wifi/w2b-um-run.sh                  # Ethernet witness (C=1: also linkhold)
+python series.py mac --prefix w2c --name machold --contents clk --tuning relaylog=1,sctpbuf=48,linkhold=4 --udp
+```
+
 ## Clients
 
 | name | machine | link | DevTools |
