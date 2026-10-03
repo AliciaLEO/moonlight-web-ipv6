@@ -109,7 +109,8 @@ Details and test notes in the [wiki](docs/wiki/04-Frontend.md#48-controller-comp
 ### On a TV
 
 An Android TV box is a client too, from a TV browser — tested with **TV Bro** on a Mi TV and on a Freebox Player POP. The stream is sized for what the TV's decoder and browser can show — Auto streams 720p at most there, for the lowest latency — and shown by the TV browser's own video player: every frame, where drawing them in the page held a TV to about 30 a second. A decoder that freezes on the PC's loss-healing stream (the Freebox's does) is noticed, and the stream comes back on keyframes: once, and that TV remembers it.\
-**With the remote:** switch TV Bro to **Direct navigation** (hold OK on a link, then pick the D‑pad icon). The arrows then move between the cards and OK launches. In a stream, the arrows and OK go to the PC, and **holding OK** opens the stream's menu (Resume, Statistics, Stop): a TV browser keeps Back for itself. A pad paired to the TV gets around the pages too, and **Select + Start + LB + RB** opens the same menu.
+**With the remote:** switch TV Bro to **Direct navigation** (hold OK on a link, then pick the D‑pad icon). The arrows then move between the cards and OK launches. In a stream, the arrows and OK go to the PC, and **holding OK** opens the stream's menu (Resume, Mouse, Statistics, Stop): a TV browser keeps Back for itself. Its **Mouse** turns the remote into the PC's mouse: the arrows move the pointer, OK clicks, Ch+ / Ch− scroll. A pad paired to the TV gets around the pages too, and **Select + Start + LB + RB** opens the same menu.\
+**With TV Bro's own cursor** (its default mode), the pages scroll at the screen's edge and a click in a stream lands right under the cursor. Every page has an on‑screen way out (✕, Close). A TV asked for more than its Auto would pick (1080p60 on a Mi TV) says so at launch, and streams as asked.
 
 ---
 
