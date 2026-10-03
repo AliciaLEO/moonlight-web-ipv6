@@ -385,6 +385,7 @@
         "resolutionDeviceDesc": "The stream matches this screen pixel for pixel ({{size}}); the remote display switches to that size when it can.",
         "resolutionCustomDesc": "Width and height, {{min}} to {{max}} pixels each. Never larger than the remote display.",
         "bitrateAuto": "· auto",
+        "bitrateBackToAuto": "Back to auto",
         "resolutionWidth": "Width",
         "resolutionHeight": "Height",
         "streamAspect": "Streamed Ratio",

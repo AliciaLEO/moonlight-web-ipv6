@@ -385,6 +385,7 @@
         "resolutionDeviceDesc": "串流与本屏幕逐像素对应（{{size}}）；远程显示器在可能时切换到该尺寸。",
         "resolutionCustomDesc": "宽度和高度，各为 {{min}} 到 {{max}} 像素。不会大于远程显示器。",
         "bitrateAuto": "· 自动",
+        "bitrateBackToAuto": "恢复自动",
         "resolutionWidth": "宽度",
         "resolutionHeight": "高度",
         "streamAspect": "串流比例",

@@ -488,6 +488,11 @@ export class SettingsView {
     _syncBitrateMark() {
         const mark = this.container.querySelector('#settings-bitrate-auto');
         if (mark) mark.textContent = this._bitrateAuto ? t('settings.bitrateAuto') : '';
+        // The way back to the estimate, offered only once it has been left:
+        // a stray click on the track (a TV's cursor) was otherwise kept for
+        // good, with nothing to undo it but a reset of every setting.
+        const back = this.container.querySelector('#settings-bitrate-back-to-auto');
+        if (back) back.hidden = this._bitrateAuto;
     }
 
     /**
@@ -1346,6 +1351,10 @@ export class SettingsView {
                             <span>1 Mbps</span>
                             <span>150 Mbps</span>
                         </div>
+                        <button type="button" id="settings-bitrate-back-to-auto"
+                                class="btn btn-secondary btn-small"${this._bitrateAuto ? ' hidden' : ''}>
+                            ${t('settings.bitrateBackToAuto')}
+                        </button>
                     </div>
                 </div>
 
@@ -1769,6 +1778,17 @@ export class SettingsView {
                 this._bitrateAuto = !isNaN(value) && value === this._estimateBitrate();
                 this._syncBitrateMark();
                 this._autoSave();
+            });
+
+        const bitrateBack = this.container.querySelector('#settings-bitrate-back-to-auto');
+        if (bitrateBack)
+            bitrateBack.addEventListener('click', () => {
+                this._bitrateAuto = true;
+                this._applyAutoBitrate();
+                this._syncBitrateMark();
+                this._autoSave();
+                // The button just hid itself: the focus goes to the slider.
+                if (bitrateSlider) bitrateSlider.focus();
             });
 
         const gamingCheck = this.container.querySelector('#settings-gaming-mode');

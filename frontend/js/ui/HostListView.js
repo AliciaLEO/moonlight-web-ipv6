@@ -239,6 +239,13 @@ export class HostListView {
                 return;
             }
 
+            // ── Kebab menu: its own Close (a TV remote has no Escape) ─────
+            if (e.target.closest('.btn-menu-close')) {
+                e.stopPropagation();
+                this._closeMenuBackToButton();
+                return;
+            }
+
             // ── Kebab menu toggle ──────────────────────────────────────────
             const menuBtn = e.target.closest('.btn-host-menu');
             if (menuBtn) {
@@ -467,6 +474,12 @@ export class HostListView {
         // App-card keyboard activation (Enter/Space) — cards are role="button".
         this._keydownHandler = (e) => {
             if (this._destroyed) return;
+            // Escape (a pad's B, through RemoteNav) closes an open kebab menu,
+            // and the focus goes back to the button that opened it.
+            if (e.key === 'Escape' && this._closeMenuBackToButton()) {
+                e.preventDefault();
+                return;
+            }
             if (e.key !== 'Enter' && e.key !== ' ') return;
             // The Quit button of a running app is a real <button>: let it act.
             if (e.target.closest && e.target.closest('.app-card-quit')) return;
@@ -1189,6 +1202,13 @@ export class HostListView {
                                     ? ''
                                     : `<button class="host-menu-item btn-remove" data-uuid="${host.uuid}">${t('common.remove')}</button>`
                             }
+                            ${
+                                // A TV remote's Back never reaches the page: the
+                                // menu carries its own way out there.
+                                RemoteNav.isActive()
+                                    ? `<button class="host-menu-item btn-menu-close">${t('common.close')}</button>`
+                                    : ''
+                            }
                         </div>
                     </div>
                 </div>
@@ -1691,6 +1711,18 @@ export class HostListView {
                 this._launchFailTimers.delete(card);
             }, HostListView.LAUNCH_FAIL_FADE_MS),
         );
+    }
+
+    /**
+     * Close the open kebab menu, focusing the button that opened it.
+     * @returns {boolean} whether a menu was open
+     */
+    _closeMenuBackToButton() {
+        const open = this.container.querySelector('.btn-host-menu[aria-expanded="true"]');
+        if (!this.container.querySelector('.host-menu:not([hidden])')) return false;
+        this._closeAllMenus();
+        if (open instanceof HTMLElement) open.focus();
+        return true;
     }
 
     _closeAllMenus() {

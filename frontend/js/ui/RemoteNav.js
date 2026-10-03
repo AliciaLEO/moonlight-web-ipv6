@@ -282,11 +282,33 @@ export function pickNext(from, dir, list) {
     return best;
 }
 
+/** @param {any} el */
+function isRange(el) {
+    return !!(el && typeof el.matches === 'function' && el.matches('input[type="range"]'));
+}
+
+/** @param {any} el */
+function isArmed(el) {
+    return !!(el && el.dataset && el.dataset.navArmed === '1');
+}
+
+/**
+ * OK on a slider: it takes the arrows (armed), or gives them back. Leaving it
+ * disarms it (onFocusOut).
+ * @param {HTMLElement} el
+ */
+function armRange(el) {
+    if (isArmed(el)) delete el.dataset.navArmed;
+    else el.dataset.navArmed = '1';
+}
+
 /**
  * True when an arrow belongs to the element itself: a caret to move inside a
  * text, a slider's value, a list's choice. Up and Down still leave a one-line
  * text field (it has nowhere to go with them), and Left/Right leave it at its
  * ends; a list is left with Up and Down only when closed — a TV opens it on OK.
+ * A slider takes Left/Right only once OK armed it (armRange): passing over the
+ * bitrate on the way to the next setting used to change it.
  * @param {any} el
  * @param {string} key
  */
@@ -302,7 +324,7 @@ export function arrowStaysNative(el, key) {
     }
     if (el.matches('input')) {
         const type = (el.getAttribute('type') || 'text').toLowerCase();
-        if (type === 'range') return !vertical;
+        if (type === 'range') return !vertical && isArmed(el);
         if (type === 'checkbox' || type === 'radio' || type === 'button' || type === 'submit') {
             return false;
         }
@@ -423,13 +445,21 @@ function viewKey() {
 
 function onKeyDown(e) {
     if (!isActive()) return;
+    if (e.key === 'Enter' && isRange(e.target) && !(streaming() && !topLayer())) {
+        armRange(/** @type {HTMLElement} */ (e.target));
+        e.preventDefault();
+        return;
+    }
     const dir = KEY_DIRS[e.key];
     if (!dir) return;
     if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
     // In a stream the keys are the host's, unless a layer is up over it.
     if (streaming() && !topLayer()) return;
     if (arrowStaysNative(e.target, e.key)) return;
-    if (move(dir)) {
+    // A slider not armed keeps its value even with nowhere to move to: the
+    // browser would step it otherwise.
+    const keepSlider = isRange(e.target) && (dir === 'left' || dir === 'right');
+    if (move(dir) || keepSlider) {
         e.preventDefault();
         e.stopPropagation();
     }
@@ -453,6 +483,11 @@ function onPointerDown() {
 
 function onSteeringKey(e) {
     if (STEERING_KEYS.has(e.key)) pointerInUse(false);
+}
+
+function onFocusOut(e) {
+    const el = /** @type {HTMLElement} */ (e.target);
+    if (isRange(el) && isArmed(el)) delete el.dataset.navArmed;
 }
 
 function onFocusIn(e) {
@@ -533,7 +568,7 @@ function onBodyClass() {
  */
 function stepRange(el, dir) {
     if (dir !== 'left' && dir !== 'right') return false;
-    if (!el || !el.matches || !el.matches('input[type="range"]')) return false;
+    if (!isRange(el) || !isArmed(el)) return false;
     if (dir === 'right') el.stepUp();
     else el.stepDown();
     el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -606,7 +641,8 @@ function pollPads() {
         }
         if (fresh(PAD_A)) {
             const el = /** @type {HTMLElement|null} */ (document.activeElement);
-            if (el && el !== document.body && typeof el.click === 'function') el.click();
+            if (isRange(el)) armRange(/** @type {HTMLElement} */ (el));
+            else if (el && el !== document.body && typeof el.click === 'function') el.click();
         }
         if (fresh(PAD_B)) sendEscape();
         st.pressed = down;
@@ -640,6 +676,7 @@ export function init() {
     window.addEventListener('keydown', onSteeringKey, true);
     window.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('focusin', onFocusIn, true);
+    document.addEventListener('focusout', onFocusOut, true);
     // Elements coming and going, and menus shown through `hidden`. Classes
     // are left out: they change all the time during a stream, and the one
     // that matters — body.streaming-active — has its own observer below.
@@ -697,6 +734,7 @@ export function _resetForTest() {
         window.removeEventListener('keydown', onSteeringKey, true);
         window.removeEventListener('pointerdown', onPointerDown, true);
         document.removeEventListener('focusin', onFocusIn, true);
+        document.removeEventListener('focusout', onFocusOut, true);
         document.documentElement.classList.remove('remote-nav', 'nav-pointer');
     }
     state.forced = null;

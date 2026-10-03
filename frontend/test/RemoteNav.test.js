@@ -135,9 +135,11 @@ describe('RemoteNav.arrowStaysNative', () => {
         expect(arrowStaysNative(input, 'ArrowLeft')).toBe(false);
     });
 
-    it('leaves a slider its left and right, and a checkbox nothing', () => {
+    it('leaves an armed slider its left and right, and a checkbox nothing', () => {
         const range = document.createElement('input');
         range.type = 'range';
+        expect(arrowStaysNative(range, 'ArrowRight')).toBe(false);
+        range.dataset.navArmed = '1';
         expect(arrowStaysNative(range, 'ArrowRight')).toBe(true);
         expect(arrowStaysNative(range, 'ArrowUp')).toBe(false);
         const box = document.createElement('input');
@@ -402,5 +404,76 @@ describe('RemoteNav: the ring follows the focus, not the cursor', () => {
         init();
         tap();
         expect(html.classList.contains('nav-pointer')).toBe(false);
+    });
+});
+
+describe('RemoteNav: a slider changes only once OK armed it', () => {
+    beforeEach(() => {
+        _resetForTest();
+        document.body.innerHTML = '';
+    });
+    afterEach(() => _resetForTest());
+
+    function slider(left, top) {
+        const r = document.createElement('input');
+        r.type = 'range';
+        r.min = '1';
+        r.max = '150';
+        r.value = '20';
+        document.body.appendChild(r);
+        return place(r, left, top, 300, 20);
+    }
+
+    it('passing over it with Left/Right keeps its value', () => {
+        _setActiveForTest(true);
+        init();
+        const r = slider(0, 0);
+        r.focus();
+        const ev = press('ArrowRight', r);
+        expect(ev.defaultPrevented).toBe(true);
+        expect(r.value).toBe('20');
+    });
+
+    it('OK arms it, OK again or leaving it disarms it', () => {
+        _setActiveForTest(true);
+        init();
+        const r = slider(0, 0);
+        const b = button('below', 0, 100);
+        r.focus();
+        press('Enter', r);
+        expect(r.dataset.navArmed).toBe('1');
+        expect(press('ArrowRight', r).defaultPrevented).toBe(false); // the browser steps it
+        press('Enter', r);
+        expect(r.dataset.navArmed).toBeUndefined();
+        press('Enter', r);
+        b.focus();
+        expect(r.dataset.navArmed).toBeUndefined();
+    });
+
+    it('a pad: A arms it, then its right steps it', () => {
+        _setActiveForTest(true);
+        init();
+        const r = slider(0, 0);
+        r.focus();
+        const buttons = Array.from({ length: 17 }, () => ({ pressed: false, value: 0 }));
+        Object.defineProperty(navigator, 'getGamepads', {
+            value: () => [{ index: 0, connected: true, buttons, axes: [0, 0, 0, 0] }],
+            configurable: true,
+        });
+        _pollForTest();
+        buttons[15].pressed = true;
+        _pollForTest();
+        expect(r.value).toBe('20');
+        buttons[15].pressed = false;
+        _pollForTest();
+        buttons[0].pressed = true;
+        _pollForTest();
+        expect(r.dataset.navArmed).toBe('1');
+        buttons[0].pressed = false;
+        _pollForTest();
+        buttons[15].pressed = true;
+        _pollForTest();
+        expect(r.value).toBe('21');
+        delete (/** @type {any} */ (navigator).getGamepads);
     });
 });

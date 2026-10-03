@@ -128,6 +128,10 @@ h2,
     outline: 4px solid var(--text-1);
     outline-offset: -6px;
 }
+/* A slider OK has armed (RemoteNav): its arrows change the value now. */
+.remote-nav input[type='range'][data-nav-armed] {
+    box-shadow: 0 0 0 4px var(--accent-1);
+}
 .remote-nav:not(.nav-pointer) .app-card:focus {
     box-shadow: var(--edge-accent), var(--glass-highlight);
     filter: var(--glow-accent);

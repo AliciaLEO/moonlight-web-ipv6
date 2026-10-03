@@ -385,6 +385,7 @@
         "resolutionDeviceDesc": "Le flux correspond à cet écran pixel pour pixel ({{size}}) ; l'écran distant passe à cette taille quand il le peut.",
         "resolutionCustomDesc": "Largeur et hauteur, de {{min}} à {{max}} pixels chacune. Jamais plus grande que l'écran distant.",
         "bitrateAuto": "· auto",
+        "bitrateBackToAuto": "Revenir à l'auto",
         "resolutionWidth": "Largeur",
         "resolutionHeight": "Hauteur",
         "streamAspect": "Ratio du flux",
