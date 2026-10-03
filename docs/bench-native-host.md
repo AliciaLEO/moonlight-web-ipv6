@@ -5838,6 +5838,46 @@ Corrigés en route :
 - clavier en US dans gamescope (amont ; Punktfunk porte un correctif) ;
 - pas encore vu : le vrai Steam dans gamescope, Steam rendu au bureau, un jeu.
 
+### 8s.15 G6 : le vrai Steam dans gamescope (03/10/2026)
+
+Hôte : l'UM790Pro sous Ubuntu 24.04, GNOME 46 en Wayland, 780M principal. Le DEV `.deb` `0.3.1.gs6` est
+construit depuis `main` (`bf6085f4`), puis `0.3.1.gs6.1` avec le correctif ci-dessous, en LAN seul.
+gamescope 3.16.31 (G0), Steam en snap, connecté. Client : Chrome sans fenêtre de DualRTX, en H.264.
+Pilote : `c4_run.py` de C4, auquel s'ajoutent une manette standard simulée dans la page, des mouvements
+relatifs envoyés sur le canal d'entrées, des touches nommées et des relevés d'images par seconde.
+
+| essai | résultat |
+|---|---|
+| Steam ouvert au bureau, carte « Steam Big Picture » en 1280×720 à 60 | Steam du bureau fermé en 3 s, Big Picture à l'écran en 5,9 s, latence 5-8 ms |
+| manette (pad simulé) | pad uinput « X-Box 360 » tenu par Steam ; A fait avancer l'accueil de Big Picture |
+| clavier | Entrée et les flèches naviguent jusqu'à la page d'un jeu |
+| souris absolue, pointeur | position renvoyée à ±1 px sur 7 points ; forme XFixes 35×35 appliquée en curseur par la page |
+| souris relative | 20 × (10, 0) puis 10 × (0, 8) : pointeur de gamescope déplacé d'autant |
+| un jeu (Counter-Strike, lancé à la manette) | il tourne dans gamescope (`GAMESCOPE_WAYLAND_DISPLAY`), à 60 i/s ; un clic ouvre « Options » ; jeu fermé → retour à Big Picture |
+| invité (rangée de partage) | même session en 1,4 s, image de l'owner |
+| fin des deux streams, relance en 1600×900 au bout de 90 s | unité vivante, minuterie posée à +10 min ; session retrouvée en 1,1 s, à 1280×720 |
+| fin par l'app (Quitter Steam) | gamescope parti en 4 s, stream fini « Steam quit, and its gamescope with it », retour à la bibliothèque ; Steam rouvert au bureau 6 s plus tard |
+| jeu lancé depuis le Steam du bureau, puis la carte | refus affiché : « a game is running from Steam on the host's desktop — quit it there first » |
+| carte « Cube » (vkcube) 1920×1080 à 60 et 120 | `-r` = cadence demandée, 60 et 120 i/s reçues |
+| Cube à 240, vkcube sur le 780M | 720p : 214 i/s reçues ; 1080p : l'hôte descend à 120 i/s, ce que suit le décodeur logiciel du client |
+| téléphone tenu droit 1170×2532 | **défaut** : Big Picture en 1170×658 → corrigé (`7b860195`), puis 1170×2532 en portrait, mise en page de Steam adaptée |
+| session X11 (GDM rebasculé) | carte Steam proposée, carte d'écran virtuel absente (voulu) ; session neuve en 2,6 s, pointeur, relatif, clavier ; retour en Wayland |
+
+**Le défaut corrigé (`7b860195`)** : la page ne traitait comme « faite à la taille du client » que la
+carte de l'écran virtuel. Les cartes gamescope recevaient la boîte à remplir, où l'hôte loge la forme 16:9
+de son écran nominal. L'hôte savait déjà les dimensionner (`isMadeForStreamKey`). Elles demandent
+maintenant une taille exacte. Tourner le téléphone ne relance rien : la session garde sa taille de départ.
+
+**Vu, non corrigé** :
+- le choix du GPU revient à l'app : gamescope compose sur le 780M, mais vkcube prend de lui-même la
+  GTX 1050 (« Selected GPU 1 ») → copie entre GPU, 2 i/s à 720p240. Avec `--gpu_number 0`, il atteint
+  214 i/s. Un jeu Vulkan sur une machine hybride fera le même choix ;
+- Counter-Strike 1.6 s'affiche recadré et agrandi dans un gamescope 1280×720 (fenêtre X à 1280×720) ;
+  Big Picture est juste. C'est le jeu face à gamescope, pas le stream ;
+- une session gamescope survit au redémarrage de GDM (unité du gestionnaire utilisateur) ;
+- pas de son sur ce banc : la seule sortie PipeWire est « Dummy Output » (aucun écran ni haut-parleur
+  branché), la capture la refuse.
+
 ## 8t. Phase UA : l'« Auto » avec détection, UA.3 (nuit du 01 au 02/10/2026)
 
 Plan du POC Ultra, Phase UA ; design §33.10. Hôte : l'instance `--dev` de
