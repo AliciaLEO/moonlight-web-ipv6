@@ -5860,20 +5860,24 @@ relatifs envoyés sur le canal d'entrées, des touches nommées et des relevés 
 | jeu lancé depuis le Steam du bureau, puis la carte | refus affiché : « a game is running from Steam on the host's desktop — quit it there first » |
 | carte « Cube » (vkcube) 1920×1080 à 60 et 120 | `-r` = cadence demandée, 60 et 120 i/s reçues |
 | Cube à 240, vkcube sur le 780M | 720p : 214 i/s reçues ; 1080p : l'hôte descend à 120 i/s, ce que suit le décodeur logiciel du client |
-| téléphone tenu droit 1170×2532 | **défaut** : Big Picture en 1170×658 → corrigé (`7b860195`), puis 1170×2532 en portrait, mise en page de Steam adaptée |
+| taille personnalisée 1170×2532 (portrait) | **défaut** : Big Picture en 1170×658 → corrigé (`7b860195`), puis 1170×2532 en portrait, mise en page de Steam adaptée |
+| Bruno, iPhone en 5G par le rendez-vous du staging (porte G) | Big Picture en 2336×1080 à 99 i/s, HEVC, latence 37 ms ; la forme du téléphone tenu en paysage, comme l'écran virtuel ; Tomb Raider net, Counter-Strike flou (voir plus bas) |
 | session X11 (GDM rebasculé) | carte Steam proposée, carte d'écran virtuel absente (voulu) ; session neuve en 2,6 s, pointeur, relatif, clavier ; retour en Wayland |
 
 **Le défaut corrigé (`7b860195`)** : la page ne traitait comme « faite à la taille du client » que la
 carte de l'écran virtuel. Les cartes gamescope recevaient la boîte à remplir, où l'hôte loge la forme 16:9
 de son écran nominal. L'hôte savait déjà les dimensionner (`isMadeForStreamKey`). Elles demandent
-maintenant une taille exacte. Tourner le téléphone ne relance rien : la session garde sa taille de départ.
+maintenant une taille exacte : celle du téléphone tenu en paysage (2336×1080 sur l'iPhone de Bruno au lieu
+d'un 16:9), ou la taille personnalisée telle quelle. Tourner le téléphone ne relance rien : la session garde
+sa taille de départ.
 
 **Vu, non corrigé** :
 - le choix du GPU revient à l'app : gamescope compose sur le 780M, mais vkcube prend de lui-même la
   GTX 1050 (« Selected GPU 1 ») → copie entre GPU, 2 i/s à 720p240. Avec `--gpu_number 0`, il atteint
   214 i/s. Un jeu Vulkan sur une machine hybride fera le même choix ;
-- Counter-Strike 1.6 s'affiche recadré et agrandi dans un gamescope 1280×720 (fenêtre X à 1280×720) ;
-  Big Picture est juste. C'est le jeu face à gamescope, pas le stream ;
+- Counter-Strike 1.6 garde sa propre résolution, en 4:3 et basse, que gamescope agrandit : flou et bandes
+  sur l'iPhone, recadré dans un gamescope 1280×720. Tomb Raider suit la taille de l'écran. Remède côté
+  joueur : une résolution plus haute dans les options vidéo du jeu ;
 - une session gamescope survit au redémarrage de GDM (unité du gestionnaire utilisateur) ;
 - pas de son sur ce banc : la seule sortie PipeWire est « Dummy Output » (aucun écran ni haut-parleur
   branché), la capture la refuse.

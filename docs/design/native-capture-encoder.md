@@ -7255,8 +7255,9 @@ pas de session du tout, a la carte aussi. Mesures : banc §8s.13, §8s.14 et
 téléphone tenu droit, X11).
 
 - **La taille** : la page traite ces cartes comme l'écran virtuel. Chaque
-  choix de résolution y nomme une taille exacte, un téléphone tenu droit
-  compris (`App.isMadeForStream`, `7b860195`). L'hôte la prend telle quelle
+  choix de résolution y nomme une taille exacte : un téléphone a l'écran de sa
+  forme tenue en paysage, une taille personnalisée est prise telle quelle
+  (`App.isMadeForStream`, `7b860195`). L'hôte la prend telle quelle
   (`isMadeForStreamKey`). Tourner l'appareil ne relance rien : la session garde
   sa taille de départ.
 
