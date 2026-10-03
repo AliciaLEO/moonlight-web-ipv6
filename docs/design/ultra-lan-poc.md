@@ -277,6 +277,58 @@ attendent 0,0 à 0,1 ms.
   par image (8,9 contre 9,2 ms en local) : la sonde ne mesure plus son propre
   retard.
 
+### 6.3 U0.3 — première série : le N95 en Wi-Fi (03/10/2026)
+
+Hôte DualRTX, client le N95 (Chrome, Wi-Fi), de 15:57 à 16:50 : 20 passes,
+chacune avec 30 s d'âge du contenu, le journal par image et 30 clics. Deux modes
+alternés D U D U dans chaque case, l'écran virtuel rendu par le GPU de la case :
+
+- **D, « HEVC par défaut »** : le produit d'aujourd'hui, Auto avec détection ;
+- **U, « HEVC réglé Ultra »** : la barre (§2), 120 i/s demandés, écran virtuel
+  à 240 Hz, tearing, détection ;
+- **A** : U en AV1. Les cases AV1 alternent U A U A.
+
+`pass.py --codec` vient de `69475ba6`. Médianes de deux passes par mode (l'âge
+montré de A sur l'Arc, d'une seule : l'autre n'a rien pu lire) :
+
+| Hôte | Mode | Âge montré | E2E par image | Clic → drapeau (clics mesurés) | Plus longue coupure du lien |
+|---|---|---|---|---|---|
+| RTX (NVENC) | D | 44,9 ms | 28,0 ms | 83,0 ms (53 / 60) | 0,8 s |
+| RTX (NVENC) | U | 270 ms | 242 ms | 135 ms (22 / 60) | 8,8 s |
+| Arc (D3D12 VE) | D | 58,2 ms | 39,9 ms | 88,6 ms (54 / 60) | 1,2 s |
+| Arc (D3D12 VE) | U | 130 ms | 114 ms | 204 ms (12 / 60) | 4,4 s |
+| iGPU AMD (AMF) | D | 51,7 ms | 31,3 ms | 93,9 ms (46 / 60) | 2,4 s |
+| iGPU AMD (AMF) | U | 320 ms | 295 ms | 101 ms (17 / 60) | 14,8 s |
+| Arc (oneVPL) | A | 448 ms | non mesuré | aucun (0 / 60) | 31 s |
+| RTX (NVENC) | A | 671 ms | non mesuré | 185 ms (8 / 60) | 20,8 s |
+
+- **Sur le N95 en Wi-Fi, demander 120 i/s fait décrocher le lien.** Le lien se
+  coupe plusieurs secondes et le débit retombe de 7 à 5 Mbit/s. Le stream ne
+  livre que 41 à 82 i/s, et plus d'un clic sur deux n'obtient pas de drapeau. Le même
+  écart se répète sur les trois GPU, passe après passe : ce n'est pas un
+  incident. Le mode par défaut, lui, reste à la cadence du client : sa détection a
+  essayé 116 i/s et y a renoncé (la file du décodeur se remplissait, puis
+  l'image arrivait trop tard).
+- **La cause n'est pas tranchée.** Ce peut être la file d'envoi SCTP de l'hôte
+  en Wi-Fi (plan Wi-Fi W1), ou le décodeur du N95. La prochaine série relance
+  les passes U avec `relaylog=1`, et `scripts/bench/wifi/flagpath.py` coupera
+  chaque image en envoi / réseau / décodage / dessin.
+- **L'AV1 est pire encore sur ce client.** Le décodage prend 0,9 à 1,1 s par
+  image, et la bande sort gris-violet, illisible sur l'Arc. Le N95 ne décode
+  pas l'AV1 1080p à cette cadence. Il n'est pas vérifié si son décodeur AV1
+  est matériel ou logiciel.
+- **Trou de l'outil, corrigé ensuite.** Le journal par image (U0.2) n'avait
+  vu aucune image AV1. La voie AV1 donne au décodeur un horodatage inventé et
+  un tampon d'hôte nul, pour que le pacer présente au décodage, et le journal
+  lisait ce zéro. Depuis `1cdb4eb9`, le tampon suit l'image jusqu'au journal
+  seul. Le pacer, la grille de vsync, la détection et la sonde d'âge ne voient
+  toujours rien en AV1 : **la détection de l'« Auto » ne mesure donc pas
+  l'AV1**. C'est noté, non corrigé. La correction n'est pas encore vérifiée en
+  vrai stream.
+- **Pas de case sous charge GPU dans cette série.** `mw-gpu-load` s'arrête au
+  bout de 60 s, plus court qu'une passe. Il faudra le brancher dans `pass.py`,
+  entre la calibration et la mesure.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
@@ -297,3 +349,9 @@ l'écran, pris d'un bout à l'autre. Si elle lit nettement plus que le total
 au-dessus d'elle, une partie du trajet n'est chronométrée par personne. En Wi-Fi,
 elle peut lire un peu faux, de la moitié de l'écart entre la montée et la
 descente.
+
+Déjà visible (U0.3, N95) : sur un portable modeste en Wi-Fi, forcer 120 i/s
+dégrade tout. L'image a 130 à 320 ms de retard au lieu de 45 à 58, avec des
+coupures de plusieurs secondes, et plus d'un clic sur deux reste sans réponse visible.
+L'« Auto » d'aujourd'hui fait le bon choix sur cet appareil : il essaie de
+monter, voit que ça ne tient pas, et reste à la cadence de l'écran.
