@@ -1670,6 +1670,18 @@ void DataChannelRelay::onInputMessage(const std::string& message, int64_t recvUs
             m_LinkQueueMs.store(fb.owdRiseMs, std::memory_order_relaxed);
             fb.gaps = msg["gaps"].toInt(0);
             fb.receivedFps = msg["fps"].toInt(0);
+            // What SCTP sent again since the last report, per thousand chunks:
+            // only the bench's retrcut= reads it (plan Wi-Fi W2 B).
+            {
+                const mw::sctp::Counters now = mw::sctp::readCounters();
+                if (m_LinkSctpSet) {
+                    const mw::sctp::Counters d = now - m_LinkSctp;
+                    fb.retransPermille =
+                        d.sent > 0 ? static_cast<int>(int64_t(d.retrans) * 1000 / d.sent) : 0;
+                }
+                m_LinkSctp = now;
+                m_LinkSctpSet = true;
+            }
             // Present, and true, only on the first report after the page came
             // back from the background (StreamView._resyncAfterHidden).
             fb.resumed = msg["resumed"].toBool(false);

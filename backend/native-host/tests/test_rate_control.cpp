@@ -463,6 +463,50 @@ void run_rate_control_tests()
         CHECK_EQ(g.targetKbps(), 12800);
     }
 
+    SECTION("RateGovernor — SCTP's retransmissions cut only under the bench's retrcut=");
+    {
+        // The product: the governor does not look at SCTP, whatever it says.
+        RateGovernor off;
+        off.start(40000, 0);
+        CHECK_EQ(off.retransCut(), 0);
+        LinkFeedback retrans;
+        retrans.retransPermille = 30;
+        CHECK(!off.report(retrans, 500));
+        CHECK_EQ(off.targetKbps(), 40000);
+        CHECK_EQ(off.retransOveruses(), 0);
+
+        // retrcut=5: 5 in a thousand or more is overuse, with no delay rise.
+        RateGovernor g;
+        g.start(40000, 0);
+        g.setRetransCut(5);
+        LinkFeedback four;
+        four.retransPermille = 4;
+        CHECK(!g.report(four, 500));
+        CHECK_EQ(g.targetKbps(), 40000);
+        LinkFeedback five;
+        five.retransPermille = 5;
+        CHECK(g.report(five, 1000));
+        CHECK_EQ(g.targetKbps(), 32000);
+        CHECK_EQ(g.retransOveruses(), 1);
+        // Under the threshold but not under half of it: held, never raised.
+        LinkFeedback three;
+        three.retransPermille = 3;
+        for (int64_t t = 1500; t <= 8000; t += 500)
+            CHECK(!g.report(three, t));
+        CHECK_EQ(g.targetKbps(), 32000);
+        // Under half of it (2 * 2 < 5): quiet, and after three seconds a raise.
+        LinkFeedback two;
+        two.retransPermille = 2;
+        // Quiet counts from the last report that was not (8000).
+        CHECK(!g.report(two, 8500));
+        CHECK(!g.report(two, 10500));
+        CHECK(g.report(two, 11000));
+        CHECK(g.targetKbps() > 32000);
+        // A negative or zero cut is off.
+        g.setRetransCut(-3);
+        CHECK_EQ(g.retransCut(), 0);
+    }
+
     SECTION("RateGovernor — never below the floor, never above the setting");
     {
         RateGovernor g;

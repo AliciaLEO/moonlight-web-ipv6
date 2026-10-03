@@ -53,6 +53,14 @@ struct LinkFeedback
     /// check on the rest; 0 when unknown.
     int receivedFps = 0;
 
+    /// SCTP chunks the host sent again in the window, per thousand it sent.
+    /// Filled by the host (DataChannelRelay). On a Mac in Wi-Fi they are mostly
+    /// datagrams the browser's full socket dropped, and each one shrinks the
+    /// congestion window: the frames then wait inside usrsctp, ~20 ms more than
+    /// on Ethernet, with no rise the receiver's minimum delay would show (plan
+    /// Wi-Fi W1 bis). Only the bench's `retrcut=` reads it.
+    int retransPermille = 0;
+
     /// The receiver's first report after its page was hidden or frozen. The
     /// gaps it names were frames the host's own sender evicted because nobody
     /// was draining them, and the silence before it was the browser's, not the

@@ -410,6 +410,10 @@ struct EncoderTuning
     int paceMultiple = 0;
     /// The most that leaves back to back under pacing, in KB. 0: 16, one chunk.
     int paceBurstKb = 0;
+    /// The rate governor also cuts when SCTP retransmits at least this many
+    /// chunks in a thousand over a report window (plan Wi-Fi W2 B; Windows
+    /// host). 0, the product: the governor does not look at SCTP.
+    int retransCutPermille = 0;
 
     bool isDefault() const
     {
@@ -436,7 +440,7 @@ struct EncoderTuning
                prioVk == PriorityVk::Default && portalDmabuf == Choice::Default &&
                mutterDirect == Choice::Default && lossPermille == 0 && lossBurst == 0 &&
                sctpCongestion < 0 && floodKbps == 0 && floodBytes == 0 && !floodLikeVideo &&
-               !relayLog && paceMultiple == 0 && paceBurstKb == 0;
+               !relayLog && paceMultiple == 0 && paceBurstKb == 0 && retransCutPermille == 0;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -537,6 +541,7 @@ struct EncoderTuning
         if (relayLog) add("relaylog=1");
         if (paceMultiple > 0) add("pace=" + std::to_string(paceMultiple));
         if (paceBurstKb > 0) add("paceburst=" + std::to_string(paceBurstKb));
+        if (retransCutPermille > 0) add("retrcut=" + std::to_string(retransCutPermille));
         return s;
     }
 };

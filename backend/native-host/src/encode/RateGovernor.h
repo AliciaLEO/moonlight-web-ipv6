@@ -171,8 +171,16 @@ public:
             return true;
         }
         m_SilenceCut = false;
-        const bool overuse = fb.owdRiseMs >= kOveruseMs || fb.gaps > 0 || fb.evictions > 0;
-        const bool quiet = fb.owdRiseMs < kQuietMs && fb.gaps == 0 && fb.evictions == 0;
+        // The bench's retrcut=: SCTP sending again more than that many chunks
+        // in a thousand is a link the stream overruns, and quiet wants it
+        // under half of that (setRetransCut).
+        const bool retransOver = m_RetransCut > 0 && fb.retransPermille >= m_RetransCut;
+        const bool retransQuiet = m_RetransCut <= 0 || fb.retransPermille * 2 < m_RetransCut;
+        if (retransOver) m_RetransOveruses++;
+        const bool overuse =
+            fb.owdRiseMs >= kOveruseMs || fb.gaps > 0 || fb.evictions > 0 || retransOver;
+        const bool quiet =
+            fb.owdRiseMs < kQuietMs && fb.gaps == 0 && fb.evictions == 0 && retransQuiet;
 
         if (overuse) {
             m_QuietSinceMs = nowMs;
@@ -221,6 +229,23 @@ public:
         rearmGoodSample(nowMs);
         return changed;
     }
+
+    /// The bench's `retrcut=` (plan Wi-Fi W2 B): SCTP retransmitting at least
+    /// @p permille chunks in a thousand over a report window reads as
+    /// overuse, and quiet then wants under half of that. 0, the product: the
+    /// governor does not look at SCTP at all.
+    ///
+    /// The receiver's delay rise is a minimum over its window: on a Mac in
+    /// Wi-Fi a few frames still arrive at once while most wait ~20 ms in
+    /// usrsctp behind a window shrunk by each drop, and the rise never reaches
+    /// kOveruseMs. The retransmissions are what the host itself sees of it;
+    /// at 20 Mbit/s instead of 42 the Mac's drops fell ninefold and its click
+    /// came back from 74 to 48.5 ms (W1 bis, 03/10/2026).
+    void setRetransCut(int permille) { m_RetransCut = permille > 0 ? permille : 0; }
+    int retransCut() const { return m_RetransCut; }
+    /// Reports that read as overuse for SCTP's retransmissions alone or with
+    /// the rest.
+    int retransOveruses() const { return m_RetransOveruses; }
 
     int targetKbps() const { return m_Target; }
     int settingKbps() const { return m_Setting; }
@@ -284,6 +309,8 @@ private:
     }
 
     bool m_Follow = false; ///< the bench's governor=off
+    int m_RetransCut = 0;  ///< the bench's retrcut=, per thousand; 0 off
+    int m_RetransOveruses = 0;
     int m_FloorPercent = kFloorPercent;
     int m_Setting = 20000;
     int m_Target = 20000;

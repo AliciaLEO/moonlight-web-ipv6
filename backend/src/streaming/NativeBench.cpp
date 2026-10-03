@@ -216,6 +216,8 @@ const char* const kUsage =
     "  pace=<n>          a frame's chunks handed to SCTP at n times the stream's bitrate\n"
     "                    at most, so a frame no longer leaves in one run (plan Wi-Fi W2 A)\n"
     "  paceburst=<KB>    what leaves back to back under pace= (default 16, one chunk)\n"
+    "  retrcut=<permille>  the rate governor also cuts when SCTP retransmits at least that\n"
+    "                    many chunks in a thousand (Windows host; plan Wi-Fi W2 B)\n"
     "the bench's own:\n"
     "  dump=<path>      the encoded stream as it comes out (Annex-B, or OBUs for AV1)\n"
     "  lose=<frames>[x<burst>][k]  every N frames, report the latest one lost (reference\n"
@@ -519,6 +521,9 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
     } else if (key == "paceburst") {
         tuning.paceBurstKb = value.toInt(&ok);
         ok = ok && tuning.paceBurstKb >= 2 && tuning.paceBurstKb <= 1024;
+    } else if (key == "retrcut") {
+        tuning.retransCutPermille = value.toInt(&ok);
+        ok = ok && tuning.retransCutPermille >= 0 && tuning.retransCutPermille <= 1000;
     } else {
         return false;
     }
