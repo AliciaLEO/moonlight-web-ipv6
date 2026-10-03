@@ -14,8 +14,11 @@ apps=$(cat "$L" 2>/dev/null)
 # finds nothing running (the first one's apps were not reopened), and its empty
 # list must not wipe the morning's.
 if [ -n "$NO_REOPEN" ]; then
-  { cat ~/mw-leo-apps.txt 2>/dev/null; echo "$apps"; } | tr ' ' '\n' | grep -v '^$' | sort -u > ~/mw-leo-apps.tmp
-  mv ~/mw-leo-apps.tmp ~/mw-leo-apps.txt
+  # Nothing was running: the file is not even rewritten.
+  if [ -n "$(echo $apps)" ]; then
+    { cat ~/mw-leo-apps.txt 2>/dev/null; echo "$apps"; } | tr ' ' '\n' | grep -v '^$' | sort -u > ~/mw-leo-apps.tmp
+    mv ~/mw-leo-apps.tmp ~/mw-leo-apps.txt
+  fi
   rm -f "$L"
   echo "== apps not reopened (night): $(echo $apps) -> ~/mw-leo-apps.txt now: $(tr '\n' ' ' < ~/mw-leo-apps.txt)"
   exit 0
