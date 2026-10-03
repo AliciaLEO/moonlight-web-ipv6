@@ -22,6 +22,18 @@ describe('App model', () => {
         const a = new App({ id: 7, name: 'Game' }, 'host/uuid');
         expect(a.boxArtUrl).toBe('/api/hosts/host%2Fuuid/appasset?appid=7');
     });
+
+    it('knows the screens made for the stream: the virtual display and gamescope apps', () => {
+        const card = (key) => new App({ id: 3, device: { key } });
+        expect(card('moonlightweb-virtual-display').isMadeForStream).toBe(true);
+        expect(card('moonlightweb-virtual-display').isGamescope).toBe(false);
+        expect(card('gamescope-steam').isMadeForStream).toBe(true);
+        expect(card('gamescope-steam').isGamescope).toBe(true);
+        expect(card('gamescope-app-Cube').isGamescope).toBe(true);
+        expect(card('gamescope-app-Cube').isVirtualDisplay).toBe(false);
+        expect(card('HDMI-A-1').isMadeForStream).toBe(false);
+        expect(new App({ id: 3 }).isMadeForStream).toBe(false);
+    });
 });
 
 describe('Host model', () => {

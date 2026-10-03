@@ -49,6 +49,29 @@ export class App {
         return this.device?.key === 'moonlightweb-virtual-display';
     }
 
+    /**
+     * Is this card an app in its own gamescope (a Linux native host: "Steam Big
+     * Picture", or one of the owner's apps)? Its screen is made at the stream's
+     * size when the session starts, and kept at that size for its whole life.
+     */
+    get isGamescope() {
+        const key = this.device?.key;
+        return (
+            key === 'gamescope-steam' ||
+            (typeof key === 'string' && key.startsWith('gamescope-app-'))
+        );
+    }
+
+    /**
+     * Is the screen behind this card made for the stream — the virtual display
+     * or a gamescope app? The resolution choice then names an exact size, a
+     * phone held upright included, instead of a box the host's shape is fitted
+     * into (see util/StreamResolution.js).
+     */
+    get isMadeForStream() {
+        return this.isVirtualDisplay || this.isGamescope;
+    }
+
     get boxArtUrl() {
         if (!this.hostUuid || !this.id || !this.hasBoxArt) return null;
         return `/api/hosts/${encodeURIComponent(this.hostUuid)}/appasset?appid=${this.id}`;

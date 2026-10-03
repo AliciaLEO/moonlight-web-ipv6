@@ -2104,10 +2104,11 @@ const MoonlightApp = {
                 touch: IS_HANDHELD,
                 // A TV's Auto stops at 720 lines: latency first.
                 tv: IS_TV,
-                // "MoonlightWeb Virtual Display": the screen is made for this
-                // stream, so every choice names an exact size instead of a box
-                // to fit into (see util/StreamResolution.js).
-                virtualDisplay: app?.isVirtualDisplay === true,
+                // "MoonlightWeb Virtual Display" or an app in gamescope: the
+                // screen is made for this stream, so every choice names an
+                // exact size instead of a box to fit into (see
+                // util/StreamResolution.js).
+                virtualDisplay: app?.isMadeForStream === true,
             },
         );
         this._fpsAuto = fpsAuto;
@@ -2118,8 +2119,11 @@ const MoonlightApp = {
         );
         this._applyResolvedSize(streamingSettings, bounded);
         if (IS_TV) this._warnTvOverAsk(streamingSettings, choice.mode === 'auto' && fpsAuto);
-        this._sizeFollowsScreen = size.followsScreen;
-        this._sizeOnVirtualDisplay = app?.isVirtualDisplay === true;
+        // A gamescope session keeps the size it was started at (a new size
+        // would only find it again, framed): turning the phone relaunches
+        // nothing there.
+        this._sizeFollowsScreen = size.followsScreen && app?.isGamescope !== true;
+        this._sizeOnVirtualDisplay = app?.isMadeForStream === true;
         // The ladder's session-only rung and bitrate outrank the choice: a
         // relaunch through here (a codec fallback under congestion) keeps
         // what the ladder brought the stream down to.
