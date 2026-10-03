@@ -78,6 +78,21 @@ python series.py mac --prefix w2a0 --contents clk --tuning relaylog=1 --udp     
 python series.py mac --prefix w2a4 --contents clk --tuning relaylog=1,pace=4 --udp
 ```
 
+**Pacing's verdict (W2 A, 03/10/2026): not for the product, the key stays.**
+On the Mac in Wi-Fi, two alternated rounds each (the page at 240):
+
+| | click → flag | kernel drops | SCTP retr. | frame age median / p90 | dropped /min |
+|---|---|---|---|---|---|
+| no pacing | 74.9 ms | 2,115 | 0.74 % | 20.6 / 51 ms | 110 |
+| `pace=4` | 85.0 ms | 2,540 | 0.79 % | 23.8 / 60 ms | 75 |
+| `pace=2` | 79.7 ms | 2,065 | 0.70 % | 15.5 / 24 ms | 48 |
+
+Pacing does not bring the drops down: Chrome's socket overflows when Chrome
+reads late (at 42 Mbit/s a 64 KB buffer holds ~12 ms), not under the host's
+bursts. Only a lower bitrate did (213 drops at 20 Mbit/s): that is W2 B, the
+rate governor cutting on SCTP's retransmissions (`retrcut=`). On the N95,
+pacing changed nothing measurable.
+
 ## Clients
 
 | name | machine | link | DevTools |

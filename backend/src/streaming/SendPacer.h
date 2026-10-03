@@ -39,6 +39,17 @@
 // and never more than a burst's worth at once: the frame still goes out within
 // a fraction of its interval, but no longer as one run the client cannot hold.
 //
+// ── What it gave (03/10/2026) ──────────────────────────────────────────────
+//
+// Not what it was for. On the Mac, two alternated rounds: the kernel's drops
+// stayed where they were (2,115 without, 2,540 at pace=4, 2,065 at pace=2)
+// and the click got no faster (74.9, 85.0, 79.7 ms). Chrome's socket fills
+// when Chrome reads late — at 42 Mbit/s a 64 KB buffer holds ~12 ms — not
+// under the host's bursts; only a lower bitrate brought the drops down. pace=2
+// did halve the p90 of a frame's age (51 to 24 ms). So it stays a bench key,
+// off in the product; the rate governor's retrcut= is the answer being
+// measured (plan « Wi-Fi », W2 B).
+//
 // The bucket starts full, refills at the rate and holds at most a burst. A
 // chunk waits until the bucket holds as much as the chunk, or a full burst for
 // a chunk bigger than that; sending it may then take the bucket below zero,
