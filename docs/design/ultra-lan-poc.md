@@ -377,6 +377,31 @@ sans elle). Médianes de deux passes par mode :
   relance un kiosque resté blanc (`probe=False`). Le calage de la bande, par
   DevTools, réussit quand même. Ce n'est pas vérifié.
 
+**L'iPhone de Bruno** (même soir, 21:26-21:37, Safari, Wi-Fi). L'hôte est la
+`--dev` de DualRTX, avec son écran virtuel au défaut du produit (rendu par
+l'Arc, D3D12 VE Intel). Quatre passes en alternance Auto, 120, Auto, 120 (la
+page de banc défile, l'iPhone reste immobile 60 s), relevées sur les captures du
+détail de la latence. Sur iOS, ni la sonde d'âge ni le clic → drapeau ne
+tournent sans console : seule la ligne « Mesurée » de U0.2 donne l'âge.
+
+| Mode | Cadence, taille | « Mesurée » moyenne / p99 | Décodage | Réseau |
+|---|---|---|---|---|
+| Auto | 60 i/s, 2532×1170 | 41,2 / 69,1 puis 47,9 / 80,4 ms | 5,6 puis 9,7 ms | 4,5 à 40 ms (une coupure de 0,37 s) |
+| 120 | 99 i/s, 2336×1080 | 39,8 / 67,2 puis 30,5 / 56,4 ms | 7,3 puis 4,7 ms | 5,3 à 17 ms |
+
+- **Le 120 gagne de 5 à 10 ms sur l'iPhone**, avec deux passes par mode
+  seulement, en Wi-Fi.
+- **Le décodage HEVC matériel de l'iPhone est mesuré pour la première fois** :
+  5 à 10 ms en moyenne, 8 à 21 ms au pire.
+- **À creuser** : 38 à 47 % d'images comptées « dropped (jitter) » dans les deux
+  modes, alors qu'aucune n'est perdue sur le réseau.
+- **Lien** : sur iOS, la `--dev` ne se joint pas à son adresse du LAN
+  (`https://192.168.1.66:8443/`). Safari n'étend pas au WebSocket de
+  signalisation l'exception de certificat acceptée pour la page, et le journal
+  de l'hôte dit « certificate unknown » toutes les 4 s. Son lien de staging
+  (`stream.dev.moonlightweb.top/<id>`, vrai certificat, vidéo restée en direct
+  sur le LAN) marche.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
