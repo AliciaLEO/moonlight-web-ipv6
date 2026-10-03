@@ -242,6 +242,41 @@ que personne ne chronomètre n'y figure pas.
       (et non plus 18080/18443), et une première passe a été arrêtée par
       Claude Code, faute de mémoire.
 
+### 6.2 U0.2 bis — la sonde d'âge ne retarde plus ce qu'elle mesure (03/10/2026)
+
+Le contrôle de U0.2 (§6.1) a montré que la sonde d'âge du contenu retardait le
+dessin des images qu'elle lisait. Elle copiait la bande sur le fil principal,
+avant le dessin de l'image. Elle passe maintenant l'image à un worker
+(`bandReadWorker.js`, `b83f3dac`), qui fait la copie. Si le navigateur refuse
+de transférer l'image, ou si le worker meurt, la sonde copie comme avant. Le
+résumé de chaque passe dit par quel chemin la copie est passée (`reader`), et
+ce que le fil principal a encore payé par lecture (`readCost`, affiché par
+`age.py`). Avec `MW_BENCH_INLINE_READ=1`, une passe copie comme avant : c'est
+ce qui a servi à mesurer l'avant et l'après (`659a017b`).
+
+Mesure du 03/10 (12:43-13:00) : hôte Arc, stream 60 i/s, une passe par mode,
+deux sur DualRTX. On compte l'attente entre le décodage d'une image lue et le
+début de son dessin, donnée par le journal par image ; les autres images
+attendent 0,0 à 0,1 ms.
+
+| Client | Avant (fil principal) | Après (worker) | `capture` de la sonde, avant → après |
+|---|---|---|---|
+| DualRTX, client local (iGPU AMD) | 11,3 / 13,2 ms | 0,1 / 0,1 ms | 19,4 / 25,5 → 8,9 / 9,1 ms |
+| N95, Wi-Fi | 7,3 ms | 0,2 ms | 49,8 → 34,8 ms |
+| UM790Pro sous Windows, Ethernet | 4,0 ms | 0,1 ms | 16,9 → 12,1 ms |
+
+- **Les âges du contenu mesurés jusqu'ici étaient trop hauts, à peu près de ce
+  coût.** La sonde ne calcule ses âges que sur les images qu'elle lit, et
+  chacune portait son retard : jusqu'à 12 ms sur le client local, 7 sur le N95,
+  4 sur l'UM790Pro. Sur le Mac, ce coût n'a pas été mesuré.
+- **Les écarts entre modes** (UA, §8t du banc) portent ce retard des deux
+  côtés. Ils restent comparables, tant que le coût ne change pas d'un mode à
+  l'autre. Une image lue de plus par seconde, à 240 i/s, aurait pu en ajouter :
+  ce n'est pas vérifié pour les passes passées.
+- La colonne `capture` de la sonde rejoint maintenant la médiane du journal
+  par image (8,9 contre 9,2 ms en local) : la sonde ne mesure plus son propre
+  retard.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
