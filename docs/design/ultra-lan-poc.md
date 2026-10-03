@@ -220,11 +220,24 @@ que personne ne chronomètre n'y figure pas.
       RTT minimal 0,3 ms, dérive estimée 0,4-0,9 ppm (0 en vrai : une seule
       machine), aucun saut. L'estimation sœur de la sonde d'âge, faite sur les
       mêmes pongs, tombe à +0,02 / +0,03 ms de l'horloge vraie.
-    - Le contrôle croisé prévu avec la colonne `capture` de la sonde d'âge
-      n'a pas pu se faire : ce matin, la bande de `scroll.html` se lit
-      invalide sur toutes les lectures, dans ces passes comme dans celles du
-      banc T7 du plan radios. Hier soir, elle se lisait ; la cause est à
-      chercher dans le banc.
+    - Le contrôle croisé (09:50, deux passes de plus, `ua-u02d-*`) : la bande
+      était illisible dans la matinée parce qu'une invite pare-feu de Windows,
+      ouverte à 06:38 par le banc T7 pour un exe sans règle, restait posée en
+      0,0 de l'écran capturé. Bruno l'a autorisée, et la bande se relit. Image
+      par image, le journal et la colonne `capture` de la sonde d'âge
+      concordent : −0,09 ms de médiane (p10 −0,19, p90 +0,01) sur 296 et 285
+      images appariées. Même horodatage, même horloge : c'est le contrôle
+      attendu.
+    - **Ce que le contrôle a montré en plus : la sonde d'âge retarde les images
+      qu'elle lit.** Elle en lit une sur quatre (`every 4`) ; ces images-là
+      attendent 12,2 ms entre leur décodage et leur dessin, les autres 0,0.
+      Médianes de bout en bout : 22,0 ms pour les images lues, 8,9 pour les
+      autres. La sonde ne calcule ses âges que sur les images lues : ses
+      chiffres absolus (`drawn`, `shown`, `capture`) portent ce retard, sur ce
+      client du moins (iGPU AMD de DualRTX, Chrome). Les écarts entre modes,
+      mesurés avec la même sonde, le portent des deux côtés. Le coût sur les
+      autres clients (Mac, N95, UM790Pro) est à mesurer de la même façon,
+      avec le journal.
     - Pièges de la matinée : l'instance dev écoute maintenant sur 8080/8443
       (et non plus 18080/18443), et une première passe a été arrêtée par
       Claude Code, faute de mémoire.
