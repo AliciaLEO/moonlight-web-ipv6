@@ -51,6 +51,7 @@ import {
     loadGamepadDb,
     detectPlatform,
     isAutoMapped,
+    isTvRemoteId,
 } from './gamepadMapping.js';
 import { getMapping, CHANGED_EVENT } from '../util/gamepadMappingsStore.js';
 
@@ -135,16 +136,13 @@ function axisToShort(v) {
 const REEMIT_MS = 500;
 
 /**
- * A TV remote that Android calls a joystick — the Freebox Player POP's "B16C"
- * has a volume axis, and that is enough (measured 01/10/2026). Once the page
- * reads the pads, Chromium hands its arrows to the Gamepad API (buttons 12-15)
- * instead of the keyboard. It is no controller for a game: StreamView gets its
+ * A TV remote seen as a pad (gamepadMapping.isTvRemoteId): StreamView gets its
  * direction pad as arrow keys instead (onRemoteKey), like any remote of the
  * keyboard kind, and the host is never told a pad is there.
  * @param {{id?: string}} gp
  */
 export function isTvRemotePad(gp) {
-    return /\bB16C\b|remote|t[ée]l[ée]commande|\brcu?\b/i.test((gp && gp.id) || '');
+    return isTvRemoteId(gp && gp.id);
 }
 
 /** Standard-mapping direction pad buttons, as the arrows they stand for. */

@@ -737,8 +737,8 @@ export class SettingsView {
                 <div class="settings-pad">
                     <span class="settings-pad-kind" title="${escapeHtml(t(`gamepad.remap.kind.${res.kind}`))}">${kindIconSvg(res.kind)}</span>
                     <span class="settings-pad-name">${escapeHtml(padName(gp))}</span>
-                    ${sourceBadge(res.source)}
-                    ${btn('settings-pad-test', key, t('settings.controllersTest'))}
+                    ${res.kind === 'remote' ? '' : sourceBadge(res.source)}
+                    ${btn('settings-pad-test', key, t(res.kind === 'remote' ? 'settings.controllersRemote' : 'settings.controllersTest'))}
                     ${getMapping(key) ? btn('settings-pad-reset', key, t('settings.controllersReset')) : ''}
                 </div>`,
                   )

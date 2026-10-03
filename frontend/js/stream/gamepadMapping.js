@@ -437,14 +437,30 @@ const KIND_HINTS = [
 ];
 
 /**
- * What `gp` is: the user's own choice first (`saved.kind`), then its USB ids,
- * then a hint from its name — a pad otherwise, the drawing of old.
+ * A TV remote that Android calls a joystick, by its name: the Freebox Player
+ * POP's "B16C" has a volume axis, and that is enough (measured 01/10/2026); a
+ * Mi TV's is "Xiaomi RC Consumer Control" (03/10/2026). Once the page reads
+ * the pads, Chromium hands its arrows to the Gamepad API (buttons 12-15)
+ * instead of the keyboard. It is no controller for a game: the stream takes
+ * its arrows as arrow keys (GamepadManager), and the host never hears of a
+ * pad. Its kind is 'remote' — not in PAD_KINDS: what it is cannot be changed.
+ * @param {string|null|undefined} id
+ */
+export function isTvRemoteId(id) {
+    return /\bB16C\b|remote|t[ée]l[ée]commande|\brcu?\b/i.test(id || '');
+}
+
+/**
+ * What `gp` is: a TV remote whatever was saved (isTvRemoteId), then the
+ * user's own choice (`saved.kind`), its USB ids, a hint from its name — a pad
+ * otherwise, the drawing of old.
  * @param {Gamepad|string} gpOrId
  * @param {{kind?: string}|null} [saved]  the pad's entry in gamepadMappingsStore
  */
 export function padKind(gpOrId, saved = null) {
-    if (saved && PAD_KINDS.includes(saved.kind)) return saved.kind;
     const id = typeof gpOrId === 'string' ? gpOrId : gpOrId && gpOrId.id;
+    if (isTvRemoteId(id)) return 'remote';
+    if (saved && PAD_KINDS.includes(saved.kind)) return saved.kind;
     const { name, vid, pid } = parsePadId(id);
     const known = vid && pid ? KNOWN_KINDS[`${vid}:${pid}`] : null;
     if (known) return known;

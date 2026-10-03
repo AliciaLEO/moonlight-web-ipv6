@@ -254,6 +254,26 @@ export function connectedPads() {
     return list.filter((gp) => gp && gp.connected !== false);
 }
 
+/** The drawing's part a TV remote's key lights (DeviceArt.remoteArtSvg), or null. */
+export function remoteKeyCtl(e) {
+    const key = e && e.key;
+    if (typeof key !== 'string') return null;
+    if (key === 'Enter' && !e.code) return 'ok';
+    if (key === 'ChannelUp') return 'chup';
+    if (key === 'ChannelDown') return 'chdown';
+    if (/^ColorF[0-9]/.test(key)) return 'colour';
+    if (/^[0-9]$/.test(key)) return 'digits';
+    const arrow = {
+        ArrowUp: 'dpup',
+        ArrowDown: 'dpdown',
+        ArrowLeft: 'dpleft',
+        ArrowRight: 'dpright',
+    };
+    return arrow[key] || null;
+}
+const REMOTE_PAD_CTLS = ['dpup', 'dpdown', 'dpleft', 'dpright'];
+const REMOTE_KEY_CTLS = ['ok', 'chup', 'chdown', 'colour', 'digits', ...REMOTE_PAD_CTLS];
+
 let dbCache; // undefined until loadGamepadDb() answers
 
 /** How MoonlightWeb reads `gp` right now (database loaded on demand). */
@@ -297,6 +317,22 @@ export class GamepadRemapDialog {
             e.stopPropagation();
             this.close();
         };
+        /** Keys held now, as remoteKeyCtl names them (a TV remote's view). */
+        this._keysHeld = new Set();
+        this._onRemoteKey = (e) => {
+            const ctl = remoteKeyCtl(e);
+            if (!ctl) return;
+            if (e.type === 'keydown') this._keysHeld.add(ctl);
+            else this._keysHeld.delete(ctl);
+        };
+    }
+
+    /** A TV remote's keys that come as keys, lit on its drawing (arrows too, from a keyboard-kind remote). */
+    _drawRemoteKeys() {
+        for (const ctl of REMOTE_KEY_CTLS) {
+            if (this._keysHeld.has(ctl)) this._art.setPressed(ctl, true);
+            else if (!REMOTE_PAD_CTLS.includes(ctl)) this._art.setPressed(ctl, false);
+        }
     }
 
     open() {
@@ -347,6 +383,8 @@ export class GamepadRemapDialog {
             if (e.target === overlay) this.close();
         });
         document.addEventListener('keydown', this._onKey, true);
+        document.addEventListener('keydown', this._onRemoteKey, true);
+        document.addEventListener('keyup', this._onRemoteKey, true);
         if (this._onOpen) this._onOpen();
 
         this._syncPads(true);
@@ -358,6 +396,9 @@ export class GamepadRemapDialog {
         if (this._raf !== null) cancelAnimationFrame(this._raf);
         this._raf = null;
         document.removeEventListener('keydown', this._onKey, true);
+        document.removeEventListener('keydown', this._onRemoteKey, true);
+        document.removeEventListener('keyup', this._onRemoteKey, true);
+        this._keysHeld.clear();
         this._overlay.remove();
         this._overlay = null;
         if (this._onClose) this._onClose();
@@ -393,8 +434,14 @@ export class GamepadRemapDialog {
         const res = pads.length ? resolvePad(this._selectedPad() || pads[0]) : null;
         this._mountArt(res ? res.kind : this._artKind);
         // What the device is: deduced, and the user's to correct.
-        const kindPicker = res
-            ? `<label class="gamepad-remap-kind">
+        const remote = !!res && res.kind === 'remote';
+        const title = this._overlay && this._overlay.querySelector('.gamepad-remap-title');
+        if (title)
+            title.textContent = t(remote ? 'gamepad.remap.kind.remote' : 'gamepad.remap.title');
+        // A TV remote is no device to correct: it never plays as a pad.
+        const kindPicker =
+            res && !remote
+                ? `<label class="gamepad-remap-kind">
                     <span>${escapeHtml(t('gamepad.remap.kind.label'))}</span>
                     <select class="gamepad-remap-select gamepad-remap-kind-select">
                         ${PAD_KINDS.map(
@@ -403,7 +450,7 @@ export class GamepadRemapDialog {
                         ).join('')}
                     </select>
                 </label>`
-            : '';
+                : '';
         if (pads.length > 1) {
             this._els.pad.innerHTML = `
                 <select class="gamepad-remap-select" aria-label="${escapeHtml(t('gamepad.remap.pick'))}">
@@ -414,7 +461,7 @@ export class GamepadRemapDialog {
                         })
                         .join('')}
                 </select>
-                ${res ? sourceBadge(res.source) : ''}
+                ${res && !remote ? sourceBadge(res.source) : ''}
                 ${kindPicker}`;
             this._els.pad.querySelector('select').addEventListener('change', (e) => {
                 this._key = /** @type {HTMLSelectElement} */ (e.target).value;
@@ -425,7 +472,7 @@ export class GamepadRemapDialog {
         } else if (pads.length === 1) {
             this._els.pad.innerHTML = `
                 <span class="gamepad-remap-name">${escapeHtml(padName(pads[0]))}</span>
-                ${sourceBadge(res.source)}
+                ${remote ? '' : sourceBadge(res.source)}
                 ${kindPicker}`;
         } else {
             this._els.pad.innerHTML = '';
@@ -482,7 +529,8 @@ export class GamepadRemapDialog {
         } else {
             const res = resolvePad(gp);
             const unmapped = res.source === null;
-            if (this._mode === 'wizard' || (this._mode === 'auto' && unmapped)) {
+            const remote = res.kind === 'remote';
+            if (!remote && (this._mode === 'wizard' || (this._mode === 'auto' && unmapped))) {
                 this._startWizard(gp);
                 return;
             }
@@ -630,6 +678,11 @@ export class GamepadRemapDialog {
         if (this._view === 'empty') {
             els.prompt.textContent = t('gamepad.remap.empty');
             actions = `<span class="gp-spacer"></span>${btn('gp-close', 'gamepad.remap.close')}`;
+        } else if (this._view === 'test' && resolvePad(gp).kind === 'remote') {
+            // A TV remote: what its keys do, nothing to remap.
+            els.prompt.textContent = t('gamepad.remap.remotePrompt');
+            hint = t('gamepad.remap.remoteHint');
+            actions = `<span class="gp-spacer"></span>${btn('gp-close', 'gamepad.remap.close', 'btn-save')}`;
         } else if (this._view === 'test') {
             const res = resolvePad(gp);
             els.prompt.textContent = t(
@@ -722,7 +775,10 @@ export class GamepadRemapDialog {
                 this._lastSource = res.source;
                 this._syncPads(true);
             }
-            if (res.source === 'pending') {
+            if (res.kind === 'remote') {
+                this._art.render(gp, BUTTON_TARGETS);
+                this._drawRemoteKeys();
+            } else if (res.source === 'pending') {
                 this._art.clear();
             } else if (res.bindings) {
                 this._art.render(readVirtualPad(gp, res.bindings), BUTTON_TARGETS);

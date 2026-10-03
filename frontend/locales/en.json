@@ -197,6 +197,15 @@
         "emptyBody": "No screen is attached to this computer, and \"MoonlightWeb Virtual Display\" is not installed. Run the MoonlightWeb installer again and accept the virtual display to stream it."
     },
     "gamepad": {
+        "remote": {
+            "digits": "Digits",
+            "arrows": "Arrows",
+            "ok": "Enter",
+            "okHold": "Held: menu",
+            "channel": "PgUp · PgDn",
+            "tvKeys": "Kept by the TV",
+            "colour": "Back"
+        },
         "noticeTitle": "Controllers need a driver",
         "noticeBody": "Windows needs the ViGEmBus driver before a gamepad connected to your browser can reach your games. Everything else — keyboard, mouse, the stream itself — works without it.",
         "install": "Install it",
@@ -213,6 +222,8 @@
             "testPrompt": "Press buttons and move the sticks to check them.",
             "unknown": "This controller's layout is unknown. Map it to use it.",
             "guessed": "This layout was recognized automatically. If a button does the wrong thing, remap it.",
+            "remotePrompt": "The TV remote: press its keys to see them.",
+            "remoteHint": "The game never sees it as a controller: its arrows come as the keyboard's arrows (or move the mouse, in Mouse mode), OK as Enter. Back, Home and the volume stay the TV's.",
             "release": "Release every button and stick…",
             "done": "Every control is set. Save to use this layout.",
             "guideHint": "Some browsers keep this button for themselves. Skip it if nothing happens.",
@@ -242,7 +253,8 @@
                 "gamepad": "Gamepad",
                 "rc": "RC radio",
                 "flightstick": "Flight stick",
-                "wheel": "Wheel"
+                "wheel": "Wheel",
+                "remote": "TV remote"
             },
             "steps": {
                 "button": "Press the button that will give the game {{name}}",
@@ -470,6 +482,7 @@
         "controllersNone": "No controller detected. Connect one and press any button.",
         "controllersSaved": "Saved layouts (controller not connected)",
         "controllersTest": "Test / remap",
+        "controllersRemote": "See the keys",
         "controllersReset": "Reset",
         "controllersDelete": "Delete",
         "quitAppOnStop": "Quit the app when the stream stops",

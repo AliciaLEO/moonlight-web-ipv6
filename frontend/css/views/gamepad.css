@@ -346,6 +346,27 @@
     filter: grayscale(1);
 }
 
+/* A TV remote (DeviceArt.remoteArtSvg): its colour keys, its rockers. */
+.gp-tv-colour {
+    stroke: rgba(0, 0, 0, 0.8);
+}
+.gp-tv-red {
+    fill: #c8323c;
+}
+.gp-tv-green {
+    fill: #2f9e52;
+}
+.gp-tv-yellow {
+    fill: #d6a91e;
+}
+.gp-tv-blue {
+    fill: #2f6fc4;
+}
+.gp-tv-rocker-text {
+    font-size: 9px;
+    fill: var(--text-3);
+}
+
 /* ── The dialog ───────────────────────────────────────────────────────── */
 
 .gamepad-remap-overlay {
@@ -467,6 +488,11 @@
     position: relative;
     margin: 6px auto 0;
     max-width: 560px;
+}
+/* The drawing gives way first, so the whole dialog stays on a short screen
+   (a TV's 720p page): prompt, hint and buttons keep their size. */
+.gamepad-remap-stage .gp-art {
+    max-height: max(160px, calc(100dvh - 330px));
 }
 
 .gamepad-remap-empty {

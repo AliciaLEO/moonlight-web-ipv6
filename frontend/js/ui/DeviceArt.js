@@ -43,6 +43,8 @@
  */
 
 import { gamepadArtSvg } from './GamepadArt.js';
+import { t } from '../i18n/i18n.js';
+import { escapeHtml } from '../util/escapeHtml.js';
 
 let seq = 0;
 
@@ -436,8 +438,103 @@ export function wheelArtSvg() {
 </svg>`;
 }
 
+/**
+ * A TV remote, standing: what each key does in MoonlightWeb, not a pad's
+ * names — the game never sees a pad (gamepadMapping.isTvRemoteId). Its arrows
+ * are the arrow keys (dpup…: they reach the page as a pad's buttons 12-15),
+ * OK is Enter and, held, the stream's menu; Ch± are Page Up and Page Down,
+ * the colour keys go back, the digits type. Back, Home, the volume and the
+ * power key stay the TV's: greyed. Lit by the remap dialog from the pad and
+ * from the keys (data-ctl ok, chup, chdown, colour, digits).
+ */
+export function remoteArtSvg() {
+    const u = `tv${++seq}`;
+    const id = (n) => `${u}-${n}`;
+    const url = (n) => `url(#${id(n)})`;
+    const CX = 320;
+    const PAD_Y = 228;
+    const BODY =
+        'M262 22 L378 22 C392 22 400 30 400 44 L398 398 C398 412 390 420 376 420 ' +
+        'L264 420 C250 420 242 412 242 398 L240 44 C240 30 248 22 262 22 Z';
+    const round = (ctl, cx, cy, r, text = '', extra = '') => `
+    <g class="${ctl ? 'gp-ctl ' : ''}gp-tv-key${extra}"${ctl ? ` data-ctl="${ctl}"` : ''}>
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="${url('face')}" stroke="rgba(0,0,0,.8)"/>
+      <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" class="gp-face-rim"/>
+      ${ctl ? `<circle class="gp-hot" cx="${cx}" cy="${cy}" r="${r}"/>` : ''}
+      ${text ? `<text x="${cx}" y="${cy + 4}" class="gp-key-text">${text}</text>` : ''}
+      ${ctl ? `<circle class="gp-ring" cx="${cx}" cy="${cy}" r="${r + 5}"/>` : ''}
+    </g>`;
+    // The digits: one control, lit by any of them.
+    let digits = '';
+    for (let i = 0; i < 10; i++) {
+        const col = i === 9 ? 1 : i % 3;
+        const row = i === 9 ? 3 : Math.floor(i / 3);
+        const x = CX - 40 + col * 40;
+        const y = 78 + row * 26;
+        digits += `
+      <circle cx="${x}" cy="${y}" r="10" fill="${url('face')}" stroke="rgba(0,0,0,.8)"/>
+      <circle class="gp-hot" cx="${x}" cy="${y}" r="10"/>
+      <text x="${x}" y="${y + 4}" class="gp-key-text">${(i + 1) % 10}</text>`;
+    }
+    const COLOURS = ['red', 'green', 'yellow', 'blue'];
+    const colours = COLOURS.map(
+        (c, i) => `
+      <rect x="${CX - 58 + i * 30}" y="383" width="26" height="14" rx="5" class="gp-tv-colour gp-tv-${c}"/>
+      <rect class="gp-hot" x="${CX - 58 + i * 30}" y="383" width="26" height="14" rx="5"/>`,
+    ).join('');
+    const rocker = (top, bottom, x, text) => `
+    <g class="gp-tv-rocker${top ? '' : ' gp-unbound'}">
+      <rect x="${x - 15}" y="306" width="30" height="66" rx="15" fill="${url('face')}" stroke="rgba(0,0,0,.8)"/>
+      ${top ? `<g class="gp-ctl" data-ctl="${top}"><path class="gp-hot" d="M${x - 15} 339 V321 A15 15 0 0 1 ${x + 15} 321 V339 Z"/><circle class="gp-ring" cx="${x}" cy="322" r="17"/></g>` : ''}
+      ${bottom ? `<g class="gp-ctl" data-ctl="${bottom}"><path class="gp-hot" d="M${x - 15} 339 V357 A15 15 0 0 0 ${x + 15} 357 V339 Z"/><circle class="gp-ring" cx="${x}" cy="356" r="17"/></g>` : ''}
+      <text x="${x}" y="326" class="gp-key-text">+</text>
+      <text x="${x}" y="361" class="gp-key-text">−</text>
+      <text x="${x}" y="344" class="gp-key-text gp-tv-rocker-text">${text}</text>
+    </g>`;
+    return `
+<svg class="gp-art gp-art-remote" viewBox="0 0 640 440" role="img" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+  ${defs(id)}
+  <ellipse cx="${CX}" cy="430" rx="110" ry="8" class="gp-floor"/>
+  <g filter="${url('drop')}">
+    <path d="${BODY}" fill="${url('shell')}"/>
+  </g>
+  <path d="${BODY}" fill="${url('sheen')}"/>
+  <path d="${BODY}" fill="none" class="gp-edge"/>
+
+  ${round(null, CX - 46, 46, 9, '', ' gp-unbound gp-tv-power')}
+
+  <g class="gp-ctl gp-tv-digits" data-ctl="digits">${digits}
+    <rect class="gp-ring" x="${CX - 56}" y="62" width="112" height="104" rx="14"/>
+  </g>
+  ${label(CX + 140, 120, escapeHtml(t('gamepad.remote.digits')))}
+
+  <circle cx="${CX}" cy="${PAD_Y}" r="56" fill="${url('plate')}" class="gp-gimbal-plate"/>
+  ${hatWay(url, 'dpup', CX, PAD_Y - 38, 0, 9)}
+  ${hatWay(url, 'dpright', CX + 38, PAD_Y, 90, 9)}
+  ${hatWay(url, 'dpdown', CX, PAD_Y + 38, 180, 9)}
+  ${hatWay(url, 'dpleft', CX - 38, PAD_Y, 270, 9)}
+  ${round('ok', CX, PAD_Y, 22, 'OK')}
+  ${label(CX + 150, PAD_Y - 24, escapeHtml(t('gamepad.remote.arrows')))}
+  ${label(CX - 152, PAD_Y - 10, escapeHtml(t('gamepad.remote.ok')))}
+  ${label(CX - 152, PAD_Y + 14, escapeHtml(t('gamepad.remote.okHold')))}
+
+  ${round(null, CX - 36, 282, 12, '', ' gp-unbound')}
+  ${round(null, CX + 36, 282, 12, '', ' gp-unbound')}
+  ${rocker(null, null, CX - 36, 'VOL')}
+  ${rocker('chup', 'chdown', CX + 36, 'CH')}
+  ${label(CX + 150, 339, escapeHtml(t('gamepad.remote.channel')))}
+  ${label(CX - 152, 300, escapeHtml(t('gamepad.remote.tvKeys')))}
+
+  <g class="gp-ctl gp-tv-colours" data-ctl="colour">${colours}
+    <rect class="gp-ring" x="${CX - 64}" y="377" width="128" height="26" rx="9"/>
+  </g>
+  ${label(CX + 150, 390, escapeHtml(t('gamepad.remote.colour')))}
+</svg>`;
+}
+
 /** The drawing of a device of this kind (the pad for 'gamepad' or anything unknown). */
 export function deviceArtSvg(kind) {
+    if (kind === 'remote') return remoteArtSvg();
     if (kind === 'rc') return rcArtSvg();
     if (kind === 'flightstick') return flightstickArtSvg();
     if (kind === 'wheel') return wheelArtSvg();
@@ -460,6 +557,9 @@ const KIND_ICONS = {
     wheel:
         '<circle cx="10" cy="10" r="7.5"/><circle cx="10" cy="10" r="2"/>' +
         '<path d="M2.6 8.6 8 9.5M17.4 8.6 12 9.5M10 12v5.5"/>',
+    remote:
+        '<rect x="6" y="1.5" width="8" height="17" rx="2.5"/><circle cx="10" cy="8" r="2.2"/>' +
+        '<path d="M8.2 13h.01M11.8 13h.01M8.2 15.5h.01M11.8 15.5h.01"/>',
 };
 
 /** A small icon of a device kind, for lists (Settings → Controllers). */

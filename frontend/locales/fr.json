@@ -197,6 +197,15 @@
         "emptyBody": "Aucun écran n'est branché à cet ordinateur, et « MoonlightWeb Virtual Display » n'est pas installé. Relancez l'installeur MoonlightWeb et acceptez l'écran virtuel pour le diffuser."
     },
     "gamepad": {
+        "remote": {
+            "digits": "Chiffres",
+            "arrows": "Flèches",
+            "ok": "Entrée",
+            "okHold": "Maintenu : menu",
+            "channel": "PgUp · PgDn",
+            "tvKeys": "Gardées par la TV",
+            "colour": "Retour"
+        },
         "noticeTitle": "Les manettes ont besoin d’un pilote",
         "noticeBody": "Windows a besoin du pilote ViGEmBus pour qu’une manette branchée à votre navigateur arrive jusqu’à vos jeux. Tout le reste — clavier, souris, le flux lui-même — fonctionne sans lui.",
         "install": "Installer",
@@ -213,6 +222,8 @@
             "testPrompt": "Appuyez sur les boutons et bougez les sticks pour les vérifier.",
             "unknown": "La disposition de cette manette est inconnue. Configurez-la pour l’utiliser.",
             "guessed": "Cette disposition a été reconnue automatiquement. Si un bouton ne fait pas ce qu’il faut, remappez-la.",
+            "remotePrompt": "Télécommande de la TV : appuyez sur ses touches pour les voir.",
+            "remoteHint": "Le jeu ne la voit jamais comme une manette : ses flèches arrivent comme les flèches du clavier (ou déplacent la souris, en mode Souris), OK comme Entrée. Retour, Accueil et le volume restent à la TV.",
             "release": "Relâchez tous les boutons et les sticks…",
             "done": "Toutes les commandes sont réglées. Enregistrez pour utiliser cette disposition.",
             "guideHint": "Certains navigateurs se réservent ce bouton. Passez l’étape s’il ne se passe rien.",
@@ -242,7 +253,8 @@
                 "gamepad": "Manette",
                 "rc": "Radiocommande",
                 "flightstick": "Joystick de vol",
-                "wheel": "Volant"
+                "wheel": "Volant",
+                "remote": "Télécommande"
             },
             "steps": {
                 "button": "Appuyez sur le bouton qui donnera {{name}} au jeu",
@@ -470,6 +482,7 @@
         "controllersNone": "Aucune manette détectée. Branchez-en une et appuyez sur un bouton.",
         "controllersSaved": "Dispositions enregistrées (manette non branchée)",
         "controllersTest": "Tester / remapper",
+        "controllersRemote": "Voir les touches",
         "controllersReset": "Réinitialiser",
         "controllersDelete": "Supprimer",
         "quitAppOnStop": "Quitter l'appli en arrêtant le stream",

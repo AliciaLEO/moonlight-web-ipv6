@@ -197,6 +197,15 @@
         "emptyBody": "这台电脑没有连接屏幕，也没有安装“MoonlightWeb Virtual Display”。请重新运行 MoonlightWeb 安装程序并接受虚拟显示器，即可串流。"
     },
     "gamepad": {
+        "remote": {
+            "digits": "数字",
+            "arrows": "方向键",
+            "ok": "回车",
+            "okHold": "长按：菜单",
+            "channel": "PgUp · PgDn",
+            "tvKeys": "由电视保留",
+            "colour": "返回"
+        },
         "noticeTitle": "手柄需要一个驱动",
         "noticeBody": "Windows 需要 ViGEmBus 驱动，浏览器上连接的手柄才能传到游戏里。其他一切——键盘、鼠标、串流本身——没有它也能正常使用。",
         "install": "安装",
@@ -213,6 +222,8 @@
             "testPrompt": "按下按键、移动摇杆以进行检查。",
             "unknown": "此手柄的布局未知。请先映射后再使用。",
             "guessed": "此布局为自动识别。如有按键不对，请重新映射。",
+            "remotePrompt": "电视遥控器：按下按键即可查看。",
+            "remoteHint": "游戏不会把它当作手柄：方向键作为键盘方向键（鼠标模式下则移动鼠标），OK 作为回车。返回、主页和音量仍归电视使用。",
             "release": "请松开所有按键和摇杆…",
             "done": "所有按键已设置。保存后即可使用此布局。",
             "guideHint": "部分浏览器会占用此按键。若无反应请跳过。",
@@ -242,7 +253,8 @@
                 "gamepad": "手柄",
                 "rc": "遥控器",
                 "flightstick": "飞行摇杆",
-                "wheel": "方向盘"
+                "wheel": "方向盘",
+                "remote": "电视遥控器"
             },
             "steps": {
                 "button": "按下将作为游戏 {{name}} 键的按钮",
@@ -470,6 +482,7 @@
         "controllersNone": "未检测到手柄。请连接手柄并按任意键。",
         "controllersSaved": "已保存的布局（手柄未连接）",
         "controllersTest": "测试 / 重新映射",
+        "controllersRemote": "查看按键",
         "controllersReset": "重置",
         "controllersDelete": "删除",
         "quitAppOnStop": "停止串流时退出应用",
