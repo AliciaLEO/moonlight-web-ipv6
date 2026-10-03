@@ -33,6 +33,8 @@ Columns (ms unless said):
                 longest it held one (ms)
   gRetr, gMin   the rate governor's logged cuts for SCTP retransmitting
                 (retrcut=), and the lowest target it logged (Mbit/s)
+  hold/s        with linkhold=: the pictures a second the session held back
+                while video waited outside usrsctp
 """
 import argparse
 import csv
@@ -52,6 +54,7 @@ WINDOW = re.compile(r"SCTP window this session: (\d+) losses inside a recovery, 
                     r"fast-retransmitted twice, (\d+) sends held by the window")
 PACING = re.compile(r"bench pacing this session: (\d+) frames, (\d+) waited at least once, "
                     r"([\d.]+) ms waited in all, the longest ([\d.]+) ms")
+LINKHOLD = re.compile(r"\[native\] link hold: (\d+) presents held back \((\d+)/s\)")
 GOVERNOR = re.compile(r"\[native\] link: (.+?) — encoding at (\d+) kbps of the (\d+) set")
 OCCUPANCY = re.compile(r"bufferedAmount above 1 / 2 / 4 frames ([\d.]+) / ([\d.]+) / ([\d.]+) %")
 DROPS = re.compile(r"Drop counters .*?sctpDelta: (\d+) sctpDeltaNamed: (\d+) "
@@ -114,6 +117,11 @@ def host_log(path):
     if gov:
         out.update(govRetr=sum(1 for why, _ in gov if "SCTP" in why),
                    govMinKbps=min(k for _, k in gov))
+    lh = None
+    for lh in LINKHOLD.finditer(text):
+        pass
+    if lh:
+        out["holdPerSec"] = int(lh.group(2))
     p = None
     for p in PACING.finditer(text):
         pass
@@ -191,6 +199,8 @@ def one(path, prefix):
         # lowest target it logged (Mbit/s).
         "govRetr": h.get("govRetr"),
         "govMin": (h["govMinKbps"] / 1000.0) if h.get("govMinKbps") else None,
+        # The session's link hold (linkhold=, plan W2 C).
+        "holdPerSec": h.get("holdPerSec"),
     }
 
 
@@ -199,11 +209,12 @@ COLS = [("click", 6), ("clickP90", 6), ("up", 5), ("rest", 6), ("shown", 6), ("e
         ("dropPerMin", 6), ("bufMaxKB", 5), ("rep", 6), ("mbps", 5), ("fps", 4), ("msg", 6),
         ("msgP90", 6), ("udp", 5), ("udpP99", 5), ("inRecovery", 5), ("cwndHeld", 6),
         ("q1", 5), ("q2", 5), ("q4", 5), ("pacedPct", 5), ("paceMaxMs", 5),
-        ("govRetr", 5), ("govMin", 5)]
+        ("govRetr", 5), ("govMin", 5), ("holdPerSec", 6)]
 HEAD = {"clickP90": "p90", "e2eMean": "mean", "e2eP90": "p90", "retrPct": "retr%",
         "dropPerMin": "drop/m", "bufMaxKB": "buf", "msgP90": "p90", "udpP99": "p99", "rep": "rep/m",
         "inRecovery": "inRec", "cwndHeld": "cwndH", "q1": ">1f%", "q2": ">2f%", "q4": ">4f%",
-        "pacedPct": "pace%", "paceMaxMs": "pmax", "govRetr": "gRetr", "govMin": "gMin"}
+        "pacedPct": "pace%", "paceMaxMs": "pmax", "govRetr": "gRetr", "govMin": "gMin",
+        "holdPerSec": "hold/s"}
 
 
 def fmt(v, w):
