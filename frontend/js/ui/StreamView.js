@@ -538,6 +538,7 @@ export class StreamView {
         this._remoteMenu = null;
         this._okHold = null;
         this._remoteMenuClosedAt = 0;
+        this._okHoldEndedAt = 0;
         // The menu's "Mouse": a remote's arrows steer the host's pointer and OK
         // clicks (RemotePointer). Remembered by the device.
         this._remotePointerOn = StreamView.readRemotePointerPref();
@@ -11018,6 +11019,27 @@ export class StreamView {
     }
 
     /**
+     * How long after the OK that opened the menu comes up the menu still
+     * ignores clicks: the TV browser's own click for that key may land just
+     * after its release.
+     */
+    static get REMOTE_OK_SETTLE_MS() {
+        return 300;
+    }
+
+    /**
+     * Whether the remote's menu may act on a click now. Not while the OK that
+     * opened it is held: TV Bro clicks the focused button on every repeat of a
+     * held OK, preventDefault or not, so the menu closed and opened again
+     * under the finger (Freebox, 03/10/2026).
+     */
+    _remoteMenuAcceptsClick() {
+        if (this._okHold && this._okHold.fired) return false;
+        const ended = this._okHoldEndedAt || 0;
+        return !ended || performance.now() - ended >= StreamView.REMOTE_OK_SETTLE_MS;
+    }
+
+    /**
      * A remote's OK going down — Enter with no code; a keyboard's Enter has
      * one. Nothing goes to the host yet: released before REMOTE_MENU_HOLD_MS
      * it becomes an Enter press and release (_remoteOkUp), held past it the
@@ -11046,6 +11068,7 @@ export class StreamView {
         const { fired, timer } = this._okHold;
         clearTimeout(timer);
         this._okHold = null;
+        if (fired) this._okHoldEndedAt = performance.now();
         if (!fired) {
             if (this._remotePointerOn && this._remotePointerActive()) {
                 // Mouse mode: OK is the left button, where the pointer is.
@@ -11235,6 +11258,7 @@ export class StreamView {
                     this._closeRemoteMenu();
                     this._handleManualQuit();
                 },
+                acceptsClick: () => this._remoteMenuAcceptsClick(),
             });
         }
         if (this._remoteMenu.isOpen) return;

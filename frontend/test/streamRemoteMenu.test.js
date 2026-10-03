@@ -67,6 +67,8 @@ function view(overrides = {}) {
         _releaseAllPhysKeys: P._releaseAllPhysKeys,
         _remoteOkDown: P._remoteOkDown,
         _remoteOkUp: P._remoteOkUp,
+        _okHoldEndedAt: 0,
+        _remoteMenuAcceptsClick: P._remoteMenuAcceptsClick,
         _openRemoteMenu: P._openRemoteMenu,
         _closeRemoteMenu: P._closeRemoteMenu,
         _toggleStatsFromMenu: P._toggleStatsFromMenu,
@@ -166,6 +168,42 @@ describe('a TV remote in a stream', () => {
         expect(menuEl()).not.toBe(null);
         expect(v._okHold).toBe(null);
         expect(v.sent).toEqual([]);
+    });
+
+    it("ignores the TV browser's clicks while the OK that opened the menu is held", () => {
+        // TV Bro clicks the focused button for every repeat of a held OK,
+        // whatever the page does with the key: the menu closed and opened
+        // again under the finger (Freebox).
+        let now = 1000;
+        const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
+        try {
+            const v = view();
+            v.handleKeyDown(ok());
+            vi.advanceTimersByTime(StreamView.REMOTE_MENU_HOLD_MS);
+            act('resume');
+            act('resume');
+            expect(menuEl()).not.toBe(null);
+            // Its own click may come just after the release: still ignored.
+            v.handleKeyUp(ok());
+            now += 50;
+            act('resume');
+            expect(menuEl()).not.toBe(null);
+            // A press of its own, later, works.
+            now += StreamView.REMOTE_OK_SETTLE_MS;
+            act('resume');
+            expect(menuEl()).toBe(null);
+            expect(v.sent).toEqual([]);
+        } finally {
+            clock.mockRestore();
+        }
+    });
+
+    it('takes clicks at once in a menu opened another way', () => {
+        // The pad chord or a test: no OK held, nothing to wait for.
+        const v = view();
+        v._openRemoteMenu();
+        act('resume');
+        expect(menuEl()).toBe(null);
     });
 
     it('lets go of what was held on the host when the menu opens', () => {

@@ -46,7 +46,11 @@ export class StreamRemoteMenu {
      *           onStats: () => void,
      *           pointerOn?: () => boolean,
      *           onPointer?: () => void,
-     *           onStop: () => void }} opts
+     *           onStop: () => void,
+     *           acceptsClick?: () => boolean }} opts
+     *   acceptsClick: false while the OK that opened the menu is still held
+     *   (and a moment after): the TV browser clicks the focused button for
+     *   every repeat of a held OK, whatever the page does with the keys.
      */
     constructor(opts) {
         this._opts = opts;
@@ -89,6 +93,11 @@ export class StreamRemoteMenu {
             </div>
         `;
         el.addEventListener('click', (e) => {
+            if (this._opts.acceptsClick && !this._opts.acceptsClick()) {
+                e.preventDefault();
+                e.stopPropagation();
+                return;
+            }
             const target = /** @type {Element} */ (e.target);
             // A click beside the box closes it, as everywhere else.
             if (target === el) {
