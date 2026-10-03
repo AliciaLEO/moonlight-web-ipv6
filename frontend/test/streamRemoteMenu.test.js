@@ -223,6 +223,27 @@ describe('a TV remote in a stream', () => {
         expect(v._statsClosed).toBe(true);
     });
 
+    it('shows the stats card again on a third press', () => {
+        // Hidden by the second press, the card must come back: the refresh
+        // tick never unhides it on its own.
+        const overlay = document.createElement('div');
+        const v = view({
+            _overlayEl: overlay,
+            _firstFrameRendered: true,
+            _positionStatsOverlay: vi.fn(),
+        });
+        v._openRemoteMenu();
+        act('stats');
+        act('stats');
+        expect(overlay.style.display).toBe('none');
+        act('stats');
+        expect(overlay.style.display).toBe('');
+        expect(v._positionStatsOverlay).toHaveBeenCalled();
+        expect(menuEl().querySelector('[data-act="stats"]').getAttribute('aria-pressed')).toBe(
+            'true',
+        );
+    });
+
     it('keeps the pads held for the remap dialog when the menu closes', () => {
         const v = view();
         v._holdPads('remap');

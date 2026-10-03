@@ -11258,6 +11258,12 @@ export class StreamView {
         } else {
             this._showPerfStats = true;
             this._statsClosed = false;
+            // The refresh never unhides the card (only the first frame does):
+            // shown again here, or a second press would leave it hidden.
+            if (this._overlayEl && this._firstFrameRendered) {
+                this._overlayEl.style.display = '';
+                this._positionStatsOverlay();
+            }
             this._updateOverlay();
         }
     }
