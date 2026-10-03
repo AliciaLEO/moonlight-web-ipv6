@@ -213,6 +213,9 @@ const char* const kUsage =
     "                    channel's own: ordered, given up on after 500 ms\n"
     "  relaylog=0|1      each video frame's way through the relay, a CSV next to the log\n"
     "                    when the session ends (plan Wi-Fi W1)\n"
+    "  pace=<n>          a frame's chunks handed to SCTP at n times the stream's bitrate\n"
+    "                    at most, so a frame no longer leaves in one run (plan Wi-Fi W2 A)\n"
+    "  paceburst=<KB>    what leaves back to back under pace= (default 16, one chunk)\n"
     "the bench's own:\n"
     "  dump=<path>      the encoded stream as it comes out (Annex-B, or OBUs for AV1)\n"
     "  lose=<frames>[x<burst>][k]  every N frames, report the latest one lost (reference\n"
@@ -510,6 +513,12 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
         const int v = value.toInt(&ok);
         ok = ok && (v == 0 || v == 1);
         tuning.relayLog = v == 1;
+    } else if (key == "pace") {
+        tuning.paceMultiple = value.toInt(&ok);
+        ok = ok && tuning.paceMultiple >= 0 && tuning.paceMultiple <= 50;
+    } else if (key == "paceburst") {
+        tuning.paceBurstKb = value.toInt(&ok);
+        ok = ok && tuning.paceBurstKb >= 2 && tuning.paceBurstKb <= 1024;
     } else {
         return false;
     }

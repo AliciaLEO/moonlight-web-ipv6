@@ -698,6 +698,18 @@ DataChannelRelay::~DataChannelRelay()
                 << "windows trimmed to max burst," << d.sacks << "SACKs," << d.packetsOut
                 << "packets out," << d.dupIn << "duplicate chunks in";
     }
+    // What the bench's pacing cost: the frames that waited, and how long.
+    if (m_Sender && m_PaceMultiple > 0) {
+        const FrameSender::PacingStats p = m_Sender->pacingStats();
+        qInfo().noquote() << QStringLiteral(
+                                 "[DataChannelRelay] bench pacing this session: %1 frames, %2 "
+                                 "waited at least once, %3 ms waited in all, the longest %4 ms "
+                                 "inside one frame")
+                                 .arg(p.frames)
+                                 .arg(p.pacedFrames)
+                                 .arg(p.waitedUs / 1000.0, 0, 'f', 1)
+                                 .arg(p.maxFrameWaitUs / 1000.0, 0, 'f', 2);
+    }
     // The bench's frame log (`relaylog=1`): next to this process's log.
     if (m_FrameLog) {
         const QString logFile = Logger::instance()->logFilePath();
@@ -770,6 +782,8 @@ void DataChannelRelay::setLinkBench(const mw::native::EncoderTuning& tuning)
     m_FloodKbps = tuning.floodKbps;
     m_FloodBytes = tuning.floodBytes > 0 ? tuning.floodBytes : SctpFlood::kDefaultBytes;
     m_FloodLikeVideo = tuning.floodLikeVideo;
+    m_PaceMultiple = tuning.paceMultiple;
+    m_PaceBurstKb = tuning.paceBurstKb;
     if (tuning.relayLog && !m_FrameLog) {
         m_FrameLog = std::make_unique<RelayFrameLog>();
         qWarning() << "[DataChannelRelay] bench frame log on (relaylog=1): each video frame's way "
@@ -781,12 +795,38 @@ void DataChannelRelay::setLinkBench(const mw::native::EncoderTuning& tuning)
                    << (tuning.lossBurst > 1 ? tuning.lossBurst : 1);
 }
 
+void DataChannelRelay::applyPacing()
+{
+    if (!m_Sender || m_PaceMultiple <= 0) return;
+    if (m_StreamBitrateKbps <= 0) {
+        qWarning() << "[DataChannelRelay] bench pacing asked for, but the stream's bitrate is "
+                      "unknown: not paced";
+        return;
+    }
+    const int64_t bytesPerSecond =
+        static_cast<int64_t>(m_StreamBitrateKbps) * 1000 / 8 * m_PaceMultiple;
+    const size_t burst = static_cast<size_t>(m_PaceBurstKb > 0 ? m_PaceBurstKb : 16) * 1024;
+    // A run no longer than the burst: chunks of that size at most, header
+    // included, so pacing has something to space.
+    m_ChunkPayload = burst < 16000 + 17 ? burst - 17 : 16000;
+    m_Sender->setPacing(bytesPerSecond, burst);
+    qWarning().noquote() << QStringLiteral(
+                                "[DataChannelRelay] bench pacing (pace=%1): a frame's chunks "
+                                "handed to SCTP at %2 Mbit/s at most, %3 KB at a time, chunks "
+                                "of %4 bytes")
+                                .arg(m_PaceMultiple)
+                                .arg(bytesPerSecond * 8 / 1e6, 0, 'f', 1)
+                                .arg(burst / 1024)
+                                .arg(m_ChunkPayload);
+}
+
 bool DataChannelRelay::prepare(const rtc::Configuration& config, bool isInternet)
 {
     // Before the peer connection, since each SCTP socket reads this when it is
     // made.
     applySctpSettings(m_StreamBitrateKbps, m_SctpCongestion);
     m_Backlog.setBitrateKbps(m_StreamBitrateKbps);
+    applyPacing();
 
     if (m_Pc) {
         qWarning() << "[DataChannelRelay] already prepared";
@@ -2080,7 +2120,7 @@ void DataChannelRelay::sendFragmented(const QByteArray& data, bool isKeyframe,
         // and nothing left for the sender to copy after.
         auto fragments = FrameSender::buildFragments(
             reinterpret_cast<const uint8_t*>(data.constData()), static_cast<size_t>(data.size()),
-            isKeyframe, frameId, backendTs);
+            isKeyframe, frameId, backendTs, m_ChunkPayload);
         // The bench's losses (`loss=`, LinkLoss.h): messages that never reach
         // SCTP, so the receiver meets holes SCTP knows nothing of. A frame that
         // loses every message still spent its wire id: a gap, as on a link.

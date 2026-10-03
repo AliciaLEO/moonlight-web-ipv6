@@ -129,12 +129,17 @@ void FrameSender::writeHeader(std::byte* dst, uint32_t frameId, uint16_t chunkId
 
 std::vector<FrameSender::Fragment> FrameSender::buildFragments(const uint8_t* data, size_t size,
                                                                bool isKeyframe, uint32_t frameId,
-                                                               uint32_t backendTs)
+                                                               uint32_t backendTs,
+                                                               size_t maxPayload)
 {
     std::vector<Fragment> fragments;
     if (!data || size == 0) return fragments;
 
-    const size_t payloadMax = static_cast<size_t>(kMaxPayloadSize);
+    // Never above what one SCTP message takes, never so small that a large
+    // keyframe would need more chunks than the 16-bit count holds.
+    size_t payloadMax = std::min(maxPayload, static_cast<size_t>(kMaxPayloadSize));
+    payloadMax = std::max<size_t>(payloadMax, 1024);
+    payloadMax = std::max<size_t>(payloadMax, (size + 65534) / 65535);
     const size_t totalChunks = (size + payloadMax - 1) / payloadMax;
     fragments.reserve(totalChunks);
 
@@ -244,9 +249,62 @@ bool FrameSender::enqueueFragments(std::shared_ptr<rtc::DataChannel> dc,
     return push(std::move(job), evicted);
 }
 
+void FrameSender::setPacing(int64_t bytesPerSecond, size_t burstBytes)
+{
+    m_PaceBurst.store(burstBytes > 0 ? burstBytes : 16 * 1024, std::memory_order_relaxed);
+    m_PaceRate.store(bytesPerSecond > 0 ? bytesPerSecond : 0, std::memory_order_release);
+}
+
+FrameSender::PacingStats FrameSender::pacingStats() const
+{
+    PacingStats s;
+    s.frames = m_SentFrames.load(std::memory_order_relaxed);
+    s.pacedFrames = m_PacedFrames.load(std::memory_order_relaxed);
+    s.waitedUs = m_WaitedUs.load(std::memory_order_relaxed);
+    s.maxFrameWaitUs = m_MaxFrameWaitUs.load(std::memory_order_relaxed);
+    return s;
+}
+
+void FrameSender::waitUs(int64_t us)
+{
+    if (us <= 0) return;
+#ifdef _WIN32
+    // Not sleep_for: in a process that never asked for a finer timer, Windows
+    // sleeps a whole 15.6 ms period for a sleep of 0.7 ms (SctpFlood.cpp).
+    if (m_PaceTimer) {
+        LARGE_INTEGER due;
+        due.QuadPart = -us * 10; // relative, in 100 ns units
+        if (SetWaitableTimerEx(static_cast<HANDLE>(m_PaceTimer), &due, 0, nullptr, nullptr, nullptr,
+                               0)) {
+            WaitForSingleObject(static_cast<HANDLE>(m_PaceTimer),
+                                static_cast<DWORD>(us / 1000 + 50));
+            return;
+        }
+    }
+#endif
+    std::this_thread::sleep_for(std::chrono::microseconds(us));
+}
+
+int64_t FrameSender::paceBefore(size_t bytes)
+{
+    if (!m_Pacer.active()) return 0;
+    int64_t waited = 0;
+    for (int64_t w = m_Pacer.waitUs(bytes, steadyNowUs()); w > 0 && !m_Stop.load();
+         w = m_Pacer.waitUs(bytes, steadyNowUs())) {
+        const int64_t t0 = steadyNowUs();
+        waitUs(w);
+        waited += steadyNowUs() - t0;
+    }
+    return waited;
+}
+
 void FrameSender::run()
 {
     void* mmcss = m_Options.multimediaPriority ? enterGamesTask() : nullptr;
+#ifdef _WIN32
+    m_PaceTimer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                         TIMER_ALL_ACCESS);
+#endif
     for (;;) {
         Job job;
         {
@@ -260,6 +318,10 @@ void FrameSender::run()
         }
         sendJob(job);
     }
+#ifdef _WIN32
+    if (m_PaceTimer) CloseHandle(static_cast<HANDLE>(m_PaceTimer));
+    m_PaceTimer = nullptr;
+#endif
     leaveGamesTask(mmcss);
 }
 
@@ -270,6 +332,21 @@ void FrameSender::sendJob(const Job& job)
     auto& dc = job.dc;
     if (!dc || !dc->isOpen()) return;
 
+    // The bench's pacing, as last asked for: taken up between two frames, so
+    // a frame is never cut by a change of rate.
+    const int64_t rate = m_PaceRate.load(std::memory_order_acquire);
+    const size_t burst = m_PaceBurst.load(std::memory_order_relaxed);
+    if (rate != m_PacerRate || burst != m_PacerBurst) {
+        m_Pacer.configure(rate, burst);
+        m_PacerRate = rate;
+        m_PacerBurst = burst;
+    }
+    int64_t frameWaitUs = 0;
+    const auto paced = [this, &frameWaitUs](size_t bytes) { frameWaitUs += paceBefore(bytes); };
+    const auto counted = [this](size_t bytes) {
+        if (m_Pacer.active()) m_Pacer.sent(bytes, steadyNowUs());
+    };
+
     // t₄, only when somebody is listening: the clock read is cheap, but a
     // stamp nobody reads is still work on the wire's thread.
     const int64_t firstByteUs = job.sink ? steadyNowUs() : 0;
@@ -278,8 +355,10 @@ void FrameSender::sendJob(const Job& job)
         // Ready-made chunks: nothing to build, just hand them over in order.
         for (const Fragment& bin : job.fragments) {
             if (m_Stop.load(std::memory_order_acquire)) return;
+            paced(bin.size());
             try {
                 dc->send(bin);
+                counted(bin.size());
             } catch (const std::exception& e) {
                 if (!m_Stop.load(std::memory_order_acquire)) {
                     qWarning() << "[FrameSender] send error:" << e.what();
@@ -304,8 +383,10 @@ void FrameSender::sendJob(const Job& job)
             std::memcpy(bin.data() + kFragHeaderSize, job.data.constData() + offset,
                         static_cast<size_t>(payloadSize));
 
+            paced(bin.size());
             try {
                 dc->send(bin);
+                counted(bin.size());
             } catch (const std::exception& e) {
                 if (!m_Stop.load(std::memory_order_acquire)) {
                     qWarning() << "[FrameSender] send error:" << e.what();
@@ -313,6 +394,14 @@ void FrameSender::sendJob(const Job& job)
                 return;
             }
         }
+    }
+
+    m_SentFrames.fetch_add(1, std::memory_order_relaxed);
+    if (frameWaitUs > 0) {
+        m_PacedFrames.fetch_add(1, std::memory_order_relaxed);
+        m_WaitedUs.fetch_add(frameWaitUs, std::memory_order_relaxed);
+        if (frameWaitUs > m_MaxFrameWaitUs.load(std::memory_order_relaxed))
+            m_MaxFrameWaitUs.store(frameWaitUs, std::memory_order_relaxed);
     }
 
     // t₅. A frame that failed part-way returned above and is not reported: a

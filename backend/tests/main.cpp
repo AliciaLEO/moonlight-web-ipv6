@@ -33,6 +33,7 @@ void run_backend_probe_tests();
 void run_host_os_probe_tests();
 void run_send_backlog_tests();
 void run_relay_frame_log_tests();
+void run_send_pacer_tests();
 void run_link_loss_tests();
 void run_annexb_filler_tests();
 void run_link_freeze_log_tests();
@@ -81,6 +82,7 @@ int main(int argc, char** argv)
     run_host_os_probe_tests();
     run_send_backlog_tests();
     run_relay_frame_log_tests();
+    run_send_pacer_tests();
     run_link_loss_tests();
     run_annexb_filler_tests();
     run_link_freeze_log_tests();

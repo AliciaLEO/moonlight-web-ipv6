@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include "SendPacer.h"
+
 #include <QByteArray>
 #include <thread>
 #include <mutex>
@@ -122,8 +124,13 @@ public:
     // is what lets the native relay call it on the encoder's own buffer before
     // the encoder unlocks it. Same bytes, chunk for chunk, as the worker
     // produces for a queued QByteArray.
+    //
+    // `maxPayload` caps each chunk's payload (16,000 bytes, the most SCTP takes
+    // in one message, unless pacing wants smaller runs: the receiver joins the
+    // chunks whatever their size).
     static std::vector<Fragment> buildFragments(const uint8_t* data, size_t size, bool isKeyframe,
-                                                uint32_t frameId, uint32_t backendTs);
+                                                uint32_t frameId, uint32_t backendTs,
+                                                size_t maxPayload = kMaxPayloadSize);
 
     // Stop the worker thread and discard pending jobs. Idempotent; safe to call
     // from the relay's stop()/destructor.
@@ -131,6 +138,22 @@ public:
 
     // Diagnostic: number of delta frames dropped because the queue was full.
     uint64_t queueDropCount() const { return m_QueueDrops.load(std::memory_order_relaxed); }
+
+    /// The bench's pacing (`pace=`, SendPacer.h): chunks handed to the
+    /// DataChannel at @p bytesPerSecond at most, @p burstBytes back to back.
+    /// 0 switches it off. Taken up by the worker at its next frame.
+    void setPacing(int64_t bytesPerSecond, size_t burstBytes);
+
+    /// What pacing cost: frames sent, frames that waited at least once, the
+    /// time spent waiting in all, and the longest wait inside one frame.
+    struct PacingStats
+    {
+        uint64_t frames = 0;
+        uint64_t pacedFrames = 0;
+        int64_t waitedUs = 0;
+        int64_t maxFrameWaitUs = 0;
+    };
+    PacingStats pacingStats() const;
 
 private:
     struct Job
@@ -170,6 +193,9 @@ private:
 
     void run();
     void sendJob(const Job& job);
+    /// Wait, on the worker, until pacing lets @p bytes go; returns the wait.
+    int64_t paceBefore(size_t bytes);
+    void waitUs(int64_t us);
 
     std::thread m_Thread;
     std::mutex m_Mutex;
@@ -177,4 +203,16 @@ private:
     std::deque<Job> m_Queue;
     std::atomic<bool> m_Stop{false};
     std::atomic<uint64_t> m_QueueDrops{0};
+
+    // Pacing: asked for from any thread, applied and used on the worker only.
+    std::atomic<int64_t> m_PaceRate{0};
+    std::atomic<size_t> m_PaceBurst{16 * 1024};
+    SendPacer m_Pacer;
+    int64_t m_PacerRate = 0;
+    size_t m_PacerBurst = 0;
+    void* m_PaceTimer = nullptr; // a high-resolution waitable timer, on Windows
+    std::atomic<uint64_t> m_PacedFrames{0};
+    std::atomic<uint64_t> m_SentFrames{0};
+    std::atomic<int64_t> m_WaitedUs{0};
+    std::atomic<int64_t> m_MaxFrameWaitUs{0};
 };

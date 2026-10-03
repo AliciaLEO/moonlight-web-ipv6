@@ -403,6 +403,13 @@ struct EncoderTuning
     /// log when the session ends (plan « Wi-Fi : la vidéo qui attend dans
     /// SCTP », W1). false, the product: nothing kept.
     bool relayLog = false;
+    /// The relay hands a frame's chunks to SCTP at this many times the
+    /// stream's bitrate at most, paceBurstKb at a time (plan Wi-Fi W2 A:
+    /// a frame sent in one run overflows the browser's UDP socket on Wi-Fi).
+    /// 0, the product: as fast as the sender goes.
+    int paceMultiple = 0;
+    /// The most that leaves back to back under pacing, in KB. 0: 16, one chunk.
+    int paceBurstKb = 0;
 
     bool isDefault() const
     {
@@ -429,7 +436,7 @@ struct EncoderTuning
                prioVk == PriorityVk::Default && portalDmabuf == Choice::Default &&
                mutterDirect == Choice::Default && lossPermille == 0 && lossBurst == 0 &&
                sctpCongestion < 0 && floodKbps == 0 && floodBytes == 0 && !floodLikeVideo &&
-               !relayLog;
+               !relayLog && paceMultiple == 0 && paceBurstKb == 0;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -528,6 +535,8 @@ struct EncoderTuning
         if (floodBytes > 0) add("floodsize=" + std::to_string(floodBytes));
         if (floodLikeVideo) add("floodchannel=video");
         if (relayLog) add("relaylog=1");
+        if (paceMultiple > 0) add("pace=" + std::to_string(paceMultiple));
+        if (paceBurstKb > 0) add("paceburst=" + std::to_string(paceBurstKb));
         return s;
     }
 };

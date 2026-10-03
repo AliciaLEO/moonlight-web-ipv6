@@ -285,6 +285,9 @@ private:
     // a fresh cooldown, instead of when the backed-off timer would have.
     // Caller holds m_VideoMutex.
     void requestIdrOnDrain();
+    /// The bench's pacing (`pace=`), told to the sender once the stream's
+    /// bitrate is known: at prepare().
+    void applyPacing();
 
     IMediaEngine* m_Shim;
 
@@ -355,6 +358,12 @@ private:
     std::weak_ptr<rtc::DataChannel> m_FrameLogDc;
     // SCTP's smoothed round trip, sampled each second for that log.
     std::atomic<int> m_SrttMs{-1};
+    // `pace=`, `paceburst=` (plan Wi-Fi W2 A): the sender hands a frame's
+    // chunks to SCTP at this many times the stream's bitrate, this many KB at
+    // a time; chunks no bigger than that run. Set at setup, before any frame.
+    int m_PaceMultiple = 0;
+    int m_PaceBurstKb = 0;
+    size_t m_ChunkPayload = 16000;
 
     // Audio RTP timestamp (48 kHz Opus clock), advanced by samplesPerFrame per
     // packet for a smooth, jitter-free clock; serialized with track teardown.
