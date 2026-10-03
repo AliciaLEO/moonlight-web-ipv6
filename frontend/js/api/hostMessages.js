@@ -32,6 +32,8 @@ const VIEW_MESSAGES = new Set([
     'feedcodec',
     // Native host: its answer to a step of Auto's detection.
     'fpsstep',
+    // The relay's answer to a stamped input (stream/InputUplink.js).
+    'inputstamp',
 ]);
 
 /** Whether a host message of this type goes to the stream view. */
