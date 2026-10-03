@@ -339,6 +339,40 @@ montré de A sur l'Arc, d'une seule : l'autre n'a rien pu lire) :
   bout de 60 s, plus court qu'une passe. Il faudra le brancher dans `pass.py`,
   entre la calibration et la mesure.
 
+**L'UM790Pro en Ethernet** (même jour, 18:33-19:20). Client UM790Pro sous
+Windows (Chrome, 780M, écran virtuel à 120 Hz, câble 1 Gbit/s), même hôte et
+mêmes cases, `relaylog=1` sur toutes les passes. Le `build\` de 18:02 contient
+`e0324f4e` (clé `retrcut` du plan Wi-Fi, éteinte par défaut : rien ne change
+sans elle). Médianes de deux passes par mode :
+
+| Hôte | Mode | Cadence | Âge montré | E2E par image, médiane / p99 | Clic → drapeau (clics mesurés) |
+|---|---|---|---|---|---|
+| RTX | D | 239 i/s | 23,8 ms | 8,4 / 126 ms | 34,8 ms (58 / 60) |
+| RTX | U | 120 i/s | 24,7 ms | 9,8 / 24,7 ms | 32,9 ms (57 / 60) |
+| Arc | D | 238-239 i/s | 27,1 ms | 10,2 / 25,3 ms | 38,5 ms (58 / 60) |
+| Arc | U | 120-121 i/s | 25,0 ms | 12,9 / 30,3 ms | 36,4 ms (56 / 60) |
+| iGPU AMD | D | 227-234 i/s | 24,6 ms | 11,4 / 33,2 ms | 42,5 ms (58 / 60) |
+| iGPU AMD | U | 119-121 i/s | 28,9 ms | 13,9 / 27,2 ms | 40,0 ms (58 / 60) |
+| Arc | A (AV1) | 120-124 i/s | 27,1 ms | 15,5 / 41,0 ms | 44,0 ms (28 / 60) |
+| RTX | A (AV1) | 120-121 i/s | 28,3 ms | 11,8 / 30,3 ms | 35,3 ms (58 / 60) |
+
+- **En Ethernet, l'Ultra tient, mais le mode par défaut fait déjà aussi bien.**
+  La détection monte à 230-240 i/s et y reste. U, à 120 i/s, fait jeu égal :
+  son âge médian par image est de 1 à 3 ms plus haut, mais sa queue est plus
+  courte (p99 de 25-30 ms, contre 25-126 ms pour D, le pire étant la RTX à
+  240 i/s). Le N95 en Wi-Fi est deux à trois fois plus lent, même en D (âge de
+  45-58 ms, clic de 83-94 ms).
+- **La fenêtre de congestion d'usrsctp ne retient la vidéo qu'en Wi-Fi.** Ici,
+  le réseau a un p90 de 7 à 15 ms, dont 5 à 12 ms avant de quitter usrsctp,
+  quel que soit le mode, contre 186-232 ms sur le N95 en U.
+- **L'AV1 tient sur le 780M, sans rien gagner** : 1 à 4 ms de plus que le HEVC
+  à la même barre, pour 20 à 50 % de débit en plus (36-47 contre 29-32 Mbit/s).
+- **Outil.** `1cdb4eb9` est vérifié en vrai stream : les passes AV1 ont leur
+  âge par image. Une passe est illisible (Arc, AV1, A1) : tous les pixels lus
+  de la bande et du drapeau sont blancs (255), alors que le décodage et l'âge
+  par image étaient normaux. La cause n'est pas trouvée, et la passe suivante
+  sur le même hôte est passée. Ses clics manquent au tableau (28 / 60).
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
@@ -364,4 +398,6 @@ Déjà visible (U0.3, N95) : sur un portable modeste en Wi-Fi, forcer 120 i/s
 dégrade tout. L'image a 130 à 320 ms de retard au lieu de 45 à 58, avec des
 coupures de plusieurs secondes, et plus d'un clic sur deux reste sans réponse visible.
 L'« Auto » d'aujourd'hui fait le bon choix sur cet appareil : il essaie de
-monter, voit que ça ne tient pas, et reste à la cadence de l'écran.
+monter, voit que ça ne tient pas, et reste à la cadence de l'écran. En Ethernet, sur un mini-PC (U0.3, UM790Pro), le même « Auto » monte à
+240 i/s : l'image a 24 à 27 ms de retard et le clic s'affiche en 35 à 43 ms,
+aussi bien que le réglage Ultra forcé.
