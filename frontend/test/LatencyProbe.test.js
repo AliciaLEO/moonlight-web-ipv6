@@ -299,6 +299,39 @@ describe('LatencyProbe.run', () => {
         expect(results).toEqual([entry]);
     });
 
+    it("splits a click with the host's answer to its stamp, before or after the flag", async () => {
+        for (const answerFirst of [true, false]) {
+            const results = [];
+            let reply = null;
+            const sendClick = vi.fn();
+            const uplink = {
+                stamp: vi.fn((t0, cb) => {
+                    reply = cb;
+                    return 7;
+                }),
+                hold: vi.fn(),
+                release: vi.fn(),
+            };
+            const probe = new LatencyProbe({ source: () => ({}), sendClick, results, uplink });
+            let clickAt = null;
+            sendClick.mockImplementation(() => {
+                clickAt = now;
+            });
+            probe._sample = () => clickAt !== null && now - clickAt >= 48 && now - clickAt < 148;
+            const p = probe.measureOnce();
+            expect(sendClick).toHaveBeenCalledWith(7);
+            if (answerFirst) reply({ upMs: 20.5, hostInMs: 0.5, rttMs: 30 });
+            for (let i = 0; i < 10; i++) await tick(8);
+            const entry = await p;
+            if (!answerFirst) reply({ upMs: 20.5, hostInMs: 0.5, rttMs: 30 });
+            expect(entry.latencyMs).toBe(48);
+            expect(entry.upMs).toBe(20.5);
+            expect(entry.hostInMs).toBe(0.5);
+            expect(entry.restMs).toBe(27);
+            expect(results[0]).toBe(entry);
+        }
+    });
+
     it('drops the sample when the flag never shows within the timeout', async () => {
         const { probe, results } = makeProbe(null);
         const p = probe.measureOnce();

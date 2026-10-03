@@ -44,6 +44,7 @@ extern "C" {
 #include <algorithm>
 #include <mutex>
 #include <chrono>
+#include <optional>
 #include <random>
 #include <cstring>
 
@@ -60,6 +61,15 @@ extern "C" {
 
 /// Strip HEVC emulation prevention bytes (00 00 03) from RBSP data.
 /// Returns cleaned data with 0x03 removal bytes omitted.
+// The host's steady clock in µs: the clock frames are stamped on (backendTs)
+// and the pong's `host` field reads.
+static int64_t steadyUs()
+{
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
 static QByteArray removeHvcEp(const QByteArray& data)
 {
     QByteArray result;
@@ -1014,20 +1024,24 @@ void DataChannelRelay::createDataChannels()
         // Input messages arrive from browser on this channel
         m_InputDc->onMessage([this](const std::variant<rtc::binary, rtc::string>& msg) {
             if (!std::holds_alternative<rtc::string>(msg)) return;
+            // Taken first, before any lock or parse: a stamped message reports
+            // this as its arrival.
+            const int64_t recvUs = steadyUs();
             if (m_DirectInput) {
                 // Parse and inject here, on the receiving thread, whatever the
                 // engine. A message that finds the relay stopping leaves; one
                 // that got in before stop() took the lock finishes first.
                 std::lock_guard<std::mutex> lk(m_InputMutex);
                 if (m_Stopping.load()) return;
-                onInputMessage(std::get<rtc::string>(msg));
+                onInputMessage(std::get<rtc::string>(msg), recvUs);
                 return;
             }
             // The queued form, kept for a flag nothing clears today: the relay
             // thread handles the message on its next turn.
             std::string text = std::get<rtc::string>(msg);
             QMetaObject::invokeMethod(
-                this, [this, text]() { onInputMessage(text); }, Qt::QueuedConnection);
+                this, [this, text, recvUs]() { onInputMessage(text, recvUs); },
+                Qt::QueuedConnection);
         });
     }
 
@@ -1345,7 +1359,7 @@ void DataChannelRelay::onShimConnectionTerminated(int errorCode)
 // clipboard bridge hops to the main thread on its own, and the one piece of
 // video state touched (requestidr) goes under m_VideoMutex.
 
-void DataChannelRelay::onInputMessage(const std::string& message)
+void DataChannelRelay::onInputMessage(const std::string& message, int64_t recvUs)
 {
     if (m_Stopping.load() || !m_Connected) return;
 
@@ -1370,6 +1384,21 @@ void DataChannelRelay::onInputMessage(const std::string& message)
 
     // An invited player only gets what the owner ticked. Dropped in silence.
     if (!InputMsg::allowed(type, m_InputPolicy)) return;
+
+    // A message the client stamped (the click → flag probe, the uplink bench)
+    // is answered once handled, whatever its type: when it arrived, and, by the
+    // reply's own time, when its handling (the injection) ended. Measurement
+    // only — nothing else sends a stamp, and the input itself is unchanged.
+    struct StampReply
+    {
+        DataChannelRelay* relay;
+        double id;
+        int64_t recvUs;
+        ~StampReply() { relay->sendInputStamp(id, recvUs); }
+    };
+    std::optional<StampReply> stampReply;
+    if (const QJsonValue stamp = msg.value(QStringLiteral("stamp")); stamp.isDouble())
+        stampReply.emplace(StampReply{this, stamp.toDouble(), recvUs > 0 ? recvUs : steadyUs()});
 
     if (type == "cursormode") {
         // Who draws the mouse pointer. In desktop mode the browser draws its
@@ -1737,8 +1766,28 @@ void DataChannelRelay::onInputMessage(const std::string& message)
         // engine's encoding of it.
         m_Shim->sendControllerRemoval(static_cast<uint8_t>(msg["index"].toInt(0)),
                                       static_cast<uint16_t>(msg["mask"].toInt(0)));
+    } else if (type == "uprobe") {
+        // The uplink bench's dated message: nothing to inject, only its stamp
+        // to answer (above).
     } else {
         qWarning() << "[DataChannelRelay] Unknown input type:" << type;
+    }
+}
+
+void DataChannelRelay::sendInputStamp(double id, int64_t recvUs)
+{
+    QJsonObject reply;
+    reply["type"] = "inputstamp";
+    reply["id"] = id;
+    reply["recv"] = static_cast<double>(recvUs);
+    reply["done"] = static_cast<double>(steadyUs());
+    const QByteArray json = QJsonDocument(reply).toJson(QJsonDocument::Compact);
+    if (!m_InputDc || m_Stopping.load()) return;
+    try {
+        m_InputDc->send(std::string(json.constData(), json.size()));
+    } catch (const std::exception& e) {
+        if (!m_Stopping.load())
+            qWarning() << "[DataChannelRelay] inputstamp send failed:" << e.what();
     }
 }
 

@@ -200,7 +200,13 @@ private:
 
     void setupPeerConnection(const rtc::Configuration& config);
     void createDataChannels();
-    void onInputMessage(const std::string& message);
+    // @p recvUs: the host's steady clock (µs) when the message came off the
+    // channel; 0 for "now". Echoed to the client for a stamped message.
+    void onInputMessage(const std::string& message, int64_t recvUs = 0);
+    // The reply to an input message that carried a `stamp` (T7 of the radios
+    // plan): when it arrived and when its handling ended, on the host's
+    // steady clock, so the client can split a click into its way up and the rest.
+    void sendInputStamp(double id, int64_t recvUs);
     void handleKeyEvent(const std::string& type, const std::string& body);
     void handleMouseMove(const std::string& body);
     void handleMouseButton(const std::string& body);

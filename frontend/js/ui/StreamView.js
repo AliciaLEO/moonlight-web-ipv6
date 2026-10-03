@@ -105,6 +105,7 @@ import { FrameLog } from '../stream/FrameLog.js';
 import { VsyncGrid } from '../stream/VsyncGrid.js';
 import { CadenceStepper, autostepEnabled, stepMemory } from '../stream/CadenceStepper.js';
 import { LatencyProbe } from '../stream/LatencyProbe.js';
+import { InputUplink } from '../stream/InputUplink.js';
 import { t } from '../i18n/i18n.js';
 
 /** @typedef {import('../types/transport.js').StreamTransport} StreamTransport */
@@ -937,6 +938,24 @@ export class StreamView {
             budgetFactor: vsyncGridBudget(),
         });
         if (!this._standby) window.mwVsyncGrid = this._vsyncGrid;
+        // How long an input takes to reach the host (stream/InputUplink.js,
+        // plan radios T7): splits each click of the probe, and benches the way
+        // up alone (`mwUplink.run()`). Idle until one of them asks.
+        this._inputUplink = new InputUplink({
+            send: (msg) => {
+                if (this.webrtc) this.webrtc.send(msg);
+            },
+            sendPing: (seq, ts) => {
+                if (this.webrtc) this.webrtc.send({ type: 'ping', seq, ts });
+            },
+            bufferedAmount: () => {
+                const dc =
+                    this.webrtc && this.webrtc.dataChannels && this.webrtc.dataChannels.input;
+                return dc ? dc.bufferedAmount : 0;
+            },
+            results: (window.mwUplinkResults = window.mwUplinkResults || []),
+        });
+        if (!this._standby) window.mwUplink = this._inputUplink;
         // "Auto" with detection (stream/CadenceStepper.js): a native host's
         // stream may run above this screen's rate while what it shows gets
         // younger. Built by the first stats that carry the host's cadence, and
@@ -6749,6 +6768,11 @@ export class StreamView {
             if (typeof msg.text === 'string') this._applyHostClipboard(msg.text);
             return;
         }
+        if (msg.type === 'inputstamp') {
+            // The host's answer to a stamped input (stream/InputUplink.js).
+            this._inputUplink.noteReply(msg, performance.now());
+            return;
+        }
         if (msg.type === 'fpsstep') {
             // The native host's answer to a step of the detection.
             if (this._stepper) this._stepper.noteReply(msg, performance.now());
@@ -6758,6 +6782,7 @@ export class StreamView {
             this._contentAge.notePong(msg, performance.now());
             this._frameLog.notePong(msg, performance.now());
             this._vsyncGrid.notePong(msg, performance.now());
+            this._inputUplink.notePong(msg, performance.now());
             if (this._stepper) this._stepper.notePong(msg, performance.now());
             // The host would aim its frames at this screen's refreshes: tell it
             // when they are (native host, cadence=deadline).
@@ -9884,10 +9909,13 @@ export class StreamView {
             // canvas everywhere else.
             source: () =>
                 this.videoEl && this.videoEl.style.display === 'block' ? this.videoEl : this.canvas,
-            sendClick: () => {
-                this._sendMouseButton(1, true);
+            // The press carries the probe's stamp, for the host to date its
+            // arrival (stream/InputUplink.js).
+            sendClick: (stamp) => {
+                this._sendMouseButton(1, true, stamp);
                 this._sendMouseButton(1, false);
             },
+            uplink: this._inputUplink,
             // The grey circle: at the pointer when we know where it is, at the
             // centre otherwise, up for exactly one frame (hidden again from the
             // rAF after the one that paints it).
@@ -9943,7 +9971,7 @@ export class StreamView {
 
     /** Send a mouse button event and keep _heldMouseButtons in sync (same
      *  reason as _sendKeyEvent). `button` is 1-based, as the host expects. */
-    _sendMouseButton(button, down) {
+    _sendMouseButton(button, down, stamp = null) {
         // Latch the pointer as the drag opens, read while it lasts — see
         // _pictureCursor. Taken BEFORE the set changes, so it is the shape the
         // viewer was actually looking at when they pressed.
@@ -9953,12 +9981,16 @@ export class StreamView {
         else this._heldMouseButtons.delete(button);
 
         if (this._heldMouseButtons.size === 0) this._dragCursor = null;
-        this.webrtc.send({
+        const msg = {
             type: down ? 'mousedown' : 'mouseup',
             button,
             // Aim/fire in gaming mode is a genuine hold, not a drag.
             hold: down && !!this._gamingMode,
-        });
+        };
+        // A measured click (the latency probe): the host answers with when it
+        // arrived. Nothing else sets it.
+        if (stamp !== null) msg.stamp = stamp;
+        this.webrtc.send(msg);
     }
 
     /**
