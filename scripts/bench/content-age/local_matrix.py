@@ -127,6 +127,7 @@ def main():
     ap.add_argument("--bitrate", type=int, default=0, help="kbps (pass.py --bitrate)")
     ap.add_argument("--fps", type=int, default=0,
                     help="a frame rate the viewer named (pass.py --fps); 0 = Auto")
+    ap.add_argument("--codec", default="", help="h264 | hevc | av1 (pass.py --codec)")
     ap.add_argument("--vsync", choices=["on", "off"], default="off",
                     help="on = tearing off: the client paints on its refresh (pass.py --vsync)")
     ap.add_argument("--every", type=int, default=1,
@@ -160,6 +161,8 @@ def main():
         client += ["--game-fps", a.game_fps]
     if a.clicks:
         client += ["--clicks", str(a.clicks)]
+    if a.codec:
+        client += ["--codec", a.codec]
     if a.uplink:
         client += ["--uplink", a.uplink]
     global EXE, TUNING

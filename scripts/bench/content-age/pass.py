@@ -167,6 +167,8 @@ def stepper_state(d, content_ms):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fps", type=int, default=0, help="stream_fps; 0 = Auto")
+    ap.add_argument("--codec", choices=["h264", "hevc", "av1"], default="",
+                    help="video_codec; the bench's own (HEVC) otherwise")
     ap.add_argument("--vsync", choices=["on", "off"], default="off",
                     help="on = tearing off: the client paints on its refresh")
     ap.add_argument("--secs", type=float, default=30)
@@ -244,6 +246,8 @@ def main():
         settings = dict(run.load_matrix()["base"])
         settings.update({"stream_fps": a.fps, "tearing_default_v2": True,
                          "tearing_enabled": a.vsync == "off"})
+        if a.codec:
+            settings["video_codec"] = a.codec
         if a.bitrate > 0:
             settings.update({"stream_bitrate_auto": False, "stream_bitrate": a.bitrate})
         d.apply_settings(settings)
