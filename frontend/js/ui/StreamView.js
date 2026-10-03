@@ -4520,7 +4520,7 @@ export class StreamView {
                 if (this._stepper) this._stepper.notePainted(frameBackendTs, drawStart + renderMs);
                 // …and the frame's whole way, on the host's clock.
                 const e2e = this._frameLog.noteDrawn({
-                    backendTs: frameBackendTs,
+                    backendTs: frameBackendTs || (frameLog ? frameLog.hostTs : 0),
                     drawnMs: drawStart + renderMs,
                     arrivedMs: frameLog ? frameLog.arrived : 0,
                     decodedMs: decodedPerf,
@@ -7327,7 +7327,7 @@ export class StreamView {
         // AV1 pipeline: no NAL units, no SPS/PPS, no Annex B start codes.
         // OBUs are passed directly to the decoder.
         if (this.videoCodec === CODEC_AV1) {
-            this.handleAv1Frame(data, isKeyframe);
+            this.handleAv1Frame(data, isKeyframe, backendTs, arrivalAbs);
             return;
         }
 
@@ -7408,7 +7408,7 @@ export class StreamView {
 
     // --- AV1 pipeline ---
 
-    handleAv1Frame(data, isKeyframe) {
+    handleAv1Frame(data, isKeyframe, backendTs = 0, arrivalAbs = 0) {
         // On first keyframe, extract the Sequence Header OBU for decoder config
         // and immediately configure the decoder.
         if (!this.decoderConfigured && !this.decoderConfiguring) {
@@ -7453,7 +7453,7 @@ export class StreamView {
         }
 
         // Submit frame to AV1 decoder (no AVCC conversion needed)
-        this.decodeAv1Frame(data, isKeyframe);
+        this.decodeAv1Frame(data, isKeyframe, backendTs, arrivalAbs);
     }
 
     configureAv1Decoder(seqHeaderObu) {
@@ -7533,7 +7533,7 @@ export class StreamView {
         tryCodecs(0);
     }
 
-    decodeAv1Frame(data, isKeyframe) {
+    decodeAv1Frame(data, isKeyframe, backendTs = 0, arrivalAbs = 0) {
         if (!this.decoderConfigured) {
             // Buffer until decoder is ready (limit to avoid OOM)
             if (this.pendingFrames.length < 120) {
@@ -7565,8 +7565,14 @@ export class StreamView {
                 data: obuData,
             });
             // AV1 has no backendTs here (synthetic chunk timestamps), so the
-            // pacer sees 0 and this path keeps presenting on decode.
-            this._trackChunkSubmit(timestamp, 0);
+            // pacer sees 0 and this path keeps presenting on decode. The
+            // frame's stamp still reaches the frame log (hostTs), alone.
+            this._trackChunkSubmit(timestamp, 0, {
+                arrived: arrivalAbs > 0 ? arrivalAbs - performance.timeOrigin : 0,
+                bytes: obuData.length,
+                key: isKeyframe,
+                hostTs: backendTs > 0 ? backendTs : 0,
+            });
             this.decoder.decode(chunk);
             this.stats.received++;
             this._tellDecodeQueue();
