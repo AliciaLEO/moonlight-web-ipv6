@@ -440,6 +440,143 @@ describe('ContentAgeProbe — the age of what was drawn', () => {
     });
 });
 
+/**
+ * A Worker that does what bandReadWorker.js does, a turn later: the copy is
+ * its own, never the main thread's.
+ */
+function fakeWorkerClass(log) {
+    return class {
+        constructor(url, opts) {
+            log.made.push([String(url), opts && opts.type]);
+            this.onmessage = null;
+            this.onerror = null;
+        }
+        postMessage(msg, transfer) {
+            if (log.refuse)
+                throw Object.assign(new Error('not transferable'), { name: 'DataCloneError' });
+            log.posted.push({ msg, transfer });
+            Promise.resolve().then(async () => {
+                const { id, frame, rect } = msg;
+                const buf = new Uint8Array(frame.allocationSize({ rect }));
+                const layout = await frame.copyTo(buf, { rect });
+                frame.close();
+                if (log.crash) this.onerror({ type: 'error' });
+                else this.onmessage({ data: { id, format: frame.format, layout, buf } });
+            });
+        }
+        terminate() {
+            log.terminated = true;
+        }
+    };
+}
+
+/** A frame whose clone counts its copies, to see where they ran. */
+function countedFrame(timestamp, value, copies) {
+    const f = fakeFrame(timestamp, () => value);
+    const clone = f.clone.bind(f);
+    f.clone = () => {
+        const c = clone();
+        const copyTo = c.copyTo.bind(c);
+        c.copyTo = (buf, opts) => {
+            copies.n++;
+            return copyTo(buf, opts);
+        };
+        return c;
+    };
+    return f;
+}
+
+describe('ContentAgeProbe — the read, off the main thread', () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    it('hands the frame to a worker, which copies the strip out', async () => {
+        const log = { made: [], posted: [] };
+        vi.stubGlobal('Worker', fakeWorkerClass(log));
+        const renderer = { kind: 'canvas2d', afterDraw: null };
+        const probe = new ContentAgeProbe({ renderer: () => renderer, sendPing: () => {} });
+        probe.start({ every: 1 });
+        const copies = { n: 0 };
+        for (let i = 0; i < 3; i++) {
+            probe.onDecoded(countedFrame(i, 4242, copies), 0);
+            // Nothing copied while the frame is still on its way to its draw.
+            expect(copies.n).toBe(0);
+            renderer.afterDraw(renderer, i);
+        }
+        await flush();
+        await flush();
+        const s = probe.stop();
+        expect(log.made).toEqual([[expect.stringContaining('bandReadWorker.js'), 'module']]);
+        expect(log.posted).toHaveLength(3);
+        // The clone is transferred, not copied.
+        expect(log.posted[0].transfer).toEqual([log.posted[0].msg.frame]);
+        expect(copies.n).toBe(3);
+        // Read, and refused an age only for want of a clock: the band was good.
+        expect(s.reader).toBe('worker');
+        expect(s.invalid.clock).toBe(3);
+        expect(s.invalid.block + s.invalid.copy).toBe(0);
+        expect(s.readCost.n).toBe(3);
+    });
+
+    it('copies on the main thread where a frame cannot be transferred', async () => {
+        const log = { made: [], posted: [], refuse: true };
+        vi.stubGlobal('Worker', fakeWorkerClass(log));
+        const renderer = { kind: 'canvas2d', afterDraw: null };
+        const probe = new ContentAgeProbe({ renderer: () => renderer, sendPing: () => {} });
+        probe.start({ every: 1 });
+        const copies = { n: 0 };
+        probe.onDecoded(countedFrame(1, 4242, copies), 0);
+        expect(copies.n).toBe(1);
+        renderer.afterDraw(renderer, 1);
+        probe.onDecoded(countedFrame(2, 4242, copies), 0);
+        renderer.afterDraw(renderer, 2);
+        await flush();
+        const s = probe.stop();
+        expect(log.made).toHaveLength(1);
+        expect(s.reader).toBe('inline');
+        expect(s.invalid.clock).toBe(2);
+    });
+
+    it('counts the reads a dying worker took with it, and goes on inline', async () => {
+        const log = { made: [], posted: [], crash: true };
+        vi.stubGlobal('Worker', fakeWorkerClass(log));
+        const renderer = { kind: 'canvas2d', afterDraw: null };
+        const probe = new ContentAgeProbe({ renderer: () => renderer, sendPing: () => {} });
+        probe.start({ every: 1 });
+        const copies = { n: 0 };
+        probe.onDecoded(countedFrame(1, 4242, copies), 0);
+        renderer.afterDraw(renderer, 1);
+        await flush();
+        await flush();
+        expect(log.terminated).toBe(true);
+        probe.onDecoded(countedFrame(2, 4242, copies), 0);
+        renderer.afterDraw(renderer, 2);
+        await flush();
+        const s = probe.stop();
+        expect(s.invalid.copy).toBe(1);
+        expect(s.invalid.clock).toBe(1);
+        expect(s.reader).toBe('inline');
+    });
+
+    it('reads on the main thread when asked to', async () => {
+        const log = { made: [], posted: [] };
+        vi.stubGlobal('Worker', fakeWorkerClass(log));
+        const renderer = { kind: 'canvas2d', afterDraw: null };
+        const probe = new ContentAgeProbe({
+            renderer: () => renderer,
+            sendPing: () => {},
+            worker: false,
+        });
+        probe.start({ every: 1 });
+        probe.onDecoded(countedFrame(1, 4242, { n: 0 }), 0);
+        renderer.afterDraw(renderer, 1);
+        await flush();
+        expect(log.made).toHaveLength(0);
+        expect(probe.stop().reader).toBe('inline');
+    });
+});
+
 describe('ContentAgeProbe — the age of what is shown', () => {
     it('ages the frame on screen until the next one replaces it', () => {
         // Three frames drawn 10 ms apart, each 5 ms old when drawn.

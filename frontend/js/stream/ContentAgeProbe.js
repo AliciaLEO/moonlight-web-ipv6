@@ -30,9 +30,12 @@
  *     the screen — calibrated against the host by the bench driver over CDP,
  *     and absent until it is;
  *   - this probe reads the band out of the decoded frame (VideoFrame.copyTo of
- *     that strip alone: asynchronous, where reading the canvas back cost the
- *     main thread 13 ms a read on an iGPU), and notes when the renderer drew
- *     that same frame (VideoRenderer.afterDraw);
+ *     that strip alone, where reading the canvas back cost the main thread
+ *     13 ms a read on an iGPU), and notes when the renderer drew that same
+ *     frame (VideoRenderer.afterDraw). The copy runs in a worker
+ *     (bandReadWorker.js): on the main thread it still held the frame's draw
+ *     12.2 ms a read on DualRTX's AMD iGPU (03/10/2026) — every age read
+ *     carried it. `readCost` in the summary is what is left of it;
  *   - the draw is put on the host's clock with an estimate made from the
  *     ping/pong, whose pong carries the host's time; the difference is the
  *     content's age when it was shown.
@@ -303,11 +306,19 @@ export class ContentAgeProbe {
      *        host answers with a `pong` carrying `host` (its steady µs)
      * @param {any[]} [deps.results] where finished runs go
      *        (window.mwContentAgeResults)
+     * @param {boolean} [deps.worker] read the band in a worker where there
+     *        is one (the default); false reads it on the main thread
      */
-    constructor({ renderer, sendPing, results = [] }) {
+    constructor({ renderer, sendPing, results = [], worker = true }) {
         this._renderer = renderer;
         this._sendPing = sendPing;
         this.results = results;
+        this._noWorker = !worker;
+        this._readWorker = null;
+        this._workerState = '';
+        /** @type {Map<number, {resolve: Function, reject: Function, format: string}>} */
+        this._reads = new Map();
+        this._readSeq = 0;
         this._run = null;
         this._clock = new ClockEstimator();
         this._pingTimer = null;
@@ -329,6 +340,9 @@ export class ContentAgeProbe {
             every: Math.max(1, Math.floor(every) || 1),
             decoded: 0,
             read: 0,
+            /** The main thread's time in each read, ms; and where the copy ran. */
+            readMs: [],
+            reader: null,
             startedMs: performance.now(),
             /** @type {Map<number, {at: number, backendTs: number, value: number|null, drawnMs: number|null}>} */
             pending: new Map(),
@@ -396,31 +410,100 @@ export class ContentAgeProbe {
         const ts = frame.timestamp;
         run.pending.set(ts, entry);
         run.read++;
-        let clone;
+        const rect = { x: region.x, y: region.y, width: region.w, height: region.h };
+        // What the read costs the frame: the main thread's share, before the
+        // frame goes on to its draw. Seen in the summary as `readCost`.
+        const t0 = performance.now();
+        let read;
         try {
-            clone = frame.clone();
-            const rect = { x: region.x, y: region.y, width: region.w, height: region.h };
-            const buf = new Uint8Array(clone.allocationSize({ rect }));
-            const format = clone.format;
-            clone
-                .copyTo(buf, { rect })
-                .then((layout) => {
-                    const luma = lumaOf(format, buf, layout, region.w, region.h);
-                    const band = luma
-                        ? decodeBand(luma, region.w, region.h, region.block)
-                        : { ok: false, why: 'size' };
-                    if (!band.ok) {
-                        this._fail(ts, band.why);
-                        return;
-                    }
-                    entry.value = band.value;
-                    this._settle(ts);
-                })
-                .catch(() => this._fail(ts, 'copy'))
-                .finally(() => clone.close());
+            read = this._readStrip(frame.clone(), rect);
         } catch (e) {
-            if (clone) clone.close();
-            this._fail(ts, 'copy');
+            read = Promise.reject(e);
+        }
+        run.readMs.push(performance.now() - t0);
+        read.then(
+            ({ format, buf, layout }) => {
+                const luma = lumaOf(format, buf, layout, region.w, region.h);
+                const band = luma
+                    ? decodeBand(luma, region.w, region.h, region.block)
+                    : { ok: false, why: 'size' };
+                if (!band.ok) {
+                    this._fail(ts, band.why);
+                    return;
+                }
+                entry.value = band.value;
+                this._settle(ts);
+            },
+            () => this._fail(ts, 'copy'),
+        );
+    }
+
+    /**
+     * Copy @p rect out of @p clone, which this takes over (closed when done).
+     * In a worker where there is one: copying out of a frame the GPU decoded
+     * held the main thread 12.2 ms a read on DualRTX's AMD iGPU (03/10/2026),
+     * and that frame's draw waited behind it. Here, when the worker cannot be
+     * had — no Worker, or a browser that will not transfer a VideoFrame.
+     * @returns {Promise<{format: string, buf: Uint8Array, layout: any}>}
+     */
+    _readStrip(clone, rect) {
+        const worker = this._worker();
+        if (worker) {
+            const id = this._readSeq++;
+            const format = clone.format;
+            try {
+                worker.postMessage({ id, frame: clone, rect }, [clone]);
+                if (this._run) this._run.reader = 'worker';
+                return new Promise((resolve, reject) =>
+                    this._reads.set(id, { resolve, reject, format }),
+                );
+            } catch (e) {
+                // Not transferable here: inline from now on.
+                this._workerState = 'broken';
+            }
+        }
+        if (this._run) this._run.reader = 'inline';
+        const buf = new Uint8Array(clone.allocationSize({ rect }));
+        const format = clone.format;
+        return clone
+            .copyTo(buf, { rect })
+            .then((layout) => ({ format, buf, layout }))
+            .finally(() => clone.close());
+    }
+
+    /** The read worker, made at the first read; null where there is none. */
+    _worker() {
+        if (this._workerState === 'broken') return null;
+        if (this._readWorker) return this._readWorker;
+        if (typeof Worker !== 'function' || this._noWorker) {
+            this._workerState = 'broken';
+            return null;
+        }
+        try {
+            const w = new Worker(new URL('./bandReadWorker.js', import.meta.url), {
+                type: 'module',
+            });
+            w.onmessage = (e) => {
+                const { id, error } = e.data || {};
+                const pending = this._reads.get(id);
+                if (!pending) return;
+                this._reads.delete(id);
+                if (error) pending.reject(new Error(error));
+                else pending.resolve(e.data);
+            };
+            w.onerror = () => {
+                // Every read in flight is lost; the next ones go inline.
+                this._workerState = 'broken';
+                for (const p of this._reads.values()) p.reject(new Error('worker'));
+                this._reads.clear();
+                this._readWorker = null;
+                w.terminate();
+            };
+            this._readWorker = w;
+            return w;
+        } catch (e) {
+            this._workerState = 'broken';
+            return null;
         }
     }
 
@@ -526,6 +609,11 @@ export class ContentAgeProbe {
             unseenPerMinute: perMinute(seen.unseen),
             capture: describe(run.capture),
             beforeCapture: describe(run.before),
+            // What a read cost the frame it read, on the main thread: the
+            // wait added to its draw (12.2 ms a read inline on DualRTX's AMD
+            // iGPU, 03/10/2026). `reader`: worker, or inline.
+            readCost: describe(run.readMs),
+            reader: run.reader,
             clock: this._clock.summary,
             renderer: r ? r.kind : null,
             // [drawn at (client ms), content age (ms), capture age (ms)]
