@@ -66,7 +66,55 @@ def click_flag(d, n, every_ms=800):
     print("  clicks: %d of %d measured, click -> flag median %s ms (p90 %s, %s to %s)" % (
         summary["ok"], summary["n"], _ms(summary["medianMs"]), _ms(summary["p90Ms"]),
         _ms(summary["minMs"]), _ms(summary["maxMs"])), flush=True)
+    # Each click split by the host's answer to its stamp (InputUplink.js, plan
+    # radios T7): the way up, the injection, and the rest (flag, capture,
+    # encode, the way down, decode, draw).
+    for key in ("upMs", "hostInMs", "restMs"):
+        vals = sorted(s[key] for s in samples
+                      if s.get("ok") and isinstance(s.get(key), (int, float)))
+        summary[key] = {"n": len(vals),
+                        "median": vals[len(vals) // 2] if vals else None,
+                        "p90": vals[min(len(vals) - 1, int(0.9 * len(vals)))] if vals else None,
+                        "max": vals[-1] if vals else None}
+    if summary["upMs"]["n"]:
+        print("  split: up median %s ms (p90 %s, max %s), host %s ms, rest median %s ms (p90 %s)" % (
+            _ms(summary["upMs"]["median"]), _ms(summary["upMs"]["p90"]), _ms(summary["upMs"]["max"]),
+            _ms(summary["hostInMs"]["median"]), _ms(summary["restMs"]["median"]),
+            _ms(summary["restMs"]["p90"])), flush=True)
     return {"summary": summary, "samples": samples}
+
+
+def uplink_runs(d, spec, tag):
+    """The way up alone (frontend InputUplink.js, plan radios T7): for each
+    HZ:SECS of @p spec, that many dated messages a second that do nothing on the
+    host. None when the stream has no such bench."""
+    if not spec:
+        return None
+    if d.eval("typeof (window.mwUplink && window.mwUplink.run)") != "function":
+        print("  uplink: this client has no uplink bench (older page?)", flush=True)
+        return None
+    runs = []
+    for part in spec.split(","):
+        hz, secs = (int(x) for x in part.split(":"))
+        before = d.eval("(window.mwUplinkResults || []).length") or 0
+        d.eval("window.mwUplink.run({hz: %d, secs: %d, label: %s}); 1" % (hz, secs, json.dumps(tag)))
+        end = time.time() + secs + 15
+        while time.time() < end:
+            if (d.eval("(window.mwUplinkResults || []).length") or 0) > before:
+                break
+            time.sleep(1)
+        got = d.json_eval("JSON.stringify((window.mwUplinkResults || []).slice(%d))" % before)
+        if not got:
+            print("  uplink %d/s: no result" % hz, flush=True)
+            continue
+        r = got[0]
+        up, rtt = r["up"], r["rtt"]
+        print("  uplink %d/s for %d s: %d/%d answered, up median %s ms (p90 %s, p99 %s, max %s), "
+              "rtt median %s, %d sends queued" % (
+                  hz, secs, r["answered"], r["sent"], _ms(up["median"]), _ms(up["p90"]),
+                  _ms(up["p99"]), _ms(up["max"]), _ms(rtt["median"]), r["queuedSends"]), flush=True)
+        runs.append(r)
+    return runs
 
 
 def stepper_state(d, content_ms):
@@ -125,6 +173,8 @@ def main():
     ap.add_argument("--hold", type=int, default=0,
                     help="seconds of stream held on the virtual display with no bench page "
                          "over it, for a game driven apart; no content-age reading")
+    ap.add_argument("--uplink", default="",
+                    help="HZ:SECS[,HZ:SECS] dated input messages, the way up alone (plan radios T7)")
     ap.add_argument("--clicks", type=int, default=0,
                     help="click → flag samples after the content-age window (needs "
                          "latency_flag_enabled in the instance's settings.json)")
@@ -207,9 +257,13 @@ def main():
             # driven by a script of its own): the stream held, nothing drawn
             # over it, the overlay read at the end.
             time.sleep(a.hold)
+            # A still screen: the way up with almost no video coming down.
+            uplink = uplink_runs(d, a.uplink, a.tag)
+            clicks = click_flag(d, a.clicks) if a.clicks > 0 else None
             stats = d.stats()
             with open(os.path.join(age.OUT, a.tag + ".json"), "w") as f:
                 json.dump({"tag": a.tag, "overlay": stats, "args": vars(a),
+                           "uplink": uplink, "clicks": clicks,
                            "env": {k: os.environ.get(k, "")
                                    for k in ("MW_NATIVE_TUNING", "MW_VDD_REFRESH")}}, f)
             print("  held %d s; %s" % (a.hold, ((stats or {}).get("rows") or {}).get(
@@ -239,6 +293,7 @@ def main():
         # before the clicks (they move nothing on the screen's content).
         stepper = stepper_state(d, content_ms)
         clicks = click_flag(d, a.clicks) if a.clicks > 0 else None
+        uplink = uplink_runs(d, a.uplink, a.tag)
         d.expand_latency_detail()
         stats = d.stats()
         path = os.path.join(age.OUT, a.tag + ".json")
@@ -248,6 +303,7 @@ def main():
         data["grid"] = grid
         data["stepper"] = stepper
         data["clicks"] = clicks
+        data["uplink"] = uplink
         if grid:
             print("  grid: followed %s, lead %s ms, margin %s ms, %s misses in %s frames, "
                   "slack median %s ms (p5 %s)" % (

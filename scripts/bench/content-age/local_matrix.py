@@ -128,6 +128,11 @@ def main():
     ap.add_argument("--local-storage", action="append", default=[], metavar="KEY=VALUE")
     ap.add_argument("--game-fps", default="", help="the page at a game's rate (pass.py --game-fps)")
     ap.add_argument("--clicks", type=int, default=0, help="click → flag samples (pass.py --clicks)")
+    ap.add_argument("--uplink", default="",
+                    help="HZ:SECS[,…] dated input messages, the way up alone (pass.py --uplink)")
+    ap.add_argument("--exe", default="",
+                    help="the build under test (default build/MoonlightWeb.exe): another session "
+                         "may be rebuilding build/ while this runs")
     ap.add_argument("--hold", type=int, default=0,
                     help="the stream held that long for a game, no bench page (pass.py --hold)")
     ap.add_argument("--vdd-gpu", default="",
@@ -142,6 +147,11 @@ def main():
         client += ["--game-fps", a.game_fps]
     if a.clicks:
         client += ["--clicks", str(a.clicks)]
+    if a.uplink:
+        client += ["--uplink", a.uplink]
+    if a.exe:
+        global EXE
+        EXE = os.path.abspath(a.exe)
     if a.hold:
         client += ["--hold", str(a.hold)]
     os.makedirs(OUT, exist_ok=True)
