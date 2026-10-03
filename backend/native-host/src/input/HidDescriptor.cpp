@@ -292,6 +292,27 @@ std::vector<uint8_t> encode(const std::vector<Collection>& collections)
     return out;
 }
 
+void repairBounds(std::vector<Collection>& collections)
+{
+    auto repairItem = [](ReportItem& it) {
+        if (it.isConstant || it.reportSize == 0) return;
+        if (it.logicalMinimum < it.logicalMaximum) return;
+        it.logicalMinimum = 0;
+        it.logicalMaximum = it.reportSize >= 31 ? INT32_MAX : (int32_t{1} << it.reportSize) - 1;
+    };
+    auto repairReports = [&](std::vector<Report>& reports) {
+        for (Report& r : reports)
+            for (ReportItem& it : r.items)
+                repairItem(it);
+    };
+    for (Collection& c : collections) {
+        repairReports(c.inputReports);
+        repairReports(c.outputReports);
+        repairReports(c.featureReports);
+        repairBounds(c.children);
+    }
+}
+
 Parsed parse(const uint8_t* data, size_t size)
 {
     Parsed p;
@@ -301,6 +322,7 @@ Parsed parse(const uint8_t* data, size_t size)
     std::map<std::pair<int, int>, uint32_t> offsets;
     std::set<uint8_t> ids;
     int depth = 0;
+    uint32_t application = 0;
 
     auto fail = [&](const std::string& why) {
         p.ok = false;
@@ -337,6 +359,7 @@ Parsed parse(const uint8_t* data, size_t size)
                 ParsedCollection c;
                 c.usage = usages.empty() ? 0 : usages.front();
                 c.type = static_cast<uint8_t>(raw);
+                if (depth == 0) application = c.usage;
                 c.depth = depth++;
                 p.collections.push_back(c);
             } else if (tag == kEndCollection) {
@@ -347,6 +370,7 @@ Parsed parse(const uint8_t* data, size_t size)
                          : tag == kOutput ? Kind::Output
                                           : Kind::Feature;
                 f.reportId = g.reportId;
+                f.application = depth > 0 ? application : 0;
                 f.size = static_cast<uint16_t>(g.size);
                 f.count = static_cast<uint16_t>(g.count);
                 f.flags = static_cast<uint16_t>(raw & 0x1FF);
@@ -521,6 +545,7 @@ std::string validate(const std::vector<uint8_t>& descriptor)
         const uint32_t id = idOf(u);
         return id == 0x02 || id == 0x06 || id == 0x07 || (id >= 0x80 && id <= 0x8F);
     };
+    bool anyGame = false;
     for (const ParsedCollection& c : p.collections) {
         if (c.depth == 0 && c.type != Application)
             return "top-level collection " + hex(c.usage) + " is not an application collection";
@@ -529,11 +554,17 @@ std::string validate(const std::vector<uint8_t>& descriptor)
                 (pageOf(c.usage) == 0x01 &&
                  (idOf(c.usage) == 0x04 || idOf(c.usage) == 0x05 || idOf(c.usage) == 0x08)) ||
                 pageOf(c.usage) == 0x02;
-            if (!game) return "application collection " + hex(c.usage) + " is not a game device";
+            const bool vendor = pageOf(c.usage) >= 0xFF00;
+            if (!game && !vendor)
+                return "application collection " + hex(c.usage) + " is not a game device";
+            anyGame = anyGame || game;
         }
         if (forbiddenCollection(c.usage))
             return "collection " + hex(c.usage) + " is a keyboard, mouse or system control";
     }
+    // A vendor interface alone (the G923's second one, page 0xFFFD) is no game
+    // device: nothing for a game to read, everything for a tool to talk to.
+    if (!anyGame) return "no joystick, game pad or simulation collection";
 
     // Keys and media keys injected by a remote page are exactly what this
     // must never become, whatever collection they hide in.
@@ -550,6 +581,16 @@ std::string validate(const std::vector<uint8_t>& descriptor)
         for (uint32_t u : f.usages)
             if (forbiddenUsage(u))
                 return "usage " + hex(u) + " is a keyboard, consumer or system control usage";
+        // A vendor collection carries vendor bytes only: an axis or a button
+        // there would reach the OS's input layer under no game collection.
+        if (pageOf(f.application) >= 0xFF00 && !f.isConstant()) {
+            const bool vendorOnly =
+                f.range ? pageOf(f.usageMinimum) >= 0xFF00 && pageOf(f.usageMaximum) >= 0xFF00
+                        : std::all_of(f.usages.begin(), f.usages.end(),
+                                      [](uint32_t u) { return pageOf(u) >= 0xFF00; });
+            if (!vendorOnly)
+                return "vendor collection " + hex(f.application) + " holds a non-vendor usage";
+        }
         if (f.range) {
             for (uint32_t pg = pageOf(f.usageMinimum); pg <= pageOf(f.usageMaximum); ++pg)
                 if (pg == 0x07 || pg == 0x0C) return "usage range on page " + hex(pg) + " refused";

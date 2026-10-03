@@ -160,6 +160,56 @@ std::vector<Collection> syntheticWheel()
     return {app};
 }
 
+/// The G923 in PC mode as Chrome 154 showed it on Windows (H0 survey, 03/10):
+/// a joystick with a hat, 23 buttons, a 16-bit wheel and three 8-bit pedals,
+/// beside two HID++ collections of Logitech's (vendor page 0xFF43). Bounds as
+/// Chrome gives them there: buttons at 0..0, the vendor arrays at 255..0.
+std::vector<Collection> g923AsChromeShowsIt()
+{
+    Report in;
+    in.reportId = 1;
+    ReportItem hat = axes({0x10039}, 4, 0, 7);
+    hat.hasNull = true;
+    hat.physicalMaximum = 315;
+    hat.unitSystem = UnitSystem::EnglishRotation;
+    hat.unitFactors[0] = 1;
+    in.items.push_back(hat);
+    ReportItem b = buttons(0x90001, 0x90017);
+    b.logicalMaximum = 0;
+    in.items.push_back(b);
+    ReportItem pad;
+    pad.isConstant = true;
+    pad.isArray = true;
+    pad.reportSize = 5;
+    pad.reportCount = 1;
+    in.items.push_back(pad);
+    in.items.push_back(axes({0x10030}, 16, 0, 65535));
+    for (uint32_t u : {0x10031u, 0x10032u, 0x10035u})
+        in.items.push_back(axes({u}, 8, 0, 255));
+    ReportItem vendorBits = buttons(0xFF000001, 0xFF000003);
+    vendorBits.logicalMaximum = 0;
+    in.items.push_back(vendorBits);
+    in.items.push_back(pad);
+
+    Collection joystick;
+    joystick.usagePage = 0x01;
+    joystick.usage = 0x04;
+    joystick.inputReports.push_back(in);
+
+    auto hidpp = [](uint16_t usage, uint8_t id, uint16_t bytes) {
+        ReportItem it = axes({0xFF430000u | (usage & 0xFF)}, 8, 255, 0);
+        it.isArray = true;
+        it.reportCount = bytes;
+        Collection c;
+        c.usagePage = 0xFF43;
+        c.usage = usage;
+        c.inputReports = {Report{id, {it}}};
+        c.outputReports = {Report{id, {it}}};
+        return c;
+    };
+    return {joystick, hidpp(0x0602, 17, 19), hidpp(0x0604, 18, 63)};
+}
+
 bool sameLayout(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b)
 {
     const Parsed pa = parse(a);
@@ -221,6 +271,56 @@ void run_hid_descriptor_tests()
               p.fields[6].usages == std::vector<uint32_t>{0xFF000001}); // vendor page, extended
         // Writing the same collections twice gives the same bytes.
         CHECK(encode(syntheticWheel()) == d);
+    }
+
+    SECTION("HID descriptor — the G923 as Chrome shows it on Windows: bounds repaired, "
+            "HID++ beside the joystick accepted");
+    {
+        std::vector<Collection> wheel = g923AsChromeShowsIt();
+        repairBounds(wheel);
+        const std::vector<uint8_t> d = encode(wheel);
+        const Parsed p = parse(d);
+        CHECK(p.ok);
+        CHECK(validate(d).empty());
+        // The sizes the survey received: 10 bytes, 19 and 63, each after its id.
+        CHECK_EQ(reportBytes(p, Kind::Input, 1), static_cast<size_t>(11));
+        CHECK_EQ(reportBytes(p, Kind::Input, 17), static_cast<size_t>(20));
+        CHECK_EQ(reportBytes(p, Kind::Output, 18), static_cast<size_t>(64));
+        int buttons = 0, vendorArrays = 0;
+        for (const Field& f : p.fields) {
+            if (f.range && f.size == 1) {
+                ++buttons;
+                CHECK(f.logicalMinimum == 0 && f.logicalMaximum == 1);
+            }
+            if (!f.isVariable() && !f.isConstant()) {
+                ++vendorArrays;
+                CHECK(f.logicalMinimum == 0 && f.logicalMaximum == 255);
+            }
+        }
+        CHECK_EQ(buttons, 2);      // the 23 buttons and the 3 vendor bits
+        CHECK_EQ(vendorArrays, 4); // reports 17 and 18, in and out
+        // The axes Chrome gave right are left alone.
+        CHECK(p.fields[3].logicalMaximum == 65535 && p.fields[4].logicalMaximum == 255);
+        CHECK_EQ(p.fields[0].logicalMaximum, 7);
+        // Unrepaired, the encoder writes what it is given: 255..0 parses back reversed.
+        CHECK(encode(g923AsChromeShowsIt()) != d);
+    }
+
+    SECTION("HID descriptor — a vendor interface alone is no game device");
+    {
+        std::vector<Collection> wheel = g923AsChromeShowsIt();
+        repairBounds(wheel);
+        const std::vector<Collection> hidppOnly(wheel.begin() + 1, wheel.end());
+        CHECK(!validate(encode(hidppOnly)).empty());
+        // The G923's second interface: page 0xFFFD, usage 0xFD01, 63 bytes.
+        std::vector<Collection> fffd = {hidppOnly[1]};
+        fffd[0].usagePage = 0xFFFD;
+        fffd[0].usage = 0xFD01;
+        CHECK(!validate(encode(fffd)).empty());
+        // Beside a joystick, a vendor collection hiding an X axis is refused.
+        std::vector<Collection> hiding = wheel;
+        hiding[1].inputReports[0].items.push_back(axes({0x10030}, 8, 0, 255));
+        CHECK(!validate(encode(hiding)).empty());
     }
 
     SECTION("HID descriptor — bounds are written so a parser reads them back");

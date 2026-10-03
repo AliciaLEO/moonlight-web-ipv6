@@ -143,6 +143,9 @@ struct Field
     int32_t physicalMaximum = 0;
     uint32_t unit = 0;
     int8_t unitExponent = 0;
+    /// Usage of the top-level collection the item sits in (extended). Not part
+    /// of the layout, so == ignores it; validate() reads it.
+    uint32_t application = 0;
 
     bool isConstant() const { return flags & 0x01; }
     bool isVariable() const { return flags & 0x02; }
@@ -172,6 +175,15 @@ struct Parsed
 /// The descriptor for these collections, as a device would declare them.
 std::vector<uint8_t> encode(const std::vector<Collection>& collections);
 
+/// Puts back the logical bounds Chrome loses on Windows, where it rebuilds
+/// collections from the preparsed data instead of reading the descriptor:
+/// buttons come with 0..0 instead of 0..1, and a vendor byte array declared
+/// 0..255 comes with a minimum of 255 and a maximum of 0 (seen on the G923,
+/// 03/10). An item whose bounds are empty or reversed gets the whole unsigned
+/// range of its size, which is what such devices declare. Constant items and
+/// sane bounds are left alone. Called on what a page sends, before encode().
+void repairBounds(std::vector<Collection>& collections);
+
 /// Short items only (a long item is refused, as no game device uses one).
 Parsed parse(const uint8_t* data, size_t size);
 inline Parsed parse(const std::vector<uint8_t>& d)
@@ -194,10 +206,12 @@ constexpr size_t kMaxReports = 64;           // distinct (kind, id) pairs
 constexpr size_t kMaxReportBytes = 1024;
 
 /// Empty when the host may create this device; otherwise why not, in a short
-/// English sentence for the log. Checks: it parses; every application
+/// English sentence for the log. Checks: it parses; at least one application
 /// collection is a joystick, game pad, multi-axis controller or simulation
-/// device; no keyboard, consumer or system-control usage anywhere; report ids
-/// all zero or all non-zero; sizes within the limits above.
+/// device, and the others are vendor-defined (page 0xFF00 and up: Logitech's
+/// HID++ beside the G923's joystick, opaque bytes that reach no key or
+/// pointer); no keyboard, consumer or system-control usage anywhere; report
+/// ids all zero or all non-zero; sizes within the limits above.
 std::string validate(const std::vector<uint8_t>& descriptor);
 
 } // namespace mw::native::input::hid
