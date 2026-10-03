@@ -59,6 +59,7 @@ scripts/bench/__pycache__/
 scripts/bench/acceptance/__pycache__/
 scripts/bench/cadence/__pycache__/
 scripts/bench/content-age/__pycache__/
+scripts/bench/wifi/__pycache__/
 
 # One desk's half of the fleet table: how each machine is reached from here.
 # hosts.json declares what a machine IS and is committed; this one describes a
