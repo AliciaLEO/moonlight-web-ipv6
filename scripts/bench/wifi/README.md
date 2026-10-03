@@ -60,6 +60,24 @@ python flagpath.py --prefix w1          # a row a pass; --clicks for every click
   passes, with no stream: what the radio loses, and what it only delivers out
   of order (SCTP repairs both with a retransmission).
 
+## The kernel's drops, and pacing (W1 bis, W2 A)
+
+- `series.py` reads the Mac's `netstat -s -p udp` counter "dropped due to full
+  socket buffers" before and after each pass and each burst: on 03/10/2026,
+  1,855 and 2,303 drops in passes at Auto's bitrate, against 3,120 and 3,960
+  SCTP retransmissions. A burst can name the sink's receive buffer
+  (`--burst 45:120:15:64` for 64 KB, like a browser's): 64 KB lost 1.5 %,
+  256 KB nothing.
+- `pace=<n>` (a link key, with `paceburst=<KB>`) has the host hand a frame's
+  chunks to SCTP at n times the stream's bitrate at most, 16 KB at a time
+  (`backend/src/streaming/SendPacer.h`). The session ends with
+  `bench pacing this session: …`, read by `report.py` (`pace%`, `pmax`).
+
+```bash
+python series.py mac --prefix w2a0 --contents clk --tuning relaylog=1 --udp        # today
+python series.py mac --prefix w2a4 --contents clk --tuning relaylog=1,pace=4 --udp
+```
+
 ## Clients
 
 | name | machine | link | DevTools |
