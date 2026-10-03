@@ -309,10 +309,20 @@ montré de A sur l'Arc, d'une seule : l'autre n'a rien pu lire) :
   incident. Le mode par défaut, lui, reste à la cadence du client : sa détection a
   essayé 116 i/s et y a renoncé (la file du décodeur se remplissait, puis
   l'image arrivait trop tard).
-- **La cause n'est pas tranchée.** Ce peut être la file d'envoi SCTP de l'hôte
-  en Wi-Fi (plan Wi-Fi W1), ou le décodeur du N95. La prochaine série relance
-  les passes U avec `relaylog=1`, et `scripts/bench/wifi/flagpath.py` coupera
-  chaque image en envoi / réseau / décodage / dessin.
+- **La cause : la vidéo attend dans usrsctp, sur l'hôte.** Une série de plus
+  (18:00, RTX, D U D U, `relaylog=1`, `scripts/bench/wifi/flagpath.py`) coupe
+  le trajet de chaque image. Sur toutes les images de la minute des clics :
+
+  | Mode | Réseau p50 / p90 | dont avant de quitter usrsctp, p50 / p90 | Décodage d'une image de drapeau |
+  |---|---|---|---|
+  | D | 18-22 / 43-67 ms | 12-13 / 35-54 ms | 2-3 ms |
+  | U | 38-49 / 204-263 ms | 25-32 / 186-232 ms | 18-22 ms |
+
+  L'air (la moitié du RTT de SCTP) ne prend que 24-28 ms au p90, et SCTP ne
+  retransmet rien. C'est la fenêtre de congestion d'usrsctp qui retient la
+  vidéo à 120 i/s, comme dans W1 du plan Wi-Fi. Le décodeur du N95 ralentit
+  aussi, mais il ne compte que pour une quinzaine de millisecondes. Pour
+  corriger, il faut agir sur l'envoi (le plan Wi-Fi), pas sur le décodeur.
 - **L'AV1 est pire encore sur ce client.** Le décodage prend 0,9 à 1,1 s par
   image, et la bande sort gris-violet, illisible sur l'Arc. Le N95 ne décode
   pas l'AV1 1080p à cette cadence. Il n'est pas vérifié si son décodeur AV1
