@@ -150,9 +150,14 @@ class Client:
         """The UDP echo udp_ref.py pings, started and stopped on the client."""
         return "no UDP echo on this client"
 
-    def udp_sink(self, on):
+    def udp_sink(self, on, rcvbuf_kb=4096):
         """The UDP sink udp_ref.py's bursts count on, started and stopped."""
         return "no UDP sink on this client"
+
+    def udp_drops(self):
+        """Datagrams the client's kernel dropped for a full socket buffer since
+        it booted (W1 bis), or None where it cannot be read."""
+        return None
 
     def start(self):
         log(self.name, "chrome up:", self.chrome_up()[-300:].replace("\n", " | "))
@@ -226,14 +231,20 @@ class Mac(Client):
                     "nohup python3 ~/mw-c925/udp_ref.py echo %d > ~/mw-c925/udp_echo.log 2>&1 & "
                     "sleep 1; cat ~/mw-c925/udp_echo.log" % UDP_PORT], timeout=30, stdin_text=src)
 
-    def udp_sink(self, on):
+    def udp_sink(self, on, rcvbuf_kb=4096):
         if not on:
             return run([SSH, "mw-mac", "pkill -f 'udp_ref.py sink'; echo sink stopped"], timeout=30)
         with open(os.path.join(HERE, "udp_ref.py"), "rb") as f:
             src = f.read().decode("utf-8")
         return run([SSH, "mw-mac", "cat > ~/mw-c925/udp_ref.py; pkill -f 'udp_ref.py sink'; "
-                    "nohup python3 ~/mw-c925/udp_ref.py sink %d > ~/mw-c925/udp_sink.log 2>&1 & "
-                    "sleep 1; cat ~/mw-c925/udp_sink.log" % SINK_PORT], timeout=30, stdin_text=src)
+                    "nohup python3 ~/mw-c925/udp_ref.py sink %d %d > ~/mw-c925/udp_sink.log 2>&1 & "
+                    "sleep 1; cat ~/mw-c925/udp_sink.log" % (SINK_PORT, rcvbuf_kb)], timeout=30,
+                   stdin_text=src)
+
+    def udp_drops(self):
+        out = run([SSH, "mw-mac", "netstat -s -p udp | grep 'full socket buffers'"], timeout=30)
+        digits = out.strip().split()
+        return int(digits[0]) if digits and digits[0].isdigit() else None
 
 
 class N95(Client):
@@ -350,6 +361,7 @@ def matrix(client, series, prefix, gpu, cadences, extra, udp):
     env.update(client.env())
     t0 = time.time()
     log("run", prefix, "|", cadences, " ".join(extra), "|", TUNING or "no host key")
+    drops = client.udp_drops()
     stop = threading.Event()
     pinger = None
     if udp and client.ip:
@@ -370,6 +382,11 @@ def matrix(client, series, prefix, gpu, cadences, extra, udp):
     if pinger:
         stop.set()
         pinger.join(10)
+    after = client.udp_drops()
+    if drops is not None and after is not None:
+        # W1 bis: the datagrams the client's kernel threw away for a full
+        # socket buffer during the pass — the browser's, mostly.
+        log(client.name, "kernel drops for a full socket buffer during", prefix, ":", after - drops)
     with open(path, encoding="utf-8", errors="replace") as f:
         text = f.read()
     saved = text.count("\n   saved ")
@@ -387,17 +404,28 @@ RTX_SCREEN = "\\\\.\\DISPLAY5"
 
 def bursts(client, prefix, spec, when):
     """The radio alone, no stream: video-shaped UDP bursts to the client, lost
-    or overtaken (udp_ref.py burst; plan W1). @p spec is MBPS:FPS:SECS[,…]."""
+    or overtaken (udp_ref.py burst; plan W1). @p spec is MBPS:FPS:SECS[:RCVBUF_KB][,…]: a
+    receive buffer named for one burst restarts the sink with it (W1 bis)."""
+    sink_buf = 4096
     log(client.name, "udp sink:", client.udp_sink(True)[-80:].replace("\n", " | "))
     try:
         for k, part in enumerate(spec.split(",")):
-            mbps, fps, secs = (float(x) for x in part.split(":"))
+            fields = part.split(":")
+            mbps, fps, secs = (float(x) for x in fields[:3])
+            buf = int(fields[3]) if len(fields) > 3 else 4096
+            if buf != sink_buf:
+                sink_buf = buf
+                log(client.name, "udp sink (%d KB):" % buf,
+                    client.udp_sink(True, buf)[-60:].replace("\n", " | "))
+            drops = client.udp_drops()
             out = os.path.join(OUT, "%s-%s-burst-%s-%d.json" % (prefix, client.name, when, k))
             rep = udp_ref.burst(client.ip, SINK_PORT, mbps, fps, secs, out)
-            log(client.name, "burst %s %s Mbit/s at %s fps: %s sent, %s lost, %s late (max %s "
-                "datagrams, %s ms)" % (when, mbps, fps, rep.get("sent"), rep.get("lost"),
-                                        rep.get("late"), rep.get("lateByMax"),
-                                        rep.get("lateMsMax")))
+            after = client.udp_drops()
+            log(client.name, "burst %s %s Mbit/s at %s fps, sink buffer %d KB: %s sent, %s lost, "
+                "%s late (max %s datagrams, %s ms); kernel drops for a full buffer %s" % (
+                    when, mbps, fps, buf, rep.get("sent"), rep.get("lost"), rep.get("late"),
+                    rep.get("lateByMax"), rep.get("lateMsMax"),
+                    (after - drops) if drops is not None and after is not None else "?"))
     finally:
         log(client.name, "udp sink:", client.udp_sink(False)[-60:].replace("\n", " | "))
 

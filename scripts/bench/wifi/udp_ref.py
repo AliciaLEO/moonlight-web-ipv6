@@ -17,7 +17,7 @@ Loss or disorder (plan Wi-Fi W1): SCTP fast-retransmits a chunk when three
 SACKs report it missing, whether it was lost or only overtaken. A one-way flow
 shaped like the video tells the two apart on the radio itself:
 
-    client:  python3 udp_ref.py sink [port]                 # counts what arrives
+    client:  python3 udp_ref.py sink [port] [rcvbuf KB]     # counts what arrives
     host:    python3 udp_ref.py burst <client> [port] [mbps] [fps] [secs] [out.json]
 
 Each "frame" is <mbps>/<fps> worth of 1,200-byte datagrams sent back to back;
@@ -89,9 +89,11 @@ def ping(host, port, hz, secs, out, stop=None):
     return summary
 
 
-def sink(port):
+def sink(port, rcvbuf_kb=4096):
+    # The receive buffer: 4 MB by default, so the sink never drops; a
+    # browser's own is smaller, and a burst that overflows it is lost there.
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 << 20)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, rcvbuf_kb * 1024)
     s.bind(("0.0.0.0", port))
     print("sink on", port, flush=True)
     st = None
@@ -176,7 +178,8 @@ if __name__ == "__main__":
     if sys.argv[1] == "echo":
         echo(int(sys.argv[2]) if len(sys.argv) > 2 else 47998)
     elif sys.argv[1] == "sink":
-        sink(int(sys.argv[2]) if len(sys.argv) > 2 else 47999)
+        sink(int(sys.argv[2]) if len(sys.argv) > 2 else 47999,
+             int(sys.argv[3]) if len(sys.argv) > 3 else 4096)
     elif sys.argv[1] == "burst":
         a = sys.argv[2:]
         burst(a[0], int(a[1]) if len(a) > 1 else 47999, float(a[2]) if len(a) > 2 else 40,
