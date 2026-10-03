@@ -7249,7 +7249,15 @@ Une carte de l'hôte Linux ouvre une app dans un gamescope sans écran
 (`--backend headless`), à la taille et à la cadence du client, à côté du
 bureau : ni écran ajouté ni disposition touchée, le clavier et la souris du
 bureau à part. Aucune session de bureau n'est nécessaire : une session X11, ou
-pas de session du tout, a la carte aussi. Mesures : banc §8s.13 et §8s.14.
+pas de session du tout, a la carte aussi. Mesures : banc §8s.13, §8s.14 et
+§8s.15 (G6, le vrai Steam : Big Picture, un jeu, owner et invité, 60 à 240 Hz,
+téléphone tenu droit, X11).
+
+- **La taille** : la page traite ces cartes comme l'écran virtuel. Chaque
+  choix de résolution y nomme une taille exacte, un téléphone tenu droit
+  compris (`App.isMadeForStream`, `7b860195`). L'hôte la prend telle quelle
+  (`isMadeForStreamKey`). Tourner l'appareil ne relance rien : la session garde
+  sa taille de départ.
 
 - **Les cartes** :
   - « Steam Big Picture », quand un gamescope 3.16.22 ou plus récent (avant,
@@ -7304,7 +7312,13 @@ pas de session du tout, a la carte aussi. Mesures : banc §8s.13 et §8s.14.
     écran sont justes ;
   - clavier US (amont) ;
   - pas de HDR ;
-  - pas de changement de taille en cours de session.
+  - pas de changement de taille en cours de session ;
+  - l'app choisit son GPU elle-même : sur une machine hybride, une app Vulkan
+    peut prendre la carte dédiée quand gamescope compose sur l'autre, et chaque
+    image traverse alors d'un GPU à l'autre (vkcube sur la GTX 1050 de
+    l'UM790Pro : 2 i/s en 720p à 240 Hz, 214 i/s sur le 780M) ;
+  - pas de son quand l'hôte n'a aucune sortie audio réelle (« Dummy Output »),
+    comme pour le bureau.
 
 **Concrètement, pour l'utilisateur** : sous Linux Wayland, la carte « écran
 virtuel » montre un bureau à la taille de l'appareil qui regarde, à 240 Hz, sans
