@@ -30,8 +30,12 @@ extern "C" {
 
 #include "SctpCounters.h"
 #include "SctpFlood.h"
+#include "common/Logger.h"
 
 #include <rtc/rtc.hpp>
+#include <QCoreApplication>
+#include <QDir>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -682,11 +686,29 @@ DataChannelRelay::~DataChannelRelay()
     // fast retransmit — on a LAN, the one way a single frame arrives that late.
     // Here and not in stop(), which a closing peer has usually entered first.
     if (m_SctpAtOpenSet.load()) {
-        const std::array<uint32_t, 4> now = mw::sctp::readCounters();
-        qInfo() << "[DataChannelRelay] SCTP this session:" << (now[0] - m_SctpAtOpen[0])
-                << "data chunks sent," << (now[1] - m_SctpAtOpen[1]) << "retransmitted ("
-                << (now[2] - m_SctpAtOpen[2]) << "fast)," << (now[3] - m_SctpAtOpen[3])
-                << "T3 timeouts";
+        const mw::sctp::Counters d = mw::sctp::readCounters() - m_SctpAtOpen;
+        qInfo() << "[DataChannelRelay] SCTP this session:" << d.sent << "data chunks sent,"
+                << d.retrans << "retransmitted (" << d.fast << "fast)," << d.t3 << "T3 timeouts";
+        // How the window took those repairs (plan Wi-Fi W1): a loss inside a
+        // recovery already under way, a chunk lost twice, sends the window or
+        // max burst held back.
+        qInfo() << "[DataChannelRelay] SCTP window this session:" << d.fastInRtt
+                << "losses inside a recovery," << d.multFast << "chunks fast-retransmitted twice,"
+                << d.cwndHeld << "sends held by the window," << d.burstHeld
+                << "windows trimmed to max burst," << d.sacks << "SACKs," << d.packetsOut
+                << "packets out," << d.dupIn << "duplicate chunks in";
+    }
+    // The bench's frame log (`relaylog=1`): next to this process's log.
+    if (m_FrameLog) {
+        const QString logFile = Logger::instance()->logFilePath();
+        const QString dir =
+            logFile.isEmpty() ? QDir::tempPath() : QFileInfo(logFile).absolutePath();
+        const QString path = dir + QStringLiteral("/relay-frames-%1-%2.csv")
+                                       .arg(QCoreApplication::applicationPid())
+                                       .arg(QDateTime::currentMSecsSinceEpoch());
+        const bool ok = m_FrameLog->writeCsv(path.toStdString());
+        qInfo() << "[DataChannelRelay] frame log:" << m_FrameLog->summary().c_str()
+                << (ok ? "— written to" : "— could NOT be written to") << path;
     }
     // Static call: dynamic dispatch is meaningless in a destructor.
     DataChannelRelay::stop();
@@ -748,6 +770,11 @@ void DataChannelRelay::setLinkBench(const mw::native::EncoderTuning& tuning)
     m_FloodKbps = tuning.floodKbps;
     m_FloodBytes = tuning.floodBytes > 0 ? tuning.floodBytes : SctpFlood::kDefaultBytes;
     m_FloodLikeVideo = tuning.floodLikeVideo;
+    if (tuning.relayLog && !m_FrameLog) {
+        m_FrameLog = std::make_unique<RelayFrameLog>();
+        qWarning() << "[DataChannelRelay] bench frame log on (relaylog=1): each video frame's way "
+                      "through the relay, written next to the log when the session ends";
+    }
     if (m_Loss.active())
         qWarning() << "[DataChannelRelay] bench losses: video messages thrown away before SCTP,"
                    << tuning.lossPermille << "per thousand, bursts of"
@@ -965,6 +992,15 @@ void DataChannelRelay::createDataChannels()
     videoConfig.id = 0;
 
     m_VideoDc = m_Pc->createDataChannel("video", videoConfig);
+    if (m_VideoDc && m_FrameLog) {
+        m_FrameLogDc = m_VideoDc;
+        m_FrameLog->setBufferedProbe(
+            [](void* ctx) -> size_t {
+                const auto dc = static_cast<DataChannelRelay*>(ctx)->m_FrameLogDc.lock();
+                return dc ? dc->bufferedAmount() : 0;
+            },
+            this);
+    }
     if (m_VideoDc) {
         m_VideoDc->onOpen([this]() {
             qInfo() << "[DataChannelRelay] Video DataChannel open";
@@ -1134,6 +1170,22 @@ void DataChannelRelay::handleVideoFrame(const QByteArray& data, bool isKeyframe,
     // Re-check after acquiring the lock: stop() may have run while we waited.
     if (m_Stopping.load()) return;
 
+    if (m_FrameLog) {
+        // The capture on the host's clock, as sendFragmented stamps backendTs:
+        // what the client's per-frame log carries, and how a pass joins the two.
+        int64_t captureUs = -1;
+        if (m_Shim) {
+            const int64_t firstMs = m_Shim->firstFrameArrivalSteadyMs();
+            const int64_t presUs =
+                presentationTimeUs >= 0 ? presentationTimeUs : m_Shim->framePresentationTimeUs();
+            if (firstMs > 0 && presUs >= 0) captureUs = firstMs * 1000 + presUs;
+        }
+        const mw::sctp::Counters c = mw::sctp::readCounters();
+        m_FrameLog->begin(frameNumber, isKeyframe, static_cast<size_t>(data.size()), captureUs,
+                          steadyUs(), RelayFrameLog::Sctp{c.retrans, c.fast, c.t3},
+                          m_SrttMs.load());
+    }
+
     // Worker dropped deltas due to relay-thread backlog — enter awaiting-IDR
     // recovery (guards inside are no-ops when stopping).
     //
@@ -1211,7 +1263,11 @@ void DataChannelRelay::handleVideoFrame(const QByteArray& data, bool isKeyframe,
         // seen on the first delta after it, not on the next keyframe the
         // backed-off cooldown lets through.
         const int64_t nowMs = QDateTime::currentMSecsSinceEpoch();
-        const bool shedding = m_Backlog.note(m_VideoDc->bufferedAmount(), nowMs);
+        const size_t gatedBuffered = m_VideoDc->bufferedAmount();
+        const bool shedding = m_Backlog.note(gatedBuffered, nowMs);
+        if (m_FrameLog)
+            m_FrameLog->decide(frameNumber, RelayFrameLog::Outcome::Gated, gatedBuffered,
+                               m_Backlog.ageMs(nowMs), steadyUs());
         if (shedding) m_Freezes.note(nowMs - m_Backlog.ageMs(nowMs), nowMs);
         if (m_IdrWaitsForDrain) {
             if (!m_Backlog.backedUp()) requestIdrOnDrain();
@@ -1828,8 +1884,10 @@ void DataChannelRelay::sendFragmented(const QByteArray& data, bool isKeyframe,
     // What this actually bounds is LATENCY, which is why it is now measured in
     // time; see SendBacklog.h.
     const int64_t backlogNowMs = QDateTime::currentMSecsSinceEpoch();
+    size_t bufferedSeen = 0; // for the bench's frame log
     if (!isKeyframe) {
         size_t bufAmt = dc->bufferedAmount();
+        bufferedSeen = bufAmt;
         if (m_Backlog.note(bufAmt, backlogNowMs)) {
             m_DeltaDroppedCount++;
             m_BackpressureDropCount++;
@@ -1879,6 +1937,11 @@ void DataChannelRelay::sendFragmented(const QByteArray& data, bool isKeyframe,
                         << "totalDropped=" << m_DeltaDroppedCount
                         << (named ? "named to the encoder" : "");
             }
+            if (m_FrameLog)
+                m_FrameLog->decide(frameNumber,
+                                   named ? RelayFrameLog::Outcome::NamedDrop
+                                         : RelayFrameLog::Outcome::BacklogDrop,
+                                   bufAmt, m_Backlog.ageMs(backlogNowMs), steadyUs());
             return;
         }
     } else {
@@ -1896,8 +1959,12 @@ void DataChannelRelay::sendFragmented(const QByteArray& data, bool isKeyframe,
         // + one keyframe, bounding latency to well under a second instead of
         // letting it run away.
         size_t bufAmt = dc->bufferedAmount();
+        bufferedSeen = bufAmt;
         if (m_Backlog.note(bufAmt, backlogNowMs)) {
             m_KeyframeBackpressureWarnings++;
+            if (m_FrameLog)
+                m_FrameLog->decide(frameNumber, RelayFrameLog::Outcome::KeyframeDrop, bufAmt,
+                                   m_Backlog.ageMs(backlogNowMs), steadyUs());
             m_Freezes.note(backlogNowMs - m_Backlog.ageMs(backlogNowMs), backlogNowMs);
             if (m_KeyframeBackpressureWarnings <= 5) {
                 qInfo() << "[DataChannelRelay] Dropped keyframe (link not draining)"
@@ -1930,6 +1997,11 @@ void DataChannelRelay::sendFragmented(const QByteArray& data, bool isKeyframe,
     // Video-only path now (audio is a native RTP Opus track, not fragmented over
     // a DataChannel), so this always uses the video frameId sequence.
     uint32_t frameId = m_FrameId++;
+    if (m_FrameLog) {
+        m_FrameLog->decide(frameNumber, RelayFrameLog::Outcome::Sent, bufferedSeen,
+                           m_Backlog.ageMs(backlogNowMs), steadyUs());
+        m_FrameLog->sent(frameNumber, frameId);
+    }
     // Remember which engine frame went out under this wire id, so a receiver
     // naming a lost id can be answered with a reference invalidation. The slot
     // packs both so a stale entry from 512 frames ago is never mistaken for
@@ -1987,13 +2059,19 @@ void DataChannelRelay::sendFragmented(const QByteArray& data, bool isKeyframe,
     // The engine that stamps its frames gets told when each one left; the
     // others hand over a null sink and the sender reads no clock for them.
     FrameSentSink* sink = (frameNumber >= 0 && m_Shim) ? m_Shim->frameSentSink() : nullptr;
+    // The bench's frame log stands between the sender and the engine's sink:
+    // it keeps the stamps, then hands them on.
+    if (m_FrameLog && frameNumber >= 0) {
+        m_FrameLog->setInner(sink);
+        sink = m_FrameLog.get();
+    }
     const uint32_t reportedNumber = static_cast<uint32_t>(frameNumber < 0 ? 0 : frameNumber);
     // The engine that stamps its frames also wants to know WHICH ones the
     // sender threw away: those are the numbers it can invalidate.
     auto* native = qobject_cast<NativeMediaEngine*>(m_Shim);
     const bool nameEvictions = native && frameNumber >= 0 && native->referenceInvalidation();
     std::vector<uint32_t> evictedNumbers;
-    std::vector<uint32_t>* evictedOut = nameEvictions ? &evictedNumbers : nullptr;
+    std::vector<uint32_t>* evictedOut = (nameEvictions || m_FrameLog) ? &evictedNumbers : nullptr;
     bool evicted = false;
     if (m_DirectVideoSend) {
         // Direct mode: `data` may be borrowed from the encoder (valid only for
@@ -2017,6 +2095,9 @@ void DataChannelRelay::sendFragmented(const QByteArray& data, bool isKeyframe,
                 qInfo() << "[DataChannelRelay] bench losses:" << dropped << "messages in"
                         << m_Loss.losses() << "losses so far";
         }
+        if (fragments.empty() && m_FrameLog)
+            m_FrameLog->decide(frameNumber, RelayFrameLog::Outcome::BenchLoss, bufferedSeen,
+                               m_Backlog.ageMs(backlogNowMs), steadyUs());
         evicted = fragments.empty()
                       ? false
                       : m_Sender->enqueueFragments(dc, std::move(fragments), isKeyframe,
@@ -2036,6 +2117,10 @@ void DataChannelRelay::sendFragmented(const QByteArray& data, bool isKeyframe,
     // damage need no keyframe for it (same bargain as the SCTP drop above);
     // every other stream asks for one. GameStream engines never ride out, so
     // this is exactly their previous behaviour.
+    if (m_FrameLog) {
+        for (uint32_t n : evictedNumbers)
+            m_FrameLog->evicted(n);
+    }
     if (evicted && nameEvictions && !evictedNumbers.empty()) {
         for (uint32_t n : evictedNumbers)
             native->invalidateReference(n);
@@ -2057,6 +2142,9 @@ void DataChannelRelay::onStatsTimerTick()
 {
     if (m_Stopping.load() || !m_Connected) return;
     if (!m_InputDc || !m_InputDc->isOpen()) return;
+    if (m_FrameLog && m_Pc) {
+        if (const auto rtt = m_Pc->rtt()) m_SrttMs.store(static_cast<int>(rtt->count()));
+    }
 
     double hostRttMs = 0.0;
     int64_t decodeLatUs = m_LastDecodeLatencyUs.load(std::memory_order_acquire);

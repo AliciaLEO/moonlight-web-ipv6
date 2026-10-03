@@ -23,13 +23,24 @@
 
 namespace mw::sctp {
 
-std::array<uint32_t, 4> readCounters()
+Counters readCounters()
 {
     struct sctpstat st;
     std::memset(&st, 0, sizeof st);
     usrsctp_get_stat(&st);
-    return {st.sctps_senddata, st.sctps_sendretransdata, st.sctps_sendfastretrans,
-            st.sctps_timodata};
+    Counters c;
+    c.sent = st.sctps_senddata;
+    c.retrans = st.sctps_sendretransdata;
+    c.fast = st.sctps_sendfastretrans;
+    c.t3 = st.sctps_timodata;
+    c.multFast = st.sctps_sendmultfastretrans;
+    c.fastInRtt = st.sctps_fastretransinrtt;
+    c.sacks = st.sctps_recvsacks;
+    c.cwndHeld = st.sctps_send_cwnd_avoid;
+    c.burstHeld = st.sctps_maxburstqueued;
+    c.packetsOut = st.sctps_sendpackets;
+    c.dupIn = st.sctps_recvdupdata;
+    return c;
 }
 
 } // namespace mw::sctp

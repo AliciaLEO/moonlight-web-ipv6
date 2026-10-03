@@ -211,6 +211,8 @@ const char* const kUsage =
     "  floodsize=<bytes> their size, 64-16000 (default 1100)\n"
     "  floodchannel=fec|video   unordered with no retransmission (default), or the video\n"
     "                    channel's own: ordered, given up on after 500 ms\n"
+    "  relaylog=0|1      each video frame's way through the relay, a CSV next to the log\n"
+    "                    when the session ends (plan Wi-Fi W1)\n"
     "the bench's own:\n"
     "  dump=<path>      the encoded stream as it comes out (Annex-B, or OBUs for AV1)\n"
     "  lose=<frames>[x<burst>][k]  every N frames, report the latest one lost (reference\n"
@@ -504,6 +506,10 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
             tuning.floodLikeVideo = true;
         else
             ok = false;
+    } else if (key == "relaylog") {
+        const int v = value.toInt(&ok);
+        ok = ok && (v == 0 || v == 1);
+        tuning.relayLog = v == 1;
     } else {
         return false;
     }

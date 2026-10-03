@@ -48,6 +48,7 @@
 #include <windows.h>
 
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -145,16 +146,23 @@ void hideAll()
 LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
-    case kMsgClick:
+    case kMsgClick: {
         showAll();
+        // When the flag went up, on the steady clock the relay stamps frames
+        // with (QueryPerformanceCounter, shared by every process): a pass joins
+        // it to the frame that first showed it (plan Wi-Fi W1).
+        const long long shownUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                                      std::chrono::steady_clock::now().time_since_epoch())
+                                      .count();
         qInfo() << "[LatencyFlag] injected click at"
                 << static_cast<int>(static_cast<LONG_PTR>(wParam)) << ","
-                << static_cast<int>(lParam);
+                << static_cast<int>(lParam) << "— shown at steady" << shownUs << "us";
         // A second click inside the window restarts the countdown. The timer
         // belongs to the thread, not to a window: the windows are rebuilt
         // under it when a monitor comes or goes.
         g_HideTimer = SetTimer(nullptr, g_HideTimer, LatencyFlag::kShowMs, nullptr);
         return 0;
+    }
     case WM_DISPLAYCHANGE:
         // A virtual display driver arriving or leaving moves every rectangle
         // we computed. Rebuilding destroys this window, so it cannot happen

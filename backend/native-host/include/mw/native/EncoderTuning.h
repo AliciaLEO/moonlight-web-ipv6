@@ -399,6 +399,10 @@ struct EncoderTuning
     /// plan wants, the default), or the video channel's own — ordered, given
     /// up on after 500 ms.
     bool floodLikeVideo = false;
+    /// Each video frame's way through the relay, written as a CSV next to the
+    /// log when the session ends (plan « Wi-Fi : la vidéo qui attend dans
+    /// SCTP », W1). false, the product: nothing kept.
+    bool relayLog = false;
 
     bool isDefault() const
     {
@@ -424,7 +428,8 @@ struct EncoderTuning
                cadence == Cadence::Default && convertLinux == ConvertLinux::Default &&
                prioVk == PriorityVk::Default && portalDmabuf == Choice::Default &&
                mutterDirect == Choice::Default && lossPermille == 0 && lossBurst == 0 &&
-               sctpCongestion < 0 && floodKbps == 0 && floodBytes == 0 && !floodLikeVideo;
+               sctpCongestion < 0 && floodKbps == 0 && floodBytes == 0 && !floodLikeVideo &&
+               !relayLog;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -522,6 +527,7 @@ struct EncoderTuning
         if (floodKbps < 0) add("flood=max");
         if (floodBytes > 0) add("floodsize=" + std::to_string(floodBytes));
         if (floodLikeVideo) add("floodchannel=video");
+        if (relayLog) add("relaylog=1");
         return s;
     }
 };

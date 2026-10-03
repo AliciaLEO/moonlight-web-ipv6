@@ -23,6 +23,8 @@
 #include "SendBacklog.h"
 #include "FrameSender.h"
 #include "LinkLoss.h"
+#include "RelayFrameLog.h"
+#include "SctpCounters.h"
 #include "mw/native/EncoderTuning.h"
 #include <QByteArray>
 #include <QElapsedTimer>
@@ -344,6 +346,15 @@ private:
     bool m_FloodLikeVideo = false;
     std::shared_ptr<rtc::DataChannel> m_FloodDc;
     std::unique_ptr<SctpFlood> m_Flood;
+    // `relaylog=1`: each video frame's way through the relay (RelayFrameLog.h),
+    // written next to the log at the end of the session. Made at setup, before
+    // any frame; null otherwise, and every hook below is one null check.
+    std::unique_ptr<RelayFrameLog> m_FrameLog;
+    // The video channel, for that log's sender-side probe of bufferedAmount:
+    // set once when the channel is made, and expiring with it.
+    std::weak_ptr<rtc::DataChannel> m_FrameLogDc;
+    // SCTP's smoothed round trip, sampled each second for that log.
+    std::atomic<int> m_SrttMs{-1};
 
     // Audio RTP timestamp (48 kHz Opus clock), advanced by samplesPerFrame per
     // packet for a smooth, jitter-free clock; serialized with track teardown.
@@ -352,10 +363,9 @@ private:
 
     std::atomic<bool> m_Connected{false};
     std::atomic<bool> m_Stopping{false};
-    // usrsctp's counters (data chunks sent, retransmitted, fast-retransmitted,
-    // T3 timeouts) when the channels opened, so stop() can report the
-    // session's own. Written once in onOpen, then the flag is raised.
-    std::array<uint32_t, 4> m_SctpAtOpen{};
+    // usrsctp's counters when the channels opened, so the destructor can
+    // report the session's own. Written once in onOpen, then the flag is raised.
+    mw::sctp::Counters m_SctpAtOpen{};
     std::atomic<bool> m_SctpAtOpenSet{false};
     // Bidirectional clipboard sync (only when the streamed host is this
     // machine). Written once on the main thread before the relay moves to its
