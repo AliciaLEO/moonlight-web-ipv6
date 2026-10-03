@@ -13,6 +13,7 @@ import {
     _resetForTest,
     _settleForTest,
     _pollForTest,
+    isRemoteBackKey,
 } from '../js/ui/RemoteNav.js';
 
 /** jsdom has no layout: give an element the box it would have on screen. */
@@ -475,5 +476,97 @@ describe('RemoteNav: a slider changes only once OK armed it', () => {
         _pollForTest();
         expect(r.value).toBe('21');
         delete (/** @type {any} */ (navigator).getGamepads);
+    });
+});
+
+describe("RemoteNav: a remote's colour key is the way back", () => {
+    beforeEach(() => {
+        _resetForTest();
+        document.body.innerHTML = '';
+        document.body.className = '';
+        _setActiveForTest(true);
+        init();
+    });
+
+    afterEach(() => {
+        _resetForTest();
+        document.body.innerHTML = '';
+        document.body.className = '';
+    });
+
+    // As a Mi TV's remote sends them (03/10/2026): a stray code, no keyCode.
+    const colour = (type, extra = {}) =>
+        new KeyboardEvent(type, {
+            key: 'ColorF0Red',
+            code: 'MediaStop',
+            bubbles: true,
+            cancelable: true,
+            ...extra,
+        });
+
+    it('knows the four colour keys and nothing else', () => {
+        for (const key of ['ColorF0Red', 'ColorF1Green', 'ColorF2Yellow', 'ColorF3Blue']) {
+            expect(isRemoteBackKey({ key })).toBe(true);
+        }
+        for (const key of ['Escape', 'Enter', 'MediaStop', 'c', '']) {
+            expect(isRemoteBackKey({ key })).toBe(false);
+        }
+        expect(isRemoteBackKey(null)).toBe(false);
+    });
+
+    it('closes the dialog on top, as Escape would', () => {
+        const overlay = place(document.createElement('div'), 0, 0, 400, 300);
+        overlay.className = 'share-popin-overlay';
+        document.body.appendChild(overlay);
+        const inside = button('ok', 10, 10, 100, 60, overlay);
+        inside.focus();
+        const escapes = [];
+        overlay.addEventListener('keydown', (e) => escapes.push(e.key));
+        const close = place(document.createElement('button'), 900, 0, 40, 40);
+        close.className = 'view-close-btn';
+        document.body.appendChild(close);
+        const closed = vi.fn();
+        close.addEventListener('click', closed);
+        const ev = colour('keydown');
+        inside.dispatchEvent(ev);
+        expect(ev.defaultPrevented).toBe(true);
+        expect(escapes).toEqual(['Escape']); // the colour key itself never got there
+        expect(closed).not.toHaveBeenCalled(); // the view under the dialog stays
+    });
+
+    it("with nothing open, presses the view's ✕ (Settings, Admin)", () => {
+        button('a', 0, 100).focus();
+        const close = place(document.createElement('button'), 900, 0, 40, 40);
+        close.className = 'view-close-btn';
+        document.body.appendChild(close);
+        const closed = vi.fn();
+        close.addEventListener('click', closed);
+        document.activeElement.dispatchEvent(colour('keydown'));
+        expect(closed).toHaveBeenCalledTimes(1);
+    });
+
+    it('goes back once per press, however long it is held', () => {
+        // Android repeats a held key without the repeat flag.
+        button('a', 0, 100).focus();
+        const close = place(document.createElement('button'), 900, 0, 40, 40);
+        close.className = 'view-close-btn';
+        document.body.appendChild(close);
+        const closed = vi.fn();
+        close.addEventListener('click', closed);
+        for (let i = 0; i < 4; i++) document.body.dispatchEvent(colour('keydown'));
+        expect(closed).toHaveBeenCalledTimes(1);
+        document.body.dispatchEvent(colour('keyup'));
+        document.body.dispatchEvent(colour('keydown'));
+        expect(closed).toHaveBeenCalledTimes(2);
+    });
+
+    it('leaves it to the stream view over a bare stream', () => {
+        document.body.classList.add('streaming-active');
+        const seen = vi.fn();
+        document.addEventListener('keydown', seen);
+        const ev = colour('keydown');
+        document.body.dispatchEvent(ev);
+        expect(ev.defaultPrevented).toBe(false);
+        expect(seen).toHaveBeenCalledTimes(1);
     });
 });

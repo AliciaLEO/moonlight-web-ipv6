@@ -820,7 +820,11 @@
         "rcOk": "Enter on the host",
         "rcOkVal": "OK",
         "rcPointer": "Mouse on the host",
-        "rcPointerVal": "Menu → Mouse: arrows move, OK clicks, Ch± scrolls"
+        "rcPointerVal": "Menu → Mouse: arrows move, OK clicks, Ch± scrolls",
+        "rcBack": "Back",
+        "rcBackVal": "A colour key (red, green…)",
+        "rcCursor": "The browser's cursor",
+        "rcCursorVal": "Hold Back"
     },
     "transport": {
         "webrtcDcUdp": "WebRTC DataChannel (UDP)",

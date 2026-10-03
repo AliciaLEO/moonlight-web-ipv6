@@ -198,6 +198,33 @@ describe('a TV remote in a stream', () => {
         }
     });
 
+    it("opens the menu on a colour key, and never sends it to the host", () => {
+        // A Mi TV's red key: ColorF0Red, code MediaStop, no keyCode — sent on,
+        // it stopped the host's media player.
+        RemoteNav._resetForTest();
+        RemoteNav._setActiveForTest(true);
+        const v = view();
+        const red = (mods) => ev('MediaStop', 'ColorF0Red', mods);
+        v.handleKeyDown(red());
+        expect(menuEl()).not.toBe(null);
+        // Held: Android's repeats have no repeat flag; one press, one menu.
+        v._closeRemoteMenu();
+        v.handleKeyDown(red());
+        expect(menuEl()).toBe(null);
+        v.handleKeyUp(red());
+        expect(v.sent).toEqual([]);
+        RemoteNav._resetForTest();
+    });
+
+    it('sends no colour key to the host on a desktop either', () => {
+        RemoteNav._setActiveForTest(false);
+        const v = view();
+        v.handleKeyDown(ev('Eject', 'ColorF1Green'));
+        v.handleKeyUp(ev('Eject', 'ColorF1Green'));
+        expect(v.sent).toEqual([]);
+        expect(menuEl()).toBe(null);
+    });
+
     it('takes clicks at once in a menu opened another way', () => {
         // The pad chord or a test: no OK held, nothing to wait for.
         const v = view();

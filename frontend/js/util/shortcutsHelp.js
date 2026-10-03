@@ -101,6 +101,8 @@ export function remoteRows() {
         [t('stream.rcArrows'), t('stream.rcArrowsVal')],
         [t('stream.rcOk'), t('stream.rcOkVal')],
         [t('stream.rcPointer'), t('stream.rcPointerVal')],
+        [t('stream.rcBack'), t('stream.rcBackVal')],
+        [t('stream.rcCursor'), t('stream.rcCursorVal')],
     ];
 }
 

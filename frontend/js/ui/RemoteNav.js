@@ -114,6 +114,8 @@ const state = {
     pollTimer: /** @type {ReturnType<typeof setInterval>|null} */ (null),
     /** pad index → { pressed: Set<number>, heldDir, nextRepeatAt } */
     pads: new Map(),
+    /** a colour key ("back") is down: its repeats do nothing (backKeyFresh) */
+    backHeld: false,
     log: /** @type {string[]} */ ([]),
 };
 
@@ -445,6 +447,15 @@ function viewKey() {
 
 function onKeyDown(e) {
     if (!isActive()) return;
+    // A colour key is "back". In a stream with nothing over it, the stream
+    // view owns it (it opens the stream's menu, and never sends it on).
+    if (isRemoteBackKey(e)) {
+        if (streaming() && !topLayer()) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (backKeyFresh(e)) back();
+        return;
+    }
     if (e.key === 'Enter' && isRange(e.target) && !(streaming() && !topLayer())) {
         armRange(/** @type {HTMLElement} */ (e.target));
         e.preventDefault();
@@ -595,6 +606,49 @@ function sendEscape() {
 }
 
 /**
+ * A remote's colour keys (red, green, yellow, blue). TV browsers keep Back
+ * for themselves, but the colour keys of a Mi TV's remote reach the page, as
+ * ColorF0Red… with a stray code (MediaStop, Eject, BrowserSearch) and no
+ * keyCode (03/10/2026). Any of them is the way back.
+ * @param {{key?: string}} e
+ */
+export function isRemoteBackKey(e) {
+    return !!e && typeof e.key === 'string' && /^ColorF[0-9]/.test(e.key);
+}
+
+/**
+ * Whether this colour-key press is a new one. Android repeats a held key
+ * without the repeat flag, and each repeat would go back once more — or open
+ * and close the stream's menu in turn. One press, one "back", until it is
+ * released (onKeyUp).
+ */
+export function backKeyFresh(e) {
+    if (e.repeat || state.backHeld) return false;
+    state.backHeld = true;
+    return true;
+}
+
+function onKeyUp(e) {
+    if (isRemoteBackKey(e)) state.backHeld = false;
+}
+
+/**
+ * "Back": what Escape closes — a dialog, a menu — and with nothing open, the
+ * view's own ✕ (Settings, Admin), which Escape does not reach.
+ */
+export function back() {
+    const layer = topLayer();
+    sendEscape();
+    if (layer) return;
+    for (const btn of document.querySelectorAll('.view-close-btn')) {
+        if (isShown(btn)) {
+            /** @type {HTMLElement} */ (btn).click();
+            return;
+        }
+    }
+}
+
+/**
  * Read the pads: the direction pad moves, A clicks, B is Escape. Outside a
  * stream, or over the stream's menu (GamepadManager is paused then).
  */
@@ -644,7 +698,7 @@ function pollPads() {
             if (isRange(el)) armRange(/** @type {HTMLElement} */ (el));
             else if (el && el !== document.body && typeof el.click === 'function') el.click();
         }
-        if (fresh(PAD_B)) sendEscape();
+        if (fresh(PAD_B)) back();
         st.pressed = down;
     }
 }
@@ -674,6 +728,7 @@ export function init() {
     state.started = true;
     window.addEventListener('keydown', onKeyDown, true);
     window.addEventListener('keydown', onSteeringKey, true);
+    window.addEventListener('keyup', onKeyUp, true);
     window.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('focusin', onFocusIn, true);
     document.addEventListener('focusout', onFocusOut, true);
@@ -732,12 +787,14 @@ export function _resetForTest() {
     if (typeof window !== 'undefined') {
         window.removeEventListener('keydown', onKeyDown, true);
         window.removeEventListener('keydown', onSteeringKey, true);
+        window.removeEventListener('keyup', onKeyUp, true);
         window.removeEventListener('pointerdown', onPointerDown, true);
         document.removeEventListener('focusin', onFocusIn, true);
         document.removeEventListener('focusout', onFocusOut, true);
         document.documentElement.classList.remove('remote-nav', 'nav-pointer');
     }
     state.forced = null;
+    state.backHeld = false;
     state.started = false;
     state.memory.clear();
     state.layer = null;

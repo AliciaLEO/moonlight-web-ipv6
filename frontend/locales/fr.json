@@ -820,7 +820,11 @@
         "rcOk": "Entrée sur l'hôte",
         "rcOkVal": "OK",
         "rcPointer": "Souris sur l'hôte",
-        "rcPointerVal": "Menu → Souris : flèches, OK clique, Ch± défile"
+        "rcPointerVal": "Menu → Souris : flèches, OK clique, Ch± défile",
+        "rcBack": "Retour",
+        "rcBackVal": "Touche de couleur (rouge, verte…)",
+        "rcCursor": "Curseur du navigateur",
+        "rcCursorVal": "Retour maintenu"
     },
     "transport": {
         "webrtcDcUdp": "WebRTC DataChannel (UDP)",

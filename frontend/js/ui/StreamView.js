@@ -9192,6 +9192,14 @@ export class StreamView {
             e.preventDefault();
             return;
         }
+        // A remote's colour key is "back" (RemoteNav): over the bare stream it
+        // opens the stream's menu — RemoteNav closes it again. Never the
+        // host's: its code reads MediaStop, Eject or BrowserSearch.
+        if (RemoteNav.isRemoteBackKey(e)) {
+            e.preventDefault();
+            if (RemoteNav.isActive() && RemoteNav.backKeyFresh(e)) this._openRemoteMenu();
+            return;
+        }
         // A dialog over the stream owns the keyboard. Forwarding its keystrokes
         // to the host — and preventDefault-ing them — made Ctrl+C on the share
         // popin's PIN do nothing locally while sending a copy chord to the game.
@@ -9479,6 +9487,11 @@ export class StreamView {
         // Ahead of the dialog exclusion: the OK that opened the remote's menu
         // comes back up on the menu's button, and its hold must end there.
         if (this._okHold && this._remoteOkUp(e)) return;
+        // A colour key's release: its press never went to the host.
+        if (RemoteNav.isRemoteBackKey(e)) {
+            e.preventDefault();
+            return;
+        }
         // An arrow that was steering the pointer: its press never went to the
         // host, neither does its release — even if the mode went off meanwhile.
         if ((this._remotePointer || this._remotePointerOn) && this._remotePointerKeyUp(e)) return;

@@ -820,7 +820,11 @@
         "rcOk": "主机上的回车键",
         "rcOkVal": "OK",
         "rcPointer": "主机鼠标",
-        "rcPointerVal": "菜单 → 鼠标：方向键移动，OK 点击，Ch± 滚动"
+        "rcPointerVal": "菜单 → 鼠标：方向键移动，OK 点击，Ch± 滚动",
+        "rcBack": "返回",
+        "rcBackVal": "彩色键（红、绿……）",
+        "rcCursor": "浏览器光标",
+        "rcCursorVal": "长按返回键"
     },
     "transport": {
         "webrtcDcUdp": "WebRTC 数据通道（UDP）",
