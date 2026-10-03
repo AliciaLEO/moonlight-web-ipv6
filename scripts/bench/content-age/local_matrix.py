@@ -25,6 +25,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 EXE = os.path.join(REPO, "build", "MoonlightWeb.exe")
+TUNING = ""  # --tuning: more host keys for every pass (e.g. sctpcc=3)
 OUT = os.path.join(REPO, "bench-out", "content-age")
 WORKER_LOGS = os.path.join(os.environ["APPDATA"], "MoonlightWeb", "MoonlightWeb-dev", "logs")
 VDD_XML = r"C:\VirtualDisplayDriver\vdd_settings.xml"
@@ -57,8 +58,11 @@ def launch_dev(rate, cadence, log):
         env["MW_VDD_REFRESH"] = str(rate)
     # "client" is today's Auto; "detect" the same host, the client's
     # detection on (pass.py --autostep): neither is a host key.
-    if cadence not in ("client", "detect"):
-        env["MW_NATIVE_TUNING"] = "cadence=" + cadence
+    keys = [] if cadence in ("client", "detect") else ["cadence=" + cadence]
+    if TUNING:
+        keys.append(TUNING)
+    if keys:
+        env["MW_NATIVE_TUNING"] = ",".join(keys)
     subprocess.Popen([EXE, "--dev", "--log", log], env=env,
                      creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
     time.sleep(8)
@@ -130,6 +134,8 @@ def main():
     ap.add_argument("--clicks", type=int, default=0, help="click → flag samples (pass.py --clicks)")
     ap.add_argument("--uplink", default="",
                     help="HZ:SECS[,…] dated input messages, the way up alone (pass.py --uplink)")
+    ap.add_argument("--tuning", default="",
+                    help="host keys added to every pass's MW_NATIVE_TUNING, e.g. sctpcc=3")
     ap.add_argument("--exe", default="",
                     help="the build under test (default build/MoonlightWeb.exe): another session "
                          "may be rebuilding build/ while this runs")
@@ -149,9 +155,10 @@ def main():
         client += ["--clicks", str(a.clicks)]
     if a.uplink:
         client += ["--uplink", a.uplink]
+    global EXE, TUNING
     if a.exe:
-        global EXE
         EXE = os.path.abspath(a.exe)
+    TUNING = a.tuning
     if a.hold:
         client += ["--hold", str(a.hold)]
     os.makedirs(OUT, exist_ok=True)
