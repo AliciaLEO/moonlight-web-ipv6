@@ -138,8 +138,9 @@ Trois points de justesse invisibles hors exécution :
 
 ### Linux / macOS
 
-Linux : KMS/DRM d'abord (§19.3–19.5), le portail PipeWire en repli reste à écrire ;
-le son par PipeWire (§19.7).
+Linux : KMS/DRM d'abord (§19.3–19.5), le portail PipeWire en repli ; l'écran
+virtuel fait par le compositeur (Mutter, KWin, portail) et les apps dans leur
+propre gamescope (§35) ; le son par PipeWire (§19.7).
 macOS : ScreenCaptureKit, qui écrit directement le NV12 de l'encodeur (§20).
 
 ---
