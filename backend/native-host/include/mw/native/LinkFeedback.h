@@ -58,7 +58,8 @@ struct LinkFeedback
     /// datagrams the browser's full socket dropped, and each one shrinks the
     /// congestion window: the frames then wait inside usrsctp, ~20 ms more than
     /// on Ethernet, with no rise the receiver's minimum delay would show (plan
-    /// Wi-Fi W1 bis). Only the bench's `retrcut=` reads it.
+    /// Wi-Fi W1 bis). The rate governor cuts on it (`retrcut=`, 3 by default
+    /// on the Windows host).
     int retransPermille = 0;
 
     /// The receiver's first report after its page was hidden or frozen. The

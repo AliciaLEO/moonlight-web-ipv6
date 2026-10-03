@@ -463,9 +463,11 @@ void run_rate_control_tests()
         CHECK_EQ(g.targetKbps(), 12800);
     }
 
-    SECTION("RateGovernor — SCTP's retransmissions cut only under the bench's retrcut=");
+    SECTION("RateGovernor — SCTP's retransmissions cut only under retrcut=");
     {
-        // The product: the governor does not look at SCTP, whatever it says.
+        // The Windows session's own, measured (plan Wi-Fi W2 B).
+        CHECK_EQ(RateGovernor::kRetransCutPermille, 3);
+        // Unset, the governor does not look at SCTP, whatever it says.
         RateGovernor off;
         off.start(40000, 0);
         CHECK_EQ(off.retransCut(), 0);

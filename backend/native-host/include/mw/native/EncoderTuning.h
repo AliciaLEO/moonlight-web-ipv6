@@ -412,8 +412,9 @@ struct EncoderTuning
     int paceBurstKb = 0;
     /// The rate governor also cuts when SCTP retransmits at least this many
     /// chunks in a thousand over a report window (plan Wi-Fi W2 B; Windows
-    /// host). 0, the product: the governor does not look at SCTP.
-    int retransCutPermille = 0;
+    /// host). -1, the product: the engine's own, RateGovernor's
+    /// kRetransCutPermille; 0 the governor does not look at SCTP.
+    int retransCutPermille = -1;
     /// usrsctp's send buffer, in KB, really (plan Wi-Fi W2 C). 0, the product:
     /// 256 KiB whatever the bitrate, since libdatachannel raises the buffer to
     /// its largest message. What waits in there the host cannot see; what it
@@ -453,7 +454,7 @@ struct EncoderTuning
                prioVk == PriorityVk::Default && portalDmabuf == Choice::Default &&
                mutterDirect == Choice::Default && lossPermille == 0 && lossBurst == 0 &&
                sctpCongestion < 0 && floodKbps == 0 && floodBytes == 0 && !floodLikeVideo &&
-               !relayLog && paceMultiple == 0 && paceBurstKb == 0 && retransCutPermille == 0 &&
+               !relayLog && paceMultiple == 0 && paceBurstKb == 0 && retransCutPermille < 0 &&
                sctpBufferKb == 0 && linkHoldMs == 0;
     }
 
@@ -555,7 +556,7 @@ struct EncoderTuning
         if (relayLog) add("relaylog=1");
         if (paceMultiple > 0) add("pace=" + std::to_string(paceMultiple));
         if (paceBurstKb > 0) add("paceburst=" + std::to_string(paceBurstKb));
-        if (retransCutPermille > 0) add("retrcut=" + std::to_string(retransCutPermille));
+        if (retransCutPermille >= 0) add("retrcut=" + std::to_string(retransCutPermille));
         if (sctpBufferKb > 0) add("sctpbuf=" + std::to_string(sctpBufferKb));
         if (linkHoldMs > 0) add("linkhold=" + std::to_string(linkHoldMs));
         return s;

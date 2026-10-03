@@ -171,9 +171,9 @@ public:
             return true;
         }
         m_SilenceCut = false;
-        // The bench's retrcut=: SCTP sending again more than that many chunks
-        // in a thousand is a link the stream overruns, and quiet wants it
-        // under half of that (setRetransCut).
+        // SCTP sending again more than retrcut= chunks in a thousand is a
+        // link the stream overruns, and quiet wants it under half of that
+        // (setRetransCut).
         const bool retransOver = m_RetransCut > 0 && fb.retransPermille >= m_RetransCut;
         const bool retransQuiet = m_RetransCut <= 0 || fb.retransPermille * 2 < m_RetransCut;
         if (retransOver) m_RetransOveruses++;
@@ -230,10 +230,11 @@ public:
         return changed;
     }
 
-    /// The bench's `retrcut=` (plan Wi-Fi W2 B): SCTP retransmitting at least
-    /// @p permille chunks in a thousand over a report window reads as
-    /// overuse, and quiet then wants under half of that. 0, the product: the
-    /// governor does not look at SCTP at all.
+    /// `retrcut=` (plan Wi-Fi W2 B): SCTP retransmitting at least @p permille
+    /// chunks in a thousand over a report window reads as overuse, and quiet
+    /// then wants under half of that. 0: the governor does not look at SCTP
+    /// at all, which is where it starts; the Windows session sets
+    /// kRetransCutPermille unless the key says otherwise.
     ///
     /// The receiver's delay rise is a minimum over its window: on a Mac in
     /// Wi-Fi a few frames still arrive at once while most wait ~20 ms in
@@ -241,7 +242,20 @@ public:
     /// kOveruseMs. The retransmissions are what the host itself sees of it;
     /// at 20 Mbit/s instead of 42 the Mac's drops fell ninefold and its click
     /// came back from 74 to 48.5 ms (W1 bis, 03/10/2026).
+    ///
+    /// Measured on 03/10/2026 against the Arc of DualRTX, two alternated
+    /// rounds each, the page at 240: on a Mac in Wi-Fi the click came back
+    /// from 73.6 to 62.6 ms (p90 112 to 86), the browser's socket dropped
+    /// 366 datagrams instead of 1,016, a frame's age at p90 went from 86 to
+    /// 29 ms, the host's small messages from ~330 to 35 ms at p90, and the
+    /// frames thrown away from 182 to 34 a minute, for 23 against 20 Mbit/s
+    /// received; on an N95 in Wi-Fi, 109.2 to 100.2 ms. On Ethernet (UM790Pro)
+    /// SCTP sent 1 to 8 chunks again in a whole session; once, all 8 fell in
+    /// one report window and the rate went from 40 to 32 Mbit/s for 3.5 s.
+    /// The click stayed where it was (39.0 ms against 39.8 without).
     void setRetransCut(int permille) { m_RetransCut = permille > 0 ? permille : 0; }
+    /// The Windows session's own retrcut=, per thousand.
+    static constexpr int kRetransCutPermille = 3;
     int retransCut() const { return m_RetransCut; }
     /// Reports that read as overuse for SCTP's retransmissions alone or with
     /// the rest.
@@ -309,7 +323,7 @@ private:
     }
 
     bool m_Follow = false; ///< the bench's governor=off
-    int m_RetransCut = 0;  ///< the bench's retrcut=, per thousand; 0 off
+    int m_RetransCut = 0;  ///< retrcut=, per thousand; 0 off
     int m_RetransOveruses = 0;
     int m_FloorPercent = kFloorPercent;
     int m_Setting = 20000;

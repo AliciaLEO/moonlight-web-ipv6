@@ -227,6 +227,21 @@ void run_cadence_choice_tests()
         CHECK_EQ(t.describe(), std::string("linkhold=4"));
     }
 
+    // retrcut= is the engine's own unless said (plan Wi-Fi W2 B): a bench's
+    // retrcut=0, the governor blind to SCTP, is a key like any other.
+    SECTION("retrcut= — the engine's own unless said, 0 named");
+    {
+        EncoderTuning t;
+        CHECK_EQ(t.retransCutPermille, -1);
+        CHECK(t.isDefault());
+        CHECK_EQ(t.describe(), std::string());
+        t.retransCutPermille = 0;
+        CHECK(!t.isDefault());
+        CHECK_EQ(t.describe(), std::string("retrcut=0"));
+        t.retransCutPermille = 5;
+        CHECK_EQ(t.describe(), std::string("retrcut=5"));
+    }
+
     // A client whose decoder falls silent under the reference repairs asks for
     // none (/start's ref_invalidation): the bench's dpb=1, on every encoder.
     SECTION("refuseReferenceRepairs — one reference for that client, a bench's dpb kept");
