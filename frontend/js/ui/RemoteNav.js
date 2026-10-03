@@ -425,6 +425,26 @@ function onKeyDown(e) {
     }
 }
 
+/** Keys that steer the focus: pressing one brings its ring back. */
+const STEERING_KEYS = new Set(['Enter', 'Escape', 'Tab', ...Object.keys(KEY_DIRS)]);
+
+/**
+ * Which pointer the user holds: the browser's cursor (a tap, a click) or the
+ * focus (keys, a pad). Only the latter draws the ring — under the cursor it
+ * stayed on whatever was clicked last, away from where the cursor points.
+ */
+function pointerInUse(on) {
+    document.documentElement.classList.toggle('nav-pointer', on);
+}
+
+function onPointerDown() {
+    if (isActive()) pointerInUse(true);
+}
+
+function onSteeringKey(e) {
+    if (STEERING_KEYS.has(e.key)) pointerInUse(false);
+}
+
 function onFocusIn(e) {
     const el = /** @type {Element} */ (e.target);
     if (!el || el === document.body || !el.closest) return;
@@ -561,6 +581,7 @@ function pollPads() {
             if (b.pressed) down.add(i);
         });
         const fresh = (i) => down.has(i) && !st.pressed.has(i);
+        for (const i of down) if (!st.pressed.has(i)) pointerInUse(false);
         let dir = null;
         for (const b of Object.keys(PAD_DIRS)) if (down.has(Number(b))) dir = PAD_DIRS[b];
         if (dir && dir !== st.heldDir) {
@@ -606,6 +627,8 @@ export function init() {
     if (state.started || typeof window === 'undefined') return;
     state.started = true;
     window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('keydown', onSteeringKey, true);
+    window.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('focusin', onFocusIn, true);
     // Elements coming and going, and menus shown through `hidden`. Classes
     // are left out: they change all the time during a stream, and the one
@@ -639,8 +662,10 @@ export function _resetForTest() {
     if (state.pollTimer) clearInterval(state.pollTimer);
     if (typeof window !== 'undefined') {
         window.removeEventListener('keydown', onKeyDown, true);
+        window.removeEventListener('keydown', onSteeringKey, true);
+        window.removeEventListener('pointerdown', onPointerDown, true);
         document.removeEventListener('focusin', onFocusIn, true);
-        document.documentElement.classList.remove('remote-nav');
+        document.documentElement.classList.remove('remote-nav', 'nav-pointer');
     }
     state.forced = null;
     state.started = false;

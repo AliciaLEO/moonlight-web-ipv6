@@ -114,19 +114,21 @@ h2,
 /* On a TV (RemoteNav sets .remote-nav) the focus is the only pointer there is,
    whatever moved it: a pad's press is no keyboard event, and :focus-visible
    would stay off for it. Any focus is drawn, thicker for a screen three metres
-   away, and the focused app card lifts. */
-.remote-nav :focus {
+   away, and the focused app card lifts — unless the last thing used was the
+   browser's own cursor (.nav-pointer): the ring then stayed on whatever the
+   cursor last clicked, away from where it points. */
+.remote-nav:not(.nav-pointer) :focus {
     outline: 4px solid var(--text-1);
     outline-offset: 2px;
 }
-.remote-nav .btn:focus,
-.remote-nav .host-card:focus,
-.remote-nav .app-card:focus,
-.remote-nav .settings-section:focus {
+.remote-nav:not(.nav-pointer) .btn:focus,
+.remote-nav:not(.nav-pointer) .host-card:focus,
+.remote-nav:not(.nav-pointer) .app-card:focus,
+.remote-nav:not(.nav-pointer) .settings-section:focus {
     outline: 4px solid var(--text-1);
     outline-offset: -6px;
 }
-.remote-nav .app-card:focus {
+.remote-nav:not(.nav-pointer) .app-card:focus {
     box-shadow: var(--edge-accent), var(--glass-highlight);
     filter: var(--glow-accent);
     transform: translateY(-3px) scale(1.04);

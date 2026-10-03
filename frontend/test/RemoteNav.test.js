@@ -297,3 +297,61 @@ describe('RemoteNav on a page', () => {
         delete (/** @type {any} */ (navigator).getGamepads);
     });
 });
+
+describe('RemoteNav: the ring follows the focus, not the cursor', () => {
+    const html = document.documentElement;
+    const tap = () => window.dispatchEvent(new Event('pointerdown'));
+
+    beforeEach(() => {
+        _resetForTest();
+        document.body.innerHTML = '';
+    });
+    afterEach(() => _resetForTest());
+
+    it("a tap of the browser's cursor turns the ring off, an arrow turns it back on", () => {
+        _setActiveForTest(true);
+        init();
+        button('a', 0, 0).focus();
+        tap();
+        expect(html.classList.contains('nav-pointer')).toBe(true);
+        press('ArrowRight');
+        expect(html.classList.contains('nav-pointer')).toBe(false);
+    });
+
+    it('OK and Escape bring it back too; any other key does not', () => {
+        _setActiveForTest(true);
+        init();
+        tap();
+        press('a');
+        expect(html.classList.contains('nav-pointer')).toBe(true);
+        press('Enter');
+        expect(html.classList.contains('nav-pointer')).toBe(false);
+        tap();
+        press('Escape');
+        expect(html.classList.contains('nav-pointer')).toBe(false);
+    });
+
+    it("a pad's press brings it back", () => {
+        _setActiveForTest(true);
+        init();
+        button('a', 0, 0).focus();
+        const buttons = Array.from({ length: 17 }, () => ({ pressed: false, value: 0 }));
+        Object.defineProperty(navigator, 'getGamepads', {
+            value: () => [{ index: 0, connected: true, buttons, axes: [0, 0, 0, 0] }],
+            configurable: true,
+        });
+        _pollForTest();
+        tap();
+        buttons[13].pressed = true;
+        _pollForTest();
+        expect(html.classList.contains('nav-pointer')).toBe(false);
+        delete (/** @type {any} */ (navigator).getGamepads);
+    });
+
+    it('off a TV, a click changes nothing', () => {
+        _setActiveForTest(false);
+        init();
+        tap();
+        expect(html.classList.contains('nav-pointer')).toBe(false);
+    });
+});
