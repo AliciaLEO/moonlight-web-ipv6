@@ -201,12 +201,33 @@ que personne ne chronomètre n'y figure pas.
   - Vitest : 7 tests (âge, horloge pas encore prête, dérive de 50 ppm sur 3 min
     avec un ping toutes les 2 s, bouclage 32 bits, horodatage aberrant,
     anneau et CSV, résumé) ; suite complète 1192/1192.
-  - Pas encore en vrai stream : la passe locale du 03/10 n'a pas abouti. La
-    première a cherché la `--dev` sur 18080/18443, alors que ses réglages disent
-    maintenant 8080/8443. La seconde a été arrêtée par Claude Code, faute de
-    mémoire sur DualRTX. À refaire : sur une passe `age.py`, la médiane de
-    `frameLog` doit lire ce que lit `capture` de la sonde d'âge (même
-    horodatage, autre estimation de l'horloge).
+  - En vrai stream (03/10, 08:37) : deux passes locales sur DualRTX, hôte Arc
+    (D3D12 VE), HEVC 2560×1440 à 60 i/s, écran virtuel à 240 Hz, client sur
+    l'iGPU AMD. Toutes les images dessinées ont un âge (1200 et 1199) :
+
+    | Passe | Médiane | Moyenne | p99 | Somme des étapes (overlay) |
+    |---|---|---|---|---|
+    | r0 | 10,5 ms | 13,3 ms | 28,4 ms | 11,3 ms |
+    | r1 | 10,2 ms | 12,8 ms | 27,2 ms | 11,7 ms |
+
+    - Les médianes des étapes du journal (présent → arrivée 8,2-9,0 ms,
+      décodage 0,6, attente 0,0, dessin 0,2) s'additionnent à 9,0-9,8 ms, sous
+      la médiane de bout en bout : c'est cohérent.
+    - La somme des étapes de l'overlay lit 1,1 à 2 ms sous la moyenne mesurée.
+      Une partie de cet écart est l'arrondi de l'horodatage (0 à 2 ms) ;
+      l'autre reste à attribuer.
+    - L'horloge : 226-227 échanges (le ping de 2 s et ceux de la sonde d'âge),
+      RTT minimal 0,3 ms, dérive estimée 0,4-0,9 ppm (0 en vrai : une seule
+      machine), aucun saut. L'estimation sœur de la sonde d'âge, faite sur les
+      mêmes pongs, tombe à +0,02 / +0,03 ms de l'horloge vraie.
+    - Le contrôle croisé prévu avec la colonne `capture` de la sonde d'âge
+      n'a pas pu se faire : ce matin, la bande de `scroll.html` se lit
+      invalide sur toutes les lectures, dans ces passes comme dans celles du
+      banc T7 du plan radios. Hier soir, elle se lisait ; la cause est à
+      chercher dans le banc.
+    - Pièges de la matinée : l'instance dev écoute maintenant sur 8080/8443
+      (et non plus 18080/18443), et une première passe a été arrêtée par
+      Claude Code, faute de mémoire.
 
 ## 7. Concrètement, pour l'utilisateur
 
