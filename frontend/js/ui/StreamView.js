@@ -449,6 +449,15 @@ class SlidingStats {
     }
 }
 
+/**
+ * True for a mouse event the browser made up after a touch (Chromium says so
+ * in sourceCapabilities). The touch handlers have already acted on that tap.
+ * @param {MouseEvent & {sourceCapabilities?: {firesTouchEvents?: boolean}}} e
+ */
+export function firedByTouch(e) {
+    return !!(e && e.sourceCapabilities && e.sourceCapabilities.firesTouchEvents);
+}
+
 export class StreamView {
     constructor(
         container,
@@ -518,8 +527,11 @@ export class StreamView {
         // Audio time-stretch (WSOLA) — server-controlled kill switch.
         this._audioTimeStretch = audioTimeStretch !== false;
         // Mobile only: direct touch-screen input (absolute finger position) in
-        // place of the relative trackpad model. Off by default.
-        this._touchScreen = touchScreen === true;
+        // place of the relative trackpad model. Off by default — but always on
+        // a TV: there the "touch" is the browser's own cursor (TV Bro, TCL)
+        // tapping where it points, and the trackpad model clicked wherever the
+        // host's pointer already was instead (03/10/2026, a Mi TV).
+        this._touchScreen = touchScreen === true || IS_TV;
         // YUV 4:4:4 chroma negotiated by the backend (vs default 4:2:0). Used
         // only to annotate the codec in the stats overlay.
         this._yuv444 = yuv444 === true;
@@ -8571,6 +8583,9 @@ export class StreamView {
             // last was, with nothing on the client to show the gap. Over the
             // bars there is nothing to aim at: no press either, the release
             // below still goes out so a button is never left held.
+            // The mouse events a browser makes up after a tap: the touch path
+            // has already clicked there, a second press would double it.
+            if (firedByTouch(e)) return;
             const msg = this._absoluteMouseMessage(e.clientX, e.clientY);
             if (!msg) return;
             this._sendToHost(msg);
@@ -8578,6 +8593,7 @@ export class StreamView {
         };
 
         this._onNormalMouseUp = (e) => {
+            if (firedByTouch(e)) return;
             this.handleMouseUp(e);
         };
 
