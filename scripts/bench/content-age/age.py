@@ -161,7 +161,7 @@ def line(d):
     p99 = lambda k: (d.get(k) or {}).get("p99Ms")
     return ("%-26s shown %6s (p99 %6s) at refresh %6s  since capture %6s  drawn %6s  capture %6s  "
             "before %6s ms  %s draws/s on %s Hz  %s repeated, %s unseen /min  invalid %s  "
-            "rtt %.2f ms%s%s" % (
+            "rtt %.2f ms%s%s%s" % (
                 d.get("tag", "?"), med("shown"), p99("shown"), med("atRefresh"),
                 med("shownSinceCapture"), d.get("medianMs"),
                 med("capture"), med("beforeCapture"), d.get("drawsPerSecond"), d.get("refreshHz"),
@@ -170,7 +170,12 @@ def line(d):
                 c.get("rttMinMs") or 0,
                 "" if d.get("clockErrorMs") is None else "  clock %+.2f" % d["clockErrorMs"],
                 "" if not (d.get("frameLog") or {}).get("measured") else
-                "  e2e %.2f (p99 %.2f)" % (d["frameLog"]["medianMs"], d["frameLog"]["p99Ms"])))
+                "  e2e %.2f (p99 %.2f)" % (d["frameLog"]["medianMs"], d["frameLog"]["p99Ms"]),
+                # What a read cost the frame it read on the main thread, and
+                # where the copy ran (ContentAgeProbe.js, U0.2 bis).
+                "" if not (d.get("readCost") or {}).get("n") else
+                "  read %s ms p99 %s (%s)" % (d["readCost"]["medianMs"], d["readCost"]["p99Ms"],
+                                             d.get("reader") or "?")))
 
 
 def table(args):
