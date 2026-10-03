@@ -771,6 +771,20 @@ public:
 
     void setClientDecodeQueue(int depth) override { m_DecodeCredit.note(depth, steadyNowUs()); }
 
+    void setLinkBusyProbe(LinkBusyProbe probe) override
+    {
+        std::lock_guard<std::mutex> lk(m_LinkBusyMutex);
+        m_LinkBusyProbe = std::move(probe);
+    }
+
+    /// The relay's probe, for linkhold= (see setLinkBusyProbe). Uncontended
+    /// but for the rare moment the relay sets it.
+    bool linkBusy()
+    {
+        std::lock_guard<std::mutex> lk(m_LinkBusyMutex);
+        return m_LinkBusyProbe && m_LinkBusyProbe();
+    }
+
     void setClientVsyncGrid(double periodUs, int64_t phaseUs, int64_t leadUs, bool tearing,
                             bool steady, double budgetFps) override
     {
@@ -1925,6 +1939,9 @@ private:
             log::info("[native] rate governor: also cuts at " +
                       std::to_string(governor.retransCut()) +
                       " SCTP chunks retransmitted in a thousand (bench retrcut=)");
+        if (m_Config.tuning.linkHold)
+            log::info("[native] link hold: a picture waits, unencoded, while video waits "
+                      "outside usrsctp (bench linkhold=)");
         int baseKbps = governor.targetKbps();
         m_LinkKbps = baseKbps;
         bool boosted = false;
@@ -2076,9 +2093,27 @@ private:
         if (deadlineMode)
             deadlineTimer.h = CreateWaitableTimerExW(
                 nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+        // linkhold= (plan Wi-Fi W2 C): the same hold, for the relay's send
+        // queue instead of the client's decoder. Video waiting outside
+        // usrsctp is a frame the link has not taken yet; a picture encoded
+        // now would only wait behind it, so it is held, and the freshest
+        // goes the moment the queue drained. No reference is ever missing:
+        // a picture never encoded is no hole.
+        const bool linkHold = m_Config.tuning.linkHold;
+        bool heldForLink = false;
+        auto creditMissing = [&]() {
+            return (guarded && m_DecodeCredit.missing(steadyNowUs())) || (linkHold && linkBusy());
+        };
         auto withheld = [&](const FrameStamps& stamps) -> bool {
-            if (!guarded || !m_DecodeCredit.missing(steadyNowUs())) return false;
-            m_CreditSkips++;
+            if (guarded && m_DecodeCredit.missing(steadyNowUs())) {
+                m_CreditSkips++;
+                heldForLink = false;
+            } else if (linkHold && linkBusy()) {
+                m_LinkHolds++;
+                heldForLink = true;
+            } else {
+                return false;
+            }
             creditHeld = true;
             creditHeldStamps = stamps;
             return true;
@@ -2217,8 +2252,8 @@ private:
             const int idleTimeoutMs = static_cast<int>(idleIntervalUs / 1000) < kAcquireTimeoutMs
                                           ? static_cast<int>(idleIntervalUs / 1000)
                                           : kAcquireTimeoutMs;
-            // A picture held for the decode credit is looked at every
-            // millisecond: it goes the moment the credit is back.
+            // A picture held for the decode credit or the link is looked at
+            // every millisecond: it goes the moment the credit is back.
             const int timeoutMs = creditHeld ? 1 : refineSoon ? refineTimeoutMs : idleTimeoutMs;
 
             // Between frames, so the encoder is not holding anything.
@@ -2361,12 +2396,11 @@ private:
             reportCursorPosition();
             recentrePointerIfAway();
 
-            if (status == capture::AcquireStatus::Timeout && creditHeld &&
-                !m_DecodeCredit.missing(steadyNowUs())) {
-                // The client's decoder caught up and nothing newer came: the
-                // picture held for it goes now.
+            if (status == capture::AcquireStatus::Timeout && creditHeld && !creditMissing()) {
+                // The client's decoder caught up, or the link took what was
+                // waiting, and nothing newer came: the picture held goes now.
                 creditHeld = false;
-                m_CreditFlushes++;
+                (heldForLink ? m_LinkFlushes : m_CreditFlushes)++;
                 if (!emit(frameNumber, creditHeldStamps, error)) return;
                 noteReal();
                 countPicture();
@@ -3413,6 +3447,17 @@ private:
                       std::to_string(m_DecodeCredit.signals()) + " words from the client");
         }
 
+        // linkhold=: what the relay's send queue held back.
+        if (m_Config.tuning.linkHold && seconds > 0) {
+            const auto perSecond = [seconds](int64_t n) {
+                return std::to_string(static_cast<int>(static_cast<double>(n) / seconds + 0.5));
+            };
+            log::info("[native] link hold: " + std::to_string(m_LinkHolds) +
+                      " presents held back (" + perSecond(m_LinkHolds) + "/s), " +
+                      std::to_string(m_LinkFlushes) +
+                      " sent once the link drained, nothing newer having come");
+        }
+
         // The pipeline's own figures: what the cross-GPU bridge cost, when
         // there was one.
         if (m_Pipeline) m_Pipeline->logEndOfSession();
@@ -3486,6 +3531,13 @@ private:
     DecodeCredit m_DecodeCredit;
     int64_t m_CreditSkips = 0;
     int64_t m_CreditFlushes = 0;
+    /// The relay's send queue, read under linkhold= — see setLinkBusyProbe.
+    /// Presents held back for it, and the held pictures sent once it drained
+    /// with nothing newer, for the log.
+    std::mutex m_LinkBusyMutex;
+    LinkBusyProbe m_LinkBusyProbe;
+    int64_t m_LinkHolds = 0;
+    int64_t m_LinkFlushes = 0;
     /// The client's refresh grid, read under cadence=deadline — see
     /// setClientVsyncGrid. When the loop last aimed at it and the display's
     /// period, for the pong (vsyncGridStatus); the rest for the log.

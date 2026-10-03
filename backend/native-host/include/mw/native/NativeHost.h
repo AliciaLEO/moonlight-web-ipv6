@@ -381,6 +381,18 @@ public:
     /// Safe from any thread.
     virtual void setClientDecodeQueue(int /*depth*/) {}
 
+    /// Whether video waits outside the transport's own buffer right now —
+    /// asked by the capture loop at each picture, from its thread, so it must
+    /// be cheap and safe from any thread. Empty: never.
+    using LinkBusyProbe = std::function<bool()>;
+
+    /// The relay's view of its send queue, for the bench's linkhold= (plan
+    /// Wi-Fi W2 C): while @p probe answers true, a picture is held, not
+    /// encoded, and the freshest goes once it answers false — what the
+    /// host-guarded cadence does for the client's decoder, done for the link.
+    /// Every platform but Windows ignores it. Safe from any thread.
+    virtual void setLinkBusyProbe(LinkBusyProbe /*probe*/) {}
+
     /// When the client's screen refreshes (a `vsyncgrid` message, frontend
     /// VsyncGrid.js): every @p periodUs, one refresh at @p phaseUs on this
     /// host's steady clock, a frame needing @p leadUs from being taken here to

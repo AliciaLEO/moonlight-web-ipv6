@@ -414,6 +414,16 @@ struct EncoderTuning
     /// chunks in a thousand over a report window (plan Wi-Fi W2 B; Windows
     /// host). 0, the product: the governor does not look at SCTP.
     int retransCutPermille = 0;
+    /// usrsctp's send buffer, in KB, really (plan Wi-Fi W2 C). 0, the product:
+    /// 256 KiB whatever the bitrate, since libdatachannel raises the buffer to
+    /// its largest message. What waits in there the host cannot see; what it
+    /// cannot take waits in `bufferedAmount`, where linkHold looks.
+    int sctpBufferKb = 0;
+    /// A picture is held, not encoded, while video waits outside usrsctp; the
+    /// freshest goes once it drained (plan Wi-Fi W2 C; Windows host). A queue
+    /// turned into a lower frame rate, with no hole in the references. false,
+    /// the product: every picture is encoded.
+    bool linkHold = false;
 
     bool isDefault() const
     {
@@ -440,7 +450,8 @@ struct EncoderTuning
                prioVk == PriorityVk::Default && portalDmabuf == Choice::Default &&
                mutterDirect == Choice::Default && lossPermille == 0 && lossBurst == 0 &&
                sctpCongestion < 0 && floodKbps == 0 && floodBytes == 0 && !floodLikeVideo &&
-               !relayLog && paceMultiple == 0 && paceBurstKb == 0 && retransCutPermille == 0;
+               !relayLog && paceMultiple == 0 && paceBurstKb == 0 && retransCutPermille == 0 &&
+               sctpBufferKb == 0 && !linkHold;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -542,6 +553,8 @@ struct EncoderTuning
         if (paceMultiple > 0) add("pace=" + std::to_string(paceMultiple));
         if (paceBurstKb > 0) add("paceburst=" + std::to_string(paceBurstKb));
         if (retransCutPermille > 0) add("retrcut=" + std::to_string(retransCutPermille));
+        if (sctpBufferKb > 0) add("sctpbuf=" + std::to_string(sctpBufferKb));
+        if (linkHold) add("linkhold=1");
         return s;
     }
 };

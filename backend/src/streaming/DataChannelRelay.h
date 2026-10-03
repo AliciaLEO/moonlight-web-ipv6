@@ -364,6 +364,11 @@ private:
     int m_PaceMultiple = 0;
     int m_PaceBurstKb = 0;
     size_t m_ChunkPayload = 16000;
+    // `sctpbuf=`, `linkhold=` (plan Wi-Fi W2 C): usrsctp's send buffer in KB,
+    // really (0: libdatachannel's 256 KiB), and whether the native session
+    // holds its pictures while video waits outside it. Set at setup.
+    int m_SctpBufferKb = 0;
+    bool m_LinkHold = false;
     // usrsctp's counters at the last link report, for the share of chunks
     // sent again in each report window (LinkFeedback::retransPermille).
     // Relay thread only.

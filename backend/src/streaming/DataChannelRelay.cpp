@@ -739,12 +739,20 @@ DataChannelRelay::~DataChannelRelay()
 /// stream's bitrate — see SendBacklog::sendBufferBytesFor for the figures and
 /// the freeze that showed a fixed 256 KiB hiding a whole second at 2 Mbit/s.
 ///
+/// ⚠️ Read on 03/10/2026 (plan Wi-Fi W2 C): below 256 KiB this never took.
+/// libdatachannel's SctpTransport raises SO_SNDBUF to its largest message
+/// (Configuration::maxMessageSize, 256 KiB unset) right after reading the
+/// sysctl, so every session has had 256 KiB whatever the bitrate — a second
+/// at 2 Mbit/s, ~100 ms at 20. Only the bench's `sctpbuf=` (@p bufferKb)
+/// lowers it, by lowering the largest message along with it (setupPeerConnection).
+///
 /// A sysctl, read by each SCTP socket at creation: it must be set before the
 /// peer connection, and setting it again for another session in the same
 /// process is fine.
-void applySctpSettings(int bitrateKbps, int congestionModule)
+void applySctpSettings(int bitrateKbps, int congestionModule, int bufferKb)
 {
-    const size_t bytes = SendBacklog::sendBufferBytesFor(bitrateKbps);
+    const size_t bytes = bufferKb > 0 ? static_cast<size_t>(bufferKb) * 1024
+                                      : SendBacklog::sendBufferBytesFor(bitrateKbps);
     rtc::SctpSettings settings;
     settings.sendBufferSize = bytes;
     // Bench knobs, never settings: unset, libdatachannel's defaults stand (a
@@ -766,8 +774,12 @@ void applySctpSettings(int bitrateKbps, int congestionModule)
                    << kModules[congestionModule & 3];
     }
     rtc::SetSctpSettings(settings);
-    qInfo() << "[DataChannelRelay] SCTP send buffer set to" << (bytes / 1024) << "KiB for"
-            << bitrateKbps << "kbps, so bufferedAmount reflects the real backlog";
+    if (bufferKb > 0)
+        qWarning() << "[DataChannelRelay] SCTP bench override (sctpbuf=): send buffer" << bufferKb
+                   << "KiB, the largest message with it";
+    else
+        qInfo() << "[DataChannelRelay] SCTP send buffer asked at" << (bytes / 1024) << "KiB for"
+                << bitrateKbps << "kbps (libdatachannel keeps 256 KiB at least)";
     if (settings.minRetransmitTimeout || settings.delayedSackTime)
         qInfo() << "[DataChannelRelay] SCTP bench override: min RTO"
                 << (settings.minRetransmitTimeout ? settings.minRetransmitTimeout->count() : -1)
@@ -784,6 +796,8 @@ void DataChannelRelay::setLinkBench(const mw::native::EncoderTuning& tuning)
     m_FloodLikeVideo = tuning.floodLikeVideo;
     m_PaceMultiple = tuning.paceMultiple;
     m_PaceBurstKb = tuning.paceBurstKb;
+    m_SctpBufferKb = tuning.sctpBufferKb;
+    m_LinkHold = tuning.linkHold;
     if (tuning.relayLog && !m_FrameLog) {
         m_FrameLog = std::make_unique<RelayFrameLog>();
         qWarning() << "[DataChannelRelay] bench frame log on (relaylog=1): each video frame's way "
@@ -824,7 +838,7 @@ bool DataChannelRelay::prepare(const rtc::Configuration& config, bool isInternet
 {
     // Before the peer connection, since each SCTP socket reads this when it is
     // made.
-    applySctpSettings(m_StreamBitrateKbps, m_SctpCongestion);
+    applySctpSettings(m_StreamBitrateKbps, m_SctpCongestion, m_SctpBufferKb);
     m_Backlog.setBitrateKbps(m_StreamBitrateKbps);
     applyPacing();
 
@@ -880,7 +894,14 @@ void DataChannelRelay::setupPeerConnection(const rtc::Configuration& config)
 {
     qInfo() << "[DataChannelRelay] Creating PeerConnection";
 
-    m_Pc = std::make_shared<rtc::PeerConnection>(config);
+    // `sctpbuf=`: libdatachannel raises usrsctp's send buffer to the largest
+    // message, so that comes down with it (see applySctpSettings). Both ways:
+    // the page may send nothing bigger either, which only the clipboard ever
+    // comes near — a bench has none.
+    rtc::Configuration pcConfig = config;
+    if (m_SctpBufferKb > 0) pcConfig.maxMessageSize = static_cast<size_t>(m_SctpBufferKb) * 1024;
+
+    m_Pc = std::make_shared<rtc::PeerConnection>(pcConfig);
 
     // --- Local description callback ---
     m_Pc->onLocalDescription([this](const rtc::Description& sdp) {
@@ -1051,6 +1072,25 @@ void DataChannelRelay::createDataChannels()
                 this, [this]() { sendBufferedKeyframe(); }, Qt::QueuedConnection);
         });
         m_VideoDc->onClosed([this]() { qInfo() << "[DataChannelRelay] Video DataChannel closed"; });
+    }
+    // `linkhold=` (plan Wi-Fi W2 C): the native session asks, at each picture,
+    // whether video still waits outside usrsctp. `bufferedAmount` is an atomic
+    // in libdatachannel, so the capture thread may read it; the channel is held
+    // weakly and a closed one is never busy.
+    if (m_VideoDc && m_LinkHold) {
+        if (auto* native = qobject_cast<NativeMediaEngine*>(m_Shim)) {
+            std::weak_ptr<rtc::DataChannel> weak = m_VideoDc;
+            native->setLinkBusyProbe([weak]() {
+                const auto dc = weak.lock();
+                return dc && dc->isOpen() && dc->bufferedAmount() > 0;
+            });
+            qWarning() << "[DataChannelRelay] bench link hold (linkhold=): the session holds "
+                          "its pictures while video waits outside usrsctp ("
+                       << (m_SctpBufferKb > 0 ? m_SctpBufferKb : 256) << "KiB)";
+        } else {
+            qWarning() << "[DataChannelRelay] linkhold= asked for, but this engine is not the "
+                          "native one: nothing held";
+        }
     }
 
     // --- Input DataChannel (bidirectional, JSON text) ---
@@ -2349,6 +2389,11 @@ void DataChannelRelay::stop()
     if (m_DirectVideoSend) {
         if (auto* native = qobject_cast<NativeMediaEngine*>(m_Shim))
             native->setDirectFrameSink(nullptr);
+    }
+    // linkhold=: a WebSocket fallback must not ask a channel that is going.
+    if (m_LinkHold) {
+        if (auto* native = qobject_cast<NativeMediaEngine*>(m_Shim))
+            native->setLinkBusyProbe(nullptr);
     }
 
     if (m_Stopping.exchange(true)) {

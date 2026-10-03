@@ -218,6 +218,10 @@ const char* const kUsage =
     "  paceburst=<KB>    what leaves back to back under pace= (default 16, one chunk)\n"
     "  retrcut=<permille>  the rate governor also cuts when SCTP retransmits at least that\n"
     "                    many chunks in a thousand (Windows host; plan Wi-Fi W2 B)\n"
+    "  sctpbuf=<KB>      usrsctp's send buffer, 24-1024, really: also the largest message\n"
+    "                    either side may send (256 KB otherwise; plan Wi-Fi W2 C)\n"
+    "  linkhold=0|1      a picture held, not encoded, while video waits outside usrsctp;\n"
+    "                    the freshest goes once it drained (Windows host; with sctpbuf=)\n"
     "the bench's own:\n"
     "  dump=<path>      the encoded stream as it comes out (Annex-B, or OBUs for AV1)\n"
     "  lose=<frames>[x<burst>][k]  every N frames, report the latest one lost (reference\n"
@@ -524,6 +528,13 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
     } else if (key == "retrcut") {
         tuning.retransCutPermille = value.toInt(&ok);
         ok = ok && tuning.retransCutPermille >= 0 && tuning.retransCutPermille <= 1000;
+    } else if (key == "sctpbuf") {
+        tuning.sctpBufferKb = value.toInt(&ok);
+        ok = ok && tuning.sctpBufferKb >= 24 && tuning.sctpBufferKb <= 1024;
+    } else if (key == "linkhold") {
+        const int v = value.toInt(&ok);
+        ok = ok && (v == 0 || v == 1);
+        tuning.linkHold = v == 1;
     } else {
         return false;
     }

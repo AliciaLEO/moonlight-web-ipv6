@@ -340,6 +340,12 @@ void NativeMediaEngine::startCapture(const StartParams& params)
     // Before start() as well: the capture loop's very first pass already asks
     // whether to bring the pointer back.
     m_Session->setRecentrePointer(m_RecentrePointer.load(std::memory_order_acquire));
+    // The relay's send queue, for linkhold=: its video channel may well be
+    // made before the session.
+    {
+        std::lock_guard<std::mutex> lk(m_LinkProbeMutex);
+        if (m_LinkBusyProbe) m_Session->setLinkBusyProbe(m_LinkBusyProbe);
+    }
 
     if (!m_Session->start(error)) {
         qWarning() << "[NativeMediaEngine] could not start session:"
@@ -973,6 +979,14 @@ void NativeMediaEngine::setClientDecodeQueue(int depth)
 {
     if (m_Subscriber) return; // the feed's pace, see setFrameFloorFps
     if (m_Session) m_Session->setClientDecodeQueue(depth);
+}
+
+void NativeMediaEngine::setLinkBusyProbe(std::function<bool()> probe)
+{
+    if (m_Subscriber) return; // the feed's pace, see setFrameFloorFps
+    std::lock_guard<std::mutex> lk(m_LinkProbeMutex);
+    m_LinkBusyProbe = std::move(probe);
+    if (m_Session) m_Session->setLinkBusyProbe(m_LinkBusyProbe);
 }
 
 void NativeMediaEngine::setClientVsyncGrid(double periodUs, int64_t phaseUs, int64_t leadUs,

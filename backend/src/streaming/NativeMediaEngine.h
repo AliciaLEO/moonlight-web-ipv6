@@ -361,6 +361,11 @@ public:
     /// forwarded to Session::setClientDecodeQueue. Safe from any thread.
     void setClientDecodeQueue(int depth);
 
+    /// The relay's view of its send queue, for the bench's linkhold=:
+    /// forwarded to Session::setLinkBusyProbe, and remembered for a session
+    /// that starts after it was set. Empty takes it back. Safe from any thread.
+    void setLinkBusyProbe(std::function<bool()> probe);
+
     /// When the client's screen refreshes (a `vsyncgrid` message): forwarded
     /// to Session::setClientVsyncGrid. Safe from any thread.
     void setClientVsyncGrid(double periodUs, int64_t phaseUs, int64_t leadUs, bool tearing,
@@ -503,6 +508,10 @@ private:
     /// Producer→consumer bookkeeping, mirroring MoonlightShim's so the relays'
     /// existing drop diagnostics keep working unchanged.
     std::atomic<int> m_PendingVideoFrames{0};
+    /// The relay's probe for linkhold=, kept for a session that starts after
+    /// it was set — see setLinkBusyProbe.
+    std::mutex m_LinkProbeMutex;
+    std::function<bool()> m_LinkBusyProbe;
     std::atomic<int64_t> m_WorkerDropCount{0};
     std::atomic<bool> m_WorkerDroppedDelta{false};
 

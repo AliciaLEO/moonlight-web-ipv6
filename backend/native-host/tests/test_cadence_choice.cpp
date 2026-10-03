@@ -210,6 +210,23 @@ void run_cadence_choice_tests()
         CHECK_EQ(t.describe(), std::string("cadence=deadline"));
     }
 
+    // The link's own hold (plan Wi-Fi W2 C), the same hold as the guarded
+    // cadence's, asked of the relay's send queue instead of the client.
+    SECTION("linkhold= and sctpbuf= — off by default, named when set");
+    {
+        EncoderTuning t;
+        CHECK(!t.linkHold);
+        CHECK_EQ(t.sctpBufferKb, 0);
+        t.sctpBufferKb = 48;
+        CHECK(!t.isDefault());
+        CHECK_EQ(t.describe(), std::string("sctpbuf=48"));
+        t.linkHold = true;
+        CHECK_EQ(t.describe(), std::string("sctpbuf=48 linkhold=1"));
+        t.sctpBufferKb = 0;
+        CHECK(!t.isDefault());
+        CHECK_EQ(t.describe(), std::string("linkhold=1"));
+    }
+
     // A client whose decoder falls silent under the reference repairs asks for
     // none (/start's ref_invalidation): the bench's dpb=1, on every encoder.
     SECTION("refuseReferenceRepairs — one reference for that client, a bench's dpb kept");
