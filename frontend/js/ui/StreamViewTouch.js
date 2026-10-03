@@ -111,7 +111,8 @@ export class StreamViewTouch {
                     !this._touchMoved &&
                     this._touchFingerCount === 1 &&
                     this._touchMaxFingers === 1 &&
-                    !this._touchDragging
+                    !this._touchDragging &&
+                    !this._tvTapOffPicture(this._touchStartX, this._touchStartY)
                 ) {
                     this._touchDragging = true;
                     // Touch-screen mode: grab the button right under the finger.
@@ -233,6 +234,23 @@ export class StreamViewTouch {
             referenceHeight: Math.round(rect.height),
         });
         this._clientCursorPlacedAt(x / rect.width, y / rect.height);
+    }
+
+    /**
+     * A TV browser's cursor over no part of the picture — a letterbox bar, the
+     * stream's header. _sendAbsTouch would pin it to the nearest edge, and the
+     * tap then clicked there: the host's pointer leapt to a border and clicked
+     * something the viewer never aimed at (Freebox, 03/10/2026). A finger on a
+     * phone keeps that pinning: it lands near the edge it means.
+     * @this {StreamViewInstance}
+     */
+    _tvTapOffPicture(clientX, clientY) {
+        if (!this._tvCursor) return false;
+        const rect = this._mediaRect();
+        if (!rect || !rect.width || !rect.height) return true;
+        const x = clientX - rect.left;
+        const y = clientY - rect.top;
+        return x < 0 || y < 0 || x > rect.width || y > rect.height;
     }
 
     /**
@@ -608,6 +626,8 @@ export class StreamViewTouch {
             } else if (this._touchMaxFingers === 2) {
                 this._sendMouseButton(3, true);
                 this._sendMouseButton(3, false); // 2-finger tap → right click
+            } else if (this._tvTapOffPicture(this._touchStartX, this._touchStartY)) {
+                // A TV cursor off the picture: nothing aimed at, nothing sent.
             } else {
                 // 1-finger tap → left click. Touch-screen mode positions the
                 // cursor first; a fast double-tap at the same spot lands a second

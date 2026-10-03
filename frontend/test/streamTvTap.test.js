@@ -17,13 +17,14 @@ import { StreamView, firedByTouch } from '../js/ui/StreamView.js';
 
 const P = StreamView.prototype;
 
-function view(touchScreen) {
+function view(touchScreen, tvCursor = false) {
     const sent = [];
     const buttons = [];
     return {
         sent,
         buttons,
         _touchScreen: touchScreen,
+        _tvCursor: tvCursor,
         _scrollSamples: [],
         _panSamples: [],
         _touchLongPressMs: 500,
@@ -40,6 +41,7 @@ function view(touchScreen) {
         handleTouchStart: P.handleTouchStart,
         handleTouchEnd: P.handleTouchEnd,
         _sendAbsTouch: P._sendAbsTouch,
+        _tvTapOffPicture: P._tvTapOffPicture,
         _clearLongPress: P._clearLongPress,
     };
 }
@@ -75,6 +77,44 @@ describe('a TV cursor tap in a stream', () => {
             [1, true],
             [1, false],
         ]);
+    });
+
+    it('a TV cursor off the picture neither moves the pointer nor clicks', () => {
+        // The cursor on a letterbox bar or the header: pinned to the nearest
+        // edge, the pointer leapt to a border and clicked there (Freebox).
+        const v = view(true, true);
+        v._mediaRect = () => ({ left: 100, top: 80, width: 1280, height: 720 });
+        tap(v, 1500, 400); // right of the picture
+        tap(v, 600, 20); // above it, over the header
+        expect(v.sent).toEqual([]);
+        expect(v.buttons).toEqual([]);
+        tap(v, 1380, 800); // its very corner is still the picture
+        expect(v.sent).toEqual([
+            { type: 'mousemove', x: 1280, y: 720, referenceWidth: 1280, referenceHeight: 720 },
+        ]);
+        expect(v.buttons).toEqual([
+            [1, true],
+            [1, false],
+        ]);
+    });
+
+    it('a TV cursor held off the picture does not start a drag', () => {
+        vi.useFakeTimers();
+        const v = view(true, true);
+        v.handleTouchStart(touch('touchstart', 1500, 400, true));
+        vi.advanceTimersByTime(600);
+        v.handleTouchEnd(touch('touchend', 1500, 400, false));
+        expect(v.sent).toEqual([]);
+        expect(v.buttons).toEqual([]);
+    });
+
+    it('a finger off the picture on a phone keeps landing on the nearest edge', () => {
+        const v = view(true, false);
+        tap(v, 1400, 600);
+        expect(v.sent).toEqual([
+            { type: 'mousemove', x: 1280, y: 600, referenceWidth: 1280, referenceHeight: 720 },
+        ]);
+        expect(v.buttons.length).toBe(2);
     });
 
     it('trackpad model (a phone without the option): the click alone, where the pointer is', () => {

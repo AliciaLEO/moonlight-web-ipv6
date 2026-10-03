@@ -555,6 +555,9 @@ export class StreamView {
         // tapping where it points, and the trackpad model clicked wherever the
         // host's pointer already was instead (03/10/2026, a Mi TV).
         this._touchScreen = touchScreen === true || IS_TV;
+        // A TV's taps come from its browser's cursor: one off the picture is
+        // ignored (_tvTapOffPicture), not pinned to the nearest edge.
+        this._tvCursor = IS_TV;
         // YUV 4:4:4 chroma negotiated by the backend (vs default 4:2:0). Used
         // only to annotate the codec in the stats overlay.
         this._yuv444 = yuv444 === true;
