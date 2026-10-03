@@ -724,6 +724,7 @@
         "statLegNet": "网络",
         "statLegLinkQueue": "链路排队",
         "statLegJitter": "抖动缓冲",
+        "statLegMeasured": "实测（主机 → 绘制）",
         "statLegAudio": "音频缓冲",
         "statLegArrive": "交接",
         "statLegDecode": "解码",

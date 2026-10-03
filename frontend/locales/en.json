@@ -724,6 +724,7 @@
         "statLegNet": "Network",
         "statLegLinkQueue": "Link queue",
         "statLegJitter": "Jitter buffer",
+        "statLegMeasured": "Measured (host → drawn)",
         "statLegAudio": "Audio buffer",
         "statLegArrive": "Handoff",
         "statLegDecode": "Decode",

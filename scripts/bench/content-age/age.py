@@ -101,6 +101,9 @@ def calibrate(args):
 
 def run(args):
     page = Page(args.client, args.needle)
+    # The per-frame log (frontend stream/FrameLog.js, POC Ultra U0.2): emptied
+    # here, fetched at the end, so it holds this pass's frames only.
+    page.eval("window.mwFrameLog && mwFrameLog.clear()")
     print(page.eval("mwContentAge ? mwContentAge.start({every: %d}) : 'no mwContentAge'"
                     % args.every))
     time.sleep(args.secs)
@@ -118,6 +121,13 @@ def run(args):
     data["client"] = args.client
     data["clockErrorMs"] = check
     os.makedirs(OUT, exist_ok=True)
+    frames = page.eval("window.mwFrameLog ? JSON.stringify(mwFrameLog.summary()) : null")
+    if frames and frames != "null":
+        data["frameLog"] = json.loads(frames)
+        csv_path = os.path.join(OUT, args.tag + ".frames.csv")
+        with open(csv_path, "w", newline="") as f:
+            f.write(page.eval("mwFrameLog.csv()", timeout=120) or "")
+        print("saved", csv_path)
     path = os.path.join(OUT, args.tag + ".json")
     with open(path, "w") as f:
         json.dump(data, f)
@@ -151,14 +161,16 @@ def line(d):
     p99 = lambda k: (d.get(k) or {}).get("p99Ms")
     return ("%-26s shown %6s (p99 %6s) at refresh %6s  since capture %6s  drawn %6s  capture %6s  "
             "before %6s ms  %s draws/s on %s Hz  %s repeated, %s unseen /min  invalid %s  "
-            "rtt %.2f ms%s" % (
+            "rtt %.2f ms%s%s" % (
                 d.get("tag", "?"), med("shown"), p99("shown"), med("atRefresh"),
                 med("shownSinceCapture"), d.get("medianMs"),
                 med("capture"), med("beforeCapture"), d.get("drawsPerSecond"), d.get("refreshHz"),
                 d.get("repeatsPerMinute"), d.get("unseenPerMinute"),
                 ",".join("%s=%s" % kv for kv in (d.get("invalid") or {}).items() if kv[1]) or "0",
                 c.get("rttMinMs") or 0,
-                "" if d.get("clockErrorMs") is None else "  clock %+.2f" % d["clockErrorMs"]))
+                "" if d.get("clockErrorMs") is None else "  clock %+.2f" % d["clockErrorMs"],
+                "" if not (d.get("frameLog") or {}).get("measured") else
+                "  e2e %.2f (p99 %.2f)" % (d["frameLog"]["medianMs"], d["frameLog"]["p99Ms"])))
 
 
 def table(args):

@@ -101,6 +101,7 @@ import {
 } from '../stream/EnhancerGovernor.js';
 import { drawCapFor } from '../stream/RenderPacing.js';
 import { ContentAgeProbe } from '../stream/ContentAgeProbe.js';
+import { FrameLog } from '../stream/FrameLog.js';
 import { VsyncGrid } from '../stream/VsyncGrid.js';
 import { CadenceStepper, autostepEnabled, stepMemory } from '../stream/CadenceStepper.js';
 import { LatencyProbe } from '../stream/LatencyProbe.js';
@@ -916,6 +917,12 @@ export class StreamView {
         });
         // Standby views measure nothing; the visible one owns the console handle.
         if (!this._standby) window.mwContentAge = this._contentAge;
+        // Each drawn frame's age on the host's clock (stream/FrameLog.js):
+        // the measured end-to-end the latency breakdown shows beside its sum
+        // of legs, and the per-frame log a bench fetches (`mwFrameLog.csv()`).
+        this._frameLog = new FrameLog();
+        this._e2eMeasuredStats = new SlidingStats(2000);
+        if (!this._standby) window.mwFrameLog = this._frameLog;
         // This screen's refresh grid, for a native host that aims each frame at
         // one refresh (cadence=deadline, plan framerate-hote §13) — see
         // stream/VsyncGrid.js. Idle until a pong says the host wants it.
@@ -3546,7 +3553,11 @@ export class StreamView {
                 duration: 16667,
                 data: avccData,
             });
-            this._trackChunkSubmit(timestamp, backendTs);
+            this._trackChunkSubmit(timestamp, backendTs, {
+                arrived: arrivalAbs > 0 ? arrivalAbs - performance.timeOrigin : 0,
+                bytes: avccData.length,
+                key: isKeyframe,
+            });
             if (arrivalAbs > 0) {
                 const arriveMs = performance.timeOrigin + performance.now() - arrivalAbs;
                 if (arriveMs >= 0 && arriveMs < 5000) this._clientArriveStats.addSample(arriveMs);
@@ -3580,11 +3591,13 @@ export class StreamView {
      * timestamp: the H.264/HEVC path derives that timestamp from backendTs but
      * nudges it to stay monotonic, and AV1 makes it up (frameCount * 16667).
      */
-    _trackChunkSubmit(timestamp, backendTs) {
+    /** @param {{arrived?: number, bytes?: number, key?: boolean}} [frame] for the frame log */
+    _trackChunkSubmit(timestamp, backendTs, frame = null) {
         if (this._chunkSubmitTimes.size > 240) this._chunkSubmitTimes.clear();
         this._chunkSubmitTimes.set(timestamp, {
             perf: performance.now(),
             backendTs: backendTs || 0,
+            frame,
         });
     }
 
@@ -3711,6 +3724,7 @@ export class StreamView {
             if (submit.backendTs > 0)
                 this._e2eDelay.noteLatency(outPerf - submit.backendTs + E2E_SHIFT, outPerf);
             frame._mwDecodedPerf = outPerf;
+            frame._mwLog = submit.frame;
             backendTs = submit.backendTs;
         }
         if (this._contentAge.running) this._contentAge.onDecoded(frame, backendTs);
@@ -3847,6 +3861,7 @@ export class StreamView {
         // The console handle follows the visible view.
         if (this._latencyProbe) window.mwLatency = this._latencyProbe;
         window.mwContentAge = this._contentAge;
+        window.mwFrameLog = this._frameLog;
         window.mwVsyncGrid = this._vsyncGrid;
         if (this._rootEl) this._rootEl.style.visibility = '';
         // This leg is the live stream now, so it needs the full header — the
@@ -4429,6 +4444,7 @@ export class StreamView {
         // draw — the renderer closes the VideoFrame.
         const decodedPerf = frame._mwDecodedPerf;
         const frameBackendTs = frame._mwBackendTs;
+        const frameLog = frame._mwLog;
         const drawStart = performance.now();
         // Queue stage: how long the decoded frame waited for its turn to draw
         // (vsync pacing in rAF mode, renderer busy in immediate mode).
@@ -4448,6 +4464,17 @@ export class StreamView {
                     this._vsyncGrid.noteReady(frameBackendTs, drawStart + renderMs);
                 // …and what the detection measures: capture → painted.
                 if (this._stepper) this._stepper.notePainted(frameBackendTs, drawStart + renderMs);
+                // …and the frame's whole way, on the host's clock.
+                const e2e = this._frameLog.noteDrawn({
+                    backendTs: frameBackendTs,
+                    drawnMs: drawStart + renderMs,
+                    arrivedMs: frameLog ? frameLog.arrived : 0,
+                    decodedMs: decodedPerf,
+                    drawStartMs: drawStart,
+                    bytes: frameLog ? frameLog.bytes : 0,
+                    key: frameLog ? frameLog.key : false,
+                });
+                if (e2e === e2e) this._e2eMeasuredStats.addSample(e2e);
                 if (renderMs >= 0 && renderMs < 5000) this._clientRenderStats.addSample(renderMs);
                 // …and how that time splits between our work and waiting on the
                 // GPU/compositor, which is what tells back-pressure from cost.
@@ -6159,6 +6186,20 @@ export class StreamView {
                 }
             }
             if (reserveRow && !reserveShown) rows.push(reserveRow);
+            // The same way measured whole, frame by frame (stream/FrameLog.js):
+            // shown, not added — it is what the sum above should read, and the
+            // gap between the two is a leg nobody times. Main-thread path only.
+            if (!isMedia && !this._useWorker) {
+                const m = this._e2eMeasuredStats;
+                rows.push(
+                    legRow(
+                        escapeHtml(t('stream.statLegMeasured')),
+                        m.count > 0
+                            ? m.avg.toFixed(1) + ' / ' + m.percentile(0.99).toFixed(1) + 'ms'
+                            : '–',
+                    ),
+                );
+            }
             // The audio playout buffer: how far the sound sits behind the
             // picture on the browser side. Shown, not added — audio and video
             // are independent paths, and the total is the picture's.
@@ -6293,6 +6334,16 @@ export class StreamView {
                 }
                 if (this._mainThreadProbe) {
                     diagLine += ' · ' + formatMainThread(this._mainThreadProbe.snapshot());
+                }
+                // The way measured whole, host's stamp → end of the draw.
+                if (this._e2eMeasuredStats.count > 0) {
+                    const m = this._e2eMeasuredStats;
+                    diagLine +=
+                        ' · e2e measured ' +
+                        m.avg.toFixed(1) +
+                        '/' +
+                        m.percentile(0.99).toFixed(1) +
+                        'ms';
                 }
                 if (showDetail) {
                     html += '<div class="stats-diag">' + escapeHtml(diagLine) + '</div>';
@@ -6705,6 +6756,7 @@ export class StreamView {
         }
         if (msg.type === 'pong') {
             this._contentAge.notePong(msg, performance.now());
+            this._frameLog.notePong(msg, performance.now());
             this._vsyncGrid.notePong(msg, performance.now());
             if (this._stepper) this._stepper.notePong(msg, performance.now());
             // The host would aim its frames at this screen's refreshes: tell it
@@ -11393,6 +11445,7 @@ export class StreamView {
         }
         if (this._contentAge.running) this._contentAge.stop();
         if (window.mwContentAge === this._contentAge) window.mwContentAge = null;
+        if (window.mwFrameLog === this._frameLog) window.mwFrameLog = null;
         this._vsyncGrid.stop();
         if (window.mwVsyncGrid === this._vsyncGrid) window.mwVsyncGrid = null;
         if (this._stepper) {
