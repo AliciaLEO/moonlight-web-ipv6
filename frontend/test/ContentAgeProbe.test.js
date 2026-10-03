@@ -575,6 +575,26 @@ describe('ContentAgeProbe — the read, off the main thread', () => {
         expect(log.made).toHaveLength(0);
         expect(probe.stop().reader).toBe('inline');
     });
+
+    it('reads one run on the main thread when the run asks, the next in the worker', async () => {
+        const log = { made: [], posted: [] };
+        vi.stubGlobal('Worker', fakeWorkerClass(log));
+        const renderer = { kind: 'canvas2d', afterDraw: null };
+        const probe = new ContentAgeProbe({ renderer: () => renderer, sendPing: () => {} });
+        probe.start({ every: 1, inline: true });
+        probe.onDecoded(countedFrame(1, 4242, { n: 0 }), 0);
+        renderer.afterDraw(renderer, 1);
+        await flush();
+        expect(probe.stop().reader).toBe('inline');
+        expect(log.posted).toHaveLength(0);
+        probe.start({ every: 1 });
+        probe.onDecoded(countedFrame(2, 4242, { n: 0 }), 0);
+        renderer.afterDraw(renderer, 2);
+        await flush();
+        await flush();
+        expect(probe.stop().reader).toBe('worker');
+        expect(log.posted).toHaveLength(1);
+    });
 });
 
 describe('ContentAgeProbe — the age of what is shown', () => {

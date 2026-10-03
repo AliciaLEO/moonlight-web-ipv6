@@ -332,12 +332,15 @@ export class ContentAgeProbe {
 
     /**
      * Start reading. @p every: read one decoded frame in that many (each read
-     * holds a clone of the frame until its strip is copied out).
+     * holds a clone of the frame until its strip is copied out). @p inline:
+     * copy on the main thread, as before the worker — for a bench to measure
+     * what that costs (scripts/bench/content-age/age.py, MW_BENCH_INLINE_READ).
      */
-    start({ every = 1 } = {}) {
+    start({ every = 1, inline = false } = {}) {
         if (this._run) this.stop();
         this._run = {
             every: Math.max(1, Math.floor(every) || 1),
+            inline: inline === true,
             decoded: 0,
             read: 0,
             /** The main thread's time in each read, ms; and where the copy ran. */
@@ -447,7 +450,7 @@ export class ContentAgeProbe {
      * @returns {Promise<{format: string, buf: Uint8Array, layout: any}>}
      */
     _readStrip(clone, rect) {
-        const worker = this._worker();
+        const worker = this._run && this._run.inline ? null : this._worker();
         if (worker) {
             const id = this._readSeq++;
             const format = clone.format;

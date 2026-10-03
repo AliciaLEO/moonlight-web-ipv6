@@ -104,8 +104,11 @@ def run(args):
     # The per-frame log (frontend stream/FrameLog.js, POC Ultra U0.2): emptied
     # here, fetched at the end, so it holds this pass's frames only.
     page.eval("window.mwFrameLog && mwFrameLog.clear()")
-    print(page.eval("mwContentAge ? mwContentAge.start({every: %d}) : 'no mwContentAge'"
-                    % args.every))
+    # MW_BENCH_INLINE_READ=1: the band copied on the main thread, as before the
+    # worker (U0.2 bis) — to measure what that cost the frames it read.
+    inline = "true" if os.environ.get("MW_BENCH_INLINE_READ") == "1" else "false"
+    print(page.eval("mwContentAge ? mwContentAge.start({every: %d, inline: %s}) : 'no mwContentAge'"
+                    % (args.every, inline)))
     time.sleep(args.secs)
     # A tunnelled client answers on localhost too: only the caller knows it is
     # on this machine, sharing its counter.
