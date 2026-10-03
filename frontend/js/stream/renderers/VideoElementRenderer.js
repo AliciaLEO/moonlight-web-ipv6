@@ -42,6 +42,15 @@
 import { VideoRenderer } from './VideoRenderer.js';
 import { videoSinkCtor } from './videoSink.js';
 
+/**
+ * How long a draw waits for the generator to take a frame. The writer's
+ * `ready` is the compositor's pace; one that never comes (an overloaded TV
+ * pipeline, 02/10/2026: a Mi TV at 1080p60 froze on the way out) used to hold
+ * the one draw in flight forever, and with it the whole render path. Past
+ * this, the frame is dropped and the next one tries again.
+ */
+export const READY_WAIT_MS = 250;
+
 export class VideoElementRenderer extends VideoRenderer {
     constructor() {
         super();
@@ -134,9 +143,29 @@ export class VideoElementRenderer extends VideoRenderer {
             return;
         }
         try {
-            // Honor backpressure so we never queue ahead of the compositor.
+            // Honor backpressure so we never queue ahead of the compositor —
+            // for a while: see READY_WAIT_MS.
             if (this._writer.desiredSize !== null && this._writer.desiredSize <= 0) {
-                await this._writer.ready;
+                let timer = null;
+                const ready = await Promise.race([
+                    this._writer.ready.then(() => true),
+                    new Promise((resolve) => {
+                        timer = setTimeout(() => resolve(false), READY_WAIT_MS);
+                    }),
+                ]);
+                clearTimeout(timer);
+                if (!ready || this._disposed || !this._writer) {
+                    if (!ready && !this._readyTimedOut) {
+                        this._readyTimedOut = true;
+                        console.warn(
+                            '[VideoElementRenderer] sink not ready after ' +
+                                READY_WAIT_MS +
+                                ' ms: frame dropped',
+                        );
+                    }
+                    frame.close();
+                    return;
+                }
             }
             // The generator's writable takes ownership of the frame and closes it.
             await this._writer.write(frame);
@@ -164,13 +193,25 @@ export class VideoElementRenderer extends VideoRenderer {
         }
     }
 
+    /**
+     * Let go of everything at once: the <video> stops presenting, the writer
+     * drops what it still holds (abort, not close — close waits for writes a
+     * stalled sink may never take), and the track ends, which frees the frames
+     * and the hardware decoder buffers behind them.
+     */
     dispose() {
         this._disposed = true;
         try {
-            if (this._writer) this._writer.close();
+            if (this.videoEl) {
+                this.videoEl.pause();
+                this.videoEl.srcObject = null;
+            }
         } catch (e) {}
         try {
-            if (this.videoEl) this.videoEl.srcObject = null;
+            if (this._writer) this._writer.abort().catch(() => {});
+        } catch (e) {}
+        try {
+            if (this._track && typeof this._track.stop === 'function') this._track.stop();
         } catch (e) {}
         this._writer = null;
         this._generator = null;

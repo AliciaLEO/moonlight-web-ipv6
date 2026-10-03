@@ -10935,6 +10935,16 @@ export class StreamView {
         root.appendChild(el);
         requestAnimationFrame(() => el.classList.add('is-active'));
 
+        // Whatever stalls past this — the backend /quit has its own 5-10 s
+        // bounds — the exit screen does not outlive it: the page goes back to
+        // the host list.
+        this._quitWatchdog = setTimeout(() => {
+            if (this._quitFinished) return;
+            console.warn('[StreamView] Quit still pending: forcing the way out');
+            this._quitting = true;
+            this._quitDone();
+        }, StreamView.QUIT_WATCHDOG_MS);
+
         // Shorter than take-over (1.2s deplete) — voluntary, friendly exit.
         // Then power off the "screen" like an old CRT terminal before quitting.
         setTimeout(() => {
@@ -10950,6 +10960,11 @@ export class StreamView {
                 }),
             );
         }, 1200);
+    }
+
+    /** How long the exit screen may stay up before the way out is forced. */
+    static get QUIT_WATCHDOG_MS() {
+        return 15000;
     }
 
     // ── A TV remote: OK held opens the stream's own menu ───────────────────
@@ -11199,7 +11214,20 @@ export class StreamView {
         // Guard: prevent re-entrant calls (e.g. from WS onClose -> setTimeout)
         if (this._quitting) return;
         this._quitting = true;
+        try {
+            await this._quitTeardown({ silent, takenOver, retire, keepHostSession, quitApp });
+        } catch (err) {
+            // A throw half-way used to skip destroy(): the exit screen stayed
+            // up over a page whose keys were already unbound, and every later
+            // quit() returned at the guard above.
+            console.error('[StreamView] Quit teardown failed:', err);
+        } finally {
+            this._quitDone();
+        }
+    }
 
+    /** quit()'s body: everything between the guard and the hand-back. */
+    async _quitTeardown({ silent, takenOver, retire, keepHostSession, quitApp }) {
         // Exit fullscreen if active (before unbinding events).
         // Covers both standard Fullscreen API and iOS webkitExitFullscreen.
         // Also exit CSS fallback fullscreen if active.
@@ -11450,8 +11478,30 @@ export class StreamView {
                 this.webrtc.close();
             }
         }
+    }
 
-        this.destroy();
+    /**
+     * The end of every quit, whatever happened before it: the stream's DOM
+     * goes and the page gets its view back. Runs once — from quit()'s finally,
+     * or from the exit screen's watchdog (_handleManualQuit) when quit() is
+     * still stuck somewhere.
+     */
+    _quitDone() {
+        if (this._quitFinished) return;
+        this._quitFinished = true;
+        clearTimeout(this._quitWatchdog);
+        try {
+            this.destroy();
+        } catch (err) {
+            console.error('[StreamView] destroy failed:', err);
+            // At least the screen: without it the exit overlay stays forever.
+            try {
+                if (this._rootEl) this._rootEl.remove();
+            } catch (e) {}
+            if (!document.querySelector('.stream-overlay')) {
+                document.body.classList.remove('streaming-active');
+            }
+        }
         // In debug mode, what the stream printed goes to the client log now,
         // not at the next tick: the page may be closed next.
         void flushClientLog();
