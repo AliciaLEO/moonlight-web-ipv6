@@ -15,6 +15,13 @@
   without a new click keeps its permission across sessions, which Chrome only
   does for a device with a serial number and a product name.
 
+  "Transmettre à l'hôte" (H2) sends every open device to mw-hid-poc
+  (backend/native-host/tools/hid-poc) on the host given: its collections once,
+  then each input report as it arrives, binary [slot][report id][seq u16][bytes].
+  The host's answers (descriptor built, nodes made, requests from the OS, stats)
+  show under the device. Requests from the host are shown, never sent to the
+  device: no output report reaches the real wheel from this page.
+
   WebHID wants a secure context: serve the folder on the loopback
   (python -m http.server 39918 --bind 127.0.0.1) and open
   http://127.0.0.1:39918/hid-probe.html in Chrome or Edge. The reading is also in
@@ -44,6 +51,8 @@
   th { color: #8aa0b4; font-weight: 500; }
   .bytes span { padding: 0 1px; }
   .bytes span.moved { background: #23462a; }
+  input { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 6px; border: 1px solid #44505c;
+          background: #0d0f11; color: #eee; }
   #result { width: 100%; height: 220px; margin-top: 10px; background: #0d0f11; color: #cfe; border: 1px solid #333;
             font: 12px ui-monospace, Consolas, Menlo, monospace; display: none; }
 </style>
@@ -55,6 +64,11 @@
   <button id="pick" class="primary">Choisir un appareil</button>
   <button id="copy">Copier le relevé</button>
   <button id="reset">Remettre les compteurs à zéro</button>
+</div>
+<div class="bar">
+  <input id="host" class="mono" size="28" placeholder="ws://192.168.1.x:39920">
+  <button id="send">Transmettre à l'hôte</button>
+  <span id="link" class="muted"></span>
 </div>
 <div id="persist" class="muted"></div>
 <div id="devices"></div>
@@ -169,6 +183,98 @@ function resetCounters() {
     }
 }
 
+// ── Transmettre à l'hôte (H2) ────────────────────────────────────────────────
+const link = {
+    ws: null,
+    rtts: [],
+    slots: new Map(), // record -> slot
+};
+
+function slotOf(rec) {
+    if (!link.slots.has(rec)) link.slots.set(rec, link.slots.size);
+    return link.slots.get(rec);
+}
+
+function sendAttach(rec) {
+    if (!link.ws || link.ws.readyState !== WebSocket.OPEN || rec.error) return;
+    rec.host = { state: 'envoyé' };
+    link.ws.send(JSON.stringify({
+        type: 'attach',
+        slot: slotOf(rec),
+        vendorId: rec.device.vendorId,
+        productId: rec.device.productId,
+        productName: rec.name,
+        collections: rec.collections,
+    }));
+}
+
+function sendReport(rec, e, bytes) {
+    if (!link.ws || link.ws.readyState !== WebSocket.OPEN || !rec.host) return;
+    rec.seq = ((rec.seq || 0) + 1) & 0xffff;
+    const frame = new Uint8Array(4 + bytes.length);
+    frame[0] = slotOf(rec);
+    frame[1] = e.reportId;
+    frame[2] = rec.seq & 0xff;
+    frame[3] = rec.seq >> 8;
+    frame.set(bytes, 4);
+    link.ws.send(frame);
+}
+
+function onHostMessage(msg) {
+    if (msg.type === 'pong') {
+        link.rtts.push(performance.now() - msg.t);
+        if (link.rtts.length > 200) link.rtts.shift();
+        return;
+    }
+    if (msg.type === 'hello') {
+        $('link').textContent = msg.canCreate ? 'Hôte connecté' : `Hôte connecté, sans création : ${msg.why}`;
+        for (const rec of state.devices.values()) sendAttach(rec);
+        return;
+    }
+    const rec = Array.from(link.slots.keys()).find((r) => link.slots.get(r) === msg.slot);
+    if (!rec) return;
+    if (msg.type === 'attached') rec.host = { state: 'créé', descriptor: msg.descriptor, nodes: msg.nodes };
+    else if (msg.type === 'refused') rec.host = { state: 'refusé', why: msg.why, descriptor: msg.descriptor };
+    else if (msg.type === 'stats') rec.host = { ...rec.host, stats: msg };
+    else if (msg.type === 'request') {
+        rec.host = { ...rec.host, requests: [...(rec.host?.requests || []).slice(-4), msg] };
+    }
+}
+
+function connectHost() {
+    const url = $('host').value.trim();
+    if (!url) return;
+    try { localStorage.setItem('hidProbeHost', url); } catch { /* private window */ }
+    if (link.ws) link.ws.close();
+    link.slots.clear();
+    for (const rec of state.devices.values()) delete rec.host;
+    $('link').textContent = 'Connexion…';
+    const ws = new WebSocket(url);
+    ws.binaryType = 'arraybuffer';
+    link.ws = ws;
+    ws.onmessage = (ev) => { try { onHostMessage(JSON.parse(ev.data)); } catch { /* not JSON */ } };
+    ws.onclose = () => { if (link.ws === ws) $('link').textContent = 'Hôte déconnecté'; };
+    ws.onerror = () => { $('link').textContent = `Hôte injoignable (${url})`; };
+}
+
+setInterval(() => {
+    if (link.ws && link.ws.readyState === WebSocket.OPEN) link.ws.send(JSON.stringify({ type: 'ping', t: performance.now() }));
+}, 1000);
+
+function hostView(rec) {
+    const h = rec.host;
+    if (!h) return '';
+    const r = link.rtts.slice().sort((a, b) => a - b);
+    const rtt = r.length ? ` · aller-retour réseau médian ${quantile(r, 0.5).toFixed(1)} ms` : '';
+    const s = h.stats
+        ? ` · ${h.stats.received} reçus, ${h.stats.lost} perdus, écriture → evdev médian ${Math.round(h.stats.injectUs.median)} µs, p95 ${Math.round(h.stats.injectUs.p95)} µs`
+        : '';
+    const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const req = (h.requests || []).map((q) => `${esc(q.kind)} id ${q.reportId} : ${esc(q.data)}`).join(' · ');
+    return `<div class="mono">Hôte : ${h.state}${h.why ? ` (${esc(h.why)})` : ''}${h.nodes ? ` · ${esc(h.nodes)}` : ''}${s}${rtt}</div>`
+        + (req ? `<div class="mono muted">Demandes de l'hôte (non transmises) : ${req}</div>` : '');
+}
+
 function onReport(rec, e) {
     const now = e.timeStamp || performance.now();
     if (rec.lastAt !== null) {
@@ -178,6 +284,7 @@ function onReport(rec, e) {
     rec.lastAt = now;
     rec.total++;
     const bytes = new Uint8Array(e.data.buffer, e.data.byteOffset, e.data.byteLength);
+    sendReport(rec, e, bytes);
     let r = rec.reports.get(e.reportId);
     if (!r) {
         r = { count: 0, size: bytes.length, first: Array.from(bytes), last: null, moved: new Set() };
@@ -200,6 +307,7 @@ async function attach(device) {
     } catch (err) {
         rec.error = String(err && err.message || err);
     }
+    sendAttach(rec);
 }
 
 function stats(rec) {
@@ -282,6 +390,7 @@ function render() {
             ${rec.error ? `<div class="warn">Ouverture refusée : ${rec.error}</div>` : ''}
             <div class="mono">${s.reportsPerSec} rapports/s · écart médian ${s.gapMs.median ?? '–'} ms · p95 ${s.gapMs.p95 ?? '–'} ms · max ${s.gapMs.max ?? '–'} ms · ${s.total} reçus</div>
             <table><tr><th>id</th><th>reçus</th><th>octets</th><th>derniers octets (vert = a bougé)</th></tr>${rows || '<tr><td colspan="4" class="muted">Bougez un manche ou appuyez sur un bouton.</td></tr>'}</table>
+            ${hostView(rec)}
         </div>`);
     }
     host.innerHTML = parts.join('') || '<div class="muted">Aucun appareil ouvert.</div>';
@@ -336,6 +445,8 @@ $('copy').addEventListener('click', async () => {
 });
 
 $('reset').addEventListener('click', () => { resetCounters(); render(); });
+$('send').addEventListener('click', connectHost);
+try { $('host').value = localStorage.getItem('hidProbeHost') || ''; } catch { /* private window */ }
 
 init();
 </script>
