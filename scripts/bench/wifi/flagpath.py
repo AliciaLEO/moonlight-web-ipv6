@@ -42,7 +42,10 @@ that did not go out (gated, dropped, evicted) — when the flag was in one of
 them, the click waited for the next that went; `buf` the bufferedAmount the
 relay saw (KB), `after` what libdatachannel still held after its last fragment
 (0: usrsctp took it all); `retr` usrsctp's retransmissions while it was in
-flight; `srtt` SCTP's smoothed round trip.
+flight; `srtt` SCTP's smoothed round trip; `inSctp` the part of `net` above half
+that round trip, which is spent before the chunks leave usrsctp: in its buffer,
+held by the congestion window. `netAll`, `inSAll`: the same for every frame
+of the clicks' minute, not only the flags.
 """
 import argparse
 import bisect
@@ -58,6 +61,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 CA_OUT = os.path.join(REPO, "bench-out", "content-age")
 FLAG = re.compile(r"\[LatencyFlag\] injected click at .* shown at steady (\d+) us")
 LEGS = ["up", "inject", "raise", "toCap", "encode", "send", "net", "decode", "draw", "detect"]
+relay_every = {}  # tag → [(net, net less half SCTP's round trip)] for every frame
 
 
 def read_csv(path):
@@ -177,7 +181,21 @@ def clicks_of(tag):
                 c["retr"] = (later["retrans"] - rec["retrans"]) if later else None
         c["sum"] = sum(c[k] for k in LEGS if c.get(k) is not None) if all(
             c.get(k) is not None for k in LEGS) else None
+        # The air's share of `net`, roughly: half SCTP's own round trip, which
+        # starts when a chunk leaves usrsctp. What is left waited inside it.
+        if c.get("net") is not None and c.get("srtt") is not None:
+            c["inSctp"] = c["net"] - c["srtt"] / 2.0
         out.append(c)
+    # Every frame of the clicks' minute, not only the flags: its way down.
+    every = []
+    for fr in frames:
+        rec = by_cap.get(int(round(fr["hostMs"]))) if fr.get("hostMs") is not None else None
+        if rec is None or not rec.get("lastUs") or fr.get("arrivedMs") is None:
+            continue
+        net = ((fr["arrivedMs"] + off) * 1000.0 - rec["lastUs"]) / 1000.0
+        srtt = rec.get("srttMs") if (rec.get("srttMs") or -1) >= 0 else None
+        every.append((net, net - srtt / 2.0 if srtt is not None else None))
+    relay_every[tag] = every
     return out, relay
 
 
@@ -193,7 +211,7 @@ def fmt(v, w=6):
 
 def summary(tag, cs, relay):
     row = {"tag": tag, "n": len(cs), "matched": sum(1 for c in cs if c["matched"])}
-    for k in ["latency"] + LEGS + ["sum", "buf", "after", "retr", "srtt"]:
+    for k in ["latency"] + LEGS + ["sum", "buf", "after", "retr", "srtt", "inSctp"]:
         row[k] = med([c.get(k) for c in cs])
     row["netP90"] = q([c.get("net") for c in cs], 0.9)
     row["latP90"] = q([c.get("latency") for c in cs], 0.9)
@@ -210,6 +228,10 @@ def summary(tag, cs, relay):
     # to go in once handed over.
     row["sendAll"] = med([(r["lastUs"] - r["inUs"]) / 1000.0 for r in relay
                           if r["outcome"] == "sent" and r.get("lastUs")])
+    every = relay_every.get(tag) or []
+    row["netAll"] = med([n for n, _ in every])
+    row["netAllP90"] = q([n for n, _ in every], 0.9)
+    row["inSctpAll"] = med([h for _, h in every])
     return row
 
 
@@ -245,10 +267,12 @@ def main():
     if not rows:
         raise SystemExit("no pass")
     w = max(len(r["tag"]) for r in rows)
-    cols = ["latency", "latP90"] + LEGS + ["netP90", "sum", "sendAll", "buf", "after", "srtt",
+    cols = ["latency", "latP90"] + LEGS + ["netP90", "inSctp", "sum", "sendAll", "netAll",
+                                          "netAllP90", "inSctpAll", "buf", "after", "srtt",
                                           "skipShare", "retrShare", "afterShare"]
     heads = {"latency": "click", "latP90": "p90", "netP90": "netp90", "sendAll": "sendAl",
-             "skipShare": "skip%", "retrShare": "retr%", "afterShare": "aft%"}
+             "skipShare": "skip%", "retrShare": "retr%", "afterShare": "aft%", "netAll": "netAll",
+             "netAllP90": "allp90", "inSctpAll": "inSAll", "inSctp": "inSctp"}
     print("%-*s %3s " % (w, "pass", "n") + " ".join("%6s" % heads.get(k, k[:6]) for k in cols))
     for r in rows:
         print("%-*s %3d " % (w, r["tag"], r["n"]) + " ".join(fmt(r.get(k)) for k in cols))
