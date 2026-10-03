@@ -8,6 +8,14 @@ echo "== caffeinate"
 pids=$(ps -axo pid=,args= | awk '/[c]affeinate -i -s -t 7200/ {print $1}')
 if [ -n "$pids" ]; then kill $pids && echo "stopped $pids"; else echo "none running"; fi
 apps=$(cat "$L" 2>/dev/null)
+# At night nothing may light the screen, and a game starting can: NO_REOPEN=1
+# leaves the list in ~/mw-leo-apps.txt for whoever reopens them in the morning.
+if [ -n "$NO_REOPEN" ]; then
+  echo "$apps" > ~/mw-leo-apps.txt
+  rm -f "$L"
+  echo "== apps not reopened (night): $(echo $apps) -> ~/mw-leo-apps.txt"
+  exit 0
+fi
 [ -z "$apps" ] && apps="exopanda roblox warthunder autoclicker"
 echo "== apps: $(echo $apps)"
 for a in $apps; do
