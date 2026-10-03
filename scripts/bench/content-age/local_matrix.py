@@ -149,6 +149,12 @@ def main():
                          "may be rebuilding build/ while this runs")
     ap.add_argument("--hold", type=int, default=0,
                     help="the stream held that long for a game, no bench page (pass.py --hold)")
+    ap.add_argument("--target", default="vdisplay",
+                    help="vdisplay (the product's virtual display) | display (a physical screen, "
+                         "named by --display-gpu): a game on a real screen (pass.py --target)")
+    ap.add_argument("--display-gpu", default="",
+                    help="with --target display: the screen this GPU drives (\"RTX\", \"Arc\"), its "
+                         "tile found from the instance's /api/native/status at each pass")
     ap.add_argument("--vdd-gpu", default="",
                     help="the GPU that renders the virtual display (the XML's <friendlyname>), "
                          "e.g. \"NVIDIA GeForce RTX 5060 Ti\"; put back at the end")
@@ -201,12 +207,19 @@ def main():
                         f.write(prepared)
                     since = time.time()
                     launch_dev(rate, cadence, os.path.join(OUT, tag + ".server.log"))
+                    screen = []
+                    if a.target == "display" and a.display_gpu:
+                        sys.path.insert(0, os.path.join(os.path.dirname(HERE), "acceptance"))
+                        import gpu_load
+                        index, disp = gpu_load.display_on_gpu(a.display_gpu)
+                        print("   the screen of", disp.get("gpu"), "is tile", index, flush=True)
+                        screen = ["--display-index", str(index)]
                     r = subprocess.run([sys.executable, os.path.join(HERE, "pass.py"), "--tag", tag,
-                                        "--target", "vdisplay", "--secs", str(a.secs),
+                                        "--target", a.target, "--secs", str(a.secs),
                                         "--every", str(a.every), "--vsync", a.vsync,
                                         "--bitrate", str(a.bitrate), "--settle", str(a.settle),
                                         "--fps", str(a.fps)]
-                                       + (["--autostep"] if cadence == "detect" else [])
+                                       + (["--autostep"] if cadence == "detect" else []) + screen
                                        + client,
                                        capture_output=True, text=True)
                     tail = (r.stdout + r.stderr).strip().splitlines()

@@ -272,8 +272,12 @@ def main():
         if a.hold > 0:
             # A game on the virtual display instead of the bench page (RE9,
             # driven by a script of its own): the stream held, nothing drawn
-            # over it, the overlay read at the end.
+            # over it, the overlay read at the end. The frame log of the held
+            # time, read before the clicks clear it: each frame's age, host to
+            # drawn, under the game.
+            d.eval("window.mwFrameLog && mwFrameLog.clear()")
             time.sleep(a.hold)
+            frame_log = d.eval("window.mwFrameLog ? JSON.stringify(mwFrameLog.summary()) : null")
             # A still screen: the way up with almost no video coming down.
             uplink = uplink_runs(d, a.uplink, a.tag)
             clicks = click_flag(d, a.clicks, tag=a.tag) if a.clicks > 0 else None
@@ -281,6 +285,7 @@ def main():
             with open(os.path.join(age.OUT, a.tag + ".json"), "w") as f:
                 json.dump({"tag": a.tag, "overlay": stats, "args": vars(a),
                            "uplink": uplink, "clicks": clicks,
+                           "frameLog": json.loads(frame_log) if frame_log else None,
                            "env": {k: os.environ.get(k, "")
                                    for k in ("MW_NATIVE_TUNING", "MW_VDD_REFRESH")}}, f)
             print("  held %d s; %s" % (a.hold, ((stats or {}).get("rows") or {}).get(
