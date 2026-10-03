@@ -251,6 +251,65 @@ QString settingsWithMode(const QString& existing, int width, int height, int ref
     return out;
 }
 
+QString settingsWithoutMode(const QString& existing, int width, int height, int refresh,
+                            bool* changed)
+{
+    *changed = false;
+    if (width <= 0 || height <= 0 || refresh <= 0) return existing;
+    // As settingsWithMode() put it in: taking out these very characters gives
+    // the owner the file they had.
+    const QString inserted =
+        QLatin1Char('\n') + resolutionBlock(width, height, refresh, QStringLiteral("    "));
+    QString out = existing;
+    const int at = out.indexOf(inserted);
+    if (at >= 0) {
+        out.remove(at, inserted.size());
+        *changed = true;
+        return out;
+    }
+    // Someone reformatted the file since: the first block listing the three
+    // values, with the blanks around it on its own lines.
+    static const QRegularExpression block(
+        QStringLiteral("[ \\t]*<resolution>.*?</resolution>[ \\t]*\\n?"),
+        QRegularExpression::DotMatchesEverythingOption);
+    const QString w = QStringLiteral("<width>%1</width>").arg(width);
+    const QString h = QStringLiteral("<height>%1</height>").arg(height);
+    const QString r = QStringLiteral("<refresh_rate>%1</refresh_rate>").arg(refresh);
+    auto it = block.globalMatch(existing);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch m = it.next();
+        const QString one = m.captured(0).remove(QLatin1Char(' ')).remove(QLatin1Char('\t'));
+        if (one.contains(w) && one.contains(h) && one.contains(r)) {
+            out.remove(m.capturedStart(0), m.capturedLength(0));
+            *changed = true;
+            return out;
+        }
+    }
+    return existing;
+}
+
+QList<AddedMode> parseAddedModes(const QString& text)
+{
+    static const QRegularExpression line(QStringLiteral("^\\s*(\\d+)x(\\d+)@(\\d+)\\s*$"));
+    QList<AddedMode> out;
+    for (const QString& l : text.split(QLatin1Char('\n'))) {
+        const QRegularExpressionMatch m = line.match(l);
+        if (!m.hasMatch()) continue;
+        AddedMode mode{m.captured(1).toInt(), m.captured(2).toInt(), m.captured(3).toInt()};
+        if (mode.width > 0 && mode.height > 0 && mode.refresh > 0 && !out.contains(mode))
+            out.append(mode);
+    }
+    return out;
+}
+
+QString addedModesText(const QList<AddedMode>& modes)
+{
+    QString out;
+    for (const AddedMode& m : modes)
+        out += QStringLiteral("%1x%2@%3\n").arg(m.width).arg(m.height).arg(m.refresh);
+    return out;
+}
+
 QString settingsXml(int width, int height, int refresh)
 {
     // The layout the driver ships (its own sample, verified on the bench):

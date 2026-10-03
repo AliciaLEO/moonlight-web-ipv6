@@ -25,6 +25,7 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QStringList>
 #include <QThread>
 
 #include <cstdio>
@@ -465,13 +466,82 @@ void deletePackage()
     SetupDiDestroyDeviceInfoList(set);
 }
 
+/// The modes the record says this project added to another VDD's file.
+QList<VirtualDisplay::AddedMode> readAddedModes()
+{
+    QFile f(VirtualDisplay::addedModesPath());
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return {};
+    return VirtualDisplay::parseAddedModes(QString::fromUtf8(f.readAll()));
+}
+
+/// The record rewritten, or removed when it holds nothing.
+void writeAddedModes(const QList<VirtualDisplay::AddedMode>& modes)
+{
+    const QString path = VirtualDisplay::addedModesPath();
+    if (modes.isEmpty()) {
+        QFile::remove(path);
+        return;
+    }
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+        Logger::warning(QStringLiteral("[vdisplay-apply] cannot write %1").arg(path));
+        return;
+    }
+    f.write(VirtualDisplay::addedModesText(modes).toUtf8());
+}
+
+/// @p xml with every mode the record names taken out; @p removed lists them.
+QString withoutAddedModes(const QString& xml, QStringList* removed)
+{
+    QString out = xml;
+    for (const VirtualDisplay::AddedMode& m : readAddedModes()) {
+        bool changed = false;
+        out = VirtualDisplay::settingsWithoutMode(out, m.width, m.height, m.refresh, &changed);
+        if (changed)
+            removed->append(
+                QStringLiteral("%1x%2 at %3 Hz").arg(m.width).arg(m.height).arg(m.refresh));
+    }
+    return out;
+}
+
+/// The modes this project added to another VDD's file, taken out of it, and
+/// the record cleared: the owner's list as it was before our first stream.
+/// When the display is switched off, and when the package is uninstalled
+/// beside another node. A file of ours needs nothing: it is rewritten whole.
+void forgetAddedModes()
+{
+    const QString path = VirtualDisplay::settingsXmlPath();
+    QFile f(path);
+    QString current;
+    if (f.open(QIODevice::ReadOnly | QIODevice::Text)) current = QString::fromUtf8(f.readAll());
+    f.close();
+    if (!current.isEmpty() && !VirtualDisplay::isOurSettings(current)) {
+        QStringList removed;
+        const QString cleaned = withoutAddedModes(current, &removed);
+        if (!removed.isEmpty()) {
+            if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+                Logger::warning(QStringLiteral("[vdisplay-apply] cannot write %1").arg(path));
+                return; // the record stays, for the next try
+            }
+            f.write(cleaned.toUtf8());
+            f.close();
+            Logger::info(QStringLiteral("[vdisplay-apply] taken out of another VDD's mode list "
+                                        "again: %1")
+                             .arg(removed.join(QStringLiteral(", "))));
+        }
+    }
+    writeAddedModes({});
+}
+
 /// The driver's mode list, holding @p width × @p height ahead of the rest.
 ///
 /// The file is shared by every instance of the driver on the machine: one an
 /// owner's own VDD wrote carries no marker of ours and is left exactly as it
-/// is — the display then comes up at whatever that file lists. Ours is
-/// rewritten whenever the wanted mode changes, and @p changed says so, since
-/// the driver only reads this file when the device starts.
+/// is — the display then comes up at whatever that file lists — but for the
+/// client's mode, added ahead of its list and recorded (addedModesPath), so
+/// that the end of the stream, or the next activation, takes it out again.
+/// Ours is rewritten whenever the wanted mode changes, and @p changed says
+/// so, since the driver only reads this file when the device starts.
 bool writeSettings(int width, int height, int refresh, bool* changed, QString* error)
 {
     *changed = false;
@@ -487,10 +557,28 @@ bool writeSettings(int width, int height, int refresh, bool* changed, QString* e
             // Someone else's file — an owner's own VDD, or an install of ours
             // from before the marker. It keeps every one of its modes; the
             // client's is added to the list, and nothing else is touched.
+            //
+            // But first, out with what an earlier stream of ours added and
+            // nobody took out (a server stopped mid-stream, a display that did
+            // not come up): the list must not grow from one client to the
+            // next — two sizes at 240 Hz and the driver brought nothing up.
+            QStringList removed;
+            const QString cleaned = withoutAddedModes(current, &removed);
+            if (!removed.isEmpty())
+                Logger::info(QStringLiteral("[vdisplay-apply] left by an earlier stream, taken "
+                                            "out of another VDD's mode list: %1")
+                                 .arg(removed.join(QStringLiteral(", "))));
+            // The mode as settingsWithMode() spells it, for the record.
+            VirtualDisplay::AddedMode mode{width, height, refresh};
+            const bool sized = VirtualDisplay::normaliseMode(mode.width, mode.height);
+            if (!VirtualDisplay::normaliseRate(mode.refresh))
+                mode.refresh = VirtualDisplay::kRefreshHz;
             bool added = false;
             const QString grown =
-                VirtualDisplay::settingsWithMode(current, width, height, refresh, &added);
-            if (!added) {
+                VirtualDisplay::settingsWithMode(cleaned, width, height, refresh, &added);
+            writeAddedModes(added && sized ? QList<VirtualDisplay::AddedMode>{mode}
+                                           : QList<VirtualDisplay::AddedMode>{});
+            if (grown == current) {
                 Logger::info(QStringLiteral("[vdisplay-apply] %1 belongs to another VDD — left as "
                                             "it is")
                                  .arg(path));
@@ -503,12 +591,14 @@ bool writeSettings(int width, int height, int refresh, bool* changed, QString* e
             f.write(grown.toUtf8());
             f.close();
             *changed = true;
-            Logger::info(QStringLiteral("[vdisplay-apply] %1x%2 at %3 Hz added to another VDD's "
-                                        "mode list in %4 — its own modes kept")
-                             .arg(width)
-                             .arg(height)
-                             .arg(refresh > 0 ? refresh : VirtualDisplay::kRefreshHz)
-                             .arg(path));
+            if (added)
+                Logger::info(QStringLiteral("[vdisplay-apply] %1x%2 at %3 Hz added to another "
+                                            "VDD's mode list in %4 — its own modes kept, ours "
+                                            "taken out at the end")
+                                 .arg(mode.width)
+                                 .arg(mode.height)
+                                 .arg(mode.refresh)
+                                 .arg(path));
             return true;
         }
     } else if (!QDir().mkpath(QFileInfo(path).absolutePath())) {
@@ -620,6 +710,7 @@ int stageDriver(Context& ctx)
         } else {
             Logger::info(QStringLiteral(
                 "[vdisplay-apply] another node uses the driver — package and settings kept"));
+            forgetAddedModes();
         }
         ctx.result.ok = true;
         ctx.result.stage = QStringLiteral("done");
@@ -661,6 +752,10 @@ int stageDriver(Context& ctx)
         } else if (!setEnabled(nodes.set, *ours, enable, &error)) {
             return failAt(ctx, stage, error);
         }
+        // Off: the client's mode leaves the owner's list with the stream. The
+        // driver read it when the device started; a device stopped reads
+        // nothing until the next activation adds what that client needs.
+        if (!enable) forgetAddedModes();
         ctx.result.ok = true;
         ctx.result.stage = stage;
         return kExitOk; // the caller decides whether a mode stage follows
@@ -1216,6 +1311,8 @@ int stageMode(Context& ctx)
                 Logger::warning(
                     QStringLiteral("[vdisplay-apply] the device stays on: %1").arg(disableError));
         }
+        // Nor does the mode it was asked for stay in an owner's list.
+        forgetAddedModes();
         return failAt(ctx, stage, QStringLiteral("the virtual display did not appear"));
     }
     ctx.result.display = target->gdiName;

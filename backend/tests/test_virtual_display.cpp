@@ -18,6 +18,7 @@
 #include "backend/VirtualDisplay.h"
 #include "test_framework.h"
 
+#include <QFileInfo>
 #include <QRegularExpression>
 
 // The pure half of "MoonlightWeb Virtual Display": what an elevated helper
@@ -269,6 +270,61 @@ void run_virtual_display_tests()
         const QString noList = QStringLiteral("<vdd_settings><options/></vdd_settings>");
         CHECK_EQ(settingsWithMode(noList, 2532, 1170, 120, &changed), noList);
         CHECK(!changed);
+    }
+
+    SECTION("VirtualDisplay — the mode added to another VDD's list comes out again");
+    {
+        const QString theirs =
+            QStringLiteral("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<vdd_settings>\n"
+                           "  <resolutions>\n"
+                           "    <resolution>\n      <width>800</width>\n"
+                           "      <height>600</height>\n      <refresh_rate>30</refresh_rate>\n"
+                           "    </resolution>\n"
+                           "  </resolutions>\n</vdd_settings>\n");
+        bool changed = false;
+        const QString grown = settingsWithMode(theirs, 1784, 1160, 240, &changed);
+        CHECK(changed);
+        // Out again: the owner's file, byte for byte.
+        CHECK_EQ(settingsWithoutMode(grown, 1784, 1160, 240, &changed), theirs);
+        CHECK(changed);
+        // Not there, or another rate of the same size: nothing touched.
+        CHECK_EQ(settingsWithoutMode(theirs, 1784, 1160, 240, &changed), theirs);
+        CHECK(!changed);
+        CHECK_EQ(settingsWithoutMode(grown, 1784, 1160, 120, &changed), grown);
+        CHECK(!changed);
+        // Reformatted since: still found by its values, the owner's kept.
+        QString tabbed = grown;
+        tabbed.replace(QStringLiteral("    <resolution>\n      <width>1784"),
+                       QStringLiteral("\t<resolution>\n\t\t<width>1784"));
+        const QString back = settingsWithoutMode(tabbed, 1784, 1160, 240, &changed);
+        CHECK(changed);
+        CHECK(!back.contains(QStringLiteral("<width>1784</width>")));
+        CHECK(back.contains(QStringLiteral("<width>800</width>")));
+        CHECK(back.contains(QStringLiteral("</resolutions>")));
+
+        // DualRTX, 03/10/2026: a TV's 1280×720 at 240 left in the list, then a
+        // Mac's 1784×1160 at 240. The next activation takes the first out
+        // before it adds the second: one mode of ours at a time.
+        const QString leftover = settingsWithMode(theirs, 1280, 720, 240, &changed);
+        const QString cleaned = settingsWithoutMode(leftover, 1280, 720, 240, &changed);
+        const QString next = settingsWithMode(cleaned, 1784, 1160, 240, &changed);
+        CHECK(!next.contains(QStringLiteral("<width>1280</width>")));
+        CHECK(next.contains(QStringLiteral("<width>1784</width>")));
+        CHECK_EQ(settingsWithoutMode(next, 1784, 1160, 240, &changed), theirs);
+    }
+
+    SECTION("VirtualDisplay — the record of the modes we added reads back what it wrote");
+    {
+        const QList<AddedMode> modes = parseAddedModes(
+            QStringLiteral("1784x1160@240\n1280x720@240\nnot a mode\n1784x1160@240\n0x0@60\n"));
+        CHECK_EQ(int(modes.size()), 2);
+        CHECK(modes.value(0) == (AddedMode{1784, 1160, 240}));
+        CHECK(modes.value(1) == (AddedMode{1280, 720, 240}));
+        CHECK_EQ(addedModesText(modes), QStringLiteral("1784x1160@240\n1280x720@240\n"));
+        CHECK(parseAddedModes(QString()).isEmpty());
+        // Beside the driver's own file, which both editions share.
+        CHECK_EQ(QFileInfo(addedModesPath()).absolutePath(),
+                 QFileInfo(settingsXmlPath()).absolutePath());
     }
 
     SECTION("VirtualDisplay — the client's refresh rate travels and fills the mode list");

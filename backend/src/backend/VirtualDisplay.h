@@ -19,6 +19,7 @@
 
 #include <QByteArray>
 #include <QJsonObject>
+#include <QList>
 #include <QString>
 
 #include <array>
@@ -351,6 +352,42 @@ bool isOurSettings(const QString& xml);
 /// there is no size to add.
 QString settingsWithMode(const QString& existing, int width, int height, int refresh,
                          bool* changed);
+
+/// @p existing with the mode settingsWithMode() added for @p width ×
+/// @p height at @p refresh taken out again: the block exactly as it went in,
+/// so the owner's file comes back byte for byte, or else the first block that
+/// lists those three values. Returns the file unchanged (@p changed false)
+/// when no block lists that mode.
+QString settingsWithoutMode(const QString& existing, int width, int height, int refresh,
+                            bool* changed);
+
+/// A mode this project added to another VDD's list.
+struct AddedMode
+{
+    int width = 0;
+    int height = 0;
+    int refresh = 0;
+    bool operator==(const AddedMode& o) const
+    {
+        return width == o.width && height == o.height && refresh == o.refresh;
+    }
+};
+
+/// The record of those modes, one `1784x1160@240` a line: what the next
+/// activation, or this one's end, takes out of the owner's file. Without it
+/// the list grew by a mode with every new client — on DualRTX, 03/10/2026, a
+/// 1280×720 at 240 Hz left by a TV's stream, after which the driver no longer
+/// brought the display up for a Mac's 1784×1160 at 240. Lines that do not
+/// read as a mode are skipped.
+QList<AddedMode> parseAddedModes(const QString& text);
+QString addedModesText(const QList<AddedMode>& modes);
+
+/// Where that record lives: beside the driver's file, which both editions
+/// write to, so either takes out what the other added.
+inline QString addedModesPath()
+{
+    return QStringLiteral("C:/VirtualDisplayDriver/moonlightweb-added-modes.txt");
+}
 
 // ── Paths ───────────────────────────────────────────────────────────────────
 
