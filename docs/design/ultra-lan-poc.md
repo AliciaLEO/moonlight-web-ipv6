@@ -370,8 +370,12 @@ sans elle). Médianes de deux passes par mode :
 - **Outil.** `1cdb4eb9` est vérifié en vrai stream : les passes AV1 ont leur
   âge par image. Une passe est illisible (Arc, AV1, A1) : tous les pixels lus
   de la bande et du drapeau sont blancs (255), alors que le décodage et l'âge
-  par image étaient normaux. La cause n'est pas trouvée, et la passe suivante
-  sur le même hôte est passée. Ses clics manquent au tableau (28 / 60).
+  par image étaient normaux. La passe suivante sur le même hôte est passée, et
+  ses clics manquent au tableau (28 / 60). Cause probable : la fenêtre blanche
+  du kiosque de contenu, déjà vue le 22/09 (`acceptance/run.py`,
+  `content_start`). Le banc d'âge l'ouvre sans la vérification d'image qui
+  relance un kiosque resté blanc (`probe=False`). Le calage de la bande, par
+  DevTools, réussit quand même. Ce n'est pas vérifié.
 
 ## 7. Concrètement, pour l'utilisateur
 
