@@ -215,16 +215,16 @@ void run_cadence_choice_tests()
     SECTION("linkhold= and sctpbuf= — off by default, named when set");
     {
         EncoderTuning t;
-        CHECK(!t.linkHold);
+        CHECK_EQ(t.linkHoldMs, 0);
         CHECK_EQ(t.sctpBufferKb, 0);
         t.sctpBufferKb = 48;
         CHECK(!t.isDefault());
         CHECK_EQ(t.describe(), std::string("sctpbuf=48"));
-        t.linkHold = true;
-        CHECK_EQ(t.describe(), std::string("sctpbuf=48 linkhold=1"));
+        t.linkHoldMs = 4;
+        CHECK_EQ(t.describe(), std::string("sctpbuf=48 linkhold=4"));
         t.sctpBufferKb = 0;
         CHECK(!t.isDefault());
-        CHECK_EQ(t.describe(), std::string("linkhold=1"));
+        CHECK_EQ(t.describe(), std::string("linkhold=4"));
     }
 
     // A client whose decoder falls silent under the reference repairs asks for

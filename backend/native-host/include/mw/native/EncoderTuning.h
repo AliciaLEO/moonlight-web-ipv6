@@ -417,13 +417,16 @@ struct EncoderTuning
     /// usrsctp's send buffer, in KB, really (plan Wi-Fi W2 C). 0, the product:
     /// 256 KiB whatever the bitrate, since libdatachannel raises the buffer to
     /// its largest message. What waits in there the host cannot see; what it
-    /// cannot take waits in `bufferedAmount`, where linkHold looks.
+    /// cannot take waits in `bufferedAmount`, where linkHoldMs looks.
     int sctpBufferKb = 0;
-    /// A picture is held, not encoded, while video waits outside usrsctp; the
-    /// freshest goes once it drained (plan Wi-Fi W2 C; Windows host). A queue
-    /// turned into a lower frame rate, with no hole in the references. false,
-    /// the product: every picture is encoded.
-    bool linkHold = false;
+    /// A picture is held, not encoded, once video has waited outside usrsctp
+    /// for this many milliseconds without the queue draining; the freshest
+    /// goes once it drained (plan Wi-Fi W2 C; Windows host). A queue turned
+    /// into a lower frame rate, with no hole in the references. Not at the
+    /// first byte: on Ethernet a frame bigger than usrsctp's room overflows
+    /// for a millisecond or two, and holding on that halved the frame rate
+    /// (03/10/2026). 0, the product: every picture is encoded.
+    int linkHoldMs = 0;
 
     bool isDefault() const
     {
@@ -451,7 +454,7 @@ struct EncoderTuning
                mutterDirect == Choice::Default && lossPermille == 0 && lossBurst == 0 &&
                sctpCongestion < 0 && floodKbps == 0 && floodBytes == 0 && !floodLikeVideo &&
                !relayLog && paceMultiple == 0 && paceBurstKb == 0 && retransCutPermille == 0 &&
-               sctpBufferKb == 0 && !linkHold;
+               sctpBufferKb == 0 && linkHoldMs == 0;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -554,7 +557,7 @@ struct EncoderTuning
         if (paceBurstKb > 0) add("paceburst=" + std::to_string(paceBurstKb));
         if (retransCutPermille > 0) add("retrcut=" + std::to_string(retransCutPermille));
         if (sctpBufferKb > 0) add("sctpbuf=" + std::to_string(sctpBufferKb));
-        if (linkHold) add("linkhold=1");
+        if (linkHoldMs > 0) add("linkhold=" + std::to_string(linkHoldMs));
         return s;
     }
 };

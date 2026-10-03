@@ -1939,9 +1939,10 @@ private:
             log::info("[native] rate governor: also cuts at " +
                       std::to_string(governor.retransCut()) +
                       " SCTP chunks retransmitted in a thousand (bench retrcut=)");
-        if (m_Config.tuning.linkHold)
-            log::info("[native] link hold: a picture waits, unencoded, while video waits "
-                      "outside usrsctp (bench linkhold=)");
+        if (m_Config.tuning.linkHoldMs > 0)
+            log::info("[native] link hold: a picture waits, unencoded, once video has waited "
+                      "outside usrsctp " +
+                      std::to_string(m_Config.tuning.linkHoldMs) + " ms (bench linkhold=)");
         int baseKbps = governor.targetKbps();
         m_LinkKbps = baseKbps;
         bool boosted = false;
@@ -2099,7 +2100,7 @@ private:
         // now would only wait behind it, so it is held, and the freshest
         // goes the moment the queue drained. No reference is ever missing:
         // a picture never encoded is no hole.
-        const bool linkHold = m_Config.tuning.linkHold;
+        const bool linkHold = m_Config.tuning.linkHoldMs > 0;
         bool heldForLink = false;
         auto creditMissing = [&]() {
             return (guarded && m_DecodeCredit.missing(steadyNowUs())) || (linkHold && linkBusy());
@@ -3448,7 +3449,7 @@ private:
         }
 
         // linkhold=: what the relay's send queue held back.
-        if (m_Config.tuning.linkHold && seconds > 0) {
+        if (m_Config.tuning.linkHoldMs > 0 && seconds > 0) {
             const auto perSecond = [seconds](int64_t n) {
                 return std::to_string(static_cast<int>(static_cast<double>(n) / seconds + 0.5));
             };

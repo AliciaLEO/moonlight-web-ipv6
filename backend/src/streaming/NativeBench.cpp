@@ -220,8 +220,9 @@ const char* const kUsage =
     "                    many chunks in a thousand (Windows host; plan Wi-Fi W2 B)\n"
     "  sctpbuf=<KB>      usrsctp's send buffer, 24-1024, really: also the largest message\n"
     "                    either side may send (256 KB otherwise; plan Wi-Fi W2 C)\n"
-    "  linkhold=0|1      a picture held, not encoded, while video waits outside usrsctp;\n"
-    "                    the freshest goes once it drained (Windows host; with sctpbuf=)\n"
+    "  linkhold=<ms>     a picture held, not encoded, once video has waited outside usrsctp\n"
+    "                    that long, 1-100; the freshest goes once it drained (Windows host;\n"
+    "                    with sctpbuf=)\n"
     "the bench's own:\n"
     "  dump=<path>      the encoded stream as it comes out (Annex-B, or OBUs for AV1)\n"
     "  lose=<frames>[x<burst>][k]  every N frames, report the latest one lost (reference\n"
@@ -532,9 +533,8 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
         tuning.sctpBufferKb = value.toInt(&ok);
         ok = ok && tuning.sctpBufferKb >= 24 && tuning.sctpBufferKb <= 1024;
     } else if (key == "linkhold") {
-        const int v = value.toInt(&ok);
-        ok = ok && (v == 0 || v == 1);
-        tuning.linkHold = v == 1;
+        tuning.linkHoldMs = value.toInt(&ok);
+        ok = ok && tuning.linkHoldMs >= 0 && tuning.linkHoldMs <= 100;
     } else {
         return false;
     }

@@ -797,7 +797,7 @@ void DataChannelRelay::setLinkBench(const mw::native::EncoderTuning& tuning)
     m_PaceMultiple = tuning.paceMultiple;
     m_PaceBurstKb = tuning.paceBurstKb;
     m_SctpBufferKb = tuning.sctpBufferKb;
-    m_LinkHold = tuning.linkHold;
+    m_LinkHoldMs = tuning.linkHoldMs;
     if (tuning.relayLog && !m_FrameLog) {
         m_FrameLog = std::make_unique<RelayFrameLog>();
         qWarning() << "[DataChannelRelay] bench frame log on (relaylog=1): each video frame's way "
@@ -1074,19 +1074,38 @@ void DataChannelRelay::createDataChannels()
         m_VideoDc->onClosed([this]() { qInfo() << "[DataChannelRelay] Video DataChannel closed"; });
     }
     // `linkhold=` (plan Wi-Fi W2 C): the native session asks, at each picture,
-    // whether video still waits outside usrsctp. `bufferedAmount` is an atomic
-    // in libdatachannel, so the capture thread may read it; the channel is held
-    // weakly and a closed one is never busy.
-    if (m_VideoDc && m_LinkHold) {
+    // whether video has waited outside usrsctp for longer than the key says.
+    // Not whether it waits at all: on Ethernet a frame bigger than usrsctp's
+    // room overflows for a millisecond or two and is gone, and holding on that
+    // halved the frame rate (03/10/2026) — held pictures come out bigger and
+    // overflow again. So the probe dates the start of each backlog, and the
+    // channel's "buffered amount low" (at 0) closes it. `bufferedAmount` is an
+    // atomic in libdatachannel, so the capture thread may read it; the
+    // channel is held weakly and a closed one is never busy.
+    if (m_VideoDc && m_LinkHoldMs > 0) {
         if (auto* native = qobject_cast<NativeMediaEngine*>(m_Shim)) {
             std::weak_ptr<rtc::DataChannel> weak = m_VideoDc;
-            native->setLinkBusyProbe([weak]() {
+            auto since = std::make_shared<std::atomic<int64_t>>(-1);
+            m_VideoDc->setBufferedAmountLowThreshold(0);
+            m_VideoDc->onBufferedAmountLow([since]() { since->store(-1); });
+            const int64_t graceUs = static_cast<int64_t>(m_LinkHoldMs) * 1000;
+            native->setLinkBusyProbe([weak, since, graceUs]() {
                 const auto dc = weak.lock();
-                return dc && dc->isOpen() && dc->bufferedAmount() > 0;
+                if (!dc || !dc->isOpen() || dc->bufferedAmount() == 0) {
+                    since->store(-1);
+                    return false;
+                }
+                const int64_t nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch())
+                                          .count();
+                int64_t from = since->load();
+                if (from < 0 && since->compare_exchange_strong(from, nowUs)) from = nowUs;
+                return nowUs - from >= graceUs;
             });
             qWarning() << "[DataChannelRelay] bench link hold (linkhold=): the session holds "
-                          "its pictures while video waits outside usrsctp ("
-                       << (m_SctpBufferKb > 0 ? m_SctpBufferKb : 256) << "KiB)";
+                          "its pictures once video has waited outside usrsctp ("
+                       << (m_SctpBufferKb > 0 ? m_SctpBufferKb : 256) << "KiB) for" << m_LinkHoldMs
+                       << "ms";
         } else {
             qWarning() << "[DataChannelRelay] linkhold= asked for, but this engine is not the "
                           "native one: nothing held";
@@ -2391,7 +2410,7 @@ void DataChannelRelay::stop()
             native->setDirectFrameSink(nullptr);
     }
     // linkhold=: a WebSocket fallback must not ask a channel that is going.
-    if (m_LinkHold) {
+    if (m_LinkHoldMs > 0) {
         if (auto* native = qobject_cast<NativeMediaEngine*>(m_Shim))
             native->setLinkBusyProbe(nullptr);
     }
