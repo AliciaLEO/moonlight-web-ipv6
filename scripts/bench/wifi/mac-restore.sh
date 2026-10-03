@@ -10,10 +10,14 @@ if [ -n "$pids" ]; then kill $pids && echo "stopped $pids"; else echo "none runn
 apps=$(cat "$L" 2>/dev/null)
 # At night nothing may light the screen, and a game starting can: NO_REOPEN=1
 # leaves the list in ~/mw-leo-apps.txt for whoever reopens them in the morning.
+# Added to what is there, never written over it: a second bench the same night
+# finds nothing running (the first one's apps were not reopened), and its empty
+# list must not wipe the morning's.
 if [ -n "$NO_REOPEN" ]; then
-  echo "$apps" > ~/mw-leo-apps.txt
+  { cat ~/mw-leo-apps.txt 2>/dev/null; echo "$apps"; } | tr ' ' '\n' | grep -v '^$' | sort -u > ~/mw-leo-apps.tmp
+  mv ~/mw-leo-apps.tmp ~/mw-leo-apps.txt
   rm -f "$L"
-  echo "== apps not reopened (night): $(echo $apps) -> ~/mw-leo-apps.txt"
+  echo "== apps not reopened (night): $(echo $apps) -> ~/mw-leo-apps.txt now: $(tr '\n' ' ' < ~/mw-leo-apps.txt)"
   exit 0
 fi
 [ -z "$apps" ] && apps="exopanda roblox warthunder autoclicker"
