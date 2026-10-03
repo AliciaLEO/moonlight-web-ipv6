@@ -116,6 +116,21 @@ pacing changed nothing measurable.
   frames overflow usrsctp for a millisecond or two; holding on that took the
   stream from 223 to 87 fps (03/10/2026), the held frames coming out bigger.
 
+**C's verdict (W2 C, night of 03/10/2026): not for the product, the keys
+stay.** On the Mac in Wi-Fi, two alternated rounds over B's default:
+
+| | click → flag (p90) | frame age median / p90 | fps | kernel drops | Mbit/s |
+|---|---|---|---|---|---|
+| B alone | 63.6 ms (78) | 15 / 26 ms | 120 | 472 | 21 |
+| `sctpbuf=48,linkhold=4` | 83.1 ms (134) | 26 / 79 ms | 31 | 0 | 25 |
+| `sctpbuf=32,linkhold=4` | 77.7 ms (141) | 31 / 81 ms | 31 | 0 | 17 |
+
+usrsctp keeps a byte until it is acked, and on this Wi-Fi that takes ~16 ms
+even with no loss: a smaller buffer caps the throughput (about buffer / 16 ms)
+instead of shortening a queue, and the hold turns the excess into frame rate.
+With so little in flight Chrome's socket never overflowed (0 drops), which
+confirms W1 bis at too high a price. On Ethernet `linkhold=4` kept 225-233 fps.
+
 ```bash
 bash ../../../bench-out/wifi/w2b-um-run.sh                  # Ethernet witness (C=1: also linkhold)
 python series.py mac --prefix w2c --name machold --contents clk --tuning relaylog=1,sctpbuf=48,linkhold=4 --udp
