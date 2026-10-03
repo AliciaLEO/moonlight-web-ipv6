@@ -109,6 +109,7 @@ const state = {
     opener: /** @type {string|null} */ (null),
     observer: /** @type {MutationObserver|null} */ (null),
     bodyObserver: /** @type {MutationObserver|null} */ (null),
+    headerObserver: /** @type {ResizeObserver|null} */ (null),
     restoreQueued: false,
     pollTimer: /** @type {ReturnType<typeof setInterval>|null} */ (null),
     /** pad index → { pressed: Set<number>, heldDir, nextRepeatAt } */
@@ -360,6 +361,15 @@ function scrollable(el) {
     for (let n = el; n && n !== document.body; n = n.parentElement) {
         const s = getComputedStyle(n);
         if (/(auto|scroll)/.test(s.overflowY) && n.scrollHeight > n.clientHeight) return n;
+    }
+    // On a TV the document itself scrolls (layout.css, html.remote-nav).
+    const root = /** @type {HTMLElement|null} */ (document.scrollingElement);
+    if (
+        root &&
+        root.scrollHeight > root.clientHeight &&
+        getComputedStyle(document.documentElement).overflowY !== 'hidden'
+    ) {
+        return root;
     }
     return null;
 }
@@ -643,11 +653,31 @@ export function init() {
     state.bodyObserver = new MutationObserver(onBodyClass);
     state.bodyObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
     if (isActive()) {
-        // The thicker focus ring and the lifted card (base.css).
+        // The thicker focus ring and the lifted card (base.css), and the
+        // document as the page's scroller (layout.css).
         document.documentElement.classList.add('remote-nav');
         state.pollTimer = setInterval(pollPads, PAD_POLL_MS);
+        measureHeader();
     }
     exposeDebug();
+}
+
+/**
+ * The sticky app header's height, for what sticks under it and for where a
+ * scrolled-to element lands (--app-header-h, layout.css and settings.css).
+ */
+function measureHeader() {
+    const header = document.querySelector('.app-header');
+    if (!header) return;
+    const apply = () => {
+        const h = /** @type {HTMLElement} */ (header).offsetHeight;
+        if (h > 0) document.documentElement.style.setProperty('--app-header-h', h + 'px');
+    };
+    apply();
+    if (typeof ResizeObserver === 'function') {
+        state.headerObserver = new ResizeObserver(apply);
+        state.headerObserver.observe(header);
+    }
 }
 
 /** Tests: force the mode, and forget everything. */
@@ -659,6 +689,8 @@ export function _resetForTest() {
     if (state.observer) state.observer.disconnect();
     if (state.bodyObserver) state.bodyObserver.disconnect();
     state.bodyObserver = null;
+    if (state.headerObserver) state.headerObserver.disconnect();
+    state.headerObserver = null;
     if (state.pollTimer) clearInterval(state.pollTimer);
     if (typeof window !== 'undefined') {
         window.removeEventListener('keydown', onKeyDown, true);

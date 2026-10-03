@@ -2,7 +2,7 @@
  * MoonlightWeb — TNR suite. Copyright (C) 2026 Bruno Martin.
  * GPLv3 — see repository LICENSE.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
     pickNext,
     navKey,
@@ -295,6 +295,55 @@ describe('RemoteNav on a page', () => {
         _pollForTest();
         expect(document.activeElement).toBe(b);
         delete (/** @type {any} */ (navigator).getGamepads);
+    });
+});
+
+describe('RemoteNav: at the edge of a long page', () => {
+    const root = document.documentElement;
+    let scrollBy;
+
+    beforeEach(() => {
+        _resetForTest();
+        document.body.innerHTML = '';
+        scrollBy = vi.fn();
+        // jsdom has no layout: a document taller than the screen.
+        Object.defineProperty(document, 'scrollingElement', { value: root, configurable: true });
+        Object.defineProperty(root, 'scrollHeight', { value: 2000, configurable: true });
+        Object.defineProperty(root, 'clientHeight', { value: 700, configurable: true });
+        root.scrollBy = scrollBy;
+    });
+    afterEach(() => {
+        _resetForTest();
+        delete (/** @type {any} */ (document).scrollingElement);
+        delete (/** @type {any} */ (root).scrollHeight);
+        delete (/** @type {any} */ (root).clientHeight);
+        delete (/** @type {any} */ (root).scrollBy);
+    });
+
+    it('on a TV the document itself scrolls: Down past the last card shows more', () => {
+        _setActiveForTest(true);
+        init();
+        button('top', 0, 0);
+        const last = button('last', 0, 600);
+        last.focus();
+        const ev = press('ArrowDown');
+        expect(scrollBy).toHaveBeenCalledWith({ top: 700 * 0.6 });
+        expect(ev.defaultPrevented).toBe(true);
+    });
+
+    it('a scrolling box around the focus is still scrolled first', () => {
+        _setActiveForTest(true);
+        init();
+        const box = document.createElement('div');
+        box.style.overflowY = 'auto';
+        Object.defineProperty(box, 'scrollHeight', { value: 900 });
+        Object.defineProperty(box, 'clientHeight', { value: 300 });
+        box.scrollBy = vi.fn();
+        document.body.appendChild(box);
+        button('inside', 0, 0, 100, 60, box).focus();
+        press('ArrowDown');
+        expect(box.scrollBy).toHaveBeenCalledWith({ top: 300 * 0.6 });
+        expect(scrollBy).not.toHaveBeenCalled();
     });
 });
 

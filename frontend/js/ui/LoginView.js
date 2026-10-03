@@ -548,7 +548,11 @@ export class LoginView {
     _keepSubmitInView(input, btn) {
         this._releaseSubmitInView();
         const vv = window.visualViewport;
-        const scroller = /** @type {HTMLElement|null} */ (this.container.closest('#main-content'));
+        // On a TV the document scrolls, not #main-content (layout.css).
+        const docScrolls = document.documentElement.classList.contains('remote-nav');
+        const scroller = /** @type {HTMLElement|null} */ (
+            docScrolls ? document.scrollingElement : this.container.closest('#main-content')
+        );
         if (!vv || !scroller || !window.matchMedia('(pointer: coarse)').matches) return;
 
         const reveal = () => {
@@ -557,10 +561,9 @@ export class LoginView {
             scroller.style.paddingBottom = covered > 0 ? `${covered}px` : '';
             // Whichever ends first: the keyboard's top edge, or the scroll
             // area's own (the footer sits under it).
-            const visibleBottom = Math.min(
-                vv.offsetTop + vv.height,
-                scroller.getBoundingClientRect().bottom,
-            );
+            const visibleBottom = docScrolls
+                ? vv.offsetTop + vv.height
+                : Math.min(vv.offsetTop + vv.height, scroller.getBoundingClientRect().bottom);
             const overflow = btn.getBoundingClientRect().bottom + 12 - visibleBottom;
             if (overflow > 0) scroller.scrollTop += overflow;
         };

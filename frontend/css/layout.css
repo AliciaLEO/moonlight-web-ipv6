@@ -233,6 +233,41 @@
     width: 100%;
 }
 
+/* ── On a TV, the document scrolls instead ──────────────────────────────────
+   A TV browser's own cursor (TV Bro, TCL Browser) scrolls the DOCUMENT when it
+   reaches an edge of the screen. With #main-content as the scroller nothing
+   moved, and the host list stayed cut at the bottom (03/10/2026, a Mi TV).
+   Under RemoteNav (.remote-nav, TVs only) the page grows with its content and
+   the header sticks to the top; the stream is position:fixed, untouched. */
+html.remote-nav {
+    height: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+    /* Whatever is scrolled to (a focused card) lands below the header, whose
+       height RemoteNav measures into --app-header-h. */
+    scroll-padding-top: calc(var(--app-header-h, 64px) + 16px);
+    scrollbar-width: thin;
+    scrollbar-color: var(--surface-4) transparent;
+}
+html.remote-nav body {
+    height: auto;
+    min-height: 100%;
+    overflow: visible;
+}
+html.remote-nav #app {
+    height: auto;
+    min-height: 100vh;
+    min-height: 100dvh;
+}
+html.remote-nav #main-content {
+    flex: 1 0 auto;
+    overflow: visible;
+}
+html.remote-nav .app-header {
+    position: sticky;
+    top: 0;
+}
+
 /* Inner views are centered with a max width — the scrollbar stays on the
    right edge of the viewport, below the header. */
 .hosts-view,

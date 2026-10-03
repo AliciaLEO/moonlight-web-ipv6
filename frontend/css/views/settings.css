@@ -10,6 +10,23 @@
     justify-content: space-between;
     margin-bottom: var(--space-5);
 }
+/* On a TV the document scrolls (layout.css): the page's title and its ✕ stay
+   under the app header, or the only way out of a long page scrolled away —
+   a TV remote's Back never reaches the page. */
+html.remote-nav .settings-header,
+html.remote-nav .admin-header {
+    position: sticky;
+    top: var(--app-header-h, 64px);
+    z-index: 50;
+    margin-inline: calc(-1 * var(--space-3));
+    padding: var(--space-2) var(--space-3);
+    background: var(--surface-glass);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+}
+html.remote-nav:has(.settings-header, .admin-header) {
+    scroll-padding-top: calc(var(--app-header-h, 64px) + 88px);
+}
 .settings-header h2,
 .admin-header h2 {
     font-size: var(--fs-xl);
