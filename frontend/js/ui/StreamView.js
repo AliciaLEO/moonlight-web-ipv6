@@ -450,6 +450,14 @@ class SlidingStats {
     }
 }
 
+/**
+ * The stream <video>'s poster: one transparent pixel. Without one, Android's
+ * WebView draws its own grey "play" picture over a <video> that has no frame
+ * yet — a huge blurred one behind the startup steps on a TV (Mi TV, 03/10/2026).
+ */
+export const BLANK_POSTER =
+    'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
 /** The keys a remote's arrows arrive as, and the way each steers the pointer. */
 const REMOTE_POINTER_DIRS = {
     ArrowUp: 'up',
@@ -1998,7 +2006,7 @@ export class StreamView {
             </div>
             <div class="stream-canvas-area">
                 <canvas id="stream-canvas" class="stream-canvas"></canvas>
-                <video id="stream-video" class="stream-video" autoplay muted playsinline></video>
+                <video id="stream-video" class="stream-video" autoplay muted playsinline poster="${BLANK_POSTER}"></video>
                 <audio id="stream-audio" autoplay playsinline></audio>
                 <div id="stream-latency-mark" class="stream-latency-mark" hidden></div>
                 <div id="stream-input-layer" class="stream-input-layer"></div>
