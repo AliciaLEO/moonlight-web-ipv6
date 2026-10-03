@@ -6100,7 +6100,7 @@ Jusqu'au 03/10, la sonde copiait la bande sur le fil principal, avant le
 dessin de l'image : chaque image lue attendait d'autant, et la sonde ne
 calcule ses âges que sur ces images-là. Mesuré le 03/10 : 11 à 13 ms sur le
 client local de DualRTX, 7,3 ms sur le N95, 4,0 ms sur l'UM790Pro sous
-Windows ; non mesuré sur le Mac. Les âges absolus des §8m à §8t sont donc trop
+Windows ; non mesuré sur le Mac. Les âges absolus des §8p et §8t sont donc trop
 hauts d'à peu près ce coût. Les écarts entre modes le portent des deux côtés.
 La copie se fait maintenant dans un worker (`b83f3dac`) et ne coûte plus que
 0,1 à 0,2 ms (`docs/design/ultra-lan-poc.md` §6.2).
