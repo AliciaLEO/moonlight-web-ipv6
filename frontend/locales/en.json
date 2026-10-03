@@ -810,6 +810,7 @@
         "remoteMenu": "Stream menu",
         "remoteResume": "Resume",
         "remoteStats": "Statistics",
+        "remotePointer": "Mouse",
         "remoteStop": "Stop the stream",
         "remoteTitle": "TV remote",
         "rcMenu": "Stream menu",
@@ -817,7 +818,9 @@
         "rcArrows": "Arrows on the host",
         "rcArrowsVal": "Arrows",
         "rcOk": "Enter on the host",
-        "rcOkVal": "OK"
+        "rcOkVal": "OK",
+        "rcPointer": "Mouse on the host",
+        "rcPointerVal": "Menu → Mouse: arrows move, OK clicks, Ch± scrolls"
     },
     "transport": {
         "webrtcDcUdp": "WebRTC DataChannel (UDP)",

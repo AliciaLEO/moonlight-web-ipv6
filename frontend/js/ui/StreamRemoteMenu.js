@@ -26,6 +26,10 @@
  * when), and while it is up nothing goes to the host: RemoteNav moves the
  * focus between its buttons and OK presses the one that has it.
  *
+ * Its "Mouse" turns the remote into the host's mouse (StreamView, with
+ * stream/RemotePointer.js): the arrows steer the pointer, OK clicks, Ch+ and
+ * Ch− scroll. Pressed again, the arrows go back to being arrows on the host.
+ *
  * This class only draws it and reports the choice; StreamView owns what each
  * one does. It wears the share popins' look (and their class, which also
  * keeps the stream's keyboard capture off its buttons).
@@ -40,6 +44,8 @@ export class StreamRemoteMenu {
      *           statsOn: () => boolean,
      *           onResume: () => void,
      *           onStats: () => void,
+     *           pointerOn?: () => boolean,
+     *           onPointer?: () => void,
      *           onStop: () => void }} opts
      */
     constructor(opts) {
@@ -58,6 +64,10 @@ export class StreamRemoteMenu {
         return !!this._el;
     }
 
+    _pointerOn() {
+        return !!(this._opts.pointerOn && this._opts.pointerOn());
+    }
+
     open() {
         if (this._el) return;
         const el = document.createElement('div');
@@ -68,6 +78,11 @@ export class StreamRemoteMenu {
                 <h3>${title}</h3>
                 <div class="stream-remote-menu-actions">
                     <button type="button" class="btn" data-act="resume" data-nav-initial>${escapeHtml(t('stream.remoteResume'))}</button>
+                    ${
+                        this._opts.onPointer
+                            ? `<button type="button" class="btn btn-secondary" data-act="pointer" aria-pressed="${this._pointerOn() ? 'true' : 'false'}">${escapeHtml(t('stream.remotePointer'))}</button>`
+                            : ''
+                    }
                     <button type="button" class="btn btn-secondary" data-act="stats" aria-pressed="${this._opts.statsOn() ? 'true' : 'false'}">${escapeHtml(t('stream.remoteStats'))}</button>
                     <button type="button" class="btn btn-danger" data-act="stop">${escapeHtml(t('stream.remoteStop'))}</button>
                 </div>
@@ -88,6 +103,11 @@ export class StreamRemoteMenu {
             else if (act === 'stats') {
                 this._opts.onStats();
                 btn.setAttribute('aria-pressed', this._opts.statsOn() ? 'true' : 'false');
+            } else if (act === 'pointer' && this._opts.onPointer) {
+                // Mouse mode on: back to the stream at once, where it is used.
+                this._opts.onPointer();
+                btn.setAttribute('aria-pressed', this._pointerOn() ? 'true' : 'false');
+                if (this._pointerOn()) this._opts.onResume();
             }
         });
         // Capture: the stream's own Escape handling must not see this one.

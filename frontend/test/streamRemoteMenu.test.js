@@ -5,6 +5,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { StreamView } from '../js/ui/StreamView.js';
 import * as RemoteNav from '../js/ui/RemoteNav.js';
+import { RemotePointer } from '../js/stream/RemotePointer.js';
 
 /**
  * A TV remote in a stream.
@@ -72,6 +73,23 @@ function view(overrides = {}) {
         _closeOverlayEl: P._closeOverlayEl,
         _holdPads: P._holdPads,
         _releasePads: P._releasePads,
+        // The menu's "Mouse".
+        _remotePointerOn: false,
+        _remotePointer: null,
+        _wheelAccum: 0,
+        _wheelAccumX: 0,
+        _sendToHost: (m) => sent.push(m),
+        _sendMouseButton: (button, down) =>
+            sent.push({ type: down ? 'mousedown' : 'mouseup', button }),
+        _clientCursorSteers: () => false,
+        _sendWheel: P._sendWheel,
+        _remoteArrow: P._remoteArrow,
+        _remotePointerActive: P._remotePointerActive,
+        _remotePointerKeyDown: P._remotePointerKeyDown,
+        _remotePointerKeyUp: P._remotePointerKeyUp,
+        _toggleRemotePointer: P._toggleRemotePointer,
+        _pointerOfRemote: P._pointerOfRemote,
+        _remotePointerMove: P._remotePointerMove,
         ...overrides,
     };
 }
@@ -252,5 +270,105 @@ describe('the arrows of a remote that reaches the page as a pad', () => {
         v._remoteArrow('left', false, false);
         v._remoteArrow('left', true, true);
         expect(v.sent).toEqual([]);
+    });
+});
+
+describe("the menu's Mouse: a remote steering the host's pointer", () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+        RemoteNav._setActiveForTest(true);
+        localStorage.removeItem('mw_remote_pointer');
+    });
+
+    afterEach(() => {
+        RemoteNav._setActiveForTest(null);
+        vi.useRealTimers();
+        document.body.innerHTML = '';
+    });
+
+    /** A view in mouse mode, its pointer on the fake clock. */
+    function mouseView() {
+        const v = view({ _remotePointerOn: true });
+        v._remotePointer = new RemotePointer({
+            move: (dx, dy) => v._remotePointerMove(dx, dy),
+            now: () => Date.now(),
+            schedule: (cb) => setTimeout(cb, 16),
+            cancel: (id) => clearTimeout(id),
+        });
+        return v;
+    }
+    const moves = (v) => v.sent.filter((m) => m.type === 'mousemove');
+
+    it('an arrow moves the pointer, held it keeps moving, and no key reaches the host', () => {
+        const v = mouseView();
+        v.handleKeyDown(ev('ArrowRight', 'ArrowRight', { keyCode: 0x27 }));
+        expect(moves(v)).toEqual([{ type: 'mousemove', dx: 4, dy: 0 }]);
+        vi.advanceTimersByTime(160);
+        const n = moves(v).length;
+        expect(n).toBeGreaterThan(3);
+        v.handleKeyUp(ev('ArrowRight', 'ArrowRight', { keyCode: 0x27 }));
+        vi.advanceTimersByTime(160);
+        expect(moves(v)).toHaveLength(n);
+        expect(v.sent.filter((m) => m.type === 'keydown' || m.type === 'keyup')).toEqual([]);
+    });
+
+    it('OK clicks where the pointer is, instead of an Enter', () => {
+        const v = mouseView();
+        v.handleKeyDown(ok());
+        v.handleKeyUp(ok());
+        expect(v.sent).toEqual([
+            { type: 'mousedown', button: 1 },
+            { type: 'mouseup', button: 1 },
+        ]);
+    });
+
+    it('OK held still opens the menu', () => {
+        const v = mouseView();
+        v.handleKeyDown(ok());
+        vi.advanceTimersByTime(StreamView.REMOTE_MENU_HOLD_MS);
+        expect(menuEl()).not.toBe(null);
+        v.handleKeyUp(ok());
+        expect(v.sent).toEqual([]);
+    });
+
+    it('Ch+ and Ch− scroll the wheel', () => {
+        const v = mouseView();
+        v.handleKeyDown(ev('', 'ChannelUp', { keyCode: 33 }));
+        v.handleKeyUp(ev('', 'ChannelUp', { keyCode: 33 }));
+        v.handleKeyDown(ev('', 'ChannelDown', { keyCode: 34 }));
+        expect(v.sent).toEqual([
+            { type: 'mousewheel', delta: 120 },
+            { type: 'mousewheel', delta: -120 },
+        ]);
+    });
+
+    it("a pad remote's arrows steer it too", () => {
+        const v = mouseView();
+        v._remoteArrow('down', true, false);
+        v._remoteArrow('down', true, true);
+        expect(moves(v)).toEqual([{ type: 'mousemove', dx: 0, dy: 4 }]);
+        v._remoteArrow('down', false, false);
+        expect(v._remotePointer.moving).toBe(false);
+        expect(v.sent.filter((m) => m.type === 'keydown')).toEqual([]);
+    });
+
+    it('the menu turns it on — kept by the device — and goes back to the stream', () => {
+        const v = view();
+        v._openRemoteMenu();
+        const btn = menuEl().querySelector('[data-act="pointer"]');
+        expect(btn.getAttribute('aria-pressed')).toBe('false');
+        btn.click();
+        expect(v._remotePointerOn).toBe(true);
+        expect(localStorage.getItem('mw_remote_pointer')).toBe('1');
+        expect(menuEl()).toBe(null);
+        expect(StreamView.readRemotePointerPref()).toBe(true);
+    });
+
+    it('turned off, the arrows are arrows on the host again', () => {
+        const v = mouseView();
+        v._toggleRemotePointer();
+        v.handleKeyDown(ev('ArrowLeft', 'ArrowLeft', { keyCode: 0x25 }));
+        expect(v.sent.map((m) => [m.type, m.code])).toEqual([['keydown', 'ArrowLeft']]);
+        expect(localStorage.getItem('mw_remote_pointer')).toBe('0');
     });
 });

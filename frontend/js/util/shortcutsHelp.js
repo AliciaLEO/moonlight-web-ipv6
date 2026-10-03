@@ -100,6 +100,7 @@ export function remoteRows() {
         [t('stream.rcMenu'), t('stream.rcMenuVal')],
         [t('stream.rcArrows'), t('stream.rcArrowsVal')],
         [t('stream.rcOk'), t('stream.rcOkVal')],
+        [t('stream.rcPointer'), t('stream.rcPointerVal')],
     ];
 }
 

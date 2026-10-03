@@ -810,6 +810,7 @@
         "remoteMenu": "Menu du stream",
         "remoteResume": "Reprendre",
         "remoteStats": "Statistiques",
+        "remotePointer": "Souris",
         "remoteStop": "Arrêter le stream",
         "remoteTitle": "Télécommande",
         "rcMenu": "Menu du stream",
@@ -817,7 +818,9 @@
         "rcArrows": "Flèches sur l'hôte",
         "rcArrowsVal": "Flèches",
         "rcOk": "Entrée sur l'hôte",
-        "rcOkVal": "OK"
+        "rcOkVal": "OK",
+        "rcPointer": "Souris sur l'hôte",
+        "rcPointerVal": "Menu → Souris : flèches, OK clique, Ch± défile"
     },
     "transport": {
         "webrtcDcUdp": "WebRTC DataChannel (UDP)",

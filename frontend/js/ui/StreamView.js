@@ -80,6 +80,7 @@ import {
 } from '../util/BrowserDetect.js';
 import * as RemoteNav from './RemoteNav.js';
 import { StreamRemoteMenu } from './StreamRemoteMenu.js';
+import { RemotePointer } from '../stream/RemotePointer.js';
 import { createVideoRenderer, NO_WEBGPU_ALGOS } from '../stream/renderers/createRenderer.js';
 import { tvPresentsThroughSink, videoSinkCtor } from '../stream/renderers/videoSink.js';
 import {
@@ -449,6 +450,14 @@ class SlidingStats {
     }
 }
 
+/** The keys a remote's arrows arrive as, and the way each steers the pointer. */
+const REMOTE_POINTER_DIRS = {
+    ArrowUp: 'up',
+    ArrowDown: 'down',
+    ArrowLeft: 'left',
+    ArrowRight: 'right',
+};
+
 /**
  * True for a mouse event the browser made up after a touch (Chromium says so
  * in sourceCapabilities). The touch handlers have already acted on that tap.
@@ -521,6 +530,11 @@ export class StreamView {
         this._remoteMenu = null;
         this._okHold = null;
         this._remoteMenuClosedAt = 0;
+        // The menu's "Mouse": a remote's arrows steer the host's pointer and OK
+        // clicks (RemotePointer). Remembered by the device.
+        this._remotePointerOn = StreamView.readRemotePointerPref();
+        /** @type {RemotePointer|null} */
+        this._remotePointer = null;
         // Who keeps the pads from reaching the host: the remap dialog, the
         // remote's menu. Either may close while the other is still up.
         this._padHolds = new Set();
@@ -9177,6 +9191,8 @@ export class StreamView {
             return;
         }
         if (RemoteNav.isActive() && this._remoteOkDown(e)) return;
+        if (this._remotePointerOn && this._remotePointerActive() && this._remotePointerKeyDown(e))
+            return;
 
         // Before anything else reads this event: a modifier the local OS ate
         // the key-up of is still down on the host, and this event says so.
@@ -9445,6 +9461,9 @@ export class StreamView {
         // Ahead of the dialog exclusion: the OK that opened the remote's menu
         // comes back up on the menu's button, and its hold must end there.
         if (this._okHold && this._remoteOkUp(e)) return;
+        // An arrow that was steering the pointer: its press never went to the
+        // host, neither does its release — even if the mode went off meanwhile.
+        if ((this._remotePointer || this._remotePointerOn) && this._remotePointerKeyUp(e)) return;
         // Same exclusion as handleKeyDown: a release whose press was never sent
         // would land on the host as an unmatched key-up.
         if (StreamView.isLocalKeyboardTarget(e.target)) return;
@@ -11020,10 +11039,124 @@ export class StreamView {
         clearTimeout(timer);
         this._okHold = null;
         if (!fired) {
-            const tap = { keyCode: 0x0d, code: 'Enter', key: 'Enter', char: null, nonUs: false };
-            this._sendKeyEvent({ type: 'keydown', ...tap });
-            this._sendKeyEvent({ type: 'keyup', ...tap });
+            if (this._remotePointerOn && this._remotePointerActive()) {
+                // Mouse mode: OK is the left button, where the pointer is.
+                this._sendMouseButton(1, true);
+                this._sendMouseButton(1, false);
+            } else {
+                const tap = {
+                    keyCode: 0x0d,
+                    code: 'Enter',
+                    key: 'Enter',
+                    char: null,
+                    nonUs: false,
+                };
+                this._sendKeyEvent({ type: 'keydown', ...tap });
+                this._sendKeyEvent({ type: 'keyup', ...tap });
+            }
         }
+        return true;
+    }
+
+    // ── A TV remote as a mouse (the menu's "Mouse") ────────────────────────
+
+    /** The device's choice, off unless it was turned on here before. */
+    static readRemotePointerPref() {
+        try {
+            return localStorage.getItem('mw_remote_pointer') === '1';
+        } catch (e) {
+            return false;
+        }
+    }
+
+    /** Mouse mode is on, on a TV, and no menu is over the stream. */
+    _remotePointerActive() {
+        return (
+            this._remotePointerOn &&
+            RemoteNav.isActive() &&
+            !(this._remoteMenu && this._remoteMenu.isOpen)
+        );
+    }
+
+    /** The menu's "Mouse": on, or back to the arrows going to the host. */
+    _toggleRemotePointer() {
+        this._remotePointerOn = !this._remotePointerOn;
+        try {
+            localStorage.setItem('mw_remote_pointer', this._remotePointerOn ? '1' : '0');
+        } catch (e) {
+            /* private mode: for this stream only */
+        }
+        if (!this._remotePointerOn && this._remotePointer) this._remotePointer.releaseAll();
+    }
+
+    _pointerOfRemote() {
+        if (!this._remotePointer) {
+            this._remotePointer = new RemotePointer({
+                move: (dx, dy) => this._remotePointerMove(dx, dy),
+            });
+        }
+        return this._remotePointer;
+    }
+
+    /**
+     * The remote moved the pointer by (dx, dy) host desktop pixels. Where the
+     * page draws the pointer itself, it is moved there and the host's put at
+     * the same point (absolute, as the finger does — see _clientCursorSteer);
+     * elsewhere the host moves its own by the delta.
+     */
+    _remotePointerMove(dx, dy) {
+        if (this._quitting) return;
+        if (this._clientCursorSteers()) {
+            this._clientCursorMoved(dx, dy);
+            const p = this._clientCursorPos;
+            const fw = this._pictureWidth(),
+                fh = this._pictureHeight();
+            if (p && fw > 0 && fh > 0) {
+                this._sendToHost({
+                    type: 'mousemove',
+                    x: Math.round(p.x),
+                    y: Math.round(p.y),
+                    referenceWidth: Math.round(fw),
+                    referenceHeight: Math.round(fh),
+                });
+                return;
+            }
+        }
+        this._sendToHost({ type: 'mousemove', dx, dy });
+    }
+
+    /**
+     * A key of a remote in mouse mode: an arrow steers, Ch+ / Ch− scroll.
+     * @returns {boolean} whether the event was taken
+     */
+    _remotePointerKeyDown(e) {
+        const dir = REMOTE_POINTER_DIRS[e.key];
+        if (dir) {
+            e.preventDefault();
+            if (!e.repeat) this._pointerOfRemote().press(dir);
+            return true;
+        }
+        if (e.key === 'ChannelUp' || e.key === 'ChannelDown') {
+            e.preventDefault();
+            this._sendWheel('mousewheel', e.key === 'ChannelUp' ? 1 : -1);
+            return true;
+        }
+        return false;
+    }
+
+    /** @returns {boolean} whether the release was a steering arrow's */
+    _remotePointerKeyUp(e) {
+        const dir = REMOTE_POINTER_DIRS[e.key];
+        if (!dir || !this._remotePointer || !this._remotePointer.isHeld(dir)) {
+            // Ch± in mouse mode scrolled: no key went down on the host.
+            if (this._remotePointerActive() && (e.key === 'ChannelUp' || e.key === 'ChannelDown')) {
+                e.preventDefault();
+                return true;
+            }
+            return false;
+        }
+        e.preventDefault();
+        this._remotePointer.release(dir);
         return true;
     }
 
@@ -11041,6 +11174,15 @@ export class StreamView {
         };
         const k = keys[dir];
         if (!k || this._quitting) return;
+        // Mouse mode: the pad's arrows steer the pointer, as the keys' do.
+        if (this._remotePointer && this._remotePointer.isHeld(dir) && !down) {
+            this._remotePointer.release(dir);
+            return;
+        }
+        if (this._remotePointerOn && this._remotePointerActive()) {
+            if (down && !repeat) this._pointerOfRemote().press(dir);
+            return;
+        }
         if (!down && !this._heldPhysKeys.has(k[0])) return;
         if (down && repeat && !this._heldPhysKeys.has(k[0])) return;
         this._sendKeyEvent({
@@ -11079,6 +11221,8 @@ export class StreamView {
                 statsOn: () => !!(this._showPerfStats && !this._statsClosed),
                 onResume: () => this._closeRemoteMenu(),
                 onStats: () => this._toggleStatsFromMenu(),
+                pointerOn: () => this._remotePointerOn,
+                onPointer: () => this._toggleRemotePointer(),
                 onStop: () => {
                     this._closeRemoteMenu();
                     this._handleManualQuit();
@@ -11087,6 +11231,7 @@ export class StreamView {
         }
         if (this._remoteMenu.isOpen) return;
         this._releaseAllPhysKeys();
+        if (this._remotePointer) this._remotePointer.releaseAll();
         this._holdPads('remote-menu');
         this._remoteMenu.open();
     }
@@ -11531,6 +11676,7 @@ export class StreamView {
     }
 
     destroy() {
+        if (this._remotePointer) this._remotePointer.releaseAll();
         this._exitCssFallbackFullscreen();
         this._releaseWakeLock();
         this.stopRenderLoop();

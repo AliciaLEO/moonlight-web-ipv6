@@ -810,6 +810,7 @@
         "remoteMenu": "串流菜单",
         "remoteResume": "继续",
         "remoteStats": "统计信息",
+        "remotePointer": "鼠标",
         "remoteStop": "停止串流",
         "remoteTitle": "电视遥控器",
         "rcMenu": "串流菜单",
@@ -817,7 +818,9 @@
         "rcArrows": "主机上的方向键",
         "rcArrowsVal": "方向键",
         "rcOk": "主机上的回车键",
-        "rcOkVal": "OK"
+        "rcOkVal": "OK",
+        "rcPointer": "主机鼠标",
+        "rcPointerVal": "菜单 → 鼠标：方向键移动，OK 点击，Ch± 滚动"
     },
     "transport": {
         "webrtcDcUdp": "WebRTC 数据通道（UDP）",
