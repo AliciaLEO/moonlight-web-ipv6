@@ -402,6 +402,30 @@ tournent sans console : seule la ligne « Mesurée » de U0.2 donne l'âge.
   (`stream.dev.moonlightweb.top/<id>`, vrai certificat, vidéo restée en direct
   sur le LAN) marche.
 
+**Le Mac M1 en Wi-Fi** (même nuit, 22:49-23:19, Chrome de banc, capot fermé).
+Même hôte, mêmes cases en HEVC (le M1 ne décode pas l'AV1), `relaylog=1`.
+Médianes de deux passes par mode :
+
+| Hôte | Mode | Âge montré | E2E par image, médiane / p99 | Clic → drapeau (clics mesurés) |
+|---|---|---|---|---|
+| RTX | D | 29,4 ms | 14,1 / 165 ms | 63,7 ms (58 / 60) |
+| RTX | U | 36,2 ms | 22,4 / 304 ms | 60,9 ms (55 / 60) |
+| Arc | D | 37,1 ms | 22,4 / 157 ms | 72,2 ms (58 / 60) |
+| Arc | U | 43,9 ms | 26,4 / 184 ms | 71,0 ms (56 / 60) |
+| iGPU AMD | D | 32,7 ms | 17,0 / 145 ms | 74,9 ms (55 / 60) |
+| iGPU AMD | U | 43,2 ms | 24,6 / 228 ms | 71,2 ms (57 / 60) |
+
+- **Le défaut monte déjà à 114-125 i/s**, la cadence de l'écran du Mac, et fait
+  mieux que U de 7 à 11 ms d'âge. Le clic est le même dans les deux modes.
+- **Le Mac tient les 120 i/s, contrairement au N95.** Son p90 avant de quitter
+  usrsctp est de 50 à 79 ms dans les deux modes, contre 186-232 ms sur le N95
+  en U et 5-12 ms en Ethernet. Le Wi-Fi du Mac fait attendre, sans décrocher.
+- **Bilan provisoire de U0.3** : sur ordinateur, la barre « HEVC réglé Ultra »
+  ne bat l'« Auto » détecté sur aucun client. Le N95 en Wi-Fi décroche à
+  120 i/s, et l'UM790Pro et le Mac font jeu égal ou mieux en Auto. Sur
+  l'iPhone, le 120 gagne 5 à 10 ms. Restent l'iPad, RE9 sur la RTX, les cases
+  sous charge GPU et Android.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
