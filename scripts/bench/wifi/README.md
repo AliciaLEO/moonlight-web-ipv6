@@ -15,7 +15,8 @@ them back.
 |---|---|
 | `series.py` | one client's phase: its Chrome up, its DevTools port tunnelled, stale pairings cleared, then each round × content as one `local_matrix.py` run (`--tuning` for host keys), the client down |
 | `report.py` | the table of a prefix: click → flag and its split, the content's age, each frame's age, SCTP retransmissions, frames thrown away, `rep/m`, bitrate, the small messages' round trip, the UDP ping |
-| `udp_ref.py` | a bare UDP ping to an echo on the client (`--udp` in a series starts the echo on the Mac) |
+| `flagpath.py` | where each click's flag frame waited, from the relay's frame log, the client's and the flag's time (W1) |
+| `udp_ref.py` | a bare UDP ping to an echo on the client (`--udp` in a series starts the echo on the Mac); video-shaped bursts to a sink (`--burst`) |
 | `stop.ps1` | stops a series whatever it does, puts the virtual display's settings file back and turns the display off |
 | `vdd-reset.ps1` | the virtual display left primary by a killed pass: a short `--dev` start resets it |
 | `memwatch.ps1` | stops the series when DualRTX runs short of commit |
@@ -30,6 +31,34 @@ python series.py um  --prefix w0 --contents clk,g80 --rounds 2
 ssh mw-mac bash -s < mac-restore.sh
 python report.py w0                                    # --passes for one row per pass
 ```
+
+## Where the flag's frame waited (W1)
+
+```bash
+python series.py mac --prefix w1 --contents clk --rounds 2 --tuning relaylog=1 --udp --burst 45:120:20
+python flagpath.py --prefix w1          # a row a pass; --clicks for every click
+```
+
+- `relaylog=1` (a link key of the native host, like `sctpcc=`) has the relay
+  keep each video frame's way (`backend/src/streaming/RelayFrameLog.h`): its
+  capture on the host's steady clock, the decision (sent, dropped by the
+  backlog, gated awaiting a keyframe, evicted), the sender's first and last
+  fragment into the DataChannel, `bufferedAmount` before and after, usrsctp's
+  retransmission counters and SCTP's round trip. `local_matrix.py` copies it
+  beside the pass (`<tag>.relay.csv`). The log ends with the session's line
+  `frame log: …` (what became of the frames, and how long `bufferedAmount`
+  held more than 1, 2 and 4 frames) and `SCTP window this session: …`.
+- `pass.py` keeps the client's per-frame log of the clicks' minute
+  (`<tag>.clicks.frames.csv`) and the page's time origin; the host's
+  `[LatencyFlag] … shown at steady N us` dates each flag.
+- `flagpath.py` joins the three, click by click: up, injection, flag raised,
+  until the capture of the frame that showed it (`toCap`, with the frames in
+  between that did not go out: `skipped`), encode, the sender's queue, `net`
+  (libdatachannel's queue, usrsctp's, the air, a wait behind a retransmitted
+  chunk), decode, draw, detection. The legs add up to the measured click.
+- `--burst MBPS:FPS:SECS` sends video-shaped UDP bursts to the Mac before the
+  passes, with no stream: what the radio loses, and what it only delivers out
+  of order (SCTP repairs both with a retransmission).
 
 ## Clients
 

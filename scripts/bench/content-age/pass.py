@@ -40,15 +40,23 @@ def _ms(v):
     return "-" if v is None else "%.2f" % v
 
 
-def click_flag(d, n, every_ms=800):
+def click_flag(d, n, every_ms=800, tag=None):
     """@p n click → flag samples (frontend LatencyProbe.js, the host's
     LatencyFlag): the whole loop the player feels, input to picture. Started
     without waiting on it — a minute is longer than a DevTools call should
-    hang — and read back as it fills. None when the stream has no flag."""
+    hang — and read back as it fills. None when the stream has no flag.
+
+    With @p tag, the client's per-frame log of the clicks' minute is saved
+    (<tag>.clicks.frames.csv) with the page's time origin: a click's `ts` and
+    `latencyMs` then name the frame that showed its flag, which the relay's
+    frame log follows back on the host (plan Wi-Fi W1, scripts/bench/wifi)."""
     if d.eval("typeof (window.mwLatency && window.mwLatency.run)") != "function":
         print("  clicks: no click-to-photon probe on this stream (latency_flag_enabled?)",
               flush=True)
         return None
+    if tag:
+        d.eval("window.mwFrameLog && mwFrameLog.clear()")
+    time_origin = d.eval("performance.timeOrigin")
     before = d.eval("(window.mwLatencyResults || []).length") or 0
     d.eval("window.mwLatency.run(%d, %d); 1" % (n, every_ms))
     end = time.time() + n * (every_ms + 300) / 1000 + 30
@@ -81,7 +89,12 @@ def click_flag(d, n, every_ms=800):
             _ms(summary["upMs"]["median"]), _ms(summary["upMs"]["p90"]), _ms(summary["upMs"]["max"]),
             _ms(summary["hostInMs"]["median"]), _ms(summary["restMs"]["median"]),
             _ms(summary["restMs"]["p90"])), flush=True)
-    return {"summary": summary, "samples": samples}
+    if tag and d.eval("typeof window.mwFrameLog === 'object' && !!window.mwFrameLog"):
+        path = os.path.join(age.OUT, tag + ".clicks.frames.csv")
+        with open(path, "w", newline="") as f:
+            f.write(d.eval("mwFrameLog.csv()") or "")
+        print("  saved", path, flush=True)
+    return {"summary": summary, "samples": samples, "timeOrigin": time_origin}
 
 
 def uplink_runs(d, spec, tag):
@@ -259,7 +272,7 @@ def main():
             time.sleep(a.hold)
             # A still screen: the way up with almost no video coming down.
             uplink = uplink_runs(d, a.uplink, a.tag)
-            clicks = click_flag(d, a.clicks) if a.clicks > 0 else None
+            clicks = click_flag(d, a.clicks, tag=a.tag) if a.clicks > 0 else None
             stats = d.stats()
             with open(os.path.join(age.OUT, a.tag + ".json"), "w") as f:
                 json.dump({"tag": a.tag, "overlay": stats, "args": vars(a),
@@ -292,7 +305,7 @@ def main():
         # "Auto" with detection: where it stands and what it decided, read
         # before the clicks (they move nothing on the screen's content).
         stepper = stepper_state(d, content_ms)
-        clicks = click_flag(d, a.clicks) if a.clicks > 0 else None
+        clicks = click_flag(d, a.clicks, tag=a.tag) if a.clicks > 0 else None
         uplink = uplink_runs(d, a.uplink, a.tag)
         d.expand_latency_detail()
         stats = d.stats()

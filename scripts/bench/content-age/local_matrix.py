@@ -99,6 +99,13 @@ def host_lines(tag, since):
             lines += [l.rstrip() for l in f if any(k in l for k in HOST_LINES)]
     with open(os.path.join(OUT, tag + ".host.txt"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
+    # The relay's frame log (`relaylog=1`, plan Wi-Fi W1): written next to the
+    # worker's log when the session ends; the newest is this pass's.
+    frames = [p for p in glob.glob(os.path.join(WORKER_LOGS, "relay-frames-*.csv"))
+              if os.path.getmtime(p) >= since]
+    if frames:
+        shutil.copyfile(max(frames, key=os.path.getmtime), os.path.join(OUT, tag + ".relay.csv"))
+        print("    relay frame log:", tag + ".relay.csv", flush=True)
     for l in lines:
         if any(k in l for k in ("cadence:", "cadence step", "decode credit", "deadline:")):
             print("   ", l[l.find("[native]"):][:240], flush=True)

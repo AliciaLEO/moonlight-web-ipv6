@@ -1,4 +1,4 @@
-"""Series of click → flag passes against DualRTX's native host, one client at a
+"""Series of click-to-flag passes against DualRTX's native host, one client at a
 time (plan « Wi-Fi : la vidéo qui attend dans SCTP », born of T7 of the radios
 plan, 03/10/2026).
 
@@ -68,6 +68,7 @@ WSL_SSH = ["wsl.exe", "-u", "root", "--", "sshpass", "-p", "123456", "ssh",
            "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=8"]
 TUN_OPTS = ["-N", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30"]
 UDP_PORT = 47998
+SINK_PORT = 47999
 
 
 def log(*a):
@@ -149,6 +150,10 @@ class Client:
         """The UDP echo udp_ref.py pings, started and stopped on the client."""
         return "no UDP echo on this client"
 
+    def udp_sink(self, on):
+        """The UDP sink udp_ref.py's bursts count on, started and stopped."""
+        return "no UDP sink on this client"
+
     def start(self):
         log(self.name, "chrome up:", self.chrome_up()[-300:].replace("\n", " | "))
         self.open_tunnel()
@@ -220,6 +225,15 @@ class Mac(Client):
         return run([SSH, "mw-mac", "cat > ~/mw-c925/udp_ref.py; pkill -f 'udp_ref.py echo'; "
                     "nohup python3 ~/mw-c925/udp_ref.py echo %d > ~/mw-c925/udp_echo.log 2>&1 & "
                     "sleep 1; cat ~/mw-c925/udp_echo.log" % UDP_PORT], timeout=30, stdin_text=src)
+
+    def udp_sink(self, on):
+        if not on:
+            return run([SSH, "mw-mac", "pkill -f 'udp_ref.py sink'; echo sink stopped"], timeout=30)
+        with open(os.path.join(HERE, "udp_ref.py"), "rb") as f:
+            src = f.read().decode("utf-8")
+        return run([SSH, "mw-mac", "cat > ~/mw-c925/udp_ref.py; pkill -f 'udp_ref.py sink'; "
+                    "nohup python3 ~/mw-c925/udp_ref.py sink %d > ~/mw-c925/udp_sink.log 2>&1 & "
+                    "sleep 1; cat ~/mw-c925/udp_sink.log" % SINK_PORT], timeout=30, stdin_text=src)
 
 
 class N95(Client):
@@ -371,7 +385,24 @@ def matrix(client, series, prefix, gpu, cadences, extra, udp):
 RTX_SCREEN = "\\\\.\\DISPLAY5"
 
 
-def phase(client, prefix, hosts, contents, rounds, cadences, udp):
+def bursts(client, prefix, spec, when):
+    """The radio alone, no stream: video-shaped UDP bursts to the client, lost
+    or overtaken (udp_ref.py burst; plan W1). @p spec is MBPS:FPS:SECS[,…]."""
+    log(client.name, "udp sink:", client.udp_sink(True)[-80:].replace("\n", " | "))
+    try:
+        for k, part in enumerate(spec.split(",")):
+            mbps, fps, secs = (float(x) for x in part.split(":"))
+            out = os.path.join(OUT, "%s-%s-burst-%s-%d.json" % (prefix, client.name, when, k))
+            rep = udp_ref.burst(client.ip, SINK_PORT, mbps, fps, secs, out)
+            log(client.name, "burst %s %s Mbit/s at %s fps: %s sent, %s lost, %s late (max %s "
+                "datagrams, %s ms)" % (when, mbps, fps, rep.get("sent"), rep.get("lost"),
+                                        rep.get("late"), rep.get("lateByMax"),
+                                        rep.get("lateMsMax")))
+    finally:
+        log(client.name, "udp sink:", client.udp_sink(False)[-60:].replace("\n", " | "))
+
+
+def phase(client, prefix, hosts, contents, rounds, cadences, udp, burst=""):
     start_screens = screen_names(monitors())
     noted = set()
     log("== phase", client.name, "hosts", hosts, "contents", contents, "x%d" % rounds,
@@ -394,6 +425,8 @@ def phase(client, prefix, hosts, contents, rounds, cadences, udp):
                                          "{}"])[-80:])
     if udp:
         log(client.name, "udp echo:", client.udp_echo(True)[-120:].replace("\n", " | "))
+    if burst and client.ip:
+        bursts(client, prefix, burst, "before")
     try:
         for r in range(1, rounds + 1):
             for g in hosts:
@@ -440,6 +473,9 @@ def main():
     ap.add_argument("--exe", default="", help="the build under test (default build/)")
     ap.add_argument("--udp", action="store_true",
                     help="a bare UDP ping to the client beside each pass (the Mac only)")
+    ap.add_argument("--burst", default="",
+                    help="MBPS:FPS:SECS[,...] video-shaped UDP bursts to the client before the "
+                         "passes, no stream: lost or overtaken (the Mac only)")
     a = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
     client = {"lx": UmLinux, "mac": Mac, "um": UmWin, "n95": N95, "loc": Local}[a.phase]()
@@ -451,7 +487,8 @@ def main():
     if a.exe:
         EXE = os.path.abspath(a.exe)
     contents = [c for c in a.contents.split(",") if c in CONTENTS]
-    return phase(client, a.prefix, a.hosts.split(","), contents, a.rounds, a.cadences, a.udp)
+    return phase(client, a.prefix, a.hosts.split(","), contents, a.rounds, a.cadences, a.udp,
+                 a.burst)
 
 
 if __name__ == "__main__":
