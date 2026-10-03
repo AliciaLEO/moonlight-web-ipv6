@@ -78,7 +78,10 @@ class Page:
                 raise RuntimeError(msg["error"])
             res = msg.get("result", {})
             if "exceptionDetails" in res:
-                raise RuntimeError(res["exceptionDetails"].get("text", "exception"))
+                det = res["exceptionDetails"]
+                # "Uncaught" alone says nothing: the exception's own text with it.
+                raise RuntimeError("%s %s" % (det.get("text", "exception"),
+                                              (det.get("exception") or {}).get("description", "")))
             return res.get("result", {}).get("value")
 
 
