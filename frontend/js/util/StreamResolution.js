@@ -118,6 +118,27 @@ export const MOBILE_AUTO_BOX = { width: CUSTOM_SIZE_MAX, height: AUTO_MAX_HEIGHT
  *  wants the 1080p names it — "Match my screen", a rung, Custom. */
 export const TV_AUTO_MAX_HEIGHT = 720;
 
+/**
+ * What a TV is asked beyond what its Auto would pick, or null. A viewer may
+ * name 1080p60 on a TV — their choice stands (Bruno, 02/10/2026: the user
+ * decides) — but is told first: a Mi TV decodes about 34 frames a second at
+ * 720p, and 1080p60 left it frozen on the way out of the stream.
+ * @param {{height: number, fps: number, autoFps: number}} asked the launch's
+ *   size and rate, and the rate Auto would pick here (0 when unknown)
+ * @returns {{height: number, fps: number, autoHeight: number, autoFps: number}|null}
+ */
+export function tvOverAsk({ height, fps, autoFps }) {
+    const tooTall = height > TV_AUTO_MAX_HEIGHT;
+    const tooFast = autoFps > 0 && fps > autoFps;
+    if (!tooTall && !tooFast) return null;
+    return {
+        height,
+        fps,
+        autoHeight: Math.min(height, TV_AUTO_MAX_HEIGHT),
+        autoFps: autoFps > 0 ? Math.min(fps, autoFps) : fps,
+    };
+}
+
 /** The tallest box Auto asks for on this kind of screen. */
 function autoCeiling(tv) {
     return tv ? TV_AUTO_MAX_HEIGHT : AUTO_MAX_HEIGHT;

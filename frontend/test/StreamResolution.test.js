@@ -26,6 +26,7 @@ import {
     fitPixelBudget,
     readResolutionChoice,
     resolveStreamSize,
+    tvOverAsk,
 } from '../js/util/StreamResolution.js';
 
 const phone = { screen: { width: 390, height: 844 }, devicePixelRatio: 3 };
@@ -506,5 +507,35 @@ describe('fitPixelBudget', () => {
         const out = fitPixelBudget({ height: 0, aspect: null }, 120, { device: uhd });
         expect(out.capped).toBe(false);
         expect(out.fps).toBe(120);
+    });
+});
+
+describe('tvOverAsk — a TV asked more than its Auto would take', () => {
+    it("is null within Auto's 720p and rate", () => {
+        expect(tvOverAsk({ height: 720, fps: 30, autoFps: 30 })).toBeNull();
+        expect(tvOverAsk({ height: 540, fps: 50, autoFps: 50 })).toBeNull();
+    });
+
+    it("names the size and the rate past Auto's, and what Auto takes (Mi TV, 1080p60)", () => {
+        expect(tvOverAsk({ height: 1080, fps: 60, autoFps: 30 })).toEqual({
+            height: 1080,
+            fps: 60,
+            autoHeight: TV_AUTO_MAX_HEIGHT,
+            autoFps: 30,
+        });
+    });
+
+    it('a size alone past 720 is enough', () => {
+        expect(tvOverAsk({ height: 1080, fps: 50, autoFps: 50 })).toEqual({
+            height: 1080,
+            fps: 50,
+            autoHeight: 720,
+            autoFps: 50,
+        });
+    });
+
+    it('a rate alone past Auto is enough; an unknown Auto rate is no reason', () => {
+        expect(tvOverAsk({ height: 720, fps: 60, autoFps: 30 })?.autoFps).toBe(30);
+        expect(tvOverAsk({ height: 720, fps: 60, autoFps: 0 })).toBeNull();
     });
 });

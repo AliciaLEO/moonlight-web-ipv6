@@ -840,7 +840,8 @@
         "timeout": "Le serveur ne répond pas — démarrage annulé",
         "hevcH264Unsupported": "HEVC et H.264 non pris en charge par le navigateur",
         "hdrFallback": "HDR indisponible — bascule en {{to}} sans HDR",
-        "chroma444Fallback": "4:4:4 indisponible — bascule en H.264 4:2:0"
+        "chroma444Fallback": "4:4:4 indisponible — bascule en H.264 4:2:0",
+        "tvOverAsk": "Cette TV risque de ne pas tenir {{height}}p à {{fps}} i/s — en Auto, elle prend {{autoHeight}}p à {{autoFps}} i/s."
     },
     "permission": {
         "videoCapture": {

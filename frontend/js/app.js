@@ -83,6 +83,7 @@ import {
     readResolutionChoice,
     resolveStreamSize,
     fitPixelBudget,
+    tvOverAsk,
 } from './util/StreamResolution.js';
 import {
     hardwareDecodeLimit,
@@ -2116,6 +2117,7 @@ const MoonlightApp = {
             await hardwareDecodeLimit(streamingSettings.video_codec),
         );
         this._applyResolvedSize(streamingSettings, bounded);
+        if (IS_TV) this._warnTvOverAsk(streamingSettings, choice.mode === 'auto' && fpsAuto);
         this._sizeFollowsScreen = size.followsScreen;
         this._sizeOnVirtualDisplay = app?.isVirtualDisplay === true;
         // The ladder's session-only rung and bitrate outrank the choice: a
@@ -2785,6 +2787,31 @@ const MoonlightApp = {
      * is told of a change through `clientrefresh` and paces to it without a
      * relaunch.
      */
+    /**
+     * On a TV, say when the launch asks more than Auto would: the stream goes
+     * as asked, the viewer chose it, but a TV's decoder may not keep up
+     * (util/StreamResolution.js, tvOverAsk). Once per page and setting, not at
+     * every relaunch of the same stream.
+     * @param {object} settings the launch's copy, size and rate resolved
+     * @param {boolean} allAuto both size and rate left to Auto
+     */
+    _warnTvOverAsk(settings, allAuto) {
+        if (allAuto) return;
+        const over = tvOverAsk({
+            height: settings.stream_height > 0 ? settings.stream_height : 0,
+            fps: settings.stream_fps > 0 ? settings.stream_fps : 60,
+            autoFps: autoFps() || 0,
+        });
+        if (!over) return;
+        const key = over.height + '@' + over.fps;
+        if (this._tvOverAskShown === key) return;
+        this._tvOverAskShown = key;
+        console.warn(
+            '[MW] TV asked ' + key + ' — Auto would take ' + over.autoHeight + '@' + over.autoFps,
+        );
+        Toast.warning(t('launch.tvOverAsk', over));
+    },
+
     _applyResolvedFps(settings) {
         if (settings.stream_fps > 0) return;
         const fps = autoFps();
