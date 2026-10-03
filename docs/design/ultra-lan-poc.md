@@ -159,6 +159,55 @@ navigateur) ne commencent qu'après U0 et U1.
 
 *(rempli porte par porte)*
 
+### 6.1 U0.2 — l'E2E par image (03/10/2026, `ea3d313c`)
+
+Le POC a besoin d'une latence mesurée d'un bout à l'autre, image par image, et
+non d'une somme d'étapes. La latence de l'overlay additionne des étapes, chacune
+chronométrée sur sa propre horloge et moyennée sur sa propre fenêtre : une étape
+que personne ne chronomètre n'y figure pas.
+
+- **L'horloge commune existait** (plan 1, cadence de l'hôte) :
+  - le pong porte les µs de l'hôte (`DataChannelRelay`, champ `host`) ;
+  - `util/ClockEstimator.js` ajuste un décalage et une dérive sur les échanges
+    proches du RTT le plus court ;
+  - ses tests (dérive, RTT asymétrique, saut d'horloge, valeur aberrante) sont
+    dans `ContentAgeProbe.test.js`.
+- **Ce que U0.2 ajoute** : `stream/FrameLog.js`. Il met l'horodatage de chaque
+  image (`backendTs`) sur l'horloge du client, avec sa propre estimation sur
+  60 s, nourrie par le ping de 2 s. Il en tire l'âge de l'image à la fin de son
+  dessin. On le retrouve :
+  - dans le détail de latence, en ligne « Mesurée (hôte → dessin) » (moyenne et
+    p99 sur 2 s). Elle est affichée, pas additionnée : c'est ce que la somme
+    devrait lire, et l'écart entre les deux est une étape que personne ne
+    chronomètre ;
+  - dans la ligne `[perf]` (`e2e measured`) ;
+  - dans un journal de toutes les images : un anneau de colonnes de
+    16 384 images (une minute à 240 i/s), lu par CDP avec `mwFrameLog.csv()` ou
+    `summary()`. `age.py run` le vide au départ et l'enregistre en
+    `<tag>.frames.csv` à côté du JSON de la passe.
+- **Où le trajet commence** :
+  - hôte natif : à la présentation de l'image à l'écran, à la milliseconde. Il
+    lit 0 à 2 ms de trop, parce que les deux moitiés de l'horodatage sont
+    arrondies à la milliseconde ;
+  - hôte GameStream : à l'arrivée de la première image du stream au backend.
+    Sa capture, son encodage et son trajet jusqu'au backend manquent, du même
+    montant sur chaque image.
+- **Limites** :
+  - un lien plus lent dans un sens que dans l'autre (la montée en Wi-Fi) fausse
+    l'âge de la moitié de l'écart, sur chaque image ;
+  - seul le décodage sur le fil principal est couvert, pas le worker (option) ;
+  - AV1 n'a pas d'horodatage d'hôte sur ce chemin.
+- **Vérifié** :
+  - Vitest : 7 tests (âge, horloge pas encore prête, dérive de 50 ppm sur 3 min
+    avec un ping toutes les 2 s, bouclage 32 bits, horodatage aberrant,
+    anneau et CSV, résumé) ; suite complète 1192/1192.
+  - Pas encore en vrai stream : la passe locale du 03/10 n'a pas abouti. La
+    première a cherché la `--dev` sur 18080/18443, alors que ses réglages disent
+    maintenant 8080/8443. La seconde a été arrêtée par Claude Code, faute de
+    mémoire sur DualRTX. À refaire : sur une passe `age.py`, la médiane de
+    `frameLog` doit lire ce que lit `capture` de la sonde d'âge (même
+    horodatage, autre estimation de l'horloge).
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
@@ -172,3 +221,10 @@ saura pourquoi et de combien, et les gains trouvés en chemin hors codec (cadenc
 à 120 ou 240 Hz, présentateur, réglages du transport) iront à tout le monde. Les
 TV passent au banc elles aussi : si le décodeur Ultra tourne assez vite sur leur
 petit GPU, elles en profiteront ; sinon elles gardent leur décodeur matériel.
+
+Déjà visible (U0.2) : le détail de la latence, dans les statistiques du stream,
+gagne une ligne « Mesurée (hôte → dessin) ». C'est l'âge réel de l'image à
+l'écran, pris d'un bout à l'autre. Si elle lit nettement plus que le total
+au-dessus d'elle, une partie du trajet n'est chronométrée par personne. En Wi-Fi,
+elle peut lire un peu faux, de la moitié de l'écart entre la montée et la
+descente.

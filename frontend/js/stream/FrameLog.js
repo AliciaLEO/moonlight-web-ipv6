@@ -17,7 +17,7 @@
 
 /**
  * FrameLog — each drawn frame's way from the host to the end of its draw, on
- * one clock (POC Ultra U0.2, docs/design/ultra-lan-poc.md §3).
+ * one clock (POC Ultra U0.2, docs/design/ultra-lan-poc.md §6.1).
  *
  * The overlay's latency is a sum of legs, each timed on its own clock and
  * averaged on its own window: a leg nobody measures (the host's wait for the
