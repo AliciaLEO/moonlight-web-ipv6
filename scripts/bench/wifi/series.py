@@ -40,8 +40,13 @@ OUT = os.path.join(REPO, "bench-out", "wifi")
 LOG = os.path.join(OUT, "series.log")
 sys.path.insert(0, HERE)
 import udp_ref  # noqa: E402
+import remote_host  # noqa: E402
 
 TUNING = ""
+# --host: a native host on another machine (remote_host.py), its passes run by
+# pass.py --host instead of local_matrix.py.
+HOST = None
+CA_OUT = os.path.join(REPO, "bench-out", "content-age")
 EXE = os.path.join(REPO, "build", "MoonlightWeb.exe")
 HOST_IP = "192.168.1.66"
 # The --dev instance's own ports (8080/8443 since 03/10/2026, 18080/18443 before).
@@ -430,6 +435,64 @@ def bursts(client, prefix, spec, when):
         log(client.name, "udp sink:", client.udp_sink(False)[-60:].replace("\n", " | "))
 
 
+def remote_matrix(client, series, prefix, extra, udp):
+    """One pass against a host on another machine (--host): its DEV edition's
+    native_tuning set, pass.py run against it, its log and the relay's frame
+    log fetched back under the pass's name — what local_matrix.py does for
+    the --dev on this machine (plan Wi-Fi, B and W2.5 on Linux and macOS)."""
+    tag = "%s-v0-detect-r0" % prefix
+    log("run", prefix, "| host", HOST.mid, "|", TUNING or "no host key")
+    log(HOST.tag, HOST.set_tuning(TUNING)[-200:])
+    offset = HOST.log_size()
+    since = time.time()
+    args = client.client_args()
+    if "--client-url" in args:
+        i = args.index("--client-url")
+        args = args[:i] + args[i + 2:]
+    cmd = [sys.executable, os.path.join(CA, "pass.py"), "--host", HOST.mid, "--tag", tag,
+           "--autostep", "--settle", "14", "--secs", str(client.secs), "--every",
+           str(client.every)] + args + extra
+    env = dict(os.environ)
+    env["PYTHONIOENCODING"] = "utf-8"
+    env.update(client.env())
+    drops = client.udp_drops()
+    stop = threading.Event()
+    pinger = None
+    if udp and client.ip:
+        pinger = threading.Thread(target=udp_ref.ping, kwargs=dict(
+            host=client.ip, port=UDP_PORT, hz=20, secs=3 * 3600,
+            out=os.path.join(OUT, prefix + ".udp.json"), stop=stop.is_set), daemon=True)
+        pinger.start()
+    path = os.path.join(OUT, prefix + ".out")
+    t0 = time.time()
+    with open(path, "w", encoding="utf-8") as f:
+        try:
+            p = subprocess.run(cmd, cwd=CA, env=env, stdout=f, stderr=subprocess.STDOUT,
+                               creationflags=NOWIN, timeout=30 * 60)
+            rc = p.returncode
+        except subprocess.TimeoutExpired:
+            rc = "timeout"
+    if pinger:
+        stop.set()
+        pinger.join(10)
+    after = client.udp_drops()
+    if drops is not None and after is not None:
+        log(client.name, "kernel drops for a full socket buffer during", prefix, ":", after - drops)
+    # The host's side, named as local_matrix.py names it: report.py and
+    # flagpath.py read <tag>.server.log and <tag>.relay.csv.
+    n = HOST.fetch_log(offset, os.path.join(CA_OUT, tag + ".server.log"))
+    relay = HOST.fetch_relay_csv(since, os.path.join(CA_OUT, tag + ".relay.csv"))
+    log(HOST.tag, "log %d bytes, relay log %s" % (n, "fetched" if relay else "none"))
+    with open(path, encoding="utf-8", errors="replace") as f:
+        text = f.read()
+    alerts = [l.strip() for l in text.splitlines()
+              if "!!" in l or "Traceback" in l or "Error" in l or "SystemExit" in l]
+    log("done", prefix, "rc", rc, "| %.1f min" % ((time.time() - t0) / 60))
+    for a in alerts[:6]:
+        log("   !", a[:200])
+    summarize(series, prefix)
+
+
 def phase(client, prefix, hosts, contents, rounds, cadences, udp, burst=""):
     start_screens = screen_names(monitors())
     noted = set()
@@ -462,8 +525,11 @@ def phase(client, prefix, hosts, contents, rounds, cadences, udp, burst=""):
                     if not client.ensure():
                         log("client", client.name, "lost: phase stopped")
                         return 3
-                    matrix(client, prefix, "%s-%s-%s-%s-%d" % (prefix, client.name, g, c, r),
-                           g, cadences, CONTENTS[c], udp)
+                    name = "%s-%s-%s-%s-%d" % (prefix, client.name, g, c, r)
+                    if HOST:
+                        remote_matrix(client, prefix, name, CONTENTS[c], udp)
+                    else:
+                        matrix(client, prefix, name, g, cadences, CONTENTS[c], udp)
                     now = monitors()
                     gone = start_screens - screen_names(now)
                     # The RTX's screen has left the desktop on these switches
@@ -498,6 +564,9 @@ def main():
     ap.add_argument("--name", default="", help="the client's name in the tags (default: the phase)")
     ap.add_argument("--bitrate", type=int, default=0, help="kbps; 0 = the automatic one")
     ap.add_argument("--tuning", default="", help="host keys for every pass (local_matrix --tuning)")
+    ap.add_argument("--host", default="",
+                    help="a native host on another machine (um790pro, mw-mac): its DEV "
+                         "edition's native_tuning set to --tuning, pass.py --host against it")
     ap.add_argument("--exe", default="", help="the build under test (default build/)")
     ap.add_argument("--udp", action="store_true",
                     help="a bare UDP ping to the client beside each pass (the Mac only)")
@@ -510,13 +579,16 @@ def main():
     if a.name:
         client.name = a.name
     client.bitrate = a.bitrate
-    global TUNING, EXE
+    global TUNING, EXE, HOST
     TUNING = a.tuning
+    hosts = a.hosts.split(",")
+    if a.host:
+        HOST = remote_host.for_machine(a.host)
+        hosts = [HOST.tag]
     if a.exe:
         EXE = os.path.abspath(a.exe)
     contents = [c for c in a.contents.split(",") if c in CONTENTS]
-    return phase(client, a.prefix, a.hosts.split(","), contents, a.rounds, a.cadences, a.udp,
-                 a.burst)
+    return phase(client, a.prefix, hosts, contents, a.rounds, a.cadences, a.udp, a.burst)
 
 
 if __name__ == "__main__":

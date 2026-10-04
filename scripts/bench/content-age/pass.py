@@ -31,6 +31,8 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(BENCH, "cadence"))
 import run, drive, fleet  # noqa: E402
 import age  # noqa: E402
+sys.path.insert(0, os.path.join(BENCH, "wifi"))
+import remote_host  # noqa: E402
 from cadence import monitors  # noqa: E402
 
 CONTENT_PORT = 9334
@@ -221,6 +223,27 @@ def keep_off_content(pid):
     return moved
 
 
+def frames_only(d, tag, secs):
+    """A pass against a host on another machine (--host): its band is not read,
+    calibrating it wants the host's own clock beside the page. The per-frame
+    log stands in: each frame's capture → draw on the host's clock, written as
+    the band's pass writes it (<tag>.json, <tag>.frames.csv)."""
+    d.eval("window.mwFrameLog && mwFrameLog.clear()")
+    time.sleep(secs)
+    data = {"tag": tag, "remoteHost": True}
+    frames = d.eval("window.mwFrameLog ? JSON.stringify(mwFrameLog.summary()) : null")
+    os.makedirs(age.OUT, exist_ok=True)
+    if frames and frames != "null":
+        data["frameLog"] = json.loads(frames)
+        with open(os.path.join(age.OUT, tag + ".frames.csv"), "w", newline="") as f:
+            f.write(d.eval("mwFrameLog.csv()") or "")
+        print("  frames: e2e median %s ms (p99 %s)" % (
+            _ms(data["frameLog"].get("medianMs")), _ms(data["frameLog"].get("p99Ms"))),
+            flush=True)
+    with open(os.path.join(age.OUT, tag + ".json"), "w") as f:
+        json.dump(data, f)
+
+
 def band_seen(d, secs=2.0):
     """Whether the client reads the bench page's band on the stream: two
     seconds of the probe, every frame. False only when it read no age and
@@ -272,21 +295,28 @@ def main():
                          "§33.10): the stream may step above the client's rate. Off otherwise "
                          "(mw_autostep=0): on is the product's default, and a pass without this "
                          "flag stays the Auto from before it, the bench's reference")
+    ap.add_argument("--host", default="local",
+                    help="the host: this machine (local), or a fleet machine's DEV edition "
+                         "(um790pro, mw-mac; ../wifi/remote_host.py): its page put up over "
+                         "SSH, its band not read")
     a = ap.parse_args()
     remote = a.client_port > 0
+    rh = remote_host.for_machine(a.host) if a.host != "local" else None
     # Another session's Chrome may already hold the client kiosk's debugging
     # port (9333 on 01/10/2026): the kiosk would not get it, and this pass would
     # drive that other browser. MW_BENCH_DEBUG_PORT moves the kiosk's.
     if os.environ.get("MW_BENCH_DEBUG_PORT"):
         run.DEBUG_PORT = int(os.environ["MW_BENCH_DEBUG_PORT"])
 
-    access = dict(run.access_map().get("local") or {})
-    probe = fleet.probe("local")
+    access = dict(run.access_map().get(a.host) or {})
+    probe = fleet.probe(a.host)
     pin = (probe.get("pin") or {}).get("pin")
     if pin:
         access["pin"] = pin
-    access["lan"] = fleet.lan_url("local", probe) or access.get("lan")
-    if remote:
+    access["lan"] = fleet.lan_url(a.host, probe) or access.get("lan")
+    # A remote client reaches this machine's --dev at the address it is told;
+    # a remote host, at its own.
+    if remote and not rh:
         access["lan"] = a.client_url or access["lan"]
         d = drive.Driver(a.client_port)
     else:
@@ -366,6 +396,26 @@ def main():
         if d.eval("typeof (window.mwContentAge && window.mwContentAge.onDecoded)") != "function":
             raise SystemExit("the page runs an older content-age probe")
         page = "scroll.html?band=time&px=%d%s" % (a.px, "&fps=" + a.game_fps if a.game_fps else "")
+        if rh:
+            print("  " + rh.content_start(page), flush=True)
+            shown = True
+            content_ms = d.eval("performance.now()")
+            time.sleep(4 + a.settle)
+            frames_only(d, a.tag, a.secs)
+            grid = None
+            stepper = stepper_state(d, content_ms)
+            clicks = click_flag(d, a.clicks, tag=a.tag) if a.clicks > 0 else None
+            uplink = uplink_runs(d, a.uplink, a.tag)
+            d.expand_latency_detail()
+            stats = d.stats()
+            path = os.path.join(age.OUT, a.tag + ".json")
+            with open(path) as f:
+                data = json.load(f)
+            data.update({"overlay": stats, "grid": grid, "stepper": stepper, "clicks": clicks,
+                         "uplink": uplink, "args": vars(a), "host": a.host})
+            with open(path, "w") as f:
+                json.dump(data, f)
+            return
         run.content_start(page, probe=False, debug_port=CONTENT_PORT)
         shown = True
         # When the content began to move, on the client's clock: what the
@@ -451,7 +501,10 @@ def main():
         except Exception:
             pass
         if shown:
-            run.content_stop()
+            if rh:
+                print("  " + rh.content_stop(), flush=True)
+            else:
+                run.content_stop()
         if not remote:
             run.kiosk_stop()
 
