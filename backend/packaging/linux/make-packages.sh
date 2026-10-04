@@ -450,7 +450,9 @@ fi
 # The native host opens libvulkan.so.1 with dlopen, never links it: without
 # it, GL converts and VA-API encodes, as they always have. apt, dnf and zypper
 # install recommended packages by default, so a machine without Vulkan gets it
-# with MoonlightWeb, silently; one set to skip them still streams.
+# with MoonlightWeb, silently; one set to skip them still streams. dav1d too:
+# the AV1 Vulkan Video encoder's pixel proof reads its stream back with it
+# (C13.12, opened at run time) — without it, no AV1 through Vulkan.
 deb_depends=(
     --depends libgl1 --depends libopengl0 --depends libegl1
     --depends libfontconfig1 --depends libfreetype6
@@ -459,6 +461,7 @@ deb_depends=(
     --depends libgles2 --depends libgbm1 --depends libpipewire-0.3-0
     --depends libcap2-bin
     --deb-recommends libvulkan1 --deb-recommends mesa-vulkan-drivers
+    --deb-recommends "libdav1d7 | libdav1d6 | libdav1d5"
 )
 # RPM resolves soname provides, which every RPM distro generates the same way —
 # unlike package names, which differ between Fedora (libglvnd-glx) and openSUSE
@@ -480,6 +483,7 @@ rpm_depends=(
     # libvulkan_radeon and libvulkan_intel.
     --rpm-tag "Recommends: libvulkan_radeon.so()(64bit)"
     --rpm-tag "Recommends: libvulkan_intel.so()(64bit)"
+    --rpm-tag "Recommends: libdav1d.so.7()(64bit)"
 )
 
 common=(

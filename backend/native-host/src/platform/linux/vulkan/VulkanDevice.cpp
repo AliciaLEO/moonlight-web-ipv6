@@ -286,6 +286,8 @@ bool VulkanDevice::identify(const std::string& renderNode, DeviceIdentity& out, 
                      has(extensions, VK_KHR_VIDEO_ENCODE_H265_EXTENSION_NAME);
     id.decodesHevc = has(extensions, VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME) &&
                      has(extensions, VK_KHR_VIDEO_DECODE_H265_EXTENSION_NAME);
+    id.encodesAv1 = has(extensions, VK_KHR_VIDEO_ENCODE_QUEUE_EXTENSION_NAME) &&
+                    has(extensions, VK_KHR_VIDEO_ENCODE_AV1_EXTENSION_NAME);
     id.importsHostMemory = has(extensions, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
     out = id;
     return true;
@@ -386,20 +388,44 @@ std::unique_ptr<VulkanDevice> VulkanDevice::open(const std::string& renderNode,
                 return i;
         return UINT32_MAX;
     };
-    if (options.encodeHevc) {
-        for (const char* name :
-             {VK_KHR_VIDEO_QUEUE_EXTENSION_NAME, VK_KHR_VIDEO_ENCODE_QUEUE_EXTENSION_NAME,
-              VK_KHR_VIDEO_ENCODE_H265_EXTENSION_NAME}) {
+    if (options.encodeHevc || options.encodeAv1) {
+        std::vector<const char*> needed = {VK_KHR_VIDEO_QUEUE_EXTENSION_NAME,
+                                           VK_KHR_VIDEO_ENCODE_QUEUE_EXTENSION_NAME};
+        if (options.encodeHevc) needed.push_back(VK_KHR_VIDEO_ENCODE_H265_EXTENSION_NAME);
+        if (options.encodeAv1) needed.push_back(VK_KHR_VIDEO_ENCODE_AV1_EXTENSION_NAME);
+        for (const char* name : needed) {
             if (!has(extensions, name)) {
                 error = device->m_Name + " offers no Vulkan Video encoder (" + name + ")";
                 return nullptr;
             }
         }
-        device->m_EncodeFamily = videoFamily(VK_QUEUE_VIDEO_ENCODE_BIT_KHR,
-                                             VK_VIDEO_CODEC_OPERATION_ENCODE_H265_BIT_KHR);
+        // One queue for whatever is asked: a family that takes every codec.
+        const VkVideoCodecOperationFlagsKHR operations =
+            (options.encodeHevc ? VK_VIDEO_CODEC_OPERATION_ENCODE_H265_BIT_KHR : 0) |
+            (options.encodeAv1 ? VK_VIDEO_CODEC_OPERATION_ENCODE_AV1_BIT_KHR : 0);
+        for (uint32_t i = 0; i < familyCount && device->m_EncodeFamily == UINT32_MAX; ++i)
+            if ((families[i].queueFamilyProperties.queueFlags & VK_QUEUE_VIDEO_ENCODE_BIT_KHR) &&
+                (videoFamilies[i].videoCodecOperations & operations) == operations)
+                device->m_EncodeFamily = i;
         if (device->m_EncodeFamily == UINT32_MAX) {
-            error = device->m_Name + " has no queue that encodes HEVC";
+            error = device->m_Name + " has no queue that encodes " +
+                    (options.encodeAv1 && options.encodeHevc ? "HEVC and AV1"
+                     : options.encodeAv1                     ? "AV1"
+                                                             : "HEVC");
             return nullptr;
+        }
+        // The AV1 encoder is a feature as well as an extension: both, or none.
+        if (options.encodeAv1) {
+            VkPhysicalDeviceVideoEncodeAV1FeaturesKHR av1 = {};
+            av1.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_ENCODE_AV1_FEATURES_KHR;
+            VkPhysicalDeviceFeatures2 asked = {};
+            asked.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            asked.pNext = &av1;
+            loader.vkGetPhysicalDeviceFeatures2(device->m_Physical, &asked);
+            if (av1.videoEncodeAV1 != VK_TRUE) {
+                error = device->m_Name + " lists VK_KHR_video_encode_av1 without its feature";
+                return nullptr;
+            }
         }
         if (!loader.vkGetPhysicalDeviceVideoCapabilitiesKHR ||
             !loader.vkGetPhysicalDeviceVideoFormatPropertiesKHR) {
@@ -514,11 +540,13 @@ bool VulkanDevice::create(bool high, std::string& error)
         enable.push_back(has(extensions, "VK_KHR_global_priority") ? "VK_KHR_global_priority"
                                                                    : "VK_EXT_global_priority");
     }
-    const bool video = m_Options.encodeHevc || m_Options.decodeHevc;
+    const bool encode = m_Options.encodeHevc || m_Options.encodeAv1;
+    const bool video = encode || m_Options.decodeHevc;
     if (video) enable.push_back(VK_KHR_VIDEO_QUEUE_EXTENSION_NAME);
-    if (m_Options.encodeHevc) {
+    if (encode) {
         enable.push_back(VK_KHR_VIDEO_ENCODE_QUEUE_EXTENSION_NAME);
-        enable.push_back(VK_KHR_VIDEO_ENCODE_H265_EXTENSION_NAME);
+        if (m_Options.encodeHevc) enable.push_back(VK_KHR_VIDEO_ENCODE_H265_EXTENSION_NAME);
+        if (m_Options.encodeAv1) enable.push_back(VK_KHR_VIDEO_ENCODE_AV1_EXTENSION_NAME);
         if (m_EncodeIntraRefresh)
             enable.push_back(VK_KHR_VIDEO_ENCODE_INTRA_REFRESH_EXTENSION_NAME);
     }
@@ -553,9 +581,22 @@ bool VulkanDevice::create(bool high, std::string& error)
     VkPhysicalDeviceVideoEncodeIntraRefreshFeaturesKHR refresh = {};
     refresh.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_ENCODE_INTRA_REFRESH_FEATURES_KHR;
     refresh.videoEncodeIntraRefresh = VK_TRUE;
+    VkPhysicalDeviceVideoEncodeAV1FeaturesKHR av1 = {};
+    av1.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_ENCODE_AV1_FEATURES_KHR;
+    av1.videoEncodeAV1 = VK_TRUE;
+    // The chain: the AV1 encoder's feature, then the sweeps', each where asked.
+    void* videoFeatures = nullptr;
+    if (encode && m_EncodeIntraRefresh) {
+        refresh.pNext = videoFeatures;
+        videoFeatures = &refresh;
+    }
+    if (m_Options.encodeAv1) {
+        av1.pNext = videoFeatures;
+        videoFeatures = &av1;
+    }
     VkPhysicalDeviceVulkan13Features f13 = {};
     f13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-    f13.pNext = m_Options.encodeHevc && m_EncodeIntraRefresh ? &refresh : nullptr;
+    f13.pNext = videoFeatures;
     f13.synchronization2 = VK_TRUE;
     VkPhysicalDeviceVulkan12Features f12 = {};
     f12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
@@ -609,7 +650,7 @@ bool VulkanDevice::create(bool high, std::string& error)
     if (video) {
         MW_VULKAN_VIDEO_FUNCTIONS(MW_VULKAN_LOAD_DEVICE)
     }
-    if (m_Options.encodeHevc) {
+    if (encode) {
         MW_VULKAN_VIDEO_ENCODE_FUNCTIONS(MW_VULKAN_LOAD_DEVICE)
     }
     if (m_Options.decodeHevc) {

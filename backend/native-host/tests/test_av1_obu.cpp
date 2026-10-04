@@ -175,6 +175,38 @@ void run_av1_obu_tests()
         for (int i = 0; i < av1::kRefsPerFrame; ++i)
             CHECK_EQ(f.refFrameIdx[static_cast<size_t>(i)], 0);
 
+        // Read to the quantizer (C13.12, a driver's own frame header): the
+        // render size and base_q_idx of both frames.
+        av1::FrameHeader fh;
+        key.renderWidth = 1918;
+        key.renderHeight = 1078;
+        const std::vector<uint8_t> kb = av1::frameHeaderBits(s, key);
+        CHECK(av1::parseFrameHeader(kb.data(), kb.size(), s, fh).empty());
+        CHECK_EQ(fh.start.frameType, 0);
+        CHECK_EQ(fh.renderWidth, 1918u);
+        CHECK_EQ(fh.renderHeight, 1078u);
+        CHECK_EQ(fh.tileCols, 1);
+        CHECK_EQ(fh.tileRows, 1);
+        CHECK_EQ(fh.baseQIdx, 120);
+        inter.q.baseQIdx = 201;
+        const std::vector<uint8_t> ib2 = av1::frameHeaderBits(s, inter);
+        CHECK(av1::parseFrameHeader(ib2.data(), ib2.size(), s, fh).empty());
+        CHECK_EQ(fh.start.frameType, 1);
+        CHECK_EQ(fh.start.orderHint, 5u);
+        CHECK_EQ(fh.renderWidth, 0u);
+        CHECK_EQ(fh.baseQIdx, 201);
+        CHECK(fh.deltaQKnown);
+        CHECK(!fh.deltaQPresent);
+        // Per-superblock deltas: base_q_idx is then a starting point only.
+        inter.deltaQPresent = true;
+        const std::vector<uint8_t> ib3 = av1::frameHeaderBits(s, inter);
+        CHECK(av1::parseFrameHeader(ib3.data(), ib3.size(), s, fh).empty());
+        CHECK(fh.deltaQKnown);
+        CHECK(fh.deltaQPresent);
+        CHECK_EQ(fh.baseQIdx, 201);
+        // A frame header cut short does not read.
+        CHECK(!av1::parseFrameHeader(ib2.data(), 2, s, fh).empty());
+
         // Segmentation and every delta still fit the room left in front of a
         // tile.
         av1::Frame worst = inter;

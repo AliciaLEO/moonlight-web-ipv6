@@ -166,6 +166,9 @@ struct DeviceOptions
     bool wantHigh = true;
     /// A queue that encodes HEVC (Vulkan Video): the whole chain in Vulkan.
     bool encodeHevc = false;
+    /// A queue that encodes AV1 (C13.12), with VK_KHR_video_encode_av1 and
+    /// its feature enabled.
+    bool encodeAv1 = false;
     /// A queue that decodes HEVC: the encoder's pixel proof reads its own
     /// stream back with it.
     bool decodeHevc = false;
@@ -185,6 +188,8 @@ struct DeviceIdentity
     /// The driver shows a Vulkan Video HEVC encoder, and a decoder.
     bool encodesHevc = false;
     bool decodesHevc = false;
+    /// The driver shows a Vulkan Video AV1 encoder (C13.12).
+    bool encodesAv1 = false;
     /// VK_EXT_external_memory_host: the conversion can read memory a
     /// process mapped — the portal's shared memory (C13.10).
     bool importsHostMemory = false;

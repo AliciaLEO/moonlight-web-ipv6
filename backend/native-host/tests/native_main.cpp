@@ -45,6 +45,7 @@ void run_scanout_window_tests();
 void run_linux_pipeline_tests();
 void run_vulkan_convert_tests();
 void run_vulkan_hevc_tests();
+void run_vulkan_av1_tests();
 void run_cpu_cursor_tests();
 void run_portal_tests();
 void run_encode_load_cap_tests();
@@ -208,6 +209,7 @@ int main(int argc, char** argv)
     RUN(linux_pipeline);
     RUN(vulkan_convert);
     RUN(vulkan_hevc);
+    RUN(vulkan_av1);
     RUN(cpu_cursor);
     RUN(portal);
     RUN(linux_session);

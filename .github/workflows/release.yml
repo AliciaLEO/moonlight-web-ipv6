@@ -516,6 +516,11 @@ jobs:
           # nothing of glslang ships, and the loader is opened at run time.
           # Without it CMake leaves the route out, loudly, and GL converts.
           sudo apt-get install -y glslang-tools
+          # AV1 through Vulkan Video (C13.12) reads its pixel proof back with
+          # dav1d: its headers only, the library opened at run time (any of
+          # libdav1d.so.7, .6, .5). Without them CMake warns and the host never
+          # offers AV1 through Vulkan.
+          sudo apt-get install -y libdav1d-dev
           # The click-to-photon flag's X11 overlay (LatencyFlag.h). Optional in
           # the same way: without these CMake builds the stub, and the shipped
           # binary would simply report that it has no backend — which on a

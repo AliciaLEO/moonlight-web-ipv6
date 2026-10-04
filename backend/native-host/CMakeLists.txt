@@ -276,10 +276,25 @@ else()
                     src/encode/linux/VulkanHevcEncoder.cpp
                     src/encode/linux/VulkanHevcDecoder.cpp
                     src/encode/linux/VulkanHevcProof.cpp
+                    src/encode/linux/VulkanAv1Encoder.cpp
+                    src/encode/linux/Dav1dDecoder.cpp
                     ${_mw_spirv_headers})
                 target_include_directories(mw-native-host PRIVATE ${_mw_spirv})
                 target_include_directories(mw-native-host SYSTEM PRIVATE
                     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vulkan-headers/include)
+                # The AV1 encoder's pixel proof reads its stream back with
+                # dav1d (C13.12; BSD-2-Clause): headers only, from the system
+                # (libdav1d-dev), the library opened at run time like libva.
+                # Without them AV1 is never offered through Vulkan, and the
+                # configure says so.
+                pkg_check_modules(MW_DAV1D dav1d)
+                if(MW_DAV1D_FOUND)
+                    target_include_directories(mw-native-host SYSTEM PRIVATE ${MW_DAV1D_INCLUDE_DIRS})
+                    target_compile_definitions(mw-native-host PUBLIC MW_NATIVE_LINUX_DAV1D=1)
+                    message(STATUS "mw-native-host: AV1 pixel proof ON (dav1d ${MW_DAV1D_VERSION} headers)")
+                else()
+                    message(WARNING "mw-native-host: AV1 pixel proof OFF — install libdav1d-dev (no AV1 through Vulkan Video meanwhile)")
+                endif()
                 # PUBLIC so the session and the tests know whether the route exists.
                 target_compile_definitions(mw-native-host PUBLIC MW_NATIVE_LINUX_VULKAN=1)
                 message(STATUS "mw-native-host: Vulkan conversion ON (SPIR-V by ${MW_GLSLANG_VALIDATOR})")
@@ -514,6 +529,7 @@ if(MW_BUILD_TESTS)
         tests/test_linux_pipeline.cpp
         tests/test_vulkan_convert.cpp
         tests/test_vulkan_hevc.cpp
+        tests/test_vulkan_av1.cpp
         tests/test_linux_session.cpp
         tests/test_mac_keymap.cpp
         tests/test_mac_session.cpp

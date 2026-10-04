@@ -19,6 +19,8 @@
 
 #include "../../core/Log.h"
 #include "../../platform/linux/vulkan/VulkanDevice.h"
+#include "Dav1dDecoder.h"
+#include "VulkanAv1Encoder.h"
 #include "VulkanHevcDecoder.h"
 
 #include <sys/stat.h>
@@ -106,9 +108,15 @@ std::string firstLine(const std::string& path)
     return line;
 }
 
-/// What could change a verdict, as one line.
+/// The AV1 encoder's revision, as kEncoderRevision is HEVC's: raised whenever
+/// what VulkanAv1Encoder hands the driver changes. 1: C13.12.
+constexpr int kAv1EncoderRevision = 1;
+
+/// What could change a verdict, as one line. HEVC's keys stay what they
+/// were; AV1's start with "av1|" and carry its own revision and the decoder.
 std::string cacheKey(const vulkan::DeviceIdentity& id, const std::string& renderNode, int width,
-                     int height, const VulkanHevcEncoder::Witness& witness)
+                     int height, const VulkanHevcEncoder::Witness& witness,
+                     const std::string& av1Decoder = std::string())
 {
     std::string uuid;
     char hex[4];
@@ -123,9 +131,14 @@ std::string cacheKey(const vulkan::DeviceIdentity& id, const std::string& render
     const std::string vcn =
         firstLine("/sys/class/drm/" + node + "/device/fw_version/vcn_fw_version");
     std::ostringstream key;
+    if (!av1Decoder.empty()) key << "av1|";
     key << uuid << '|' << std::hex << id.vendorId << std::dec << '|' << id.driverVersion << '|'
         << id.name << '|' << kernel << '|' << (vcn.empty() ? "-" : vcn) << '|' << width << 'x'
-        << height << "|r" << kEncoderRevision << "|d" << witness.transformDepth;
+        << height;
+    if (av1Decoder.empty())
+        key << "|r" << kEncoderRevision << "|d" << witness.transformDepth;
+    else
+        key << "|r" << kAv1EncoderRevision << "|q" << witness.constantQp << '|' << av1Decoder;
     std::string text = key.str();
     std::replace(text.begin(), text.end(), '\t', ' ');
     std::replace(text.begin(), text.end(), '\n', ' ');
@@ -407,6 +420,140 @@ VulkanHevcProof vulkanHevcVerdict(const std::string& renderNode, int width, int 
     }
     proof = proveVulkanHevc(renderNode, width, height, fps, tuning, witness);
     log::info("[native] Vulkan Video pixel proof on " + id.name + ", " + std::to_string(width) +
+              "x" + std::to_string(height) + ": " +
+              (proof.ran ? (proof.passed ? "passed" : "FAILED") : "could not run") + " in " +
+              std::to_string(proof.tookMs) + " ms — " + proof.summary);
+    if (useCache && proof.ran) writeCache(key, proof);
+    return proof;
+}
+
+VulkanHevcProof proveVulkanAv1(const std::string& renderNode, int width, int height, int fps,
+                               const EncoderTuning& tuning, const VulkanEncodeWitness& witness)
+{
+    VulkanHevcProof proof;
+    const auto started = std::chrono::steady_clock::now();
+    auto took = [&] {
+        return static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        std::chrono::steady_clock::now() - started)
+                                        .count());
+    };
+    auto refused = [&](const std::string& why) {
+        proof.summary = why;
+        proof.tookMs = took();
+        return proof;
+    };
+
+    std::string error;
+    Dav1dDecoder decoder;
+    if (!decoder.open(error)) return refused(error);
+    // Its own device: the verdict is the GPU's and the driver's.
+    vulkan::DeviceOptions options;
+    options.wantHigh = false;
+    options.encodeAv1 = true;
+    std::shared_ptr<vulkan::VulkanDevice> device =
+        vulkan::VulkanDevice::open(renderNode, options, error);
+    if (!device) return refused(error);
+    const double scale =
+        static_cast<double>(width) * height / (1920.0 * 1080.0) * (fps > 0 ? fps : 60) / 60.0;
+    const int kbps = std::max(10000, static_cast<int>(50000.0 * scale));
+    VulkanEncodeWitness sweeping = witness;
+    sweeping.sweepPictures = kProofSweep;
+    VulkanAv1Encoder encoder;
+    if (!encoder.init(device, Codec::Av1, width, height, fps, kbps, /*intraRefresh=*/true, tuning,
+                      error, sweeping))
+        return refused(error);
+
+    const int bandRows = encoder.sequence().sb128 ? 128 : 64;
+    double worstPicture = 99.0, worstBand = 99.0, worstChroma = 99.0;
+    int decoded = 0, worstAt = -1;
+    std::vector<uint8_t> out;
+    for (int n = 0; n < kPictures; ++n) {
+        const uint32_t frame = static_cast<uint32_t>(n);
+        const std::vector<uint8_t> picture = proofPicture(width, height, n);
+        if (!encoder.upload(picture.data(), error))
+            return refused("picture " + std::to_string(n) + ": " + error);
+        if (frame == kLostTo + 1 && !encoder.invalidateReference(kLostFrom, error))
+            return refused("the loss of frame " + std::to_string(kLostFrom) + ": " + error);
+        EncoderOutput encoded;
+        if (!encoder.encode(frame == kKeyframeAt, frame, encoded, error))
+            return refused("picture " + std::to_string(n) + ": " + error);
+        const std::vector<uint8_t> unit(encoded.data, encoded.data + encoded.size);
+        encoder.releaseOutput();
+        if (frame >= kLostFrom && frame <= kLostTo) continue; // never arrived
+        // The frame at the encoder's alignment; its top left is the picture
+        // (the render size, which the encoder's guard reads back).
+        int frameWidth = 0, frameHeight = 0;
+        if (!decoder.decode(unit.data(), unit.size(), width, height, out, frameWidth, frameHeight,
+                            error))
+            return refused("picture " + std::to_string(n) + " does not decode: " + error);
+        const PicturePsnr q = comparePictures(picture.data(), out.data(), width, height, bandRows);
+        if (q.luma < worstPicture || q.worstBand < worstBand) worstAt = n;
+        worstPicture = std::min(worstPicture, q.luma);
+        worstBand = std::min(worstBand, q.worstBand);
+        worstChroma = std::min(worstChroma, q.chroma);
+        ++decoded;
+    }
+
+    proof.ran = true;
+    proof.pictures = decoded;
+    proof.worstPicturePsnr = worstPicture;
+    proof.worstBandPsnr = worstBand;
+    proof.passed = worstPicture >= kPictureFloorDb && worstBand >= kBandFloorDb;
+    char numbers[240];
+    std::snprintf(numbers, sizeof(numbers),
+                  "%d pictures decoded back by %s, worst %.1f dB over a picture and %.1f dB over a "
+                  "superblock row (picture %d), chroma %.1f dB, %s",
+                  decoded, decoder.version().c_str(), worstPicture, worstBand, worstAt, worstChroma,
+                  encoder.intraRefreshEnabled() ? "with intra-refresh sweeps"
+                                                : "no intra refresh on this driver");
+    proof.summary = proof.passed ? std::string(numbers)
+                                 : "the AV1 stream does not decode to what was encoded: " +
+                                       std::string(numbers);
+    proof.tookMs = took();
+    return proof;
+}
+
+VulkanHevcProof vulkanAv1Verdict(const std::string& renderNode, int width, int height, int fps,
+                                 const EncoderTuning& tuning)
+{
+    const VulkanEncodeWitness witness;
+    vulkan::DeviceIdentity id;
+    std::string error;
+    if (!vulkan::VulkanDevice::identify(renderNode, id, error)) {
+        VulkanHevcProof proof;
+        proof.summary = error;
+        return proof;
+    }
+    if (!id.encodesAv1) {
+        VulkanHevcProof proof;
+        proof.summary = id.name + " shows no Vulkan Video AV1 encoder";
+        return proof;
+    }
+    // The decoder is part of what the verdict holds for: opened first, and a
+    // machine without one is told so before any device is.
+    std::string decoderName;
+    {
+        Dav1dDecoder probe;
+        if (!probe.open(error)) {
+            VulkanHevcProof proof;
+            proof.summary = error;
+            return proof;
+        }
+        decoderName = probe.version();
+    }
+    const char* cacheSetting = std::getenv("MW_VK_PROOF_CACHE");
+    const bool useCache = !(cacheSetting && std::string(cacheSetting) == "0");
+    const std::string key = cacheKey(id, renderNode, width, height, witness, decoderName);
+    VulkanHevcProof proof;
+    if (useCache && readCache(key, proof)) {
+        log::info("[native] Vulkan Video AV1 pixel proof on " + id.name + ", " +
+                  std::to_string(width) + "x" + std::to_string(height) + ": " +
+                  (proof.passed ? "passed" : "failed") + " (kept from an earlier proof) — " +
+                  proof.summary);
+        return proof;
+    }
+    proof = proveVulkanAv1(renderNode, width, height, fps, tuning, witness);
+    log::info("[native] Vulkan Video AV1 pixel proof on " + id.name + ", " + std::to_string(width) +
               "x" + std::to_string(height) + ": " +
               (proof.ran ? (proof.passed ? "passed" : "FAILED") : "could not run") + " in " +
               std::to_string(proof.tookMs) + " ms — " + proof.summary);

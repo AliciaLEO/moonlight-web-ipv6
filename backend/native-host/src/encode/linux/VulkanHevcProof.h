@@ -84,6 +84,20 @@ VulkanHevcProof proveVulkanHevc(const std::string& renderNode, int width, int he
 VulkanHevcProof vulkanHevcVerdict(const std::string& renderNode, int width, int height, int fps,
                                   const EncoderTuning& tuning);
 
+/// The same proof for the AV1 encoder (C13.12, VulkanAv1Encoder): the same
+/// pictures, the same loss and keyframe, decoded by dav1d (Dav1dDecoder) —
+/// the GPU's own AV1 decoder would need a frame header parser this engine has
+/// no other use for, and dav1d is what Chrome reads AV1 with when its GPU
+/// cannot. No dav1d on the machine, or none in the build: the proof cannot
+/// run, and no session is offered AV1 through Vulkan.
+VulkanHevcProof proveVulkanAv1(const std::string& renderNode, int width, int height, int fps,
+                               const EncoderTuning& tuning,
+                               const VulkanEncodeWitness& witness = {});
+
+/// The AV1 proof's verdict, cached as the HEVC one is, under its own key.
+VulkanHevcProof vulkanAv1Verdict(const std::string& renderNode, int width, int height, int fps,
+                                 const EncoderTuning& tuning);
+
 /// The witness the environment asks for: MW_VK_ENCODE_DEPTH=N codes the
 /// transform depth N — 2 is the one that coded wrong on the 780M — so that a
 /// test shows the proof failing and the session falling back. Never set by

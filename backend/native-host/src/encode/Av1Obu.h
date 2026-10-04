@@ -733,4 +733,164 @@ inline std::string parseFrameStart(const uint8_t* payload, size_t size, const Se
     return {};
 }
 
+/// An uncompressed_header() read as far as its quantizer: what a driver that
+/// writes the frame header itself (Vulkan Video, C13.12) is checked by — the
+/// frame it was asked for, and the base_q_idx its rate control chose.
+struct FrameHeader
+{
+    FrameStart start;
+    uint32_t renderWidth = 0; ///< 0: the frame's own size
+    uint32_t renderHeight = 0;
+    int tileCols = 1;
+    int tileRows = 1;
+    int baseQIdx = 0;
+    /// delta_q_present, when the header could be read that far — not past a
+    /// segmentation it does not follow. Present, base_q_idx is a starting
+    /// point the superblocks move from (RADV's rate control does exactly
+    /// that, 04/10/2026), not the picture's quantizer.
+    bool deltaQKnown = false;
+    bool deltaQPresent = false;
+};
+
+namespace detail {
+
+/// ns(n): a value below @p n, in as few bits as the spec's code allows.
+inline uint32_t ns(h264vui_detail::BitReader& r, uint32_t n)
+{
+    int w = 0;
+    for (uint32_t x = n; x != 0; x >>= 1)
+        ++w;
+    const uint32_t m = (1u << w) - n;
+    const uint32_t v = r.u(w - 1);
+    if (v < m) return v;
+    return (v << 1) - m + r.u(1);
+}
+
+} // namespace detail
+
+/// Reads an uncompressed_header() of @p s up to base_q_idx: the fields
+/// frameHeaderBits() writes, with any tile layout the driver chose. Frames
+/// whose header says what the sequence here never allows — screen content
+/// tools, a frame size of their own, frame ids — do not read.
+inline std::string parseFrameHeader(const uint8_t* payload, size_t size, const Sequence& s,
+                                    FrameHeader& out)
+{
+    const std::vector<uint8_t> bytes(payload, payload + size);
+    h264vui_detail::BitReader r{bytes};
+    FrameHeader h;
+    FrameStart& f = h.start;
+    f.showExisting = r.u(1) != 0;
+    if (f.showExisting) return "show_existing_frame: not written here";
+    f.frameType = static_cast<int>(r.u(2));
+    f.showFrame = r.u(1) != 0;
+    if (!f.showFrame) return "a frame not shown";
+    const bool key = f.frameType == 0;
+    if (f.frameType == 2 || f.frameType == 3) return "an intra-only or switch frame";
+    f.errorResilient = key ? true : r.u(1) != 0;
+    const bool disableCdfUpdate = r.u(1) != 0;
+    if (r.u(1)) return "frame_size_override_flag";
+    if (s.orderHintBits > 0) f.orderHint = r.u(s.orderHintBits);
+    if (!key && !f.errorResilient) f.primaryRefFrame = static_cast<int>(r.u(3));
+    if (!key) f.refreshFrameFlags = static_cast<uint8_t>(r.u(8));
+    if (!key && f.errorResilient && s.orderHintBits > 0)
+        for (int i = 0; i < kNumRefFrames; ++i)
+            r.u(s.orderHintBits);
+    const auto renderSize = [&] {
+        if (r.u(1)) {
+            h.renderWidth = r.u(16) + 1;
+            h.renderHeight = r.u(16) + 1;
+        }
+    };
+    if (key) {
+        renderSize(); // frame_size(): the sequence's
+    } else {
+        if (s.orderHintBits > 0 && r.u(1)) return "frame_refs_short_signaling";
+        for (int i = 0; i < kRefsPerFrame; ++i)
+            f.refFrameIdx[static_cast<size_t>(i)] = static_cast<int>(r.u(3));
+        renderSize();
+        r.u(1);              // allow_high_precision_mv: force_integer_mv is 0
+        if (!r.u(1)) r.u(2); // is_filter_switchable, interpolation_filter
+        r.u(1);              // is_motion_mode_switchable
+        if (!f.errorResilient && s.refFrameMvs) r.u(1); // use_ref_frame_mvs
+    }
+    if (!disableCdfUpdate) r.u(1); // disable_frame_end_update_cdf
+
+    // tile_info()
+    const uint32_t miCols = 2 * ((s.width + 7) >> 3);
+    const uint32_t miRows = 2 * ((s.height + 7) >> 3);
+    const int sbShift = s.sb128 ? 5 : 4;
+    const int sbSize = sbShift + 2;
+    const uint32_t sbCols = (miCols + (1u << sbShift) - 1) >> sbShift;
+    const uint32_t sbRows = (miRows + (1u << sbShift) - 1) >> sbShift;
+    const uint32_t maxTileWidthSb = kMaxTileWidth >> sbSize;
+    uint32_t maxTileAreaSb = kMaxTileArea >> (2 * sbSize);
+    const int minLog2TileCols = detail::tileLog2(maxTileWidthSb, sbCols);
+    const int maxLog2TileCols = detail::tileLog2(1, (std::min)(sbCols, 64u));
+    const int maxLog2TileRows = detail::tileLog2(1, (std::min)(sbRows, 64u));
+    const int minLog2Tiles =
+        (std::max)(minLog2TileCols, detail::tileLog2(maxTileAreaSb, sbRows * sbCols));
+    int tileColsLog2 = 0, tileRowsLog2 = 0;
+    if (r.u(1)) { // uniform_tile_spacing_flag
+        tileColsLog2 = minLog2TileCols;
+        while (tileColsLog2 < maxLog2TileCols && r.u(1))
+            ++tileColsLog2;
+        const uint32_t widthSb = (sbCols + (1u << tileColsLog2) - 1) >> tileColsLog2;
+        h.tileCols = static_cast<int>((sbCols + widthSb - 1) / widthSb);
+        tileRowsLog2 = (std::max)(minLog2Tiles - tileColsLog2, 0);
+        while (tileRowsLog2 < maxLog2TileRows && r.u(1))
+            ++tileRowsLog2;
+        const uint32_t heightSb = (sbRows + (1u << tileRowsLog2) - 1) >> tileRowsLog2;
+        h.tileRows = static_cast<int>((sbRows + heightSb - 1) / heightSb);
+    } else {
+        uint32_t widest = 0, start = 0;
+        int cols = 0;
+        for (; start < sbCols && !r.overrun; ++cols) {
+            const uint32_t sizeSb = detail::ns(r, (std::min)(sbCols - start, maxTileWidthSb)) + 1;
+            widest = (std::max)(widest, sizeSb);
+            start += sizeSb;
+        }
+        h.tileCols = cols;
+        tileColsLog2 = detail::tileLog2(1, static_cast<uint32_t>(cols));
+        maxTileAreaSb =
+            minLog2Tiles > 0 ? (sbRows * sbCols) >> (minLog2Tiles + 1) : sbRows * sbCols;
+        const uint32_t maxTileHeightSb = (std::max)(maxTileAreaSb / (std::max)(widest, 1u), 1u);
+        int rows = 0;
+        for (start = 0; start < sbRows && !r.overrun; ++rows)
+            start += detail::ns(r, (std::min)(sbRows - start, maxTileHeightSb)) + 1;
+        h.tileRows = rows;
+        tileRowsLog2 = detail::tileLog2(1, static_cast<uint32_t>(rows));
+    }
+    if (tileColsLog2 > 0 || tileRowsLog2 > 0) {
+        r.u(tileRowsLog2 + tileColsLog2); // context_update_tile_id
+        r.u(2);                           // tile_size_bytes_minus_1
+    }
+    h.baseQIdx = static_cast<int>(r.u(8));
+    // The rest of quantization_params(), then segmentation_params() when it
+    // is off, then delta_q_params()'s first bit.
+    const auto deltaQ = [&] {
+        if (r.u(1)) r.u(7);
+    };
+    deltaQ(); // DeltaQYDc
+    bool diffUv = false;
+    if (s.separateUvDeltaQ) diffUv = r.u(1) != 0;
+    deltaQ(); // DeltaQUDc
+    deltaQ(); // DeltaQUAc
+    if (diffUv) {
+        deltaQ();
+        deltaQ();
+    }
+    if (r.u(1)) { // using_qmatrix
+        r.u(4);
+        r.u(4);
+        if (s.separateUvDeltaQ) r.u(4);
+    }
+    if (!r.u(1)) { // segmentation_enabled
+        h.deltaQKnown = true;
+        h.deltaQPresent = h.baseQIdx > 0 && r.u(1) != 0;
+    }
+    if (r.overrun) return "past the end";
+    out = h;
+    return {};
+}
+
 } // namespace mw::native::encode::av1
