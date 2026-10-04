@@ -1350,6 +1350,8 @@ QString NativeMediaEngine::hidAttach(int slot, const QJsonObject& message)
     device.name = message.value(QStringLiteral("productName")).toString().left(120).toStdString();
     device.vendorId = static_cast<uint16_t>(message.value(QStringLiteral("vendorId")).toInt());
     device.productId = static_cast<uint16_t>(message.value(QStringLiteral("productId")).toInt());
+    device.forceFeedback =
+        message.value(QStringLiteral("forceFeedback")).toBool() && hidForceFeedback();
 
     std::lock_guard<std::mutex> lock(m_HidMutex);
     if (!m_Hid) {
@@ -1365,6 +1367,16 @@ QString NativeMediaEngine::hidAttach(int slot, const QJsonObject& message)
                     [this, r, kind, data]() { emit hidRequest(r.slot, kind, r.reportId, data); },
                     Qt::QueuedConnection);
             });
+        m_Hid->setFfbSink([this](const mw::native::HidFfb& op) {
+            QJsonObject m{{QStringLiteral("type"), QStringLiteral("hidffb")},
+                          {QStringLiteral("slot"), op.slot},
+                          {QStringLiteral("op"), QString::fromStdString(op.op)},
+                          {QStringLiteral("effect"), op.effect}};
+            if (!op.kind.empty()) m[QStringLiteral("kind")] = QString::fromStdString(op.kind);
+            for (const auto& [name, value] : op.fields)
+                m[QString::fromStdString(name)] = value;
+            QMetaObject::invokeMethod(this, [this, m]() { emit hidFfb(m); }, Qt::QueuedConnection);
+        });
     }
     const std::string why = m_Hid->attach(slot, device);
     if (!why.empty()) {
@@ -1382,6 +1394,17 @@ void NativeMediaEngine::hidInput(const uint8_t* frame, size_t size)
     if (!m_Hid) return;
     const uint16_t seq = static_cast<uint16_t>(frame[2] | (frame[3] << 8));
     m_Hid->input(frame[0], frame[1], seq, frame + 4, size - 4);
+}
+
+bool NativeMediaEngine::hidForceFeedback() const
+{
+#ifdef Q_OS_WIN
+    // pid.dll drives the PID block the recreated device gets. Linux has no
+    // equivalent for uhid devices (hid-pidff binds to usbhid only).
+    return true;
+#else
+    return false;
+#endif
 }
 
 void NativeMediaEngine::hidDetach(int slot)

@@ -98,6 +98,17 @@ MediaTrackRelay::MediaTrackRelay(IMediaEngine* engine, QObject* parent)
                 } catch (const std::exception&) {}
             });
 
+    // Force feedback a game asked of a recreated wheel, for the page to play on
+    // the real one. Reliable and ordered like the rest of this channel: an
+    // effect's start must never overtake its parameters.
+    connect(m_Shim, &IMediaEngine::hidFfb, this, [this](QJsonObject m) {
+        if (m_Stopping.load() || !m_InputDc) return;
+        const QByteArray j = QJsonDocument(m).toJson(QJsonDocument::Compact);
+        try {
+            m_InputDc->send(std::string(j.constData(), j.size()));
+        } catch (const std::exception&) {}
+    });
+
     // The input gate (native host) — see DataChannelRelay for the message.
     connect(m_Shim, &IMediaEngine::inputGateChanged, this,
             [this](bool blocked, QString reason, QString window) {
@@ -475,9 +486,11 @@ void MediaTrackRelay::createTracksAndChannels()
                     const QString why = !m_InputPolicy.hid
                                             ? QStringLiteral("not allowed for this player")
                                             : m_Shim->hidUnavailableReason();
-                    QJsonObject caps{{QStringLiteral("type"), QStringLiteral("hidcaps")},
-                                     {QStringLiteral("available"), why.isEmpty()},
-                                     {QStringLiteral("why"), why}};
+                    QJsonObject caps{
+                        {QStringLiteral("type"), QStringLiteral("hidcaps")},
+                        {QStringLiteral("available"), why.isEmpty()},
+                        {QStringLiteral("ffb"), why.isEmpty() && m_Shim->hidForceFeedback()},
+                        {QStringLiteral("why"), why}};
                     const QByteArray j = QJsonDocument(caps).toJson(QJsonDocument::Compact);
                     try {
                         m_InputDc->send(std::string(j.constData(), j.size()));

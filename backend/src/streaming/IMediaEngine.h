@@ -328,6 +328,9 @@ public:
         Q_UNUSED(size);
     }
     virtual void hidDetach(int slot) { Q_UNUSED(slot); }
+    /// Whether a recreated device can carry force feedback back to the page
+    /// (a PID block that pid.dll drives: Windows only). Announced in hidcaps.
+    virtual bool hidForceFeedback() const { return false; }
 
 signals:
     /// presentationTimeUs travels WITH the frame through the queued connection:
@@ -354,6 +357,10 @@ signals:
     /// report, a feature): forwarded to the page, on the engine's thread.
     /// kind: 0 output, 1 get feature, 2 set feature.
     void hidRequest(int slot, int kind, int reportId, QByteArray data);
+
+    /// A force-feedback operation a game asked of a recreated device, as the
+    /// page's hidffb message (mw::native::HidFfb): op, effect, kind, fields.
+    void hidFfb(QJsonObject message);
 
     /// The mouse pointer's SHAPE changed, and the browser is the one drawing it.
     ///
