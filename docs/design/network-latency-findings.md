@@ -535,6 +535,31 @@ With clicks (20:38-21:01; bruno added to `input` for the series, removed after):
 - The wired client here is DualRTX's Chrome through its Hyper-V switch (2-3 ms
   with spikes to 25 ms to the UM790Pro): its clicks are slower than the N95's,
   so it only counts against its own base.
+- **Decision (Bruno, 04/10 ~23:20): no max burst is the Linux native host's
+  default too, `6a833826`** (`kNativeSctpMaxBurst` = 0 on Windows and Linux);
+  `retrcut` stays off on Linux.
+
+### 04/10/2026 — B and W2.5 on the macOS native host: started, not finished
+
+Host: the Mac M1 Pro (Wi-Fi), DEV `0.3.1.g5de-dev` from the CI (`5de1e2af`),
+ScreenCaptureKit, the bench page on its screen; client the N95 in Wi-Fi. Both
+ends are on Wi-Fi here, so this is not the same link as the Windows host to
+the Mac. Two passes only before the screen time Bruno granted ran out:
+
+| Arm | Click (p90) | Frame age med / p90 | fps | Received | Dropped /min | Messages med |
+|---|---|---|---|---|---|---|
+| base | 70.5 ms (127) | 19.4 / 56.5 | 96 | 10.8 Mbit/s | 238 | 38.4 |
+| `retrcut=3` | no click seen | 39.2 / 63.1 | 106 | 22.5 Mbit/s | 426 | 34.6 |
+
+- In the `retrcut=3` pass the host saw and showed all 60 flags (its log) but
+  the client found none: the flag sits at the bottom of the Mac's screen
+  (792,1111 of 1800×1169), probably under the kiosk page that pass. Not
+  understood yet.
+- The following passes failed on the bench driver, not the host: it clicked
+  a button labelled "Unlock", and the N95's Chrome is in French
+  ("Déverrouiller"); fixed in `d1900763`. Still to rerun: all four arms, two
+  rounds, on another Mac slot.
+
 
 ## 4. The model so far (04/10/2026)
 
