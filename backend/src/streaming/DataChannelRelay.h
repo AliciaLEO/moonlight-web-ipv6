@@ -352,6 +352,20 @@ private:
     bool m_FloodLikeVideo = false;
     std::shared_ptr<rtc::DataChannel> m_FloodDc;
     std::unique_ptr<SctpFlood> m_Flood;
+    // POC Ultra U1.1 (`ultra=synthetic:<KiB>`, `ultrachannel=`): a synthetic
+    // Ultra stream on channel id 5, one message train per video frame sent,
+    // through a FrameSender of its own so that it never evicts the video.
+    // Read at setup; the payload is made once, incompressible.
+    int m_UltraSynthKb = 0;
+    bool m_UltraUnordered = false;
+    std::shared_ptr<rtc::DataChannel> m_UltraDc;
+    std::unique_ptr<FrameSender> m_UltraSender;
+    std::vector<uint8_t> m_UltraPayload;
+    uint32_t m_UltraSeq = 0;
+    std::atomic<bool> m_UltraOpen{false};
+    /// One synthetic Ultra frame, stamped @p backendTs like the video frame it
+    /// follows. On the capture thread, never blocking (the sender's thread sends).
+    void sendUltraSynthetic(uint32_t backendTs);
     // `relaylog=1`: each video frame's way through the relay (RelayFrameLog.h),
     // written next to the log at the end of the session. Made at setup, before
     // any frame; null otherwise, and every hook below is one null check.

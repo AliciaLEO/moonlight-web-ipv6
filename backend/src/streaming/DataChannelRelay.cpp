@@ -834,6 +834,8 @@ void DataChannelRelay::setLinkBench(const mw::native::EncoderTuning& tuning)
     m_FloodKbps = tuning.floodKbps;
     m_FloodBytes = tuning.floodBytes > 0 ? tuning.floodBytes : SctpFlood::kDefaultBytes;
     m_FloodLikeVideo = tuning.floodLikeVideo;
+    m_UltraSynthKb = tuning.ultraSynthKb;
+    m_UltraUnordered = tuning.ultraUnordered;
     m_PaceMultiple = tuning.paceMultiple;
     m_PaceBurstKb = tuning.paceBurstKb;
     m_SctpBufferKb = tuning.sctpBufferKb;
@@ -1273,6 +1275,51 @@ void DataChannelRelay::createDataChannels()
                 if (m_Stopping.load() || !m_InputPolicy.hid) return;
                 m_Shim->hidInput(reinterpret_cast<const uint8_t*>(frame.data()), frame.size());
             });
+        }
+    }
+
+    // --- Ultra DataChannel (bench only: `ultra=synthetic:<KiB>`, POC U1.1) ---
+    // What an intra codec would ask of SCTP, without the codec: per video frame
+    // sent, a train of incompressible chunks in the video's own format (header
+    // with frameId and the frame's backendTs) on channel id 5 — id 4 is the
+    // HID passthrough's. Negotiated, so it adds nothing to the offer; a client
+    // without `mw_ultra_sink` drops what lands on the id. Its own FrameSender,
+    // with the video's queue depth, so that a full link evicts Ultra frames,
+    // never the video, and the drops are counted apart.
+    if (m_UltraSynthKb > 0) {
+        rtc::DataChannelInit ultraConfig;
+        ultraConfig.negotiated = true;
+        ultraConfig.id = 5;
+        if (m_UltraUnordered) {
+            ultraConfig.reliability.unordered = true;
+            ultraConfig.reliability.maxRetransmits = 0;
+        } else {
+            ultraConfig.reliability.unordered = false;
+            ultraConfig.reliability.maxPacketLifeTime =
+                std::chrono::milliseconds(kVideoFrameLifetimeMs);
+        }
+        m_UltraDc = m_Pc->createDataChannel("ultra", ultraConfig);
+        if (m_UltraDc) {
+            FrameSender::Options ultraOptions;
+            ultraOptions.multimediaPriority = true;
+            ultraOptions.maxQueuedDeltas = 1;
+            m_UltraSender = std::make_unique<FrameSender>(ultraOptions);
+            // Incompressible bytes: SCTP compresses nothing, but a capture of
+            // the wire or a middlebox might, and the bench must not lean on it.
+            m_UltraPayload.resize(static_cast<size_t>(m_UltraSynthKb) * 1024);
+            uint64_t x = 0x9E3779B97F4A7C15ull;
+            for (auto& b : m_UltraPayload) {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                b = static_cast<uint8_t>(x);
+            }
+            m_UltraDc->onOpen([this]() { m_UltraOpen.store(true); });
+            m_UltraDc->onClosed([this]() { m_UltraOpen.store(false); });
+            qWarning().noquote() << "[DataChannelRelay] bench Ultra synthetic on DC#5:"
+                                 << m_UltraSynthKb << "KiB per video frame,"
+                                 << (m_UltraUnordered ? "unordered, no retransmission"
+                                                      : "ordered, 500 ms lifetime");
         }
     }
 
@@ -2357,7 +2404,20 @@ void DataChannelRelay::sendFragmented(const QByteArray& data, bool isKeyframe,
     // no governor to tell.
     if (evicted && native) native->noteEviction();
 
+    // The bench's synthetic Ultra stream rides on the frames the native
+    // engine sends (direct mode), with the same stamp.
+    if (m_DirectVideoSend && m_UltraSender) sendUltraSynthetic(backendTs);
+
     m_FrameCount++;
+}
+
+void DataChannelRelay::sendUltraSynthetic(uint32_t backendTs)
+{
+    if (!m_UltraOpen.load(std::memory_order_relaxed) || m_UltraPayload.empty()) return;
+    auto fragments =
+        FrameSender::buildFragments(m_UltraPayload.data(), m_UltraPayload.size(),
+                                    /*isKeyframe=*/false, m_UltraSeq++, backendTs, m_ChunkPayload);
+    m_UltraSender->enqueueFragments(m_UltraDc, std::move(fragments), /*isKeyframe=*/false);
 }
 
 // --- Stats timer (1s interval) ---
@@ -2590,6 +2650,18 @@ void DataChannelRelay::stop()
     closeDc(m_InputDc, "input");
     closeDc(m_HidDc, "hid");
 
+    // The bench's Ultra stream: its channel closed first, so a send blocked on
+    // it returns, then its sender joined. What the queue threw away is the
+    // number the transport lab wants.
+    if (m_UltraSender) {
+        m_UltraOpen.store(false);
+        closeDc(m_UltraDc, "ultra");
+        const uint64_t drops = m_UltraSender->queueDropCount();
+        m_UltraSender->stop();
+        qInfo() << "[DataChannelRelay] bench Ultra synthetic:" << m_UltraSeq << "frames of"
+                << m_UltraSynthKb << "KiB queued," << drops << "dropped by the sender's queue";
+        m_UltraSender.reset();
+    }
     // The bench's flood: its channel closed first, so a send blocked on it
     // errors out and the thread joins at once.
     if (m_Flood) {

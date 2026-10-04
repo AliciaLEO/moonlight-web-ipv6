@@ -211,7 +211,12 @@ const char* const kUsage =
     "  floodsize=<bytes> their size, 64-16000 (default 1100)\n"
     "  floodchannel=fec|video   unordered with no retransmission (default), or the video\n"
     "                    channel's own: ordered, given up on after 500 ms\n"
-    "  relaylog=0|1      each video frame's way through the relay, a CSV next to the log\n"
+    "  ultra=synthetic:<KiB>   POC Ultra U1.1: per video frame sent, that many KiB of\n"
+    "                    incompressible bytes on channel id 5 (1-8192); the client\n"
+    "                    times them when its localStorage has mw_ultra_sink=1\n"
+    "  ultrachannel=video|unordered   their channel: the video's reliability (default),\n"
+    "                    or unordered with no retransmission\n"
+    "  relaylog=0|1     each video frame's way through the relay, a CSV next to the log\n"
     "                    when the session ends (plan Wi-Fi W1)\n"
     "  pace=<n>          a frame's chunks handed to SCTP at n times the stream's bitrate\n"
     "                    at most, so a frame no longer leaves in one run (plan Wi-Fi W2 A)\n"
@@ -520,6 +525,21 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
             tuning.floodLikeVideo = false;
         else if (c == "video")
             tuning.floodLikeVideo = true;
+        else
+            ok = false;
+    } else if (key == "ultra") {
+        const QString v = value.toLower();
+        ok = v.startsWith(QLatin1String("synthetic:"));
+        if (ok) {
+            tuning.ultraSynthKb = v.mid(10).toInt(&ok);
+            ok = ok && tuning.ultraSynthKb >= 1 && tuning.ultraSynthKb <= 8192;
+        }
+    } else if (key == "ultrachannel") {
+        const QString c = value.toLower();
+        if (c == "video")
+            tuning.ultraUnordered = false;
+        else if (c == "unordered")
+            tuning.ultraUnordered = true;
         else
             ok = false;
     } else if (key == "relaylog") {

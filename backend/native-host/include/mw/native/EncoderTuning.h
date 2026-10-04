@@ -399,6 +399,15 @@ struct EncoderTuning
     /// plan wants, the default), or the video channel's own — ordered, given
     /// up on after 500 ms.
     bool floodLikeVideo = false;
+    /// POC Ultra U1.1, the transport lab: a synthetic Ultra stream on a channel
+    /// of its own (id 5; id 4 is the HID passthrough's). For every video frame
+    /// that leaves, this many KiB of incompressible bytes go out with the
+    /// frame's stamp, through a FrameSender of their own: the load an intra
+    /// codec would put on SCTP, with no codec. 0, the product: none.
+    int ultraSynthKb = 0;
+    /// Its channel: the video channel's reliability (ordered, given up on after
+    /// 500 ms; the default), or unordered with no retransmission.
+    bool ultraUnordered = false;
     /// Each video frame's way through the relay, written as a CSV next to the
     /// log when the session ends (plan « Wi-Fi : la vidéo qui attend dans
     /// SCTP », W1). false, the product: nothing kept.
@@ -470,8 +479,9 @@ struct EncoderTuning
                prioVk == PriorityVk::Default && portalDmabuf == Choice::Default &&
                mutterDirect == Choice::Default && lossPermille == 0 && lossBurst == 0 &&
                sctpCongestion < 0 && floodKbps == 0 && floodBytes == 0 && !floodLikeVideo &&
-               !relayLog && paceMultiple == 0 && paceBurstKb == 0 && retransCutPermille < 0 &&
-               sctpBufferKb == 0 && linkHoldMs == 0 && sctpMaxBurst < 0 && sctpScheduler < 0;
+               ultraSynthKb == 0 && !ultraUnordered && !relayLog && paceMultiple == 0 &&
+               paceBurstKb == 0 && retransCutPermille < 0 && sctpBufferKb == 0 && linkHoldMs == 0 &&
+               sctpMaxBurst < 0 && sctpScheduler < 0;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -569,6 +579,8 @@ struct EncoderTuning
         if (floodKbps < 0) add("flood=max");
         if (floodBytes > 0) add("floodsize=" + std::to_string(floodBytes));
         if (floodLikeVideo) add("floodchannel=video");
+        if (ultraSynthKb > 0) add("ultra=synthetic:" + std::to_string(ultraSynthKb));
+        if (ultraUnordered) add("ultrachannel=unordered");
         if (relayLog) add("relaylog=1");
         if (paceMultiple > 0) add("pace=" + std::to_string(paceMultiple));
         if (paceBurstKb > 0) add("paceburst=" + std::to_string(paceBurstKb));
