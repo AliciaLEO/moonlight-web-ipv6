@@ -26,7 +26,8 @@ Columns (ms unless said):
                 up + down), median and p90
   udp           a bare UDP ping to the client beside the pass, median / p99
   inRec, cwndH  with relaylog=1: losses inside a recovery already under way
-                (usrsctp spared the window a second cut), sends the window held
+                (usrsctp spared the window a second cut), sends the window held;
+                burstT the windows usrsctp trimmed to its max burst (sctpburst=)
   >1f% …        with relaylog=1: share of the time bufferedAmount held more
                 than 1, 2 and 4 frames' worth
   pace%, pmax   with pace=: the frames the pacing held at least once, and the
@@ -51,7 +52,8 @@ WIFI_OUT = os.path.join(REPO, "bench-out", "wifi")
 SCTP = re.compile(r"SCTP this session: (\d+) data chunks sent, (\d+) retransmitted "
                   r"\(\s*(\d+) fast\), (\d+) T3")
 WINDOW = re.compile(r"SCTP window this session: (\d+) losses inside a recovery, (\d+) chunks "
-                    r"fast-retransmitted twice, (\d+) sends held by the window")
+                    r"fast-retransmitted twice, (\d+) sends held by the window"
+                    r"(?:, (\d+) windows trimmed to max burst)?")
 PACING = re.compile(r"bench pacing this session: (\d+) frames, (\d+) waited at least once, "
                     r"([\d.]+) ms waited in all, the longest ([\d.]+) ms")
 LINKHOLD = re.compile(r"\[native\] link hold: (\d+) presents held back \((\d+)/s\)")
@@ -108,6 +110,8 @@ def host_log(path):
         pass
     if w:
         out.update(inRecovery=int(w.group(1)), twice=int(w.group(2)), cwndHeld=int(w.group(3)))
+        if w.group(4) is not None:
+            out["burstTrim"] = int(w.group(4))
     o = None
     for o in OCCUPANCY.finditer(text):
         pass
@@ -192,6 +196,7 @@ def one(path, prefix):
         # With relaylog=1 (plan W1): the window's view, and how long the
         # buffer held more than 1, 2 and 4 frames.
         "inRecovery": h.get("inRecovery"), "cwndHeld": h.get("cwndHeld"),
+        "burstTrim": h.get("burstTrim"),
         "q1": h.get("q1"), "q2": h.get("q2"), "q4": h.get("q4"),
         # With pace= (plan W2 A): the frames that waited, the longest wait.
         "pacedPct": h.get("pacedPct"), "paceMaxMs": h.get("paceMaxMs"),
@@ -207,12 +212,12 @@ def one(path, prefix):
 COLS = [("click", 6), ("clickP90", 6), ("up", 5), ("rest", 6), ("shown", 6), ("e2e", 6),
         ("e2eMean", 6), ("e2eP90", 6), ("down", 6), ("retrPct", 6), ("t3", 3),
         ("dropPerMin", 6), ("bufMaxKB", 5), ("rep", 6), ("mbps", 5), ("fps", 4), ("msg", 6),
-        ("msgP90", 6), ("udp", 5), ("udpP99", 5), ("inRecovery", 5), ("cwndHeld", 6),
+        ("msgP90", 6), ("udp", 5), ("udpP99", 5), ("inRecovery", 5), ("cwndHeld", 6), ("burstTrim", 6),
         ("q1", 5), ("q2", 5), ("q4", 5), ("pacedPct", 5), ("paceMaxMs", 5),
         ("govRetr", 5), ("govMin", 5), ("holdPerSec", 6)]
 HEAD = {"clickP90": "p90", "e2eMean": "mean", "e2eP90": "p90", "retrPct": "retr%",
         "dropPerMin": "drop/m", "bufMaxKB": "buf", "msgP90": "p90", "udpP99": "p99", "rep": "rep/m",
-        "inRecovery": "inRec", "cwndHeld": "cwndH", "q1": ">1f%", "q2": ">2f%", "q4": ">4f%",
+        "inRecovery": "inRec", "cwndHeld": "cwndH", "burstTrim": "burstT", "q1": ">1f%", "q2": ">2f%", "q4": ">4f%",
         "pacedPct": "pace%", "paceMaxMs": "pmax", "govRetr": "gRetr", "govMin": "gMin",
         "holdPerSec": "hold/s"}
 
