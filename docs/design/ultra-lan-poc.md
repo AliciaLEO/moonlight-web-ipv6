@@ -671,3 +671,10 @@ L'« Auto » d'aujourd'hui fait le bon choix sur cet appareil : il essaie de
 monter, voit que ça ne tient pas, et reste à la cadence de l'écran. En Ethernet, sur un mini-PC (U0.3, UM790Pro), le même « Auto » monte à
 240 i/s : l'image a 24 à 27 ms de retard et le clic s'affiche en 35 à 43 ms,
 aussi bien que le réglage Ultra forcé.
+
+Déjà visible (U0.4, la borne Steam) : sur un PC à carte NVIDIA relié en
+Ethernet, le codec PyroWave de Steam affiche un clic 7 à 15 ms plus tôt que
+son HEVC. C'est ce qui justifie de poursuivre le POC. Une partie de ce gain
+vient sans doute de la façon dont Steam présente l'image, et pas seulement du
+codec : dans le navigateur, le gain à attendre est plus petit, et le chemin
+d'affichage de Chrome (15 à 25 ms) devient le prochain poste à travailler.
