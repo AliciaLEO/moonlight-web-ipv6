@@ -191,3 +191,50 @@ describe('firedByTouch', () => {
         expect(firedByTouch(null)).toBe(false);
     });
 });
+
+describe('the stats card under a TV cursor', () => {
+    function ptr(type, x, pointerType = 'touch') {
+        const e = new Event(type, { bubbles: true, cancelable: true });
+        Object.assign(e, { clientX: x, clientY: 100, pointerType, pointerId: 1, button: 0 });
+        return e;
+    }
+
+    function card(tvCursor) {
+        const el = document.createElement('div');
+        document.body.appendChild(el);
+        P._makeStatsDraggable.call({ _tvCursor: tvCursor }, el);
+        return el;
+    }
+
+    it("is not dragged by TV Bro's edge swipes", () => {
+        // Held against an edge over the card, each fake swipe dragged it, and
+        // ending cancelled it never let go: the card slid away (Mi TV).
+        const el = card(true);
+        el.dispatchEvent(ptr('pointerdown', 800));
+        window.dispatchEvent(ptr('pointermove', 500));
+        expect(el.style.left).toBe('');
+        expect(el.classList.contains('dragging')).toBe(false);
+        el.remove();
+    });
+
+    it('a drag a browser cancels lets go of the card', () => {
+        const el = card(false);
+        el.dispatchEvent(ptr('pointerdown', 800));
+        expect(el.classList.contains('dragging')).toBe(true);
+        window.dispatchEvent(ptr('pointercancel', 700));
+        expect(el.classList.contains('dragging')).toBe(false);
+        el.style.left = '';
+        window.dispatchEvent(ptr('pointermove', 500));
+        expect(el.style.left).toBe('');
+        el.remove();
+    });
+
+    it('a mouse on a TV still drags it', () => {
+        const el = card(true);
+        el.dispatchEvent(ptr('pointerdown', 800, 'mouse'));
+        window.dispatchEvent(ptr('pointermove', 790, 'mouse'));
+        expect(el.classList.contains('user-moved')).toBe(true);
+        window.dispatchEvent(ptr('pointerup', 790, 'mouse'));
+        el.remove();
+    });
+});

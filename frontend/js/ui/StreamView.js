@@ -5562,10 +5562,17 @@ export class StreamView {
             } catch (_) {}
             window.removeEventListener('pointermove', onMove);
             window.removeEventListener('pointerup', onUp);
+            window.removeEventListener('pointercancel', onUp);
             e.preventDefault();
         };
         el.addEventListener('pointerdown', (e) => {
             if (e.button !== 0 && e.pointerType === 'mouse') return;
+            // A TV browser has no finger: its only touches are the swipes TV
+            // Bro fakes to scroll when its cursor is held against an edge. Over
+            // the card they dragged it, and as each swipe ends cancelled (no
+            // pointerup), the drag never ended — the card slid away for as long
+            // as the arrow was held (Mi TV, 04/10/2026).
+            if (this._tvCursor && e.pointerType === 'touch') return;
             // The close (×) button handles its own pointer events — never drag.
             if (e.target.closest && e.target.closest('.overlay-close-btn')) return;
             const rect = el.getBoundingClientRect();
@@ -5583,6 +5590,7 @@ export class StreamView {
             if (e.pointerType === 'touch') e.stopPropagation();
             window.addEventListener('pointermove', onMove);
             window.addEventListener('pointerup', onUp);
+            window.addEventListener('pointercancel', onUp);
             e.preventDefault();
         });
     }
