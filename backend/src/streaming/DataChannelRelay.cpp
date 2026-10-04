@@ -749,7 +749,7 @@ DataChannelRelay::~DataChannelRelay()
 /// A sysctl, read by each SCTP socket at creation: it must be set before the
 /// peer connection, and setting it again for another session in the same
 /// process is fine.
-void applySctpSettings(int bitrateKbps, int congestionModule, int bufferKb)
+void applySctpSettings(int bitrateKbps, int congestionModule, int bufferKb, int maxBurst)
 {
     const size_t bytes = bufferKb > 0 ? static_cast<size_t>(bufferKb) * 1024
                                       : SendBacklog::sendBufferBytesFor(bitrateKbps);
@@ -772,6 +772,16 @@ void applySctpSettings(int bitrateKbps, int congestionModule, int bufferKb)
         static const char* const kModules[] = {"RFC 2581", "HSTCP", "H-TCP", "RTCC"};
         qWarning() << "[DataChannelRelay] SCTP bench override: congestion control"
                    << kModules[congestionModule & 3];
+    }
+    // The bench's `sctpburst=` (plan Wi-Fi W2.5): how many packets usrsctp
+    // sends at one opportunity. libdatachannel holds it at 10; a frame of 20
+    // to 35 packets then waits 2 to 4 SACK round trips, and a round trip is
+    // 8-9 ms on a Mac in Wi-Fi against 3-4 on Ethernet.
+    if (maxBurst >= 0) {
+        settings.maxBurst = static_cast<size_t>(maxBurst);
+        qWarning() << "[DataChannelRelay] SCTP bench override (sctpburst=): max burst"
+                   << (maxBurst > 0 ? QString::number(maxBurst) + " packets"
+                                    : QStringLiteral("off"));
     }
     rtc::SetSctpSettings(settings);
     if (bufferKb > 0)
@@ -798,6 +808,7 @@ void DataChannelRelay::setLinkBench(const mw::native::EncoderTuning& tuning)
     m_PaceBurstKb = tuning.paceBurstKb;
     m_SctpBufferKb = tuning.sctpBufferKb;
     m_LinkHoldMs = tuning.linkHoldMs;
+    m_SctpMaxBurst = tuning.sctpMaxBurst;
     if (tuning.relayLog && !m_FrameLog) {
         m_FrameLog = std::make_unique<RelayFrameLog>();
         qWarning() << "[DataChannelRelay] bench frame log on (relaylog=1): each video frame's way "
@@ -838,7 +849,7 @@ bool DataChannelRelay::prepare(const rtc::Configuration& config, bool isInternet
 {
     // Before the peer connection, since each SCTP socket reads this when it is
     // made.
-    applySctpSettings(m_StreamBitrateKbps, m_SctpCongestion, m_SctpBufferKb);
+    applySctpSettings(m_StreamBitrateKbps, m_SctpCongestion, m_SctpBufferKb, m_SctpMaxBurst);
     m_Backlog.setBitrateKbps(m_StreamBitrateKbps);
     applyPacing();
 

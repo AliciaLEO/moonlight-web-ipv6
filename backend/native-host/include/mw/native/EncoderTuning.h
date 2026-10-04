@@ -428,6 +428,11 @@ struct EncoderTuning
     /// for a millisecond or two, and holding on that halved the frame rate
     /// (03/10/2026). 0, the product: every picture is encoded.
     int linkHoldMs = 0;
+    /// usrsctp's max burst, in packets: the most it sends at one opportunity,
+    /// a SACK's arrival among them (plan Wi-Fi W2.5). 0: no limit. -1, the
+    /// product: libdatachannel's 10. A frame of 20 to 35 packets then leaves
+    /// over 2 to 4 SACK round trips, 8 to 9 ms each on a Mac in Wi-Fi.
+    int sctpMaxBurst = -1;
 
     bool isDefault() const
     {
@@ -455,7 +460,7 @@ struct EncoderTuning
                mutterDirect == Choice::Default && lossPermille == 0 && lossBurst == 0 &&
                sctpCongestion < 0 && floodKbps == 0 && floodBytes == 0 && !floodLikeVideo &&
                !relayLog && paceMultiple == 0 && paceBurstKb == 0 && retransCutPermille < 0 &&
-               sctpBufferKb == 0 && linkHoldMs == 0;
+               sctpBufferKb == 0 && linkHoldMs == 0 && sctpMaxBurst < 0;
     }
 
     /// One line naming every field that is NOT at its default, for the log and
@@ -559,6 +564,7 @@ struct EncoderTuning
         if (retransCutPermille >= 0) add("retrcut=" + std::to_string(retransCutPermille));
         if (sctpBufferKb > 0) add("sctpbuf=" + std::to_string(sctpBufferKb));
         if (linkHoldMs > 0) add("linkhold=" + std::to_string(linkHoldMs));
+        if (sctpMaxBurst >= 0) add("sctpburst=" + std::to_string(sctpMaxBurst));
         return s;
     }
 };

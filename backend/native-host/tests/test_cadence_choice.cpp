@@ -242,6 +242,20 @@ void run_cadence_choice_tests()
         CHECK_EQ(t.describe(), std::string("retrcut=5"));
     }
 
+    // usrsctp's max burst (plan Wi-Fi W2.5): libdatachannel's 10 unless said,
+    // 0 a key like any other (no limit).
+    SECTION("sctpburst= — libdatachannel's unless said, 0 named");
+    {
+        EncoderTuning t;
+        CHECK_EQ(t.sctpMaxBurst, -1);
+        CHECK(t.isDefault());
+        t.sctpMaxBurst = 0;
+        CHECK(!t.isDefault());
+        CHECK_EQ(t.describe(), std::string("sctpburst=0"));
+        t.sctpMaxBurst = 32;
+        CHECK_EQ(t.describe(), std::string("sctpburst=32"));
+    }
+
     // A client whose decoder falls silent under the reference repairs asks for
     // none (/start's ref_invalidation): the bench's dpb=1, on every encoder.
     SECTION("refuseReferenceRepairs — one reference for that client, a bench's dpb kept");
