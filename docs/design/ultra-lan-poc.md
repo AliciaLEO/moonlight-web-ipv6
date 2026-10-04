@@ -562,10 +562,24 @@ lui-même. 60 clics par passe, aucun manqué ; résultats dans
 - « Low Latency Networking » de Steam dégrade les deux codecs (+7 ms en
   médiane pour PyroWave ; pour le HEVC, une queue à 83 ms au p90 et une pointe
   à 376 ms).
-- Ce n'est pas encore une comparaison avec MoonlightWeb : ses clics se
-  mesurent autrement (le drapeau de l'overlay de banc, 33-43 ms sur ce couple
-  en U0.3). La même mesure par `click-photon.ps1` sur MoonlightWeb, et l'hôte
-  à iGPU, restent à faire.
+- **MoonlightWeb, même couple, même outil** (23:22, `--dev` du build
+  `ded56fc6`, écran de la RTX streamé en « Auto », 120 i/s, tearing, Chrome
+  sur l'UM790Pro) : médiane 58,2 ms, p90 75,0 ms (42 à 108), 60 clics sur 60.
+  C'est au niveau du HEVC de Steam (49,9-57,9), 15 ms derrière son PyroWave.
+  Une 2e passe est invalide (58 clics manqués sur 60). Cause probable : le
+  drapeau de latence de la `--dev` (`latency_flag_enabled`) s'affiche au point
+  même du clic, au centre de l'écran de l'hôte, et masque le pixel lu. À
+  refaire avec ce drapeau coupé.
+- **Les deux mesures de MoonlightWeb ne disent pas la même chose.** Son propre
+  clic → drapeau donnait 33-43 ms sur ce couple (U0.3), parce qu'il lit le
+  drapeau dans le canevas, au moment du dessin. `click-photon.ps1` lit le
+  bureau composé du client : il compte en plus la composition de Chrome et
+  celle du DWM. L'écart, environ 15 à 25 ms, est ce que coûte le chemin de
+  présentation du navigateur, qu'un client natif comme Steam n'a pas. Pour
+  Ultra, c'est un poste que le codec ne touche pas (U3, présentateurs au
+  photon).
+- Reste à faire : l'hôte à iGPU, et MoonlightWeb repassé sans le drapeau de
+  banc.
 
 ## 7. Concrètement, pour l'utilisateur
 
