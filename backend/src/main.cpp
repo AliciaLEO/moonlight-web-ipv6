@@ -3948,9 +3948,13 @@ int main(int argc, char* argv[])
                     }
                     // The last stream on "MoonlightWeb Virtual Display" turns
                     // it off again — after a grace, so a reload comes back to
-                    // a display that never went.
-                    if (onVirtualDisplay && !siblingLive)
-                        VirtualDisplayJob::instance().releaseSoon();
+                    // a display that never went. Whether another stream still
+                    // shows it is the grace's own question, as on the guests'
+                    // path: a sibling streaming ANOTHER app of this host does
+                    // not keep it, and nobody else would ask again. Gated on
+                    // siblingLive until 04/10/2026, the virtual display stayed
+                    // on behind every stream that ran beside Display 1.
+                    if (onVirtualDisplay) VirtualDisplayJob::instance().releaseSoon();
                 });
 
             auto startWorker = [worker, respond, standby, reqSlot, appId, &g_Pool,
