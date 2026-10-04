@@ -105,6 +105,36 @@ StreamRelay::StreamRelay(IMediaEngine* engine, quint16 wsPort, const QSslConfigu
             QString::fromUtf8(QJsonDocument(m).toJson(QJsonDocument::Compact)));
     });
 
+    // The pointer the client draws (native host, desktop mode): its shape, then
+    // where it is — see DataChannelRelay for both messages. Without them a wss
+    // client that asked the host to leave the picture clean drew a plain arrow
+    // that never changed shape.
+    connect(m_Shim, &IMediaEngine::cursorShapeChanged, this,
+            [this](QByteArray png, int hotspotX, int hotspotY, bool visible, QString kind,
+                   double scale) {
+                if (!m_WsClient || m_WsClient->state() != QAbstractSocket::ConnectedState) return;
+                QJsonObject m;
+                m["type"] = "cursor";
+                m["visible"] = visible;
+                m["hotspotX"] = hotspotX;
+                m["hotspotY"] = hotspotY;
+                m["scale"] = scale;
+                if (!kind.isEmpty()) m["kind"] = kind;
+                if (!png.isEmpty()) m["png"] = QString::fromLatin1(png.toBase64());
+                m_WsClient->sendTextMessage(
+                    QString::fromUtf8(QJsonDocument(m).toJson(QJsonDocument::Compact)));
+            });
+    connect(m_Shim, &IMediaEngine::cursorMoved, this, [this](double x, double y, bool visible) {
+        if (!m_WsClient || m_WsClient->state() != QAbstractSocket::ConnectedState) return;
+        QJsonObject m;
+        m["type"] = "cursorpos";
+        m["x"] = x;
+        m["y"] = y;
+        m["visible"] = visible;
+        m_WsClient->sendTextMessage(
+            QString::fromUtf8(QJsonDocument(m).toJson(QJsonDocument::Compact)));
+    });
+
     bool secure = !sslConfig.isNull();
     m_WsServer = new QWebSocketServer(
         QString("Moonlight-Relay"),
@@ -691,6 +721,13 @@ void StreamRelay::onWsTextMessage(const QString& message)
         // The way out of a closed input gate — native host only, full
         // reasoning in DataChannelRelay's handler.
         if (auto* native = qobject_cast<NativeMediaEngine*>(m_Shim)) native->releaseInputBlock();
+    } else if (type == "cursormode") {
+        // Who draws the pointer — native host only, full reasoning in
+        // DataChannelRelay's handler. Ignored here until 04/10/2026: on wss the
+        // host kept burning its pointer into a desktop-mode picture that the
+        // browser was drawing its own on, and the viewer saw two.
+        if (auto* native = qobject_cast<NativeMediaEngine*>(m_Shim))
+            native->setCompositeCursor(msg["composite"].toBool(true), msg["cursorPx"].toInt(0));
     } else if (type == "framefloor") {
         // How fast the client wants frames while the host's screen is still —
         // native host only, full reasoning in DataChannelRelay's handler.

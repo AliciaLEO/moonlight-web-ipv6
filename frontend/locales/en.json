@@ -738,6 +738,7 @@
         "statTransport": "Transport:",
         "statLatency": "Latency:",
         "statLegHost": "Sunshine",
+        "statLegHostNative": "Host · capture → encode",
         "statLegHostNet": "Host link",
         "statLegServer": "Server",
         "statLegNet": "Network",

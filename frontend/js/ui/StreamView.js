@@ -6084,7 +6084,13 @@ export class StreamView {
             const legs = hostStages
                 ? [{ key: 'statStageTotal', stats: this._hostTotalStats }]
                 : [
-                      { key: 'statLegHost', stats: this._hostProcStats },
+                      // The native host without its stages (on wss, where no
+                      // sender closes them) still measures present → encoded
+                      // itself: its own time, not Sunshine's.
+                      {
+                          key: this._nativeHost ? 'statLegHostNative' : 'statLegHost',
+                          stats: this._hostProcStats,
+                      },
                       { key: 'statLegHostNet', stats: this._hostRttStats },
                   ];
             if (isMedia) {

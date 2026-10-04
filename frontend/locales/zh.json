@@ -738,6 +738,7 @@
         "statTransport": "传输：",
         "statLatency": "延迟：",
         "statLegHost": "Sunshine",
+        "statLegHostNative": "主机 · 采集 → 编码",
         "statLegHostNet": "主机链路",
         "statLegServer": "服务器",
         "statLegNet": "网络",
