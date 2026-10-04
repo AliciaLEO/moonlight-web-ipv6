@@ -27,6 +27,7 @@ import {
     verifyHostSignature,
     extractFingerprint,
     IDENTITY_REFUSED,
+    isBindRefusedClose,
 } from '../util/pairingCrypto.js';
 import { defaultIceServers } from './IceServers.js';
 import { isViewMessage } from './hostMessages.js';
@@ -281,7 +282,11 @@ export class WebRtcMedia {
                 }, this.WS_GRACE_PERIOD_MS);
             } else {
                 // Close code tells us what went wrong
-                if (evt.code === 1015) {
+                if (isBindRefusedClose(evt)) {
+                    // The host refused our key: final, like a refusal of its own
+                    // signature here (see IDENTITY_REFUSED).
+                    this._onError(IDENTITY_REFUSED);
+                } else if (evt.code === 1015) {
                     this._onError(
                         'Erreur de securite TLS. ' + "Verifiez la date et l'heure du systeme.",
                     );

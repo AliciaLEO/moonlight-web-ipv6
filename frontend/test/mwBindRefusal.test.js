@@ -5,7 +5,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { WebRtcDataChannel } from '../js/api/WebRtcDataChannel.js';
 import { WebRtcMedia } from '../js/api/WebRtcMedia.js';
-import { IDENTITY_REFUSED } from '../js/util/pairingCrypto.js';
+import { IDENTITY_REFUSED, isBindRefusedClose } from '../js/util/pairingCrypto.js';
 
 /**
  * A host that fails MW-BIND must end the launch with IDENTITY_REFUSED — the one
@@ -46,5 +46,23 @@ describe.each([
         // No DTLS state was created for the peer that failed to prove itself.
         expect(createPc).not.toHaveBeenCalled();
         expect(t.pc).toBeNull();
+    });
+});
+
+/**
+ * The other half: the HOST refusing our key closes the signalling socket with
+ * 1008. Seen 04/10/2026 on the UM790Pro's DEV after it changed port — a session
+ * cookie (cookies ignore the port) bound to the key of the old origin. Every
+ * WebRTC rung was refused, and the stream came up over wss with a doubled
+ * pointer and no word to the user.
+ */
+describe('isBindRefusedClose', () => {
+    it("is the host's MW-BIND refusal, and nothing else", () => {
+        expect(isBindRefusedClose({ code: 1008, reason: 'pairing verification failed' })).toBe(
+            true,
+        );
+        expect(isBindRefusedClose({ code: 1008, reason: 'something else' })).toBe(false);
+        expect(isBindRefusedClose({ code: 1006, reason: '' })).toBe(false);
+        expect(isBindRefusedClose(undefined)).toBe(false);
     });
 });

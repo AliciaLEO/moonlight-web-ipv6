@@ -70,6 +70,17 @@ const PROTOCOL = 'MW-BIND-v1';
  */
 export const IDENTITY_REFUSED = 'identity_refused';
 
+/**
+ * Is this signalling-socket close the HOST refusing the binding? The other half
+ * of IDENTITY_REFUSED: the host closes with 1008 and this reason when our hello
+ * names a key the session is not paired with (or our signature fails). Every
+ * WebRTC rung would be refused the same way, and wss would walk around it — so
+ * it ends the launch too.
+ */
+export function isBindRefusedClose(evt) {
+    return evt?.code === 1008 && evt.reason === 'pairing verification failed';
+}
+
 const ALGORITHM = { name: 'ECDSA', namedCurve: 'P-256' };
 const SIGN_PARAMS = { name: 'ECDSA', hash: { name: 'SHA-256' } };
 
