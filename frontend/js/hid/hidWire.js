@@ -107,8 +107,8 @@ export function isGameDevice(collections) {
 }
 
 /** The `hidattach` message for a device opened in this page. */
-export function attachMessage(slot, device) {
-    return {
+export function attachMessage(slot, device, { forceFeedback = false } = {}) {
+    const m = {
         type: 'hidattach',
         slot,
         vendorId: device.vendorId,
@@ -116,6 +116,10 @@ export function attachMessage(slot, device) {
         productName: device.productName || '',
         collections: (device.collections || []).map(plainCollection),
     };
+    // The page can play force feedback on this device: the host gives the
+    // recreated one a PID block and sends what games ask as hidffb.
+    if (forceFeedback) m.forceFeedback = true;
+    return m;
 }
 
 export function detachMessage(slot) {

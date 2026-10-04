@@ -59,6 +59,7 @@ export default defineConfig({
                 'js/api/FloodCounter.js',
                 'js/hid/hidWire.js',
                 'js/hid/HidPassthrough.js',
+                'js/hid/hidppFfb.js',
                 'js/ui/Toast.js',
                 'js/ui/RemoteNav.js',
             ],

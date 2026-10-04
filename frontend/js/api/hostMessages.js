@@ -38,6 +38,7 @@ const VIEW_MESSAGES = new Set([
     'hidcaps',
     'hidattached',
     'hidrequest',
+    'hidffb',
 ]);
 
 /** Whether a host message of this type goes to the stream view. */

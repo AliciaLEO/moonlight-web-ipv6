@@ -16,6 +16,7 @@ import {
     detachMessage,
     isGameDevice,
 } from './hidWire.js';
+import { HidppFfbPlayer, HidppTransport, findFfbFeature, hasHidpp } from './hidppFfb.js';
 
 /**
  * The HID passthrough in the stream (plan « Passthrough HID », P2): the game
@@ -28,9 +29,15 @@ import {
  * the switches; the stream applies them.
  *
  * What the host asks back (`hidrequest`: output reports, features) is counted
- * and never written to the real device yet: a host writing to a wheel's
- * vendor interface could reprogram it. Force feedback (P3, P4) will open that
- * door with its own rules.
+ * and never written to the real device: a host writing to a wheel's vendor
+ * interface could reprogram it.
+ *
+ * Force feedback (P4) takes its own road, and only when the host says it can
+ * (`hidcaps.ffb`): the host decodes what the game asks of the recreated wheel
+ * into neutral operations (`hidffb`), and this page plays them through a
+ * driver of its own for the real wheel's protocol — Logitech's HID++ 0x8123
+ * for now (hidppFfb.js). The host never writes raw bytes to the wheel. When
+ * the device stops being sent, the wheel is reset and left free.
  */
 
 export const FORWARD_KEY = 'mw_hid_forward';
@@ -150,7 +157,11 @@ export class HidPassthrough {
     handleMessage(msg) {
         if (!msg || typeof msg.type !== 'string') return false;
         if (msg.type === 'hidcaps') {
-            this._caps = { available: !!msg.available, why: String(msg.why || '') };
+            this._caps = {
+                available: !!msg.available,
+                ffb: !!msg.ffb,
+                why: String(msg.why || ''),
+            };
             if (this._caps.available) this.applyWanted();
             else this._dropAll(this._caps.why);
             this._changed();
@@ -163,6 +174,7 @@ export class HidPassthrough {
                 if (msg.ok) {
                     e.state = 'on';
                     e.why = '';
+                    if (e.ffb) this._startFfb(e);
                 } else {
                     this._release(device, e);
                     e.state = 'refused';
@@ -175,6 +187,11 @@ export class HidPassthrough {
         }
         if (msg.type === 'hidrequest') {
             this._requests++;
+            return true;
+        }
+        if (msg.type === 'hidffb') {
+            const entry = this._entryBySlot(msg.slot);
+            entry?.[1].ffb?.player?.apply(msg);
             return true;
         }
         return false;
@@ -239,8 +256,9 @@ export class HidPassthrough {
             this._sendFrame(this._pump.report(slot, e.reportId, bytes, this._now()));
         };
         device.addEventListener('inputreport', listener);
-        this._entries.set(device, { slot, state: 'pending', why: '', listener });
-        this._send(attachMessage(slot, device));
+        const ffb = await this._probeFfb(device);
+        this._entries.set(device, { slot, state: 'pending', why: '', listener, ffb });
+        this._send(attachMessage(slot, device, { forceFeedback: !!ffb }));
         this._armTimer();
     }
 
@@ -259,9 +277,38 @@ export class HidPassthrough {
         this._disarmTimer();
     }
 
+    // A wheel whose motor this page can drive, when the host takes force
+    // feedback: its transport and feature index, or null.
+    async _probeFfb(device) {
+        if (!this._caps?.ffb || !hasHidpp(device)) return null;
+        const transport = new HidppTransport(device);
+        const index = await findFfbFeature(transport);
+        if (!index) {
+            transport.close();
+            return null;
+        }
+        return { transport, index, player: null };
+    }
+
+    _startFfb(e) {
+        const f = e.ffb;
+        f.player = new HidppFfbPlayer(f.transport, f.index, {
+            onError: (err) => console.warn('[HID] force feedback:', err?.message || err),
+        });
+        f.player
+            .init()
+            .catch((err) => console.warn('[HID] force feedback init:', err?.message || err));
+    }
+
     _release(device, e) {
         if (e.listener) device.removeEventListener('inputreport', e.listener);
         e.listener = null;
+        if (e.ffb) {
+            const f = e.ffb;
+            e.ffb = null;
+            // Reset and freed before the transport goes: never a force left on.
+            (f.player ? f.player.close() : Promise.resolve()).finally(() => f.transport.close());
+        }
         if (e.slot >= 0) this._pump.forget(e.slot);
         e.slot = -1;
     }
