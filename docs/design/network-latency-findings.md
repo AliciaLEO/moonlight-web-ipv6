@@ -430,7 +430,24 @@ N95, Wi-Fi (10:01-10:30, two alternated rounds, same build): **no gain**.
   rarely holds it back; the Mac's gain (120 fps, ~20 Mbit/s) does not carry
   over. The click moves within the N95's pass-to-pass noise (80-95 ms); the
   host's messages get faster (26 → 18 ms median).
-- Pending: the Ethernet witness (the UM790Pro needs its console user).
+
+Ethernet witness (UM790Pro, 10:44-11:05, two alternated rounds, same build,
+with `sctpss=4` as a third arm): **no regression, a gain**.
+
+| | Click | Frame age med / p90 | `inSctp` flag / all frames | fps | Repeats /min | Messages med / p90 | Sends held by the window |
+|---|---|---|---|---|---|---|---|
+| base (10) | 38.7 / 37.7 ms | 14.6 / 26.0, 11.4 / 16.2 | 4.1-4.8 / 2.8-3.3 ms | 120, 239 | 2,473, 462 | 5.6 / 14.5, 4.3 / 10.1 | ~29-30 K |
+| `sctpburst=0` | 34.4 / 39.0 ms | 8.1 / 10.6, 8.7 / 10.8 | 2.1-2.7 / 0-0.7 ms | 239, 239 | 141, 198 | 3.3 / 6.3, 3.6 / 6.8 | 26 |
+| `sctpss=4` | 36.8 / 38.7 ms | 9.9 / 13.5, 11.4 / 17.5 | 4.5-5.1 / 2.5-2.8 ms | 239, 239 | 621, 597 | 3.6 / 7.1, 4.5 / 11.6 | ~27 K |
+
+- Even on Ethernet the burst limit cost 2-3 ms a frame inside usrsctp; with
+  no limit almost nothing waits there. The first base pass stayed at 120 fps
+  (Auto's own pick); the others ran at 239.
+- **Decision (Bruno, 04/10 ~10:45): no max burst is the Windows native
+  host's default, `2ef56bfe`** (`DataChannelRelay::kNativeSctpMaxBurst` = 0;
+  `sctpburst=10` restores libdatachannel's). Native sessions now always hand
+  the relay their link settings; GameStream relays and the Linux and macOS
+  hosts keep 10.
 
 ### 04/10/2026 — W2.3: usrsctp's stream scheduler (no effect; one module breaks the association)
 
@@ -484,7 +501,9 @@ What the measurements support, in order of the path:
    round trips: 8-9 ms each in Wi-Fi, 3-4 on Ethernet).
 7. **The max burst was ~6 of those ~15 ms** (W2.5, 04/10): with no limit a
    frame spends ~9 ms in usrsctp on the Mac, the click gains 8 ms at the
-   median and ~30 at p90. What remains is the SACK clock of the Wi-Fi link.
+   median and ~30 at p90; on Ethernet the wait there falls to almost nothing.
+   The Windows native host's default since `2ef56bfe`. What remains on the
+   Mac is the SACK clock of the Wi-Fi link.
 
 ## 5. What was tried and failed
 
@@ -504,9 +523,12 @@ What the measurements support, in order of the path:
 - What sets the ~16 ms a byte stays unacked on the Mac's Wi-Fi with no loss:
   the client's SACK policy (dcsctp), Wi-Fi aggregation, usrsctp's max burst?
   W2.5 took ~6 ms off with the burst; ~9 ms remain against ~4.5 on Ethernet.
-- Whether `sctpburst=0` costs anything on Ethernet (pending), and whether its
-  slightly higher kernel drops (422 → 547 a pass on the Mac) or the N95's
-  extra T3 timeouts (1 and 3 against 0 and 1) matter in the field.
+- Whether the slightly higher kernel drops with no max burst (422 → 547 a
+  pass on the Mac) or the N95's extra T3 timeouts (1 and 3 against 0 and 1)
+  matter in the field. Ethernet gained (04/10).
+- Whether GameStream sessions (Sunshine through the same relay) and the
+  Linux and macOS native hosts gain the same from `sctpburst=0`: not measured,
+  so not changed.
 - What receive buffer Chrome gives its UDP socket on macOS and on Windows, and
   whether a page can influence it (it cannot directly). Whether Windows counts
   a full-socket drop anywhere (the N95 showed 0 "received errors").
@@ -540,7 +562,7 @@ Link keys go in `MW_NATIVE_TUNING` / `--tuning` of `local_matrix.py`
 | `retrcut=<‰>` | governor cuts on SCTP retransmissions; **3 by default on Windows**, 0 off | `e0324f4e`, `55dd9cde` |
 | `sctpbuf=<KB>` | usrsctp's real send buffer (via `maxMessageSize`) | `dc7f9c72` |
 | `linkhold=<ms>` | hold the picture after a backlog that long (Windows) | `dc7f9c72`, `a511bdd3` |
-| `sctpburst=<n>` | usrsctp's max burst in packets, 0 no limit (10 otherwise) | `01717368` |
+| `sctpburst=<n>` | usrsctp's max burst in packets, 0 no limit; **0 by default on the Windows native host**, 10 elsewhere | `01717368`, `2ef56bfe` |
 | `sctpss=0..5` | usrsctp's stream scheduler (4 = fair bandwidth) | `0c21bd5a` |
 | `namedrops=0\|1` | name the relay's dropped delta to the encoder | `25bf8c48` |
 

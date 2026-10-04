@@ -136,6 +136,22 @@ bash ../../../bench-out/wifi/w2b-um-run.sh                  # Ethernet witness (
 python series.py mac --prefix w2c --name machold --contents clk --tuning relaylog=1,sctpbuf=48,linkhold=4 --udp
 ```
 
+## usrsctp's max burst and stream scheduler (W2.5, W2.3, 04/10/2026)
+
+- `sctpburst=<n>`: usrsctp's max burst, in packets (libdatachannel's 10; 0 no
+  limit). **No limit is the Windows native host's default since `2ef56bfe`**
+  (`sctpburst=10` restores the old). Mac in Wi-Fi: click 66.9 → 58.5 ms (p90
+  98 → 69), a frame's wait in usrsctp 15.5 → 9.4 ms. N95: no gain (frames of
+  ~10 packets). Ethernet: 38.2 → 36.7 ms, a frame's age 13.0 → 8.4 ms.
+  `report.py` shows `burstT`, the windows trimmed to the max burst.
+- `sctpss=0|1|3|4|5`: usrsctp's stream scheduler. 4 (fair bandwidth, the
+  shortest message first) changed nothing for the host's messages; 2 (round
+  robin by packet) made Chrome's association fail within seconds and is
+  refused.
+
+Everything measured on the network's share of latency is gathered in
+`docs/design/network-latency-findings.md`.
+
 ## Clients
 
 | name | machine | link | DevTools |
