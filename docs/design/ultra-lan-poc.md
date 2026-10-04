@@ -426,6 +426,33 @@ Médianes de deux passes par mode :
   l'iPhone, le 120 gagne 5 à 10 ms. Restent l'iPad, RE9 sur la RTX, les cases
   sous charge GPU et Android.
 
+**L'iPad de Bruno sous RE9** (04/10, 19:17-19:36, Safari, Wi-Fi). RE9 (la copie
+de banc) tourne sur l'écran de la RTX (DISPLAY5, M27Q 120 Hz, NVENC), streamé
+par la tuile de cet écran (pas d'écran virtuel). La `--dev` est celle du build
+`ded56fc6`, jointe par stream.dev. Relevé sur les captures du détail :
+
+| Passe | Taille, cadence | « Mesurée » moy. / p99 | Décodage moy. / max | Réseau | « dropped (jitter) » |
+|---|---|---|---|---|---|
+| Auto | 2162×1216, 50 i/s | 82 / 145 ms | 21,6 / 75 ms | 13,8 ms | 44 % |
+| 120 | 1920×1080, 62 i/s | 65 / 127 ms | 16,4 / 43 ms | 19,5 ms | 45 % |
+| Auto, 1080p imposé | 1920×1080, 26 i/s | 31 / 49 ms | 8,0 / 11 ms | 2,3 ms | 3 % |
+
+- **Le décodeur de l'iPad sature à 50-60 i/s.** Il prend 16 à 22 ms par image
+  en moyenne, et jusqu'à 75 ms. À 26 i/s, il descend à 8 ms, et l'image n'a
+  plus que 31 ms.
+- **Safari annonce un écran à 32-51 Hz**, sans mode Économie d'énergie
+  (vérifié par Bruno). L'« Auto » a suivi ce chiffre : 26 i/s à la passe 3
+  (« 26 fps stream for a 51 Hz client… every 2nd refresh » dans le journal),
+  alors que RE9 présentait environ 65 images par seconde. Sur cet iPad, c'est
+  ce qui le sert le mieux, mais par accident. La mesure du rafraîchissement
+  sous Safari est à revoir.
+- **Le compteur « dropped (jitter) » suit la cadence** : 44-45 % à 50-62 i/s,
+  3 % à 26 i/s, sans aucune perte réseau. Comme sur l'iPhone, ce sont des
+  images que le décodeur n'a pas pu suivre, pas des pertes du lien. C'est une
+  hypothèse, non vérifiée.
+- DualRTX a fait un écran bleu (0x133, `DPC_WATCHDOG`) à 18:58, pendant un RE9
+  sur la RTX juste avant ces passes, et ne l'a pas refait ensuite.
+
 ### 6.4 U0.3 — synthèse provisoire (04/10/2026)
 
 **La barre à battre n'est pas « HEVC réglé Ultra », c'est l'« Auto » détecté.**
@@ -501,8 +528,7 @@ par défaut depuis ce build, à dire en comparant aux passes d'avant)** :
   niveau, la charge tourne à 30 i/s sur l'Arc au lieu de 45 le matin : sa
   fenêtre, posée sur un écran physique, ne pèse plus pareil.
 
-**Reste avant la porte U0** : l'iPad et RE9 sur l'écran de la RTX (avec
-Bruno), les TV (U0.3 quater), la borne Steam (U0.4, si Bruno l'accepte) et le
+**Reste avant la porte U0** : les TV (U0.3 quater), la borne Steam (U0.4, si Bruno l'accepte) et le
 rapport U0.5.
 
 ## 7. Concrètement, pour l'utilisateur
