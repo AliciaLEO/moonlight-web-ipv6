@@ -91,7 +91,12 @@ std::string HidPassthrough::attach(int slot, const HidDeviceInfo& device)
     if (std::string why = input::hid::validate(descriptor); !why.empty()) return why;
 
     std::unique_ptr<input::IVirtualHid> dev = m_factory ? m_factory() : input::makeVirtualHid();
-    if (!dev) return unavailableReason();
+    if (!dev) {
+        // Never empty: on a host where the OS backend is usable, its reason is
+        // "" and a missing backend must still read as a refusal.
+        const std::string why = unavailableReason();
+        return why.empty() ? "no virtual HID backend could be made" : why;
+    }
 
     auto s = std::make_unique<Slot>();
     s->parsed = input::hid::parse(descriptor);
