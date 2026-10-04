@@ -314,10 +314,13 @@ def main():
     if pin:
         access["pin"] = pin
     access["lan"] = fleet.lan_url(a.host, probe) or access.get("lan")
-    # A remote client reaches this machine's --dev at the address it is told;
-    # a remote host, at its own.
-    if remote and not rh:
-        access["lan"] = a.client_url or access["lan"]
+    # A remote client reaches this machine's --dev at the address it is told,
+    # a remote host at its own. With both, the remote client is the one driven:
+    # until 04/10/2026 the kiosk on this machine stood in for it (every --host
+    # pass before that date had DualRTX on Ethernet as its client).
+    if remote:
+        if not rh:
+            access["lan"] = a.client_url or access["lan"]
         d = drive.Driver(a.client_port)
     else:
         run.kiosk_start(access["lan"])
