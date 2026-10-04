@@ -254,6 +254,12 @@ void run_cadence_choice_tests()
         CHECK_EQ(t.describe(), std::string("sctpburst=0"));
         t.sctpMaxBurst = 32;
         CHECK_EQ(t.describe(), std::string("sctpburst=32"));
+        // And its stream scheduler (W2.3), never set unless said.
+        EncoderTuning s;
+        CHECK_EQ(s.sctpScheduler, -1);
+        s.sctpScheduler = 4;
+        CHECK(!s.isDefault());
+        CHECK_EQ(s.describe(), std::string("sctpss=4"));
     }
 
     // A client whose decoder falls silent under the reference repairs asks for

@@ -373,6 +373,8 @@ private:
     // `sctpburst=` (plan Wi-Fi W2.5): usrsctp's max burst, in packets; 0 no
     // limit, -1 libdatachannel's 10. Set at setup.
     int m_SctpMaxBurst = -1;
+    // `sctpss=` (plan Wi-Fi W2.3): usrsctp's stream scheduler, -1 its own.
+    int m_SctpScheduler = -1;
     // usrsctp's counters at the last link report, for the share of chunks
     // sent again in each report window (LinkFeedback::retransPermille).
     // Relay thread only.

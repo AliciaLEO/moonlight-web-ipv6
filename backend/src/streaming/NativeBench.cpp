@@ -221,6 +221,9 @@ const char* const kUsage =
     "                    plan Wi-Fi W2 B)\n"
     "  sctpbuf=<KB>      usrsctp's send buffer, 24-1024, really: also the largest message\n"
     "                    either side may send (256 KB otherwise; plan Wi-Fi W2 C)\n"
+    "  sctpss=0..5       usrsctp's stream scheduler: default, round robin, by packet,\n"
+    "                    priority, fair bandwidth (shortest message first), first come\n"
+    "                    (plan Wi-Fi W2.3)\n"
     "  sctpburst=<n>     usrsctp's max burst, in packets; 0 no limit (10 otherwise; plan\n"
     "                    Wi-Fi W2.5)\n"
     "  linkhold=<ms>     a picture held, not encoded, once video has waited outside usrsctp\n"
@@ -535,6 +538,9 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
     } else if (key == "sctpbuf") {
         tuning.sctpBufferKb = value.toInt(&ok);
         ok = ok && tuning.sctpBufferKb >= 24 && tuning.sctpBufferKb <= 1024;
+    } else if (key == "sctpss") {
+        tuning.sctpScheduler = value.toInt(&ok);
+        ok = ok && tuning.sctpScheduler >= 0 && tuning.sctpScheduler <= 5;
     } else if (key == "sctpburst") {
         tuning.sctpMaxBurst = value.toInt(&ok);
         ok = ok && tuning.sctpMaxBurst >= 0 && tuning.sctpMaxBurst <= 1000;

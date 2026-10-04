@@ -43,4 +43,10 @@ Counters readCounters()
     return c;
 }
 
+bool setStreamScheduler(int module)
+{
+    if (module < 0) return false;
+    return usrsctp_sysctl_set_sctp_default_ss_module(static_cast<uint32_t>(module)) == 0;
+}
+
 } // namespace mw::sctp

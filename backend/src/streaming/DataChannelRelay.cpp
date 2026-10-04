@@ -809,6 +809,7 @@ void DataChannelRelay::setLinkBench(const mw::native::EncoderTuning& tuning)
     m_SctpBufferKb = tuning.sctpBufferKb;
     m_LinkHoldMs = tuning.linkHoldMs;
     m_SctpMaxBurst = tuning.sctpMaxBurst;
+    m_SctpScheduler = tuning.sctpScheduler;
     if (tuning.relayLog && !m_FrameLog) {
         m_FrameLog = std::make_unique<RelayFrameLog>();
         qWarning() << "[DataChannelRelay] bench frame log on (relaylog=1): each video frame's way "
@@ -913,6 +914,19 @@ void DataChannelRelay::setupPeerConnection(const rtc::Configuration& config)
     if (m_SctpBufferKb > 0) pcConfig.maxMessageSize = static_cast<size_t>(m_SctpBufferKb) * 1024;
 
     m_Pc = std::make_shared<rtc::PeerConnection>(pcConfig);
+
+    // `sctpss=` (plan Wi-Fi W2.3): the host's small messages on the input
+    // channel wait behind the video's 16 KB chunks inside usrsctp. Its stream
+    // scheduler is a sysctl the SCTP socket copies when it is made, after
+    // DTLS; usrsctp_init, which the peer connection just ran, resets it.
+    if (m_SctpScheduler >= 0) {
+        static const char* const kSchedulers[] = {
+            "default",  "round robin",    "round robin by packet",
+            "priority", "fair bandwidth", "first come"};
+        const bool ok = mw::sctp::setStreamScheduler(m_SctpScheduler);
+        qWarning() << "[DataChannelRelay] SCTP bench override (sctpss=): stream scheduler"
+                   << kSchedulers[m_SctpScheduler % 6] << (ok ? "" : "— REFUSED by usrsctp");
+    }
 
     // --- Local description callback ---
     m_Pc->onLocalDescription([this](const rtc::Description& sdp) {

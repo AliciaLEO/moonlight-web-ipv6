@@ -60,4 +60,12 @@ struct Counters
 /// and its min/max macros break every std::max of that file.
 Counters readCounters();
 
+/// usrsctp's stream scheduler for the associations made from now on (the
+/// bench's `sctpss=`, plan Wi-Fi W2.3): 0 its default, 1 round robin, 2 round
+/// robin by packet, 3 priority, 4 fair bandwidth, 5 first come. A sysctl, read
+/// when an SCTP socket is made and reset by usrsctp_init: set it after the
+/// peer connection, which initialises usrsctp, and before its SCTP transport.
+/// @returns false for a module usrsctp refused
+bool setStreamScheduler(int module);
+
 } // namespace mw::sctp
