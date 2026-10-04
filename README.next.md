@@ -70,6 +70,8 @@ The browser decodes with **WebCodecs + WebGPU/canvas** and plays audio in an **A
 
 **With the FPS on Auto, the stream can go faster than your screen.** When the picture on the host changes faster than your screen refreshes and your device keeps up, a Windows host steps the stream up, to 240 at most. The step stays only while what you see gets younger: 1 to 14 ms younger on a PC on Ethernet, 3 to 15 ms on a Mac on Wi-Fi. A device that falls behind is back at its own rate within three seconds, and remembers it: its next streams to that PC do not try again in their first quarter of an hour. A TV keeps its own rate.
 
+**On Wi-Fi, the picture waits less on its way out.** A Windows or Linux host no longer holds frames back in its own network stack between two acknowledgements: from a click to its picture, about 8 ms less on a Mac on Wi-Fi; behind a cable, the picture arrives 4 to 6 ms younger. A Windows host also lowers the bitrate the moment the Wi-Fi starts resending, before the delay shows.
+
 **On Linux, Steam gets a screen of its own.** With gamescope 3.16.22 or later (Fedora 43+, Arch, Bazzite, SteamOS, Ubuntu 26.10+), a **Steam Big Picture** card opens Steam in its own screen, at the size of the device that streams it, without touching the desktop — an X11 session included. The apps you list in **Admin → Apps in their own screen** get a card each.
 
 ### Stream settings
