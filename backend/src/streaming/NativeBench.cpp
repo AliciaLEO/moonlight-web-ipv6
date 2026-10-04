@@ -221,9 +221,9 @@ const char* const kUsage =
     "                    plan Wi-Fi W2 B)\n"
     "  sctpbuf=<KB>      usrsctp's send buffer, 24-1024, really: also the largest message\n"
     "                    either side may send (256 KB otherwise; plan Wi-Fi W2 C)\n"
-    "  sctpss=0..5       usrsctp's stream scheduler: default, round robin, by packet,\n"
-    "                    priority, fair bandwidth (shortest message first), first come\n"
-    "                    (plan Wi-Fi W2.3)\n"
+    "  sctpss=0|1|3|4|5  usrsctp's stream scheduler: default, round robin, priority, fair\n"
+    "                    bandwidth (shortest message first), first come (plan Wi-Fi W2.3);\n"
+    "                    not 2, round robin by packet: Chrome's SCTP fails within seconds\n"
     "  sctpburst=<n>     usrsctp's max burst, in packets; 0 no limit (10 otherwise; plan\n"
     "                    Wi-Fi W2.5)\n"
     "  linkhold=<ms>     a picture held, not encoded, once video has waited outside usrsctp\n"
@@ -540,7 +540,10 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
         ok = ok && tuning.sctpBufferKb >= 24 && tuning.sctpBufferKb <= 1024;
     } else if (key == "sctpss") {
         tuning.sctpScheduler = value.toInt(&ok);
-        ok = ok && tuning.sctpScheduler >= 0 && tuning.sctpScheduler <= 5;
+        // Not 2, round robin by packet: against Chrome the association failed
+        // ~8 s after the channel opened, twice out of two (04/10/2026).
+        ok = ok && tuning.sctpScheduler >= 0 && tuning.sctpScheduler <= 5 &&
+             tuning.sctpScheduler != 2;
     } else if (key == "sctpburst") {
         tuning.sctpMaxBurst = value.toInt(&ok);
         ok = ok && tuning.sctpMaxBurst >= 0 && tuning.sctpMaxBurst <= 1000;

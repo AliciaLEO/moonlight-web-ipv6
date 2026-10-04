@@ -438,7 +438,9 @@ struct EncoderTuning
     /// robin, 2 round robin by packet, 3 priority, 4 fair bandwidth (the
     /// shortest pending message first: the input channel's few hundred bytes
     /// before a 16 KB video chunk), 5 first come. -1, the product: usrsctp's
-    /// default, never set.
+    /// default, never set. 4 changed nothing for the input channel's round
+    /// trip on a Mac in Wi-Fi; 2 made the association with Chrome fail within
+    /// seconds, and the key refuses it (04/10/2026).
     int sctpScheduler = -1;
 
     bool isDefault() const
