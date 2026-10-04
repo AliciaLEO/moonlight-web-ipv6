@@ -20,11 +20,47 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <cwchar>
+#include <string>
+
 #include "WinUHid.h"
 
 namespace mw::native::input {
 
 namespace {
+
+/// DirectInput (joy.cpl, and the games that list wheels through it) names a
+/// controller from its OEMName under MediaProperties, keyed by VID and PID.
+/// Windows writes one on first sight from the device description, and VHF's
+/// is "Virtual HID Framework (VHF) HID device": VHF answers the product
+/// string itself and has no way to take ours. So the real product name goes
+/// there, unless something else (the wheel's own software, on a host it was
+/// once plugged into) already wrote a name that is not VHF's.
+void nameForDirectInput(uint16_t vendorId, uint16_t productId, const std::string& name)
+{
+    if (name.empty()) return;
+    wchar_t path[160];
+    swprintf_s(path,
+               L"SYSTEM\\CurrentControlSet\\Control\\MediaProperties\\PrivateProperties\\Joystick"
+               L"\\OEM\\VID_%04X&PID_%04X",
+               vendorId, productId);
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, path, 0, nullptr, 0, KEY_QUERY_VALUE | KEY_SET_VALUE,
+                        nullptr, &key, nullptr) != ERROR_SUCCESS)
+        return; // not elevated: the name stays VHF's, nothing else changes
+    wchar_t current[256] = {};
+    DWORD bytes = sizeof(current) - sizeof(wchar_t);
+    const bool has = RegQueryValueExW(key, L"OEMName", nullptr, nullptr,
+                                      reinterpret_cast<BYTE*>(current), &bytes) == ERROR_SUCCESS;
+    if (!has || current[0] == 0 || wcsstr(current, L"VHF")) {
+        const int n = MultiByteToWideChar(CP_UTF8, 0, name.c_str(), -1, nullptr, 0);
+        std::wstring wide(n > 0 ? n : 1, L'\0');
+        if (n > 0) MultiByteToWideChar(CP_UTF8, 0, name.c_str(), -1, wide.data(), n);
+        RegSetValueExW(key, L"OEMName", 0, REG_SZ, reinterpret_cast<const BYTE*>(wide.c_str()),
+                       static_cast<DWORD>((wcslen(wide.c_str()) + 1) * sizeof(wchar_t)));
+    }
+    RegCloseKey(key);
+}
 
 /// A device made through the "MoonlightWeb Virtual HID" driver
 /// (drivers/vhid), with WinUHid's client library built in. The driver lets
@@ -48,6 +84,9 @@ public:
         // No hardware ids: given some, VHF made no child at all (04/10). The
         // collections enumerate as HID\HID_DEVICE_SYSTEM_VHF&COLnn, and
         // HidD_GetAttributes still gives the vendor and product ids.
+        // DirectInput's name comes from the registry, written before the device
+        // shows up so the first enumeration already reads it.
+        nameForDirectInput(id.vendorId, id.productId, id.name);
         m_device = WinUHidCreateDevice(&c);
         if (!m_device) {
             error = "WinUHidCreateDevice failed (error " + std::to_string(::GetLastError()) + ")";
