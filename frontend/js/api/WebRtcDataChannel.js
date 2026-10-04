@@ -31,6 +31,7 @@ import {
 import { defaultIceServers } from './IceServers.js';
 import { isViewMessage } from './hostMessages.js';
 import { attachFloodCounter, floodMode } from './FloodCounter.js';
+import { attachUltraSink, ultraSinkMode } from './UltraSink.js';
 import { closeHidChannel, createHidChannel, sendHidFrame } from '../hid/hidWire.js';
 import { setAudioJitterBufferTarget } from '../util/AudioJitter.js';
 
@@ -698,6 +699,10 @@ export class WebRtcDataChannel {
         // Clear reassembly buffers
         this._reassembly.clear();
 
+        if (this._ultra) {
+            this._ultra.stop();
+            this._ultra = null;
+        }
         if (this._flood) {
             this._flood.stop();
             this._flood = null;
@@ -909,6 +914,11 @@ export class WebRtcDataChannel {
         // the connection waits for.
         const flood = floodMode();
         if (flood) this._flood = attachFloodCounter(this.pc, flood);
+
+        // Bench only (POC Ultra U1.1): the host's synthetic Ultra stream on
+        // DC#5, timed when localStorage says `mw_ultra_sink`.
+        const ultra = ultraSinkMode();
+        if (ultra) this._ultra = attachUltraSink(this.pc, ultra);
 
         // The HID passthrough's reports (DC#4, hid/hidWire.js): unordered, never
         // retransmitted, and not one of the channels the connection waits for.
