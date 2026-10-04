@@ -59,6 +59,8 @@ import {
     supportsGamingMode,
 } from '../util/BrowserDetect.js';
 import * as RemoteNav from './RemoteNav.js';
+import { deviceKey, loadForwarded, saveForwarded } from '../hid/HidPassthrough.js';
+import { GAME_FILTERS, isGameDevice } from '../hid/hidWire.js';
 import { confirmAction } from './ConfirmDialog.js';
 import { aspectToNumber, computeAutoBitrate } from '../util/AutoBitrate.js';
 import { autoFps, measuredFps } from '../util/RefreshRate.js';
@@ -771,6 +773,64 @@ export class SettingsView {
                 removeMapping(/** @type {HTMLElement} */ (b).dataset.key),
             ),
         );
+    }
+
+    // --- HID passthrough ---
+    //
+    // The game devices this browser may open (Chrome keeps the permission of
+    // a device with a serial number) and a switch each: on, the stream sends
+    // it to the host as itself when the host can (hid/HidPassthrough.js).
+
+    async _renderHid() {
+        const list = this.container.querySelector('.settings-hid-list');
+        if (!list || !navigator.hid) return;
+        const wanted = loadForwarded();
+        let devices = [];
+        try {
+            devices = (await navigator.hid.getDevices()).filter((d) => isGameDevice(d.collections));
+        } catch {
+            devices = [];
+        }
+        // One row per device: a device with several interfaces (the G923's
+        // vendor one) shows once, by its game interface.
+        const seen = new Set();
+        devices = devices.filter((d) => !seen.has(deviceKey(d)) && seen.add(deviceKey(d)));
+        list.innerHTML = devices.length
+            ? devices
+                  .map(
+                      (d) => `
+                <label class="settings-pad">
+                    <input type="checkbox" class="settings-hid-toggle" data-key="${escapeHtml(deviceKey(d))}" ${wanted.has(deviceKey(d)) ? 'checked' : ''}>
+                    <span class="settings-pad-name">${escapeHtml(d.productName || deviceKey(d))}</span>
+                    <span class="setting-desc">${escapeHtml(deviceKey(d))}</span>
+                </label>`,
+                  )
+                  .join('')
+            : `<p class="setting-desc">${escapeHtml(t('settings.hidNone'))}</p>`;
+        list.querySelectorAll('.settings-hid-toggle').forEach((box) =>
+            box.addEventListener('change', () => {
+                const keys = loadForwarded();
+                const key = /** @type {HTMLInputElement} */ (box).dataset.key;
+                if (/** @type {HTMLInputElement} */ (box).checked) keys.add(key);
+                else keys.delete(key);
+                saveForwarded(keys);
+            }),
+        );
+    }
+
+    async _addHidDevice() {
+        let chosen = [];
+        try {
+            chosen = await navigator.hid.requestDevice({ filters: GAME_FILTERS });
+        } catch {
+            chosen = [];
+        }
+        if (chosen.length) {
+            const keys = loadForwarded();
+            for (const d of chosen) if (isGameDevice(d.collections)) keys.add(deviceKey(d));
+            saveForwarded(keys);
+        }
+        this._renderHid();
     }
 
     // --- Auto-save ---
@@ -1569,6 +1629,14 @@ export class SettingsView {
                     <h3 class="settings-section-title">${t('settings.controllers')}</h3>
                     <span class="setting-desc">${t('settings.controllersDesc')}</span>
                     <div class="settings-pads"></div>
+                    <!-- The HID passthrough: devices sent to the host as
+                         themselves. Switches kept in this browser. -->
+                    <div class="settings-hid">
+                        <span class="settings-label">${t('settings.hidTitle')}</span>
+                        <span class="setting-desc">${t(navigator.hid ? 'settings.hidDesc' : 'settings.hidUnsupported')}</span>
+                        <div class="settings-pads settings-hid-list"></div>
+                        ${navigator.hid ? `<button type="button" class="btn btn-secondary" id="btn-settings-hid-add">${t('settings.hidAdd')}</button>` : ''}
+                    </div>
                 </div>
 
                 <!-- ── Privacy ─────────────────────────────────────────────── -->
@@ -1672,6 +1740,10 @@ export class SettingsView {
         this._padSig = '';
         this._startPadWatch();
         this._renderPads();
+        this._renderHid();
+        this.container
+            .querySelector('#btn-settings-hid-add')
+            ?.addEventListener('click', () => this._addHidDevice());
 
         // Anonymous statistics: consent given, or withdrawn, on the spot.
         const statsChk = this.container.querySelector('#settings-stats-consent');

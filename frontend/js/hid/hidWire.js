@@ -191,3 +191,42 @@ export class HidReportPump {
         return encodeReportFrame(slot, reportId, seq, bytes);
     }
 }
+
+/**
+ * The 'hid' channel on a transport's peer connection: negotiated (no SDP of
+ * its own), unordered, never retransmitted. Not one of the channels the
+ * connection waits for — a host without it simply drops what lands on id 4.
+ */
+export function createHidChannel(pc) {
+    try {
+        const dc = pc.createDataChannel(HID_CHANNEL_LABEL, {
+            negotiated: true,
+            id: HID_CHANNEL_ID,
+            ordered: false,
+            maxRetransmits: 0,
+        });
+        dc.binaryType = 'arraybuffer';
+        return dc;
+    } catch {
+        return null;
+    }
+}
+
+/** Sends one frame when the channel is open; false otherwise. */
+export function sendHidFrame(dc, frame) {
+    if (!dc || dc.readyState !== 'open') return false;
+    try {
+        dc.send(frame);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+export function closeHidChannel(dc) {
+    try {
+        if (dc && dc.readyState !== 'closed') dc.close();
+    } catch {
+        /* closing anyway */
+    }
+}

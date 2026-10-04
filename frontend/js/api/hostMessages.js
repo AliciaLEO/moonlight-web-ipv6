@@ -34,6 +34,10 @@ const VIEW_MESSAGES = new Set([
     'fpsstep',
     // The relay's answer to a stamped input (stream/InputUplink.js).
     'inputstamp',
+    // Native host: the HID passthrough's word (hid/HidPassthrough.js).
+    'hidcaps',
+    'hidattached',
+    'hidrequest',
 ]);
 
 /** Whether a host message of this type goes to the stream view. */

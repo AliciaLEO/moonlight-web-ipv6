@@ -72,6 +72,33 @@ describe('GamepadManager', () => {
         gm.stop();
     });
 
+    it('never forwards a pad the HID passthrough sends as itself, and takes it back when let go', () => {
+        const send = vi.fn();
+        const wheel = fakePad({ id: 'G923 (STANDARD GAMEPAD Vendor: 046d Product: c26e)' });
+        setPads([wheel]);
+        const gm = new GamepadManager(send);
+        gm.start();
+        expect(send).toHaveBeenCalledWith(
+            expect.objectContaining({ type: 'gamepadconnect', index: 0 }),
+        );
+        send.mockClear();
+        gm.setExcluded(['usb:046d:c26e']);
+        expect(send).toHaveBeenCalledWith(
+            expect.objectContaining({ type: 'gamepaddisconnect', index: 0 }),
+        );
+        send.mockClear();
+        rafCb && rafCb(0);
+        expect(send.mock.calls.some((c) => c[0].type === 'gamepadconnect')).toBe(false);
+        gm.setExcluded([]);
+        const evt = new window.Event('gamepadconnected');
+        evt.gamepad = wheel;
+        window.dispatchEvent(evt);
+        expect(send).toHaveBeenCalledWith(
+            expect.objectContaining({ type: 'gamepadconnect', index: 0 }),
+        );
+        gm.stop();
+    });
+
     it('ignores a non-standard controller nothing maps, and says so once', () => {
         const send = vi.fn();
         const onIgnored = vi.fn();

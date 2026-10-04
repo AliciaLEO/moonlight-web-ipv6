@@ -253,6 +253,8 @@ export class GamepadManager {
         // Browser index → { last: {buttons,lt,rt,lx,ly,rx,ry}, sentAt,
         //   hasRumble, bindings, hostIndex, key }
         this._pads = new Map();
+        // Keys (`usb:vid:pid`) of pads the HID passthrough sends as themselves.
+        this._excluded = new Set();
         // Browser index → { strong, weak, since, timer } for a vibration being held.
         this._rumble = new Map();
         this._onConnect = (e) => this._handleConnect(e.gamepad);
@@ -447,6 +449,10 @@ export class GamepadManager {
         const res = this._resolve(gp);
         if (res.source === 'pending') return null;
         let entry = this._pads.get(gp.index);
+        if (this._excluded.has(res.key)) {
+            if (entry) this._release(gp.index);
+            return null;
+        }
         if (!res.source) {
             if (entry) this._release(gp.index);
             this._noteIgnored(gp);
@@ -492,6 +498,19 @@ export class GamepadManager {
             if (this._onMapped) this._onMapped(gp, res);
         }
         return entry;
+    }
+
+    /**
+     * Pads the HID passthrough sends to the host as themselves, by key
+     * (`usb:vid:pid`): never forwarded as a mapped pad as well, or the game
+     * would see the device twice. One already forwarded is taken off at once;
+     * one let go again comes back at the next poll.
+     */
+    setExcluded(keys) {
+        this._excluded = new Set(keys || []);
+        for (const [index, entry] of Array.from(this._pads)) {
+            if (this._excluded.has(entry.key)) this._release(index);
+        }
     }
 
     /** Take a forwarded pad off the host. */

@@ -35,6 +35,7 @@ import { measureRefreshRate, onRefreshRateChange } from '../util/RefreshRate.js'
 import { devicePixelSize } from '../util/StreamResolution.js';
 import { PeriodicStallDetector } from '../stream/PeriodicStallDetector.js';
 import { GamepadManager } from '../stream/GamepadManager.js';
+import { HidPassthrough } from '../hid/HidPassthrough.js';
 import { GamepadRemapDialog } from './GamepadRemapDialog.js';
 import { padKey, padName } from '../stream/gamepadMapping.js';
 import { armAudioPlayRetry } from '../util/audioAutoplay.js';
@@ -6711,9 +6712,43 @@ export class StreamView {
         this._lastDropCount = this.stats.dropped;
     }
 
+    // ── HID passthrough (hid/HidPassthrough.js) ─────────────────────────────
+
+    /**
+     * The devices the viewer switched on in Settings go to the host as
+     * themselves — the real wheel, not an Xbox pad — when it says it can
+     * (`hidcaps`). Made at the first message about it, so a `hidcaps` sent at
+     * channel open is never missed. Null without WebHID or on a transport
+     * without the 'hid' channel (the WebSocket fallback).
+     */
+    _ensureHidPassthrough() {
+        if (this._hidPassthrough) return this._hidPassthrough;
+        if (!navigator.hid || !this.webrtc || typeof this.webrtc.sendHid !== 'function')
+            return null;
+        this._hidPassthrough = new HidPassthrough({
+            send: (msg) => {
+                if (!this._quitting) this.webrtc.send(msg);
+            },
+            sendFrame: (frame) => this.webrtc.sendHid(frame),
+            // A device sent as itself is never forwarded as a mapped pad too.
+            onChange: () =>
+                this._gamepadManager?.setExcluded(this._hidPassthrough?.excludedKeys() || []),
+            onResult: (device, ok, why) => {
+                const name = device.productName || '';
+                if (ok) Toast.info(t('stream.hidForwarded', { name }), { durationMs: 5000 });
+                else Toast.warning(t('stream.hidRefused', { name, why }), { durationMs: 8000 });
+            },
+        });
+        return this._hidPassthrough;
+    }
+
     // ── Stats message handler (ping/pong + periodic backend stats) ─────────
 
     _handleStatsMessage(msg) {
+        if (typeof msg.type === 'string' && msg.type.startsWith('hid')) {
+            this._ensureHidPassthrough()?.handleMessage(msg);
+            return;
+        }
         if (msg.type === 'rumble') {
             if (this._gamepadManager) this._gamepadManager.rumble(msg.index, msg.low, msg.high);
             return;
@@ -8655,6 +8690,10 @@ export class StreamView {
 
     unbindEvents() {
         if (this._gamepadManager) this._gamepadManager.stop();
+        if (this._hidPassthrough) {
+            this._hidPassthrough.stop();
+            this._hidPassthrough = null;
+        }
         document.removeEventListener('keydown', this._onKeyDown);
         document.removeEventListener('keyup', this._onKeyUp);
         document.removeEventListener('paste', this._onPaste);

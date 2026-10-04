@@ -16,6 +16,7 @@
  */
 
 import * as iosAudioUnlock from '../audio/iosAudioUnlock.js';
+import { closeHidChannel, createHidChannel, sendHidFrame } from '../hid/hidWire.js';
 import { armAudioPlayRetry } from '../util/audioAutoplay.js';
 import { forceOpusStereo } from '../util/SdpUtils.js';
 import { openSignalingSocket } from '../net/tunnelBridge.js';
@@ -303,6 +304,11 @@ export class WebRtcMedia {
         );
     }
 
+    /** One HID passthrough report frame; false when the channel is not open. */
+    sendHid(frame) {
+        return sendHidFrame(this._hidDc, frame);
+    }
+
     /** Send JSON input message over the input DataChannel. */
     send(obj) {
         if (this.dataChannels.input && this.dataChannels.input.readyState === 'open') {
@@ -357,6 +363,9 @@ export class WebRtcMedia {
             this._audioRetryCleanup();
             this._audioRetryCleanup = null;
         }
+
+        closeHidChannel(this._hidDc);
+        this._hidDc = null;
 
         // Close DataChannels
         for (const [label, dc] of Object.entries(this.dataChannels)) {
@@ -578,6 +587,9 @@ export class WebRtcMedia {
         };
         this.dataChannels.input = this.pc.createDataChannel(this.DC_INPUT_LABEL, inputInit);
         this._setupDataChannel(this.DC_INPUT_LABEL, this.dataChannels.input);
+
+        // The HID passthrough's reports (DC#4, hid/hidWire.js), not waited for.
+        this._hidDc = createHidChannel(this.pc);
 
         console.log('[WebRtcMedia] DataChannels created (input=1; audio is an RTP track)');
     }

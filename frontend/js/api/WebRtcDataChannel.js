@@ -30,6 +30,7 @@ import {
 import { defaultIceServers } from './IceServers.js';
 import { isViewMessage } from './hostMessages.js';
 import { attachFloodCounter, floodMode } from './FloodCounter.js';
+import { closeHidChannel, createHidChannel, sendHidFrame } from '../hid/hidWire.js';
 import { setAudioJitterBufferTarget } from '../util/AudioJitter.js';
 
 /**
@@ -493,6 +494,11 @@ export class WebRtcDataChannel {
      * Send a JSON message (typically input command) to the backend.
      * Uses the input DataChannel in normal mode, or the signaling WS in WSS/fallback mode.
      */
+    /** One HID passthrough report frame; false when the channel is not open. */
+    sendHid(frame) {
+        return sendHidFrame(this._hidDc, frame);
+    }
+
     send(obj) {
         // WSS mode or WS fallback mode: send via text on the signaling WS
         if (this._wssMode || this._wsFallback) {
@@ -691,6 +697,8 @@ export class WebRtcDataChannel {
             this._flood.stop();
             this._flood = null;
         }
+        closeHidChannel(this._hidDc);
+        this._hidDc = null;
 
         // Close DataChannels
         for (const [label, dc] of Object.entries(this.dataChannels)) {
@@ -896,6 +904,10 @@ export class WebRtcDataChannel {
         // the connection waits for.
         const flood = floodMode();
         if (flood) this._flood = attachFloodCounter(this.pc, flood);
+
+        // The HID passthrough's reports (DC#4, hid/hidWire.js): unordered, never
+        // retransmitted, and not one of the channels the connection waits for.
+        this._hidDc = createHidChannel(this.pc);
 
         console.log('[WebRTC] Channels created (video=DC#0, audio=RTP, input=DC#2)');
     }

@@ -8,7 +8,7 @@
  * any later version.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
     HidReportPump,
     REPEAT_MS,
@@ -143,5 +143,39 @@ describe('hidWire (HID passthrough, P2)', () => {
         expect(pump.due(1700 + REPEAT_MS)).toHaveLength(2);
         pump.forget(0);
         expect(pump.due(9999)).toHaveLength(0);
+    });
+});
+
+describe('hidWire channel helpers', () => {
+    it('creates the negotiated, unordered, unretransmitted channel 4 and sends only when open', async () => {
+        const { createHidChannel, sendHidFrame, closeHidChannel } =
+            await import('../js/hid/hidWire.js');
+        const made = [];
+        const dc = { readyState: 'connecting', send: vi.fn(), close: vi.fn() };
+        const pc = { createDataChannel: (label, init) => (made.push({ label, init }), dc) };
+        expect(createHidChannel(pc)).toBe(dc);
+        expect(made[0]).toEqual({
+            label: 'hid',
+            init: { negotiated: true, id: 4, ordered: false, maxRetransmits: 0 },
+        });
+        expect(dc.binaryType).toBe('arraybuffer');
+        expect(sendHidFrame(dc, new Uint8Array(4))).toBe(false);
+        dc.readyState = 'open';
+        expect(sendHidFrame(dc, new Uint8Array(4))).toBe(true);
+        dc.send.mockImplementation(() => {
+            throw new Error('closing');
+        });
+        expect(sendHidFrame(dc, new Uint8Array(4))).toBe(false);
+        expect(sendHidFrame(null, new Uint8Array(4))).toBe(false);
+        closeHidChannel(dc);
+        expect(dc.close).toHaveBeenCalled();
+        closeHidChannel(null);
+        expect(
+            createHidChannel({
+                createDataChannel: () => {
+                    throw new Error('closed');
+                },
+            }),
+        ).toBe(null);
     });
 });
