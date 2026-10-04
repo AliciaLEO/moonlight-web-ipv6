@@ -649,6 +649,48 @@ l'« Auto » d'aujourd'hui (UA.3).
   (quand l'écran de l'AMD peut être le principal), parce que le gain attendu y
   est le plus grand (§3 : 4 à 12 ms).
 
+### 6.7 Après la porte U0 : U1 lancé, U3 préparé (05/10/2026, nuit)
+
+**Porte U0 franchie** (Bruno, 04/10, environ 23:45 : « Ok, go »).
+- La référence de la suite est l'« Auto » détecté.
+- Ultra ne vaut qu'en Ethernet, avec PyroWave au cœur.
+- Le chemin de présentation passe avant le décodeur.
+
+**U1.1 fait.**
+- `e8f02ce0` côté hôte : la clé `ultra=synthetic:<Kio>` envoie, après chaque
+  image vidéo, une charge incompressible de cette taille. Elle part sur le
+  canal négocié id 5 (l'id 4 est celui du HID), au format des chunks vidéo et
+  avec le tampon de l'image, par un `FrameSender` à part. `ultrachannel=`
+  choisit la fiabilité du canal.
+- `5ee304da` côté client : `mw_ultra_sink` (`UltraSink.js`) compte par seconde
+  les images, les Mbit/s, les pertes, l'étalement et le retard en plus.
+- `3178043e` : chaque passe de banc garde ces chiffres.
+- Essai local sur DualRTX (04/10, 23:44) : 273 images de 200 Kio, aucune
+  perdue, étalement de 3 à 9 ms. Les réglages de la table U1.1 que le plan
+  Wi-Fi a déjà rendus clés de banc (`sctpburst`, `sctpbuf`, `sctpcc`,
+  `retrcut`, `relaylog`) sont repris, pas refaits.
+- **U1.2 est prêt**, à passer quand l'UM790Pro sera libre : 6 tailles de 40 à
+  2000 Kio × 60 et 120 i/s, au transport du produit. Puis, à 350 et 1000 Kio
+  et 120 i/s : un tampon d'envoi de 4 Mio, le canal non ordonné, et
+  l'ancien burst maximal.
+
+**U3, le chemin de présentation, à mesurer avant le décodeur.** Mesuré
+au `click-photon.ps1`, le clic coûte 58 ms dans Chrome, contre 33-43 ms lu
+dans le canevas : 15 à 25 ms pour la composition de Chrome et du DWM (§6.5).
+Le client a déjà quatre présentateurs : Canvas2D désynchronisé (le défaut en
+tearing), WebGL2, WebGPU, et `<video>` nourri au décodage (menu de débogage).
+Une première matrice, sans code neuf :
+- ces quatre présentateurs × en fenêtre / en plein écran, le plein écran
+  pouvant laisser le DWM passer en « independent flip » ;
+- sur l'UM790Pro en Ethernet (écran à 240 Hz), hôte RTX ;
+- `click-photon.ps1 -ReadDx 200` lit un point écarté du clic, pour que le
+  drapeau de banc (`latency_flag_enabled`) ne le masque plus (`0bceb41e`) ;
+- 60 clics par case, en alternance, et le même couple refait sous Steam en
+  référence native.
+
+Ce qui en sortira : le présentateur et le mode d'écran qui rendent le plus de
+ces 15-25 ms. Le décodeur d'Ultra (U3.4) se branchera sur ce présentateur-là.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
