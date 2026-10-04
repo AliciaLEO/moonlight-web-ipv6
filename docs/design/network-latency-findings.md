@@ -418,7 +418,19 @@ clicks' minute (`inSAll`), the click's leg over the flags' frames:
   retransmissions with them (0.31 → 0.42 %): a bigger burst lands on Chrome's
   socket at once. B absorbs it.
 - Still ~9 ms in usrsctp against ~4.5 on Ethernet (W1): the SACK clock.
-- Pending: the Ethernet witness, the N95.
+
+N95, Wi-Fi (10:01-10:30, two alternated rounds, same build): **no gain**.
+
+| | Click (p90) | `net` / `inSctp` of the flag | `inSctp` all frames | Frame age med / p90 | Messages med | T3 |
+|---|---|---|---|---|---|---|
+| base (10) | 80.0 / 87.0 ms (146 / 152) | 22.4 / 14.8 ms | 12.0 ms | 24.6 / 86, 31.6 / 202 | 26.4 ms | 0, 1 |
+| `sctpburst=0` | 80.2 / 95.5 ms (125 / 166) | 26.5 / 19.4 ms | 9.6 / 14.3 ms | 22.6 / 187, 19.9 / 76 | 17.6 ms | 1, 3 |
+
+- At ~6 Mbit/s and 60 fps an N95 frame is ~10 packets, so a burst of 10
+  rarely holds it back; the Mac's gain (120 fps, ~20 Mbit/s) does not carry
+  over. The click moves within the N95's pass-to-pass noise (80-95 ms); the
+  host's messages get faster (26 → 18 ms median).
+- Pending: the Ethernet witness (the UM790Pro needs its console user).
 
 ### 04/10/2026 — W2.3: usrsctp's stream scheduler (no effect; one module breaks the association)
 
@@ -492,8 +504,9 @@ What the measurements support, in order of the path:
 - What sets the ~16 ms a byte stays unacked on the Mac's Wi-Fi with no loss:
   the client's SACK policy (dcsctp), Wi-Fi aggregation, usrsctp's max burst?
   W2.5 took ~6 ms off with the burst; ~9 ms remain against ~4.5 on Ethernet.
-- Whether `sctpburst=0` costs anything on Ethernet or on the N95, and whether
-  its slightly higher kernel drops (422 → 547 a pass) matter elsewhere.
+- Whether `sctpburst=0` costs anything on Ethernet (pending), and whether its
+  slightly higher kernel drops (422 → 547 a pass on the Mac) or the N95's
+  extra T3 timeouts (1 and 3 against 0 and 1) matter in the field.
 - What receive buffer Chrome gives its UDP socket on macOS and on Windows, and
   whether a page can influence it (it cannot directly). Whether Windows counts
   a full-socket drop anywhere (the N95 showed 0 "received errors").
