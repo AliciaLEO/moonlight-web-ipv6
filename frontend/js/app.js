@@ -95,7 +95,6 @@ import * as iosAudioUnlock from './audio/iosAudioUnlock.js';
 import { init as i18nInit, applyDOM, t } from './i18n/i18n.js';
 import { escapeHtml } from './util/escapeHtml.js';
 import { IDENTITY_REFUSED } from './util/pairingCrypto.js';
-import { takeVdGpuApartNotice } from './util/vdGpuApartNotice.js';
 import {
     startTunnel,
     tunnelHostId,
@@ -2192,12 +2191,6 @@ const MoonlightApp = {
                 // Dismiss "Launching..." toast so only the current status is visible
                 await Toast.dismissAll();
                 Toast.success(t('launch.started', { name: app.name }));
-                // The virtual display drawn by another GPU than the apps
-                // opened before the stream — see util/vdGpuApartNotice.js.
-                const gpuApart = takeVdGpuApartNotice(result, host.uuid);
-                if (gpuApart) {
-                    Toast.info(t('launch.vdGpuApart', gpuApart), { durationMs: 12000 });
-                }
 
                 // ── Streaming overlay guard ────────────────────────────────
                 // Push a guard state so Back from streaming goes to Apps.
@@ -3223,6 +3216,14 @@ const MoonlightApp = {
             // The host is this machine's own screen (mw-native-host): the mouse
             // is sent at its raw report rate there — see _bindPointerRaw.
             nativeHost: result.native === true,
+            // The virtual display drawn by another GPU than the display it
+            // replaced, when the host says so: the view tells the user to
+            // restart a stuttering app, once the stream shows the stall —
+            // see util/vdGpuApartNotice.js.
+            vdGpuApart:
+                result.vd_gpu_apart && typeof result.vd_gpu_apart === 'object'
+                    ? result.vd_gpu_apart
+                    : null,
             // This browser streams the machine it runs on ("Stream anyway"):
             // what the host injects comes back to this very window, and the
             // view must not send it again — see StreamView.handleKeyDown.

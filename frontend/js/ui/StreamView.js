@@ -109,6 +109,7 @@ import { CadenceStepper, autostepEnabled, stepMemory } from '../stream/CadenceSt
 import { LatencyProbe } from '../stream/LatencyProbe.js';
 import { InputUplink } from '../stream/InputUplink.js';
 import { t } from '../i18n/i18n.js';
+import { VdGpuApartWatch, takeVdGpuApartNotice } from '../util/vdGpuApartNotice.js';
 
 /** @typedef {import('../types/transport.js').StreamTransport} StreamTransport */
 import { escapeHtml } from '../util/escapeHtml.js';
@@ -1006,6 +1007,10 @@ export class StreamView {
         // `mousemove` delivers. Decided in _bindPointerRaw; while it is on, the
         // mousemove handlers keep their cursor bookkeeping and stop sending.
         this._nativeHost = opts.nativeHost === true;
+        // The virtual display and the apps opened before the stream on two
+        // GPUs (util/vdGpuApartNotice.js): watched only when the host says so.
+        this._vdGpuApart = opts.vdGpuApart || null;
+        this._vdGpuApartWatch = this._vdGpuApart ? new VdGpuApartWatch() : null;
         // This browser is streaming the very machine it runs on ("Stream
         // anyway" past the self-stream warning). Every key the host injects
         // then lands in this window again — see handleKeyDown/handleKeyUp.
@@ -6897,6 +6902,13 @@ export class StreamView {
             if (msg.stages && typeof msg.stages === 'object') {
                 this._hostStages = msg.stages;
                 this._hostStagesAt = performance.now();
+                if (this._vdGpuApartWatch?.note(msg.stages)) {
+                    const notice = takeVdGpuApartNotice(
+                        { vd_gpu_apart: this._vdGpuApart },
+                        this.host?.uuid || '',
+                    );
+                    if (notice) Toast.info(t('launch.vdGpuApart', notice), { durationMs: 12000 });
+                }
                 const total = msg.stages.total;
                 if (total && total.n > 0 && total.avg > 0) {
                     this._hostTotalStats.addSample(total.avg / 1000);

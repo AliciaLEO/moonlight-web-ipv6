@@ -13,7 +13,10 @@
  * host's encode at 130 ms per frame while the pointer hovered Steam's cards —
  * and 5 ms once Steam was restarted. The host says when the two GPUs differ
  * (`vd_gpu_apart` in the launch result); this says it to the user, once per
- * host and pair of GPUs.
+ * host and pair of GPUs — and only once the stream shows it: the host's
+ * encode stage stuck far above its usual few milliseconds (vdGpuApartWatch).
+ * Two GPUs apart cost nothing until such an app repaints a large area, and a
+ * warning at every launch would be a warning about nothing.
  */
 
 const SEEN_KEY = 'mw_vd_gpu_apart_seen';
@@ -49,4 +52,42 @@ export function takeVdGpuApartNotice(result, hostUuid) {
         /* told now, maybe again next time */
     }
     return { display: apart.display, apps: apart.apps };
+}
+
+/**
+ * The host's encode stage, mean over its one-second window, above which the
+ * stream is in the state this notice is about. 3 to 13 ms normally, on the
+ * GTX 1050 of the UM790Pro included; 110 to 160 ms through the whole hover.
+ */
+const ENCODE_STALLED_US = 50_000;
+
+/** Consecutive one-second windows above it: a single slow frame is not it. */
+const STALLED_WINDOWS = 2;
+
+/**
+ * Watches the native host's stage stats for the sign of an app on the other
+ * GPU: the encode stage waiting behind the copies between them. `note()`
+ * returns true once, the first time the encode stage has stayed above the
+ * threshold for STALLED_WINDOWS windows in a row; never again after that.
+ */
+export class VdGpuApartWatch {
+    constructor() {
+        this._run = 0;
+        this._fired = false;
+    }
+
+    /**
+     * @param {Record<string, {n?: number, avg?: number}>|null|undefined} stages
+     *   the `stages` of one host stats message (µs)
+     * @returns {boolean} true the one time the stall is confirmed
+     */
+    note(stages) {
+        if (this._fired) return false;
+        const encode = stages?.encode;
+        if (!encode || !(encode.n > 0)) return false;
+        this._run = encode.avg > ENCODE_STALLED_US ? this._run + 1 : 0;
+        if (this._run < STALLED_WINDOWS) return false;
+        this._fired = true;
+        return true;
+    }
 }
