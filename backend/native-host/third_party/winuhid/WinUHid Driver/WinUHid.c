@@ -802,6 +802,15 @@ WinUHidEvtIoDeviceControl(
         // Parse the report descriptor to determine the size of each report and whether numbered reports are used
         //
         status = ParseReportDescriptor(fileContext);
+#ifdef MOONLIGHTWEB_VHID
+        //
+        // MoonlightWeb: only game devices, by the engine's own validate()
+        //
+        if (NT_SUCCESS(status) &&
+            !MwHidDescriptorAllowed(fileContext->VhfConfig.ReportDescriptor, fileContext->VhfConfig.ReportDescriptorLength)) {
+            status = STATUS_ACCESS_DENIED;
+        }
+#endif
         if (!NT_SUCCESS(status)) {
             fileContext->VhfConfig.ReportDescriptor = NULL;
             fileContext->VhfConfig.ReportDescriptorLength = 0;

@@ -8,7 +8,12 @@
 
 #include <winioctl.h>
 
+#ifdef MOONLIGHTWEB_VHID
+// MoonlightWeb: a name of our own, so a WinUHid installed by someone else never collides
+#define WINUHID_DEVICE_NAME L"MoonlightWebVHid"
+#else
 #define WINUHID_DEVICE_NAME L"WinUHid"
+#endif
 #define WINUHID_WIN32_PATH (L"\\\\.\\" WINUHID_DEVICE_NAME)
 #define WINUHID_NT_PATH (L"\\DosDevices\\Global\\" WINUHID_DEVICE_NAME)
 

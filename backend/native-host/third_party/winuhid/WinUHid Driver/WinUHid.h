@@ -11,6 +11,13 @@
 
 EXTERN_C_START
 
+#ifdef MOONLIGHTWEB_VHID
+//
+// MoonlightWeb: the engine's descriptor check (drivers/vhid/DescriptorCheck.cpp)
+//
+int MwHidDescriptorAllowed(const unsigned char* data, unsigned long size);
+#endif
+
 #define INSTANCE_ID_TAG 'iHUW'
 #define REPORT_DESC_TAG 'rHUW'
 #define HARDWARE_IDS_TAG 'hHUW'
