@@ -50,6 +50,8 @@ bench-out/
 scripts/bench/results/
 # A side chapter - another display, another encoder - gets its own -ResultsDir.
 scripts/bench/results-*/
+# The click-photon flag's log of its flips (scripts/bench/photon/flag-window.ps1 -Log).
+scripts/bench/photon/*.csv
 # Throwaway Chrome profiles. Named one by one until a run needed a fresh one
 # and its profile showed up in `git status` — there is no reason to name them,
 # a browser profile is never source.
