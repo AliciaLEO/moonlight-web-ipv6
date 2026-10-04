@@ -57,6 +57,7 @@ export default defineConfig({
                 'js/i18n/i18n.js',
                 'js/api/BackendClient.js',
                 'js/api/FloodCounter.js',
+                'js/hid/hidWire.js',
                 'js/ui/Toast.js',
                 'js/ui/RemoteNav.js',
             ],
