@@ -159,4 +159,21 @@ void run_host_persistence_tests()
         CHECK(!orphan.isNativeEngine());
         CHECK(!orphan.isLocalMachine());
     }
+
+    // --- Ending a stream /cancels a GameStream host, never the native engine ---
+    //
+    // The native engine has no server behind it: a /cancel sent to its empty
+    // address came back "Host not found", and Stop answered 502 for a stream
+    // that had ended cleanly. Every other backend speaks GameStream and keeps it.
+    {
+        NvComputer native;
+        native.backendType = QStringLiteral("native");
+        CHECK(!native.takesHostCancel());
+
+        for (const char* type : {"gamestream", "wolf", "multiseat", ""}) {
+            NvComputer host = makeHost();
+            host.backendType = QString::fromLatin1(type);
+            CHECK(host.takesHostCancel());
+        }
+    }
 }

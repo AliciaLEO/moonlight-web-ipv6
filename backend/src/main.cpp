@@ -2470,7 +2470,7 @@ int main(int argc, char* argv[])
             // Cancel the revoked browser's Sunshine session (keyed like /launch).
             // Nobody legitimately resumes it, so leaving it alive is pointless.
             NvComputer* host = computerManager.getHost(g_ActiveHostUuid);
-            if (host) {
+            if (host && host->takesHostCancel()) {
                 auto* identity = IdentityManager::get();
                 auto* quitReply = computerManager.http()->quitAppAsync(
                     host->activeAddress, host->activeHttpsPort, identity->getCertificate(),
@@ -3335,48 +3335,49 @@ int main(int argc, char* argv[])
             const QString& quitUid = reqClientUniqueId;
 
             // WSS mode: StreamRelay tracking
-            QObject::connect(s, &StreamSession::streamRelayCreated,
-                             [&g_ActiveStreamRelay, &g_ActiveRelayRoot, &g_ActiveClientUniqueId,
-                              &g_ActiveHostUuid, &computerManager, &authManager, sessionToken, host,
-                              quitUid](StreamRelay* r) {
-                                 qInfo() << "[main] streamRelayCreated, relay=" << r;
-                                 g_ActiveStreamRelay = r;
-                                 g_ActiveRelayRoot = r;
-                                 g_ActiveClientUniqueId = quitUid;
-                                 g_ActiveHostUuid = host->uuid;
-                                 authManager.setSessionStreaming(sessionToken, true);
+            QObject::connect(
+                s, &StreamSession::streamRelayCreated,
+                [&g_ActiveStreamRelay, &g_ActiveRelayRoot, &g_ActiveClientUniqueId,
+                 &g_ActiveHostUuid, &computerManager, &authManager, sessionToken, host,
+                 quitUid](StreamRelay* r) {
+                    qInfo() << "[main] streamRelayCreated, relay=" << r;
+                    g_ActiveStreamRelay = r;
+                    g_ActiveRelayRoot = r;
+                    g_ActiveClientUniqueId = quitUid;
+                    g_ActiveHostUuid = host->uuid;
+                    authManager.setSessionStreaming(sessionToken, true);
 
-                                 // Context = qApp so the lambda runs on the main thread: the relay
-                                 // emits sessionEnded from its dedicated thread, but quitAppAsync()
-                                 // touches the shared QNAM that lives on the main thread.
-                                 QObject::connect(
-                                     r, &StreamRelay::sessionEnded, qApp,
-                                     [r, &g_ActiveStreamRelay, &computerManager, &authManager,
-                                      sessionToken, host, quitUid]() {
-                                         qInfo() << "[main] StreamRelay sessionEnded";
-                                         authManager.setSessionStreaming(sessionToken, false);
-                                         auto* identity = IdentityManager::get();
-                                         auto* quitReply = computerManager.http()->quitAppAsync(
-                                             host->activeAddress, host->activeHttpsPort,
-                                             identity->getCertificate(), identity->getPrivateKey(),
-                                             quitUid);
-                                         QObject::connect(quitReply, &QNetworkReply::finished,
-                                                          quitReply, &QNetworkReply::deleteLater);
-                                         // The StreamSession is ephemeral (self-deletes once
-                                         // streaming starts), so its own sessionEnded->quit()
-                                         // handler is gone by the time the client disconnects —
-                                         // this qApp lambda is the only surviving teardown owner.
-                                         // Stop the shim FIRST (while the relay is alive) so
-                                         // moonlight stops calling back before destruction (no
-                                         // UAF), then stop + deleteLater. destroyed() frees the
-                                         // signaling port and lets a deferred start() proceed.
-                                         if (r->mediaEngine()) r->mediaEngine()->stopConnection();
-                                         r->stop();
-                                         r->deleteLater();
-                                         if (g_ActiveStreamRelay == r)
-                                             g_ActiveStreamRelay = nullptr;
-                                     });
-                             });
+                    // Context = qApp so the lambda runs on the main thread: the relay
+                    // emits sessionEnded from its dedicated thread, but quitAppAsync()
+                    // touches the shared QNAM that lives on the main thread.
+                    QObject::connect(
+                        r, &StreamRelay::sessionEnded, qApp,
+                        [r, &g_ActiveStreamRelay, &computerManager, &authManager, sessionToken,
+                         host, quitUid]() {
+                            qInfo() << "[main] StreamRelay sessionEnded";
+                            authManager.setSessionStreaming(sessionToken, false);
+                            if (host->takesHostCancel()) {
+                                auto* identity = IdentityManager::get();
+                                auto* quitReply = computerManager.http()->quitAppAsync(
+                                    host->activeAddress, host->activeHttpsPort,
+                                    identity->getCertificate(), identity->getPrivateKey(), quitUid);
+                                QObject::connect(quitReply, &QNetworkReply::finished, quitReply,
+                                                 &QNetworkReply::deleteLater);
+                            }
+                            // The StreamSession is ephemeral (self-deletes once
+                            // streaming starts), so its own sessionEnded->quit()
+                            // handler is gone by the time the client disconnects —
+                            // this qApp lambda is the only surviving teardown owner.
+                            // Stop the shim FIRST (while the relay is alive) so
+                            // moonlight stops calling back before destruction (no
+                            // UAF), then stop + deleteLater. destroyed() frees the
+                            // signaling port and lets a deferred start() proceed.
+                            if (r->mediaEngine()) r->mediaEngine()->stopConnection();
+                            r->stop();
+                            r->deleteLater();
+                            if (g_ActiveStreamRelay == r) g_ActiveStreamRelay = nullptr;
+                        });
+                });
 
             // WebRTC DataChannel mode: DataChannelRelay tracking
             QObject::connect(
@@ -3391,33 +3392,35 @@ int main(int argc, char* argv[])
                     authManager.setSessionStreaming(sessionToken, true);
 
                     // Context = qApp: see StreamRelay note above (run on main thread).
-                    QObject::connect(r, &DataChannelRelay::sessionEnded, qApp,
-                                     [r, &g_ActiveRelay, &computerManager, &authManager,
-                                      sessionToken, host, quitUid]() {
-                                         qInfo() << "[main] sessionEnded fired, relay=" << r;
-                                         authManager.setSessionStreaming(sessionToken, false);
-                                         auto* identity = IdentityManager::get();
-                                         auto* quitReply = computerManager.http()->quitAppAsync(
-                                             host->activeAddress, host->activeHttpsPort,
-                                             identity->getCertificate(), identity->getPrivateKey(),
-                                             quitUid);
-                                         QObject::connect(quitReply, &QNetworkReply::finished,
-                                                          quitReply, &QNetworkReply::deleteLater);
-                                         // The StreamSession is ephemeral (self-deletes once
-                                         // streaming starts), so its own sessionEnded->quit()
-                                         // handler is gone by the time the client disconnects —
-                                         // this qApp lambda is the only surviving teardown owner.
-                                         // Stop the shim FIRST (while the relay is alive) so
-                                         // moonlight stops calling back before destruction (no
-                                         // UAF), then stop + deleteLater. destroyed() frees the
-                                         // signaling port and lets a deferred start() proceed.
-                                         if (r->mediaEngine()) r->mediaEngine()->stopConnection();
-                                         r->stop();
-                                         r->deleteLater();
-                                         if (g_ActiveRelay == r) {
-                                             g_ActiveRelay = nullptr;
-                                         }
-                                     });
+                    QObject::connect(
+                        r, &DataChannelRelay::sessionEnded, qApp,
+                        [r, &g_ActiveRelay, &computerManager, &authManager, sessionToken, host,
+                         quitUid]() {
+                            qInfo() << "[main] sessionEnded fired, relay=" << r;
+                            authManager.setSessionStreaming(sessionToken, false);
+                            if (host->takesHostCancel()) {
+                                auto* identity = IdentityManager::get();
+                                auto* quitReply = computerManager.http()->quitAppAsync(
+                                    host->activeAddress, host->activeHttpsPort,
+                                    identity->getCertificate(), identity->getPrivateKey(), quitUid);
+                                QObject::connect(quitReply, &QNetworkReply::finished, quitReply,
+                                                 &QNetworkReply::deleteLater);
+                            }
+                            // The StreamSession is ephemeral (self-deletes once
+                            // streaming starts), so its own sessionEnded->quit()
+                            // handler is gone by the time the client disconnects —
+                            // this qApp lambda is the only surviving teardown owner.
+                            // Stop the shim FIRST (while the relay is alive) so
+                            // moonlight stops calling back before destruction (no
+                            // UAF), then stop + deleteLater. destroyed() frees the
+                            // signaling port and lets a deferred start() proceed.
+                            if (r->mediaEngine()) r->mediaEngine()->stopConnection();
+                            r->stop();
+                            r->deleteLater();
+                            if (g_ActiveRelay == r) {
+                                g_ActiveRelay = nullptr;
+                            }
+                        });
                 });
 
             // WebRTC Media Track mode: MediaTrackRelay tracking
@@ -3440,12 +3443,14 @@ int main(int argc, char* argv[])
                          host, quitUid]() {
                             qInfo() << "[main] MediaTrackRelay sessionEnded, relay=" << r;
                             authManager.setSessionStreaming(sessionToken, false);
-                            auto* identity = IdentityManager::get();
-                            auto* quitReply = computerManager.http()->quitAppAsync(
-                                host->activeAddress, host->activeHttpsPort,
-                                identity->getCertificate(), identity->getPrivateKey(), quitUid);
-                            QObject::connect(quitReply, &QNetworkReply::finished, quitReply,
-                                             &QNetworkReply::deleteLater);
+                            if (host->takesHostCancel()) {
+                                auto* identity = IdentityManager::get();
+                                auto* quitReply = computerManager.http()->quitAppAsync(
+                                    host->activeAddress, host->activeHttpsPort,
+                                    identity->getCertificate(), identity->getPrivateKey(), quitUid);
+                                QObject::connect(quitReply, &QNetworkReply::finished, quitReply,
+                                                 &QNetworkReply::deleteLater);
+                            }
                             // The StreamSession is ephemeral (self-deletes once
                             // streaming starts), so its own sessionEnded->quit()
                             // handler is gone by the time the client disconnects —
@@ -3870,12 +3875,14 @@ int main(int argc, char* argv[])
                         qInfo() << "[main] Stream ended — the app keeps running on the host "
                                    "for a later resume";
                         if (!siblingLive) computerManager.refreshRunningApp(hostUuidCopy);
+                    } else if (!siblingLive && !host->takesHostCancel()) {
+                        // The native host is not a GameStream server: there is
+                        // no /cancel to send, and its engine stopped with the
+                        // worker.
+                        dropPendingHostCancel(uid, hostUuidCopy);
+                        g_LiveSunshineUids.remove(uid);
                     } else if (!siblingLive) {
-                        // The native host is not a GameStream server and
-                        // keeps its immediate /cancel.
-                        const int graceMs = host->backendType == NativeHostBackend::typeName()
-                                                ? 0
-                                                : kHostCancelGraceMs;
+                        const int graceMs = kHostCancelGraceMs;
                         dropPendingHostCancel(uid, hostUuidCopy);
                         auto* timer = new QTimer(qApp);
                         timer->setSingleShot(true);
@@ -4387,6 +4394,13 @@ int main(int argc, char* argv[])
 
             // Sent here and now, so a /cancel still held for this browser is moot.
             dropPendingHostCancel(quitUniqueId, host->uuid);
+            if (!host->takesHostCancel()) {
+                // Stopping the worker above was the whole of it.
+                g_LiveSunshineUids.remove(quitUniqueId);
+                qInfo() << "[quit] EXIT — native host, no Sunshine /cancel";
+                respond(HttpResponse::json(QJsonObject{{"status", "quit"}}));
+                return;
+            }
             qInfo() << "[quit] Sending quitAppAsync to Sunshine ...";
             g_LiveSunshineUids.remove(quitUniqueId);
             auto* identity = IdentityManager::get();
@@ -4471,9 +4485,11 @@ int main(int argc, char* argv[])
             // trailing empty-uid /cancel sweeps a session this process never saw
             // (a previous run, a crash) — the case the button exists for.
             QStringList cancelQueue;
-            for (const QString& uid : g_LiveSunshineUids)
-                cancelQueue.append(uid);
-            cancelQueue.append(QString()); // unscoped sweep, always last
+            if (host->takesHostCancel()) {
+                for (const QString& uid : g_LiveSunshineUids)
+                    cancelQueue.append(uid);
+                cancelQueue.append(QString()); // unscoped sweep, always last
+            }
             g_LiveSunshineUids.clear();
             auto* identity = IdentityManager::get();
 
@@ -4704,7 +4720,7 @@ int main(int argc, char* argv[])
     // host — the app is shared — and held back for the grace: a guest that
     // went is usually one rung of its transport chain, or its codec fallback,
     // and the next join /resumes this uid (startPlayerStream drops it). The
-    // native host has no app to keep, and no grace.
+    // native host has no app to keep, and nothing to /cancel.
     auto cancelGuestHostSessionSoon = [&g_PendingHostCancels, &dropPendingHostCancel,
                                        &g_LiveSunshineUids, &computerManager, &anyOtherSlotLive,
                                        &appOutlivesStream, &g_Pool](
@@ -4721,9 +4737,13 @@ int main(int argc, char* argv[])
             computerManager.refreshRunningApp(boundHost);
             return;
         }
-        const int graceMs =
-            host->backendType == NativeHostBackend::typeName() ? 0 : kHostCancelGraceMs;
         dropPendingHostCancel(uid, boundHost);
+        // The native host has no GameStream server to /cancel.
+        if (!host->takesHostCancel()) {
+            g_LiveSunshineUids.remove(uid);
+            return;
+        }
+        const int graceMs = kHostCancelGraceMs;
         auto* timer = new QTimer(qApp);
         timer->setSingleShot(true);
         g_PendingHostCancels.insert(uid, {timer, boundHost});

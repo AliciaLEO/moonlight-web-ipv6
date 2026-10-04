@@ -79,6 +79,12 @@ public:
     // would offer a display that has since been unplugged.
     bool isNativeEngine() const { return backendType == QLatin1String("native"); }
 
+    // True when ending a stream on this host means sending it a GameStream
+    // /cancel. The native engine has no server to send one to — its address is
+    // empty — so the /cancel only ever came back "Host not found", and Stop
+    // answered the browser with a 502 for a stream that had ended cleanly.
+    bool takesHostCancel() const { return !isNativeEngine(); }
+
     // State management
     static PairState pairStateFromString(const QString& s);
     static QString pairStateToString(PairState ps);
