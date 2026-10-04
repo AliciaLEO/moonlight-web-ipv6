@@ -561,6 +561,45 @@ the Mac. Two passes only before the screen time Bruno granted ran out:
   rounds, on another Mac slot.
 
 
+### 04/10/2026 — POC Ultra U0.4: Steam Remote Play, and the browser's present path (session ex-3b)
+
+Steam Remote Play (client beta), host DualRTX streaming its primary screen,
+the RTX's (NVENC for HEVC); client the UM790Pro under Windows on 1 GbE (780M
+hardware decode, 1920×1080, automatic bitrate, quality modifier middle,
+4:4:4 off), 22:10-23:28 (`e93407a7`, `9e1b8899`, POC doc §6.5). Method,
+no camera (`scripts/bench/photon/`, `2e0a012b`): the host shows a full-screen
+window that flips black/white on each mouse press, streamed as a non-Steam
+game. The client injects a click at the stream window's centre and reads that
+pixel back from its own composed desktop (GDI) until it flips. The sample
+covers everything from the click's way up to the client's DWM composition,
+leaving out the panel's scan-out. 60 clicks per pass, none missed; raw samples
+in `bench-out/photon/*.json`.
+
+| Pass | Codec | Low Latency Networking | Median | p90 | Min - max |
+|---|---|---|---|---|---|
+| 1 | HEVC | off | 49.9 ms | 58.9 ms | 32.6 - 67.2 |
+| 2 | PyroWave | off | 42.7 ms | 59.0 ms | 32.7 - 66.6 |
+| 3 | HEVC | off | 57.9 ms | 66.6 ms | 40.6 - 91.7 |
+| 4 | PyroWave | off | 42.6 ms | 58.3 ms | 32.4 - 83.9 |
+| 5 | HEVC | on | 58.6 ms | 83.2 ms | 41.3 - 375.8 |
+| 6 | PyroWave | on | 49.7 ms | 59.1 ms | 32.9 - 92.3 |
+
+- **Steam's "Low Latency Networking" makes both codecs worse** on 1 GbE:
+  PyroWave +7 ms at the median; HEVC no better at the median, with a p90 of
+  83 ms and one 376 ms outlier.
+- PyroWave is steady from pass to pass (42.6-42.7 ms); Steam's HEVC moves by
+  8 ms (49.9 → 57.9).
+- **MoonlightWeb on the same pair, same tool** (23:22, `--dev` `ded56fc6`,
+  the RTX screen in Auto, 120 fps, tearing, Chrome; defaults `retrcut=3`,
+  `sctpburst=0`): median 58.2 ms, p90 75.0 ms (42-108), 60 of 60. A second pass
+  is void (58 of 60 missed): most likely the bench's `latency_flag_enabled`
+  overlay drew over the pixel read.
+- **The browser's present path**: MoonlightWeb's own click → flag on this pair
+  read 33-43 ms (U0.3, the flag read in the canvas at draw). Read on the
+  composed desktop it is 58 ms. The 15-25 ms between them are Chrome's
+  compositing and the DWM's, a leg the network and the codec do not touch and
+  a native client such as Steam does not have.
+
 ## 4. The model so far (04/10/2026)
 
 What the measurements support, in order of the path:
