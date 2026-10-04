@@ -477,6 +477,22 @@ Mac, Wi-Fi, 06:00-06:16, two alternated rounds, B the default:
   messages interleaved without I-DATA, which Chrome's dcsctp cannot
   reassemble).
 
+### 04/10/2026 — POC Ultra: the iPad under RE9 (from session 9b)
+
+Bruno's iPad, Safari, Wi-Fi, streaming the RTX's screen (NVENC) under RE9,
+19:17-19:36; the `--dev` `ded56fc6`, joined through stream.dev, so with
+`retrcut=3` and `sctpburst=0` as defaults (`24509762`, POC doc §6.3).
+- Network leg of the latency detail: 13.8 ms (50 fps), 19.5 ms (62 fps),
+  2.3 ms (26 fps). "Link queue": 11, 8, 3 ms. "Link freezes": 2 of 0.91 s,
+  2 of 0.51 s, then none.
+- **"Frames dropped (jitter)" 44-45 % at 50-62 fps against 2.7 % at 26 fps,
+  with "Frames lost (network)" at 0.00 % everywhere** (iPhone, 03/10:
+  38-47 %). The counter follows the received rate and the decoder (16-22 ms a
+  frame at 50-62 fps, 8 ms at 26), not a loss on the link. To check in the
+  counter's code.
+- Safari on the iPad reported a refresh of 32 to 51 Hz with Low Power Mode
+  off; Auto followed it (26 fps in pass 3) while the game presented ~65 fps.
+
 ## 4. The model so far (04/10/2026)
 
 What the measurements support, in order of the path:
