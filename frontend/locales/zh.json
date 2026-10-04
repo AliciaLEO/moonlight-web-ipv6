@@ -863,6 +863,7 @@
     "launch": {
         "launching": "正在启动 {{name}}…",
         "started": "{{name}} 已启动",
+        "vdGpuApart": "在本次串流之前打开的应用卡顿？请重新启动它：虚拟显示器由 {{display}} 绘制，而之前打开的应用仍在 {{apps}} 上运行。",
         "failed": "启动失败",
         "appGone": "“{{name}}” 已不在此主机上——列表已刷新",
         "timeout": "服务器无响应——已取消启动",

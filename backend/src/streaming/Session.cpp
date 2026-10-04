@@ -652,6 +652,8 @@ void StreamSession::onLaunchResult(bool ok, const BackendError& err, const Media
 
         NativeMediaEngine::StartParams nativeParams;
         nativeParams.displayId = media.nativeHost.displayId;
+        m_VirtualDisplayGpu = media.nativeHost.virtualDisplayGpu;
+        m_PreviousPrimaryGpu = media.nativeHost.previousPrimaryGpu;
         nativeParams.width = m_StreamWidth;
         nativeParams.height = m_StreamHeight;
         nativeParams.fps = m_StreamFps;
@@ -1199,6 +1201,13 @@ void StreamSession::onShimConnectionStarted()
     // less delay, whereas a GameStream host gets them over its own protocol
     // and keeps the browser's frame-coalesced cadence.
     result["native"] = qobject_cast<NativeMediaEngine*>(m_Engine) != nullptr;
+    // The virtual display drawn by another GPU than the display it replaced:
+    // apps opened before the stream stay there, and the browser suggests
+    // restarting one that stutters. Absent when the GPUs are the same.
+    if (!m_VirtualDisplayGpu.isEmpty()) {
+        result["vd_gpu_apart"] = QJsonObject{{QStringLiteral("display"), m_VirtualDisplayGpu},
+                                             {QStringLiteral("apps"), m_PreviousPrimaryGpu}};
+    }
     // Whether a lost frame is healed with a delta (NVENC reference
     // invalidation): the browser then keeps decoding through a gap and names
     // the frames it missed instead of discarding deltas until a keyframe.

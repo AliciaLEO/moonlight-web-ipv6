@@ -405,6 +405,10 @@ private:
     /// Explicitly requested transport that was stripped from the chain (see
     /// setTransportDropped). Empty when the chain honoured the request.
     QString m_TransportDropped;
+    /// The virtual display's GPU and the one its predecessor was drawn by,
+    /// when they differ (NativeHostMedia::virtualDisplayGpu) — for the browser.
+    QString m_VirtualDisplayGpu;
+    QString m_PreviousPrimaryGpu;
     /// Enable ICE-TCP candidates (true for *-tcp modes, false for *-udp modes).
     bool m_EnableIceTcp = false;
     bool m_LowAudio = false;

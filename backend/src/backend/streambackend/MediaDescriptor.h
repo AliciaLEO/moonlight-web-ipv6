@@ -85,6 +85,15 @@ struct NativeHostMedia
     /// the session then keeps one reference and heals a loss by a keyframe.
     /// True — the engine's own repairs — for every other client.
     bool refInvalidation = true;
+
+    /// "MoonlightWeb Virtual Display" only: the GPU that draws it, and the one
+    /// that drew the display it took the primary role from, when they differ.
+    /// An app started before the stream stays on the second, and every picture
+    /// it paints crosses to the first — seen 04/10/2026 on the UM790Pro: Steam
+    /// on the 780M, the virtual display on a GTX 1050, 130 ms per frame on
+    /// hover. Restarting the app moves it. Both empty when nothing differs.
+    QString virtualDisplayGpu;
+    QString previousPrimaryGpu;
 };
 
 struct MediaDescriptor

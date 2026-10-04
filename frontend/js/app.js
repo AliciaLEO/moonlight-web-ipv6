@@ -95,6 +95,7 @@ import * as iosAudioUnlock from './audio/iosAudioUnlock.js';
 import { init as i18nInit, applyDOM, t } from './i18n/i18n.js';
 import { escapeHtml } from './util/escapeHtml.js';
 import { IDENTITY_REFUSED } from './util/pairingCrypto.js';
+import { takeVdGpuApartNotice } from './util/vdGpuApartNotice.js';
 import {
     startTunnel,
     tunnelHostId,
@@ -2191,6 +2192,12 @@ const MoonlightApp = {
                 // Dismiss "Launching..." toast so only the current status is visible
                 await Toast.dismissAll();
                 Toast.success(t('launch.started', { name: app.name }));
+                // The virtual display drawn by another GPU than the apps
+                // opened before the stream — see util/vdGpuApartNotice.js.
+                const gpuApart = takeVdGpuApartNotice(result, host.uuid);
+                if (gpuApart) {
+                    Toast.info(t('launch.vdGpuApart', gpuApart), { durationMs: 12000 });
+                }
 
                 // ── Streaming overlay guard ────────────────────────────────
                 // Push a guard state so Back from streaming goes to Apps.

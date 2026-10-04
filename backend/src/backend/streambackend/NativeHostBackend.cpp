@@ -111,6 +111,38 @@ int displayOf(const mw::native::Capabilities& caps, int appId, QString* why)
     return -1;
 }
 
+/// The GPU that draws our virtual display (@p displayId) and the one that drew
+/// the display it took the primary role from, when they are not the same GPU;
+/// both left empty otherwise. Apps started before the stream render on the
+/// second (see NativeHostMedia::virtualDisplayGpu).
+void gpusApart(const mw::native::Capabilities& caps, int displayId, QString* virtualGpu,
+               QString* previousGpu)
+{
+    const QString previous =
+        AppSettings().virtualDisplay().value(QLatin1String("previous_primary")).toString();
+    if (previous.isEmpty()) return;
+    int oursGpu = -1;
+    int theirsGpu = -1;
+    for (const mw::native::DisplayInfo& display : caps.displays) {
+        if (display.id == displayId)
+            oursGpu = display.gpuId;
+        else if (QString::fromStdString(display.key).compare(previous, Qt::CaseInsensitive) == 0)
+            theirsGpu = display.gpuId;
+    }
+    if (oursGpu < 0 || theirsGpu < 0 || oursGpu == theirsGpu) return;
+    const auto nameOf = [&caps](int gpuId) {
+        for (const mw::native::GpuInfo& gpu : caps.gpus)
+            if (gpu.id == gpuId) return QString::fromStdString(gpu.name);
+        return QString();
+    };
+    *virtualGpu = nameOf(oursGpu);
+    *previousGpu = nameOf(theirsGpu);
+    if (virtualGpu->isEmpty() || previousGpu->isEmpty()) {
+        virtualGpu->clear();
+        previousGpu->clear();
+    }
+}
+
 NvApp virtualDisplayApp(const mw::native::Capabilities& caps)
 {
     NvApp app(kVirtualDisplayAppId, VirtualDisplay::displayName(), /*hdr=*/false);
@@ -437,6 +469,16 @@ void NativeHostBackend::launch(const QString& seatId, const LaunchRequest& req,
     media.nativeHost.hdrRequested = req.hdrEnabled;
     media.nativeHost.rideOutLoss = req.rideOutLoss;
     media.nativeHost.refInvalidation = req.refInvalidation;
+    if (req.appId == kVirtualDisplayAppId) {
+        gpusApart(caps, displayId, &media.nativeHost.virtualDisplayGpu,
+                  &media.nativeHost.previousPrimaryGpu);
+        if (!media.nativeHost.virtualDisplayGpu.isEmpty())
+            Logger::info(
+                QStringLiteral("NativeHostBackend: the virtual display is drawn by %1, "
+                               "the display it took over from by %2 — apps opened "
+                               "before the stream stay on the latter")
+                    .arg(media.nativeHost.virtualDisplayGpu, media.nativeHost.previousPrimaryGpu));
+    }
     cb(true, BackendError{}, media);
 }
 

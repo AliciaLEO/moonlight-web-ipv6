@@ -863,6 +863,7 @@
     "launch": {
         "launching": "Launching {{name}}...",
         "started": "{{name}} started",
+        "vdGpuApart": "An app opened before this stream stutters? Restart it: the virtual display is drawn by the {{display}}, and apps opened before it stay on the {{apps}}.",
         "failed": "Launch failed",
         "appGone": "“{{name}}” is no longer on this host — the list has been refreshed",
         "timeout": "Server not responding — launch cancelled",

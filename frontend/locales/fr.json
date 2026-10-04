@@ -863,6 +863,7 @@
     "launch": {
         "launching": "Lancement de {{name}}...",
         "started": "{{name}} démarré",
+        "vdGpuApart": "Une appli ouverte avant ce stream saccade ? Redémarrez-la : l'écran virtuel est dessiné par la {{display}}, et les applis ouvertes avant lui restent sur la {{apps}}.",
         "failed": "Échec du lancement",
         "appGone": "« {{name}} » n'est plus sur cet hôte — la liste a été actualisée",
         "timeout": "Le serveur ne répond pas — démarrage annulé",
