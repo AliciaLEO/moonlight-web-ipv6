@@ -31,6 +31,9 @@ add_library(mw-native-host STATIC
     # The HID passthrough's descriptor, rebuilt from WebHID's collections and
     # checked before the host creates anything. Pure as well, so tested anywhere.
     src/input/HidDescriptor.cpp
+    # The devices a session recreates from them, with their watchdog; the OS
+    # backend behind it is chosen below (uhid, the driver, or none).
+    src/input/HidPassthrough.cpp
 )
 
 # ── Platform backend selection ──────────────────────────────────────────────
@@ -425,6 +428,23 @@ target_include_directories(mw-native-host SYSTEM PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/vigem-client/include
 )
 
+# The HID passthrough's virtual devices (plan P2): uhid on Linux, the
+# "MoonlightWeb Virtual HID" driver on Windows through WinUHid's client library
+# (third_party/winuhid, MIT; the driver itself builds apart, drivers/vhid),
+# nothing on macOS.
+if(WIN32)
+    target_sources(mw-native-host PRIVATE
+        src/input/windows/VhidDevice.cpp
+        third_party/winuhid/WinUHid/WinUHid.cpp)
+    target_include_directories(mw-native-host SYSTEM PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party/winuhid/WinUHid)
+    target_compile_definitions(mw-native-host PRIVATE WINUHID_STATIC MOONLIGHTWEB_VHID)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(mw-native-host PRIVATE src/input/linux/UhidDevice.cpp)
+else()
+    target_sources(mw-native-host PRIVATE src/input/VirtualHid_none.cpp)
+endif()
+
 target_compile_features(mw-native-host PUBLIC cxx_std_17)
 
 # The top-level build turns CMAKE_AUTOMOC on globally. This module has no
@@ -501,6 +521,7 @@ if(MW_BUILD_TESTS)
         tests/test_bgra_to_i420.cpp
         tests/test_ds4_mapping.cpp
         tests/test_hid_descriptor.cpp
+        tests/test_hid_passthrough.cpp
         tests/test_stage_stats.cpp
         tests/test_frame_cadence.cpp
         tests/test_resample_cost.cpp

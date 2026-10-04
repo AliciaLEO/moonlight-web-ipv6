@@ -68,6 +68,7 @@ void run_openh264_tests();
 void run_bgra_to_i420_tests();
 void run_ds4_mapping_tests();
 void run_hid_descriptor_tests();
+void run_hid_passthrough_tests();
 void run_stage_stats_tests();
 void run_frame_cadence_tests();
 void run_resample_cost_tests();
@@ -153,6 +154,7 @@ int main(int argc, char** argv)
     RUN(bgra_to_i420);
     RUN(ds4_mapping);
     RUN(hid_descriptor);
+    RUN(hid_passthrough);
     RUN(stage_stats);
     RUN(frame_cadence);
     RUN(resample_cost);

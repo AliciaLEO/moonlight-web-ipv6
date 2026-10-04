@@ -33,6 +33,7 @@ $sdkX64 = Join-Path $pkgs "Microsoft.Windows.SDK.CPP.x64.$kit\c"
 $wdk = Join-Path $pkgs "Microsoft.Windows.WDK.x64.$kit\c"
 $winuhid = Resolve-Path (Join-Path $here '..\..\third_party\winuhid\WinUHid Driver')
 $engineSrc = Resolve-Path (Join-Path $here '..\..\src')
+$engineInclude = Resolve-Path (Join-Path $here '..\..\include')
 $out = Join-Path $here 'build'
 $obj = Join-Path $out "obj\$Configuration"
 $package = Join-Path $out 'package'
@@ -100,7 +101,7 @@ Run (Join-Path $sdkBin 'x64\tracewpp.exe') @(
 # ── Compile and link ─────────────────────────────────────────────────────────
 Step "cl ($Configuration)"
 $common = @('/nologo', '/c', '/W4', '/WX-', '/Zi', '/guard:cf', '/GS', '/Gy', '/Zc:wchar_t',
-    "/Fd$obj\\", "/Fo$obj\\", "/I$obj", "/I$winuhid", "/I$engineSrc",
+    "/Fd$obj\\", "/Fo$obj\\", "/I$obj", "/I$winuhid", "/I$engineSrc", "/I$engineInclude",
     '/DUNICODE', '/D_UNICODE', '/D_WINDLL', '/D_WIN64', '/D_AMD64_', '/DAMD64',
     '/DUMDF_VERSION_MAJOR=2', "/DUMDF_VERSION_MINOR=$($umdf.Split('.')[1])", '/DMOONLIGHTWEB_VHID',
     # From UMDF 2.15, WPP_INIT_TRACING takes the driver object and the registry path, as the WDK's

@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include "mw/native/HidPassthrough.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -48,72 +50,8 @@
 /// the H2 bench makes against the device's own.
 namespace mw::native::input::hid {
 
-/// HID unit systems, as the low nibble of the Unit item.
-enum class UnitSystem : uint8_t
-{
-    None = 0x0,
-    SiLinear = 0x1,
-    SiRotation = 0x2,
-    EnglishLinear = 0x3,
-    EnglishRotation = 0x4,
-    Vendor = 0xF,
-};
-
-/// One main item of a report, as WebHID's HIDReportItem shows it. Usages are
-/// extended: usage page in the high 16 bits, usage id in the low 16.
-struct ReportItem
-{
-    bool isAbsolute = true;
-    bool isArray = false;
-    bool isBufferedBytes = false;
-    bool isConstant = false;
-    bool isLinear = true;
-    bool isRange = false;
-    bool isVolatile = false;
-    bool hasNull = false;
-    bool hasPreferredState = true;
-    bool wrap = false;
-    std::vector<uint32_t> usages;
-    uint32_t usageMinimum = 0;
-    uint32_t usageMaximum = 0;
-    uint16_t reportSize = 0;
-    uint16_t reportCount = 0;
-    int8_t unitExponent = 0;
-    UnitSystem unitSystem = UnitSystem::None;
-    /// Length, mass, time, temperature, current, luminous intensity.
-    int8_t unitFactors[6] = {0, 0, 0, 0, 0, 0};
-    int32_t logicalMinimum = 0;
-    int32_t logicalMaximum = 0;
-    int32_t physicalMinimum = 0;
-    int32_t physicalMaximum = 0;
-};
-
-struct Report
-{
-    uint8_t reportId = 0;
-    std::vector<ReportItem> items;
-};
-
-/// HID collection types (Collection item data).
-enum CollectionType : uint8_t
-{
-    Physical = 0x00,
-    Application = 0x01,
-    Logical = 0x02,
-};
-
-/// WebHID's HIDCollectionInfo: the items directly inside the collection, by
-/// report and kind, then its child collections.
-struct Collection
-{
-    uint16_t usagePage = 0;
-    uint16_t usage = 0;
-    uint8_t type = Application;
-    std::vector<Collection> children;
-    std::vector<Report> inputReports;
-    std::vector<Report> outputReports;
-    std::vector<Report> featureReports;
-};
+// UnitSystem, ReportItem, Report, CollectionType and Collection: in the public
+// header, where the relay fills them from the page's message.
 
 enum class Kind : uint8_t
 {
@@ -213,5 +151,13 @@ constexpr size_t kMaxReportBytes = 1024;
 /// pointer); no keyboard, consumer or system-control usage anywhere; report
 /// ids all zero or all non-zero; sizes within the limits above.
 std::string validate(const std::vector<uint8_t>& descriptor);
+
+/// The input report `reportId` put back to rest, from the last one the device
+/// sent (id byte excluded): buttons and other one-bit inputs released, hats
+/// and any variable with a null state set to a value outside their logical
+/// range, everything else — axes, pedals, throttles, padding — as it was.
+/// Sent once after a silence, so a lost connection never leaves a button held.
+std::vector<uint8_t> restReport(const Parsed& p, uint8_t reportId,
+                                const std::vector<uint8_t>& last);
 
 } // namespace mw::native::input::hid

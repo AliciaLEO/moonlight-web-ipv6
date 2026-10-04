@@ -37,6 +37,7 @@ explicite, faute de quoi la propriété ci-dessus est perdue.
 | libpipewire-0.3 | MIT (Expat) — voir la note ci-dessous |
 | libsystemd (sd-bus) | **LGPL-2.1+** — exception bornée, voir ci-dessous |
 | ViGEmClient | BSD-3-Clause |
+| WinUHid (`third_party/winuhid` : bibliothèque cliente liée, pilote construit à part dans `drivers/vhid`) | MIT |
 | SDK Windows / Apple | Licence du SDK correspondant |
 
 ### Hors frontière : `tools/` (instruments de labo, jamais distribués)

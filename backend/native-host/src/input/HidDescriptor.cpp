@@ -530,6 +530,64 @@ size_t reportBytes(const Parsed& p, Kind kind, uint8_t reportId)
     return (bits + 7) / 8 + (ids ? 1 : 0);
 }
 
+namespace {
+
+// HID packs fields little-endian, least significant bit first.
+void setBits(std::vector<uint8_t>& r, uint32_t offset, uint32_t size, uint32_t value)
+{
+    for (uint32_t b = 0; b < size; ++b) {
+        const uint32_t bit = offset + b;
+        if (bit / 8 >= r.size()) return;
+        const uint8_t mask = static_cast<uint8_t>(1u << (bit % 8));
+        if ((value >> b) & 1u)
+            r[bit / 8] |= mask;
+        else
+            r[bit / 8] &= static_cast<uint8_t>(~mask);
+    }
+}
+
+} // namespace
+
+std::vector<uint8_t> restReport(const Parsed& p, uint8_t reportId, const std::vector<uint8_t>& last)
+{
+    std::vector<uint8_t> r = last;
+    for (const Field& f : p.fields) {
+        if (f.kind != Kind::Input || f.reportId != reportId || f.isConstant() || f.size == 0 ||
+            f.size > 32)
+            continue;
+        for (uint16_t k = 0; k < f.count; ++k) {
+            const uint32_t usage = f.range            ? std::min(f.usageMinimum + k, f.usageMaximum)
+                                   : f.usages.empty() ? 0
+                                   : k < f.usages.size() ? f.usages[k]
+                                                         : f.usages.back();
+            const uint32_t offset = f.bitOffset + static_cast<uint32_t>(k) * f.size;
+            const bool button = pageOf(usage) == 0x09;
+            if (!f.isVariable()) {
+                // An array of buttons selects none; any other array (vendor
+                // bytes, HID++) is left as it was.
+                if (button) setBits(r, offset, f.size, 0);
+                continue;
+            }
+            if (f.flags & 0x40) {
+                // Null state: the first value outside the logical range that the
+                // field can hold (a 4-bit hat of 0..7 rests at 8).
+                const int64_t above = static_cast<int64_t>(f.logicalMaximum) + 1;
+                const int64_t below = static_cast<int64_t>(f.logicalMinimum) - 1;
+                const bool isSigned = f.logicalMinimum < 0;
+                const int64_t hi =
+                    isSigned ? (int64_t{1} << (f.size - 1)) - 1 : (int64_t{1} << f.size) - 1;
+                const int64_t lo = isSigned ? -(int64_t{1} << (f.size - 1)) : 0;
+                const int64_t rest = above <= hi ? above : below >= lo ? below : f.logicalMinimum;
+                setBits(r, offset, f.size, static_cast<uint32_t>(rest));
+            } else if (button || f.size == 1) {
+                setBits(r, offset, f.size, 0);
+            }
+            // Axes, pedals, throttles: as they were.
+        }
+    }
+    return r;
+}
+
 std::string validate(const std::vector<uint8_t>& descriptor)
 {
     if (descriptor.empty()) return "empty descriptor";
