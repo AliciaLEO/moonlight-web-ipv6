@@ -20,7 +20,15 @@
   then each input report as it arrives, binary [slot][report id][seq u16][bytes].
   The host's answers (descriptor built, nodes made, requests from the OS, stats)
   show under the device. Requests from the host are shown, never sent to the
-  device: no output report reaches the real wheel from this page.
+  device: no output report from the host reaches the real wheel from this page.
+
+  "Retour de force" (plan P4.0) shows under a device with a Logitech HID++
+  interface (usage page 0xFF43): it finds feature 0x8123 (FORCE_FEEDBACK) through
+  the Root feature and reads its slots, rotation range and gain. The force buttons
+  each send one short, weak effect, only when clicked: the question is whether
+  the wheel takes HID++ force commands from Chrome while G HUB runs beside it.
+  Layout of 0x8123 as described in docs/design/hid-passthrough-study.md (P4.0):
+  [0xFF device][feature index][function << 4 | software id][params], big-endian.
 
   WebHID wants a secure context: serve the folder on the loopback
   (python -m http.server 39918 --bind 127.0.0.1) and open
@@ -53,6 +61,7 @@
   .bytes span.moved { background: #23462a; }
   input { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 6px; border: 1px solid #44505c;
           background: #0d0f11; color: #eee; }
+  .ffb { margin-top: 8px; padding-top: 8px; border-top: 1px solid #2f3a45; }
   #result { width: 100%; height: 220px; margin-top: 10px; background: #0d0f11; color: #cfe; border: 1px solid #333;
             font: 12px ui-monospace, Consolas, Menlo, monospace; display: none; }
 </style>
@@ -170,6 +179,7 @@ function newRecord(device) {
         gaps: [],
         total: 0,
         error: null,
+        ffb: device.collections.some((c) => c.usagePage === 0xff43) ? { log: [], index: 0, busy: false, pending: null } : null,
     };
 }
 
@@ -275,7 +285,128 @@ function hostView(rec) {
         + (req ? `<div class="mono muted">Demandes de l'hôte (non transmises) : ${req}</div>` : '');
 }
 
+// ── Retour de force HID++ (P4.0) ────────────────────────────────────────────
+const HIDPP_LONG = 0x11; // 19 bytes after the id
+const HIDPP_VERY_LONG = 0x12; // 63 bytes after the id
+const HIDPP_SWID = 0x01;
+const FEATURE_FFB = 0x8123;
+const HIDPP_ERRORS = ['', 'inconnue', 'arguments invalides', 'hors limites', 'matériel', 'non permise',
+    'index de fonction invalide', 'fonction invalide', 'occupé', 'non prise en charge'];
+
+function ffbLog(rec, line) {
+    const f = rec.ffb;
+    f.log.push(`${new Date().toLocaleTimeString()} ${line}`);
+    if (f.log.length > 12) f.log.shift();
+}
+
+// One HID++ 2.0 call: resolves with the reply's parameters, rejects on an error
+// reply or after 1 s. The wheel answers on the same report id, bytes 1 and 2
+// (feature index, function | swid) echoed; an error reply has 0xFF at byte 1.
+function hidpp(rec, featureIndex, fn, params = [], reportId = HIDPP_LONG) {
+    const size = reportId === HIDPP_VERY_LONG ? 63 : 19;
+    const data = new Uint8Array(size);
+    data[0] = 0xff;
+    data[1] = featureIndex;
+    data[2] = (fn << 4) | HIDPP_SWID;
+    data.set(params.slice(0, size - 3), 3);
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            rec.ffb.pending = null;
+            reject(new Error('pas de réponse en 1 s'));
+        }, 1000);
+        rec.ffb.pending = {
+            match(bytes) {
+                if (bytes[1] === featureIndex && bytes[2] === data[2]) return resolve(bytes.slice(3)), true;
+                if (bytes[1] === 0xff && bytes[2] === featureIndex && bytes[3] === data[2]) {
+                    return reject(new Error(`erreur HID++ ${bytes[4]} (${HIDPP_ERRORS[bytes[4]] || '?'})`)), true;
+                }
+                return false;
+            },
+            done() { clearTimeout(timer); rec.ffb.pending = null; },
+        };
+        rec.device.sendReport(reportId, data).catch((err) => {
+            rec.ffb.pending?.done();
+            reject(err);
+        });
+    }).finally(() => rec.ffb.pending?.done());
+}
+
+const be16 = (v) => [(v >> 8) & 0xff, v & 0xff];
+const u16 = (b, i) => (b[i] << 8) | b[i + 1];
+
+async function ffbRead(rec) {
+    const f = rec.ffb;
+    const root = await hidpp(rec, 0x00, 0, be16(FEATURE_FFB));
+    if (!root[0]) throw new Error('le volant n\'a pas la fonction 0x8123');
+    f.index = root[0];
+    const info = await hidpp(rec, f.index, 0);
+    f.slots = info[0];
+    const ap = await hidpp(rec, f.index, 5);
+    f.aperture = u16(ap, 0);
+    const gains = await hidpp(rec, f.index, 7);
+    f.gain = u16(gains, 0);
+    ffbLog(rec, `0x8123 à l'index ${f.index} · ${f.slots} emplacements · ${f.aperture}° · gain ${f.gain}`);
+}
+
+// Constant force, autostarted, for `ms` milliseconds. `level` is signed 16-bit;
+// which sign turns which way is one of the things this probe finds out.
+async function ffbConstant(rec, level, ms) {
+    const p = [0, 0x80 | 0x00, ...be16(ms), ...be16(0), ...be16(level & 0xffff), 0, 0, 0, 0, 0, 0];
+    const r = await hidpp(rec, rec.ffb.index, 2, p);
+    ffbLog(rec, `force ${level > 0 ? '+' : ''}${Math.round(level / 327.67)} % ${ms} ms → emplacement ${r[0]}`);
+}
+
+// Centring spring, autostarted, no end: coefficients and saturations from a
+// strength in 0..1. Kept in its slot until "Tout arrêter".
+async function ffbSpring(rec, strength) {
+    const k = Math.round(strength * 0x7fff);
+    const sat = Math.round(strength * 0x7fff) >> 1;
+    const p = [0, 0x80 | 0x06, ...be16(0), ...be16(0),
+        ...be16(sat), ...be16(k), ...be16(0), ...be16(0), ...be16(k), ...be16(sat)];
+    const r = await hidpp(rec, rec.ffb.index, 2, p, HIDPP_VERY_LONG);
+    ffbLog(rec, `ressort ${Math.round(strength * 100)} % → emplacement ${r[0]}`);
+}
+
+// Reset every effect, then a zero spring: the firmware's own centring survives
+// a reset, and the kernel driver frees the wheel the same way.
+async function ffbStop(rec) {
+    await hidpp(rec, rec.ffb.index, 1);
+    await hidpp(rec, rec.ffb.index, 2, [0, 0x80 | 0x06, ...new Array(16).fill(0)], HIDPP_VERY_LONG);
+    ffbLog(rec, 'tout arrêté (reset + ressort nul)');
+}
+
+async function ffbRun(rec, what) {
+    const f = rec.ffb;
+    if (f.busy) return;
+    f.busy = true;
+    try {
+        if (!f.index && what !== 'read') await ffbRead(rec);
+        if (what === 'read') await ffbRead(rec);
+        else if (what === 'left') await ffbConstant(rec, -0x1999, 500);
+        else if (what === 'right') await ffbConstant(rec, 0x1999, 500);
+        else if (what === 'spring') await ffbSpring(rec, 0.3);
+        else if (what === 'stop') await ffbStop(rec);
+    } catch (err) {
+        ffbLog(rec, `échec : ${String(err && err.message || err)}`);
+    } finally {
+        f.busy = false;
+        render();
+    }
+}
+
+function ffbView(rec) {
+    if (!rec.ffb) return '';
+    const btn = (what, label) => `<button data-ffb="${what}" data-dev="${rec.key}">${label}</button>`;
+    return `<div class="ffb"><b>Retour de force HID++ (P4.0)</b>
+        <span class="muted">Mains sur le volant : chaque bouton envoie un seul effet, faible (20 %) et court.</span>
+        <div class="bar">${btn('read', 'Lire 0x8123')}${btn('left', '← 20 % 0,5 s')}${btn('right', '20 % → 0,5 s')}${btn('spring', 'Ressort 30 %')}${btn('stop', 'Tout arrêter')}</div>
+        <div class="mono muted">${rec.ffb.log.join('<br>') || 'Rien envoyé.'}</div></div>`;
+}
+
 function onReport(rec, e) {
+    if (rec.ffb?.pending && (e.reportId === HIDPP_LONG || e.reportId === HIDPP_VERY_LONG)) {
+        rec.ffb.pending.match(new Uint8Array(e.data.buffer, e.data.byteOffset, e.data.byteLength));
+    }
     const now = e.timeStamp || performance.now();
     if (rec.lastAt !== null) {
         rec.gaps.push(now - rec.lastAt);
@@ -391,6 +522,7 @@ function render() {
             <div class="mono">${s.reportsPerSec} rapports/s · écart médian ${s.gapMs.median ?? '–'} ms · p95 ${s.gapMs.p95 ?? '–'} ms · max ${s.gapMs.max ?? '–'} ms · ${s.total} reçus</div>
             <table><tr><th>id</th><th>reçus</th><th>octets</th><th>derniers octets (vert = a bougé)</th></tr>${rows || '<tr><td colspan="4" class="muted">Bougez un manche ou appuyez sur un bouton.</td></tr>'}</table>
             ${hostView(rec)}
+            ${ffbView(rec)}
         </div>`);
     }
     host.innerHTML = parts.join('') || '<div class="muted">Aucun appareil ouvert.</div>';
@@ -445,6 +577,14 @@ $('copy').addEventListener('click', async () => {
 });
 
 $('reset').addEventListener('click', () => { resetCounters(); render(); });
+// pointerdown, not click: render() rebuilds the cards four times a second, and a
+// click whose press and release land on two generations of a button is lost.
+$('devices').addEventListener('pointerdown', (ev) => {
+    const b = ev.target.closest('button[data-ffb]');
+    if (!b) return;
+    const rec = Array.from(state.devices.values()).find((r) => r.key === b.dataset.dev && r.ffb);
+    if (rec) ffbRun(rec, b.dataset.ffb);
+});
 $('send').addEventListener('click', connectHost);
 try { $('host').value = localStorage.getItem('hidProbeHost') || ''; } catch { /* private window */ }
 
