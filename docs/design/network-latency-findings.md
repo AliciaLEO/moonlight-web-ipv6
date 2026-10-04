@@ -493,6 +493,49 @@ Bruno's iPad, Safari, Wi-Fi, streaming the RTX's screen (NVENC) under RE9,
 - Safari on the iPad reported a refresh of 32 to 51 Hz with Low Power Mode
   off; Auto followed it (26 fps in pass 3) while the game presented ~65 fps.
 
+### 04/10/2026 — B and W2.5 on the Linux native host (UM790Pro)
+
+Host: the UM790Pro under Ubuntu 24.04, X11 session (the click's flag is X11
+only on Linux), DEV `6ab77b3f` LAN only, KMS capture 1920×1080 at 60 Hz, the
+bench page on its screen. Driven from DualRTX by `series.py --host um790pro`
+(`8fd33518`, `1231e818`): the band is not read on a remote host. Two
+alternated rounds per arm; Linux's own defaults: no retrcut, burst 10.
+
+Without clicks (19:45-20:36; the `input` group was not yet granted):
+
+| Client | Arm | Frame age med / p90 | `inSctp` all frames | Messages med | Retr. |
+|---|---|---|---|---|---|
+| N95, Wi-Fi | base | 18.4 / 23.9, 18.8 / 23.3 | 9.3 / 9.7 ms | 4.4-5.0 | 0-0.02 % |
+| | `retrcut=3` | 17.8 / 22.3, 18.7 / 23.0 | 9.1 / 9.8 ms | 4.4-5.0 | 0 % |
+| | `sctpburst=0` | 13.3 / 17.6, 11.9 / 15.8 | 2.9 / 2.5 ms | 3.2 | 0.03-0.12 % |
+| | both | 13.1 / 17.6, 13.2 / 17.4 | 3.1 / 3.2 ms | 3.3 | 0.01-0.13 % |
+| DualRTX Chrome, wired | base | 17.1 / 21.4, 21.0 / 35.5 | | 4.2, 8.3 | 0-0.01 % |
+| | `retrcut=3` | 17.3 / 21.2, 21.6 / 37.9 | | 5.2, 8.7 | 0 % |
+| | `sctpburst=0` | 11.9 / 18.1, 13.3 / 19.0 | | 3.3, 7.4 | 0-0.03 % |
+| | both | 12.5 / 17.8, 12.9 / 18.5 | | 3.8, 7.5 | 0-0.01 % |
+
+With clicks (20:38-21:01; bruno added to `input` for the series, removed after):
+
+| Client | Arm | Click (p90) | `net` / `inSctp` of the flag | Frame age med |
+|---|---|---|---|---|
+| N95, Wi-Fi | base | 63.6 / 65.6 ms (86 / 92) | 13.9 / 11.0 ms | 20.6 / 21.0 |
+| | `sctpburst=0` | 58.7 / 58.8 ms (80 / 81) | 6.1 / 2.6 ms | 14.4 / 14.7 |
+| DualRTX Chrome, wired | base | 86.5 / 87.2 ms (126 / 107) | 20.3 / 17.1 ms | 20.9 / 21.3 |
+| | `sctpburst=0` | 78.4 / 78.4 ms (111 / 101) | 10.9 / 7.9 ms | 13.5 / 12.8 |
+
+- **`sctpburst=0` gains on the Linux host too**: ~6.5 ms less inside usrsctp
+  per frame, a frame ~6 ms younger, the click 6-8 ms faster. A few more
+  retransmissions on the N95 (to ~0.1 %) and, in one set, more frames
+  dropped (71 → 128 a minute).
+- **`retrcut=3` changes nothing there**: this link barely retransmits
+  (0-0.1 %), unlike the Windows host to the Mac's Wi-Fi.
+- On this host ~37 ms pass between the flag going up and the capture that
+  shows it (`toCap`: KMS at 60 Hz plus the X11 flag window), against 3-4 ms on
+  the Windows host: the largest share of a Linux click, and not the network.
+- The wired client here is DualRTX's Chrome through its Hyper-V switch (2-3 ms
+  with spikes to 25 ms to the UM790Pro): its clicks are slower than the N95's,
+  so it only counts against its own base.
+
 ## 4. The model so far (04/10/2026)
 
 What the measurements support, in order of the path:
