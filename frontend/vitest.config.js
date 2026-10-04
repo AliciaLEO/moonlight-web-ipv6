@@ -60,6 +60,7 @@ export default defineConfig({
                 'js/hid/hidWire.js',
                 'js/hid/HidPassthrough.js',
                 'js/hid/hidppFfb.js',
+                'js/hid/pidFfb.js',
                 'js/ui/Toast.js',
                 'js/ui/RemoteNav.js',
             ],

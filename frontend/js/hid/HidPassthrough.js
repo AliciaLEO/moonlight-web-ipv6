@@ -17,6 +17,7 @@ import {
     isGameDevice,
 } from './hidWire.js';
 import { HidppFfbPlayer, HidppTransport, findFfbFeature, hasHidpp } from './hidppFfb.js';
+import { PidFfbPlayer, hasNativePid } from './pidFfb.js';
 
 /**
  * The HID passthrough in the stream (plan « Passthrough HID », P2): the game
@@ -35,9 +36,11 @@ import { HidppFfbPlayer, HidppTransport, findFfbFeature, hasHidpp } from './hidp
  * Force feedback (P4) takes its own road, and only when the host says it can
  * (`hidcaps.ffb`): the host decodes what the game asks of the recreated wheel
  * into neutral operations (`hidffb`), and this page plays them through a
- * driver of its own for the real wheel's protocol — Logitech's HID++ 0x8123
- * for now (hidppFfb.js). The host never writes raw bytes to the wheel. When
- * the device stops being sent, the wheel is reset and left free.
+ * driver of its own for the real wheel's protocol: Logitech's HID++ 0x8123
+ * (hidppFfb.js), or the wheel's own USB PID reports for the wheels that
+ * speak PID (pidFfb.js: Moza, Simucube, Fanatec…). The host never writes raw
+ * bytes to the wheel. When the device stops being sent, the wheel is reset
+ * and left free.
  */
 
 export const FORWARD_KEY = 'mw_hid_forward';
@@ -278,21 +281,28 @@ export class HidPassthrough {
     }
 
     // A wheel whose motor this page can drive, when the host takes force
-    // feedback: its transport and feature index, or null.
+    // feedback: how to make its player and what to close after it, or null.
     async _probeFfb(device) {
-        if (!this._caps?.ffb || !hasHidpp(device)) return null;
-        const transport = new HidppTransport(device);
-        const index = await findFfbFeature(transport);
-        if (!index) {
+        if (!this._caps?.ffb) return null;
+        if (hasHidpp(device)) {
+            const transport = new HidppTransport(device);
+            const index = await findFfbFeature(transport);
+            if (index)
+                return {
+                    make: (o) => new HidppFfbPlayer(transport, index, o),
+                    close: () => transport.close(),
+                    player: null,
+                };
             transport.close();
-            return null;
         }
-        return { transport, index, player: null };
+        if (hasNativePid(device))
+            return { make: (o) => new PidFfbPlayer(device, o), close: () => {}, player: null };
+        return null;
     }
 
     _startFfb(e) {
         const f = e.ffb;
-        f.player = new HidppFfbPlayer(f.transport, f.index, {
+        f.player = f.make({
             onError: (err) => console.warn('[HID] force feedback:', err?.message || err),
         });
         f.player
@@ -307,7 +317,7 @@ export class HidPassthrough {
             const f = e.ffb;
             e.ffb = null;
             // Reset and freed before the transport goes: never a force left on.
-            (f.player ? f.player.close() : Promise.resolve()).finally(() => f.transport.close());
+            (f.player ? f.player.close() : Promise.resolve()).finally(() => f.close());
         }
         if (e.slot >= 0) this._pump.forget(e.slot);
         e.slot = -1;
