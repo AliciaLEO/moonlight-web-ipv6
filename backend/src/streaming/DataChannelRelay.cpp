@@ -802,7 +802,7 @@ void applySctpSettings(int bitrateKbps, int congestionModule, int bufferKb, int 
         qWarning() << "[DataChannelRelay] SCTP bench override: congestion control"
                    << kModules[congestionModule & 3];
     }
-    // `sctpburst=` (plan Wi-Fi W2.5), the Windows native host's own unless
+    // `sctpburst=` (plan Wi-Fi W2.5), the Windows and Linux native hosts' own unless
     // said: how many packets usrsctp sends at one opportunity.
     // libdatachannel holds it at 10; a frame of 20 to 35 packets then waits 2
     // to 4 SACK round trips, and a round trip is 8-9 ms on a Mac in Wi-Fi

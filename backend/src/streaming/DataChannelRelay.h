@@ -379,9 +379,10 @@ private:
     int m_SctpMaxBurst = -1;
     // The native host's own max burst when `sctpburst=` is not said: no limit
     // on Windows (decided on 04/10/2026, plan Wi-Fi W2.5: the click of a Mac
-    // in Wi-Fi 66.9 -> 58.5 ms, p90 98 -> 69); libdatachannel's 10 elsewhere,
-    // where it was never measured.
-#ifdef _WIN32
+    // in Wi-Fi 66.9 -> 58.5 ms, p90 98 -> 69) and on Linux (decided the same
+    // night: the UM790Pro to an N95 in Wi-Fi 64.6 -> 58.8 ms, wired 86.9 ->
+    // 78.4); libdatachannel's 10 on macOS, not yet measured there.
+#if defined(_WIN32) || defined(__linux__)
     static constexpr int kNativeSctpMaxBurst = 0;
 #else
     static constexpr int kNativeSctpMaxBurst = -1;
