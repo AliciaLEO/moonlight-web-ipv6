@@ -145,8 +145,17 @@ class Driver:
             set(document.getElementById('login-pin-input'), %s);
             const k = document.getElementById('login-remember');
             if (k && !k.checked) k.click();
-            const b = [...document.querySelectorAll('button')].find(e => e.textContent.trim() === 'Unlock');
+            // The PIN form's own submit button, whatever the page's language:
+            // a client in French shows "Déverrouiller", and matching "Unlock"
+            // left every pass after the session expired on the PIN page
+            // (04/10/2026, the N95 against the Mac).
+            const input = document.getElementById('login-pin-input');
+            const form = input && input.closest('form');
+            const b = (form && form.querySelector('button[type=submit], button:not([type])')) ||
+                [...document.querySelectorAll('button')].find(e =>
+                    /^(unlock|déverrouiller)$/i.test(e.textContent.trim()));
             if (b) b.click();
+            else if (form) form.requestSubmit();
             return 'submitted';
         })()""" % (json.dumps(machine_name), json.dumps(pin)))
         time.sleep(8)
