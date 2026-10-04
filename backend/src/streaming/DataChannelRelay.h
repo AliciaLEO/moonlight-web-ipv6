@@ -374,8 +374,18 @@ private:
     int m_SctpBufferKb = 0;
     int m_LinkHoldMs = 0;
     // `sctpburst=` (plan Wi-Fi W2.5): usrsctp's max burst, in packets; 0 no
-    // limit, -1 libdatachannel's 10. Set at setup.
+    // limit, -1 libdatachannel's 10. Set at setup, by setLinkBench, which the
+    // native host's sessions always call.
     int m_SctpMaxBurst = -1;
+    // The native host's own max burst when `sctpburst=` is not said: no limit
+    // on Windows (decided on 04/10/2026, plan Wi-Fi W2.5: the click of a Mac
+    // in Wi-Fi 66.9 -> 58.5 ms, p90 98 -> 69); libdatachannel's 10 elsewhere,
+    // where it was never measured.
+#ifdef _WIN32
+    static constexpr int kNativeSctpMaxBurst = 0;
+#else
+    static constexpr int kNativeSctpMaxBurst = -1;
+#endif
     // `sctpss=` (plan Wi-Fi W2.3): usrsctp's stream scheduler, -1 its own.
     int m_SctpScheduler = -1;
     // usrsctp's counters at the last link report, for the share of chunks

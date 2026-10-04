@@ -791,15 +791,16 @@ void applySctpSettings(int bitrateKbps, int congestionModule, int bufferKb, int 
         qWarning() << "[DataChannelRelay] SCTP bench override: congestion control"
                    << kModules[congestionModule & 3];
     }
-    // The bench's `sctpburst=` (plan Wi-Fi W2.5): how many packets usrsctp
-    // sends at one opportunity. libdatachannel holds it at 10; a frame of 20
-    // to 35 packets then waits 2 to 4 SACK round trips, and a round trip is
-    // 8-9 ms on a Mac in Wi-Fi against 3-4 on Ethernet.
+    // `sctpburst=` (plan Wi-Fi W2.5), the Windows native host's own unless
+    // said: how many packets usrsctp sends at one opportunity.
+    // libdatachannel holds it at 10; a frame of 20 to 35 packets then waits 2
+    // to 4 SACK round trips, and a round trip is 8-9 ms on a Mac in Wi-Fi
+    // against 3-4 on Ethernet.
     if (maxBurst >= 0) {
         settings.maxBurst = static_cast<size_t>(maxBurst);
-        qWarning() << "[DataChannelRelay] SCTP bench override (sctpburst=): max burst"
-                   << (maxBurst > 0 ? QString::number(maxBurst) + " packets"
-                                    : QStringLiteral("off"));
+        qInfo() << "[DataChannelRelay] SCTP max burst:"
+                << (maxBurst > 0 ? QString::number(maxBurst) + " packets"
+                                 : QStringLiteral("no limit"));
     }
     rtc::SetSctpSettings(settings);
     if (bufferKb > 0)
@@ -826,7 +827,7 @@ void DataChannelRelay::setLinkBench(const mw::native::EncoderTuning& tuning)
     m_PaceBurstKb = tuning.paceBurstKb;
     m_SctpBufferKb = tuning.sctpBufferKb;
     m_LinkHoldMs = tuning.linkHoldMs;
-    m_SctpMaxBurst = tuning.sctpMaxBurst;
+    m_SctpMaxBurst = tuning.sctpMaxBurst >= 0 ? tuning.sctpMaxBurst : kNativeSctpMaxBurst;
     m_SctpScheduler = tuning.sctpScheduler;
     if (tuning.relayLog && !m_FrameLog) {
         m_FrameLog = std::make_unique<RelayFrameLog>();

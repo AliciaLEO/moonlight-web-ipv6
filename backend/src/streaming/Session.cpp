@@ -909,14 +909,17 @@ void StreamSession::onLaunchResult(bool ok, const BackendError& err, const Media
         // The bench's link keys (loss=, sctpcc=, flood= — plan Idées Punktfunk,
         // A0), read here rather than by the engine: the SCTP settings apply to
         // the association prepare() is about to make, before the engine starts.
-        // A bad spec is the engine's to report; here it only means none.
+        // A bad spec is the engine's to report; here it only means none. Said
+        // or not, the native host's link defaults go the same way (usrsctp's
+        // max burst, plan Wi-Fi W2.5): the relay is always told.
         if (media.type == MediaType::NativeHost) {
             const QString spec = effectiveTuningSpec(m_NativeTuning);
             mw::native::EncoderTuning tuning;
             int gpu = -1;
             QString error;
-            if (!spec.isEmpty() && parseEncoderTuningSpec(spec, tuning, gpu, error))
-                relay->setLinkBench(tuning);
+            if (!spec.isEmpty() && !parseEncoderTuningSpec(spec, tuning, gpu, error))
+                tuning = mw::native::EncoderTuning{};
+            relay->setLinkBench(tuning);
         }
 
         // SignalingServer: WebSocket for SDP/ICE exchange only.
