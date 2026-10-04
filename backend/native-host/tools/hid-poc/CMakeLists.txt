@@ -30,8 +30,12 @@ set(MW_HID_POC_SOURCES
     src/WebHidJson.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../src/input/HidDescriptor.cpp
 )
+set(MW_WINUHID ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/winuhid)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     list(APPEND MW_HID_POC_SOURCES src/VirtualHid_linux.cpp)
+elseif(WIN32)
+    # The driver of P1 (drivers/vhid), through WinUHid's client library built in.
+    list(APPEND MW_HID_POC_SOURCES src/VirtualHid_windows.cpp "${MW_WINUHID}/WinUHid/WinUHid.cpp")
 else()
     list(APPEND MW_HID_POC_SOURCES src/VirtualHid_none.cpp)
 endif()
@@ -41,3 +45,7 @@ set_target_properties(mw-hid-poc PROPERTIES AUTOMOC ON AUTOUIC OFF AUTORCC OFF)
 target_compile_features(mw-hid-poc PRIVATE cxx_std_17)
 target_include_directories(mw-hid-poc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../src)
 target_link_libraries(mw-hid-poc PRIVATE Qt6::Core Qt6::WebSockets)
+if(WIN32)
+    target_include_directories(mw-hid-poc PRIVATE "${MW_WINUHID}/WinUHid")
+    target_compile_definitions(mw-hid-poc PRIVATE WINUHID_STATIC MOONLIGHTWEB_VHID)
+endif()
