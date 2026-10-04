@@ -178,18 +178,26 @@ def start_load(gpu, name, level=None):
 
 
 def keep_off_content(pid):
-    """Move @p pid's windows that overlap MW_BENCH_CONTENT_RECT onto the
-    primary screen, still topmost (a hidden load window stops rendering)."""
+    """Move @p pid's windows that overlap MW_BENCH_CONTENT_RECT onto a screen
+    that does not, still topmost (a hidden load window stops rendering). Not
+    "the primary": while it streams, the product's virtual display can be the
+    primary screen itself (U0.3, 04/10/2026: the load sat on the content)."""
     import ctypes
     from ctypes import wintypes
     rect = os.environ.get("MW_BENCH_CONTENT_RECT")
     if not rect:
         return []
     x, y, w, h = (int(v) for v in rect.split(","))
-    prim = next((m for m in monitors() if "primary" in m), None)
-    if not prim:
+    def apart(m):
+        mx, my = (int(v) for v in m[1].split(","))
+        mw, mh = (int(v) for v in m[2].split("x"))
+        return mx >= x + w or mx + mw <= x or my >= y + h or my + mh <= y
+
+    other = next((m for m in monitors() if len(m) > 2 and apart(m)), None)
+    if not other:
+        print("  no screen apart from the content for the load window", flush=True)
         return []
-    px, py = (int(v) for v in prim[1].split(","))
+    px, py = (int(v) for v in other[1].split(","))
     user32 = ctypes.windll.user32
     found = []
 
