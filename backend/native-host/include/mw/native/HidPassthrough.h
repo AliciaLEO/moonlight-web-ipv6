@@ -151,7 +151,9 @@ struct HidRequest
 /// milliseconds; angles in hundredths of a degree.
 ///  - "effect": an effect's header; `kind` is constant, ramp, square, sine,
 ///    triangle, sawtoothUp, sawtoothDown, spring, damper, inertia or friction;
-///    fields duration (-1 = infinite), delay, gain (0..255), direction;
+///    fields duration (-1 = infinite), delay, gain (0..255), direction,
+///    directionEnable (0: apply along the enabled axes as is), axes (bit 0 X,
+///    bit 1 Y);
 ///  - "envelope": attackLevel, attackTime, fadeLevel, fadeTime;
 ///  - "condition": axis, offset, positiveCoefficient, negativeCoefficient,
 ///    positiveSaturation, negativeSaturation, deadBand;

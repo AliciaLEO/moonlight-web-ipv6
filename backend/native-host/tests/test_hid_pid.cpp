@@ -273,6 +273,8 @@ void run_hid_pid_tests()
         w.set(se, Kind::Output, P(0xA7), 20);
         w.set(se, Kind::Output, P(0x52), 255);
         w.set(se, Kind::Output, 0x000A0001, 9000); // 90°
+        w.set(se, Kind::Output, 0x00010030, 1);    // X enabled
+        w.set(se, Kind::Output, P(0x56), 1);
         e.write(se, ops);
 
         std::vector<uint8_t> cf = w.report(Kind::Output, 19 + 4);
@@ -295,6 +297,8 @@ void run_hid_pid_tests()
             CHECK_EQ(field(*effect, "delay"), 20);
             CHECK_EQ(field(*effect, "gain"), 255);
             CHECK_EQ(field(*effect, "direction"), 9000);
+            CHECK_EQ(field(*effect, "directionEnable"), 1);
+            CHECK_EQ(field(*effect, "axes"), 1);
         }
         const HidFfb* constant = find(ops, "constant");
         CHECK(constant != nullptr);

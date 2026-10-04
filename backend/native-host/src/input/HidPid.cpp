@@ -652,7 +652,10 @@ void PidEngine::write(const std::vector<uint8_t>& data, std::vector<HidFfb>& ops
         o.fields = {{"duration", duration == 0xFFFF ? -1 : duration},
                     {"delay", get(uStartDelay)},
                     {"gain", get(uGain)},
-                    {"direction", read(body, out, id, (kPageOrdinal << 16) | 0x01)}};
+                    {"direction", read(body, out, id, (kPageOrdinal << 16) | 0x01)},
+                    {"directionEnable", get(uDirectionEnable)},
+                    {"axes", read(body, out, id, (kPageDesktop << 16) | 0x30) |
+                                 (read(body, out, id, (kPageDesktop << 16) | 0x31) << 1)}};
         break;
     }
     case rSetEnvelope: {
