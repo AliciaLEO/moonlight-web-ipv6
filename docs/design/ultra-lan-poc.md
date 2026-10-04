@@ -554,8 +554,14 @@ lui-même. 60 clics par passe, aucun manqué ; résultats dans
 | 5 | HEVC | oui | 58,6 ms | 83,2 ms | 41,3 - 375,8 |
 | 6 | PyroWave | oui | 49,7 ms | 59,1 ms | 32,9 - 92,3 |
 
-- **PyroWave natif bat le HEVC de Steam de 7 à 15 ms en médiane sur la RTX**
-  (42,6-42,7 contre 49,9-57,9 ms). Il est très stable d'une passe à l'autre,
+- ⚠️ **Correction (05/10, 00:10)** : de 22:40 à 23:00, un Chrome de banc de la
+  session Wi-Fi tournait sur DualRTX, avec la RTX et DISPLAY5, l'écran
+  streamé ; il était lancé là par un défaut de son outil, corrigé par `09df1c3c`.
+  La passe 1 (HEVC, finie à 22:56) en est entachée. Toutes les autres passes
+  ont tourné après 23:00.
+- **PyroWave natif bat le HEVC de Steam de 15 ms en médiane sur la RTX, en ne
+  gardant que les passes propres** : 42,6-42,7 ms contre 57,9 ms (58,6 avec Low
+  Latency Networking). Avec la passe 1 entachée, l'écart était de 7 à 15 ms. Il est très stable d'une passe à l'autre,
   là où le HEVC varie de 8 ms. Les p90 sont proches (58-59 contre 59-67 ms).
   **La porte de U0.4 (au moins 2 ms sur NVIDIA) est franchie** : le POC ne se
   resserre pas sur les hôtes à iGPU.
@@ -566,10 +572,10 @@ lui-même. 60 clics par passe, aucun manqué ; résultats dans
   `ded56fc6`, écran de la RTX streamé en « Auto », 120 i/s, tearing, Chrome
   sur l'UM790Pro) : médiane 58,2 ms, p90 75,0 ms (42 à 108), 60 clics sur 60.
   C'est au niveau du HEVC de Steam (49,9-57,9), 15 ms derrière son PyroWave.
-  Une 2e passe est invalide (58 clics manqués sur 60). Cause probable : le
-  drapeau de latence de la `--dev` (`latency_flag_enabled`) s'affiche au point
-  même du clic, au centre de l'écran de l'hôte, et masque le pixel lu. À
-  refaire avec ce drapeau coupé.
+  Une 2e passe est invalide (58 clics manqués sur 60, 23:26:40-23:27:41). Le
+  Chrome de banc de la session Wi-Fi a redémarré sur DISPLAY5 à 23:27, en plein
+  écran sur l'écran streamé : c'est la cause la plus probable. Le drapeau de
+  latence de la `--dev` au point du clic est l'autre suspect.
 - **Les deux mesures de MoonlightWeb ne disent pas la même chose.** Son propre
   clic → drapeau donnait 33-43 ms sur ce couple (U0.3), parce qu'il lit le
   drapeau dans le canevas, au moment du dessin. `click-photon.ps1` lit le
@@ -614,8 +620,8 @@ client mobile, c'est le décodeur. En Ethernet, aucun poste ne dépasse 6 ms.
   passent dans la composition de Chrome et du DWM. Steam, client natif, n'a
   pas ce poste.
 
-**3. La borne Steam (U0.4, RTX).** PyroWave natif bat le HEVC de Steam de 7 à
-15 ms en médiane (42,6 contre 49,9-57,9 ms, §6.5). La porte de U0.4 est
+**3. La borne Steam (U0.4, RTX).** PyroWave natif bat le HEVC de Steam de 15 ms
+en médiane, sur les passes propres (42,6 contre 57,9 ms, §6.5). La porte de U0.4 est
 franchie.
 - Ce gain dépasse ce que le codec peut gagner seul : le modèle du §3 prédisait
   plutôt une légère perte sur NVIDIA, et l'encodage plus le décodage du HEVC ne
