@@ -445,9 +445,9 @@ de l'écran, là où forcer 120 i/s fait décrocher le lien.
 
 **Le budget d'un clic sur l'UM790Pro en Ethernet** (`flagpath.py`, médianes
 des 20 passes, en ms) : montée du clic 1,5-3, le drapeau dessiné sur l'hôte
-12-19 (la boucle de messages de l'overlay de banc, pas le produit), jusqu'à la
-capture 1-5, encodage 2-6, envoi 0,2, réseau 6-10, décodage 0,5-5, dessin
-3-6. Hors drapeau de banc, il reste environ 20 ms. Un codec intra ne peut
+12-16 (la boucle de messages de l'overlay de banc, pas le produit), jusqu'à la
+capture 1-5, encodage 2-6, envoi 0,2, réseau 6-10, décodage 0,4-5, dessin
+0,2-6. Hors drapeau de banc, il reste 20 à 27 ms. Un codec intra ne peut
 gagner que sur l'encodage et le décodage, soit 3 à 10 ms à se partager, et la
 cadence (déjà à 240 i/s) n'a plus de marge.
 
