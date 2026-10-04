@@ -502,8 +502,7 @@ par défaut depuis ce build, à dire en comparant aux passes d'avant)** :
   fenêtre, posée sur un écran physique, ne pèse plus pareil.
 
 **Reste avant la porte U0** : l'iPad et RE9 sur l'écran de la RTX (avec
-Bruno),
-les TV (U0.3 quater), la borne Steam (U0.4, si Bruno l'accepte) et le
+Bruno), les TV (U0.3 quater), la borne Steam (U0.4, si Bruno l'accepte) et le
 rapport U0.5.
 
 ## 7. Concrètement, pour l'utilisateur
