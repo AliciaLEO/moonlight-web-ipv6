@@ -185,6 +185,9 @@ fi
 udevadm control --reload-rules >/dev/null 2>&1 || true
 udevadm trigger --subsystem-match=misc --sysname-match=uinput >/dev/null 2>&1 || true
 modprobe uinput >/dev/null 2>&1 || true
+# The same for uhid, the HID passthrough's devices.
+udevadm trigger --subsystem-match=misc --sysname-match=uhid >/dev/null 2>&1 || true
+modprobe uhid >/dev/null 2>&1 || true
 
 # The stream's media block, the one production owns (empty in the DEV edition).
 MEDIA_RANGE=48550-48573

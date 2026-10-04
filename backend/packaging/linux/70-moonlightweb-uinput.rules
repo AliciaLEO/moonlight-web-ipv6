@@ -26,3 +26,10 @@
 # this machine that gains the right to create a pad; what a remote client can
 # do with it is decided by MoonlightWeb's own input policy, unchanged.
 KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="uaccess", MODE="0660", GROUP="input"
+#
+# /dev/uhid, for the HID passthrough: a wheel or a radio read by the browser
+# through WebHID is recreated here as itself (same reports, same ids), which
+# uinput cannot do. Same rights, same holders, same reasoning as uinput above;
+# the descriptor a client sends is checked by MoonlightWeb before anything is
+# created (game devices only: no keyboard, no mouse).
+KERNEL=="uhid", SUBSYSTEM=="misc", OPTIONS+="static_node=uhid", TAG+="uaccess", MODE="0660", GROUP="input"
