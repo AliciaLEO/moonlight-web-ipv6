@@ -26,6 +26,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 /// The HID passthrough (docs/design/hid-passthrough-study.md, plan P2): a game
@@ -123,6 +124,10 @@ struct HidDeviceInfo
     uint16_t productId = 0;
     uint16_t version = 0;
     std::vector<input::hid::Collection> collections;
+    /// The page can play force feedback on the real device (it found a way to
+    /// drive its motor, e.g. Logitech's HID++ 0x8123): the recreated device
+    /// gets a PID block, and what games ask of it comes back as HidFfb.
+    bool forceFeedback = false;
 };
 
 /// What the host's OS asked of a recreated device, for the page to pass on.
@@ -138,6 +143,31 @@ struct HidRequest
     Kind kind = Kind::Output;
     uint8_t reportId = 0;
     std::vector<uint8_t> data;
+};
+
+/// One force-feedback operation a game asked of a recreated device, decoded
+/// from the PID reports pid.dll wrote (input/HidPid.h), for the page to play on
+/// the real wheel. Levels use DirectInput's scale, -10000..10000; times are in
+/// milliseconds; angles in hundredths of a degree.
+///  - "effect": an effect's header; `kind` is constant, ramp, square, sine,
+///    triangle, sawtoothUp, sawtoothDown, spring, damper, inertia or friction;
+///    fields duration (-1 = infinite), delay, gain (0..255), direction;
+///  - "envelope": attackLevel, attackTime, fadeLevel, fadeTime;
+///  - "condition": axis, offset, positiveCoefficient, negativeCoefficient,
+///    positiveSaturation, negativeSaturation, deadBand;
+///  - "periodic": magnitude, offset, phase, period;
+///  - "constant": magnitude;  "ramp": start, end;
+///  - "start" (loops), "solo" (loops: stop the others first), "stop", "free";
+///  - "gain": gain (0..255, the device's master gain);
+///  - "control": `kind` enable, disable, stopAll, reset, pause or continue.
+/// `effect` is the effect block (1..40), 0 for gain and control.
+struct HidFfb
+{
+    int slot = 0;
+    std::string op;
+    int effect = 0;
+    std::string kind;
+    std::vector<std::pair<std::string, int32_t>> fields;
 };
 
 /// The devices one stream session recreates. Thread-safe: attach and detach
@@ -159,6 +189,7 @@ public:
     static constexpr int kSilenceMs = 3000;
 
     using RequestSink = std::function<void(const HidRequest&)>;
+    using FfbSink = std::function<void(const HidFfb&)>;
     using Factory = std::function<std::unique_ptr<input::IVirtualHid>()>;
     using Clock = std::function<int64_t()>; // milliseconds, monotonic
 
@@ -169,6 +200,10 @@ public:
     ~HidPassthrough();
     HidPassthrough(const HidPassthrough&) = delete;
     HidPassthrough& operator=(const HidPassthrough&) = delete;
+
+    /// Where force-feedback operations go; set before the first attach. Called
+    /// on a backend thread, outside this object's lock.
+    void setFfbSink(FfbSink sink) { m_onFfb = std::move(sink); }
 
     /// Empty when this host can recreate devices; why not otherwise.
     static std::string unavailableReason();
@@ -190,6 +225,7 @@ private:
     void watchdog();
 
     RequestSink m_onRequest;
+    FfbSink m_onFfb;
     Factory m_factory;
     Clock m_clock;
     std::mutex m_mutex;

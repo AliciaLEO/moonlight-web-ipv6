@@ -19,6 +19,7 @@
 
 #include "core/Log.h"
 #include "input/HidDescriptor.h"
+#include "input/HidPid.h"
 #include "input/VirtualHid.h"
 
 #include <chrono>
@@ -33,6 +34,14 @@ int64_t steadyMs()
     using namespace std::chrono;
     return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
+
+/// A device's PID block, shared with its backend's threads: pid.dll's requests
+/// arrive there, possibly before the slot is in the table.
+struct PidState
+{
+    std::mutex mutex;
+    std::unique_ptr<input::hid::PidEngine> engine;
+};
 
 } // namespace
 
@@ -74,7 +83,11 @@ std::string HidPassthrough::attach(int slot, const HidDeviceInfo& device)
 
     std::vector<input::hid::Collection> collections = device.collections;
     input::hid::repairBounds(collections);
-    const std::vector<uint8_t> descriptor = input::hid::encode(collections);
+    // Force feedback: a PID block after the device's own reports, when the
+    // page can play it and the device numbers its reports.
+    const uint8_t pidId = device.forceFeedback ? input::hid::pidFirstId(collections) : 0;
+    const std::vector<uint8_t> descriptor =
+        pidId ? input::hid::encodeWithPid(collections, pidId) : input::hid::encode(collections);
     if (std::string why = input::hid::validate(descriptor); !why.empty()) return why;
 
     std::unique_ptr<input::IVirtualHid> dev = m_factory ? m_factory() : input::makeVirtualHid();
@@ -87,9 +100,30 @@ std::string HidPassthrough::attach(int slot, const HidDeviceInfo& device)
         const size_t n = input::hid::reportBytes(s->parsed, input::hid::Kind::Input, id);
         if (n) s->inputBytes[id] = n - (s->numbered ? 1 : 0);
     }
-    dev->setRequestHandler([this, slot](input::IVirtualHid::Request kind, uint8_t reportId,
-                                        const std::vector<uint8_t>& data) {
-        if (!m_onRequest) return;
+    auto pid = std::make_shared<PidState>();
+    if (pidId) pid->engine = std::make_unique<input::hid::PidEngine>(s->parsed, pidId);
+    dev->setFeatureHandler([pid](uint8_t reportId) {
+        std::lock_guard<std::mutex> lock(pid->mutex);
+        return pid->engine ? pid->engine->getFeature(reportId) : std::vector<uint8_t>{};
+    });
+    dev->setRequestHandler([this, slot, pid](input::IVirtualHid::Request kind, uint8_t reportId,
+                                             const std::vector<uint8_t>& data) {
+        // The PID block's reports stay here: decoded into operations, or
+        // already answered by the feature handler.
+        std::vector<HidFfb> ops;
+        bool handled = false;
+        {
+            std::lock_guard<std::mutex> lock(pid->mutex);
+            if (pid->engine && pid->engine->owns(reportId)) {
+                if (kind != input::IVirtualHid::Request::GetFeature) pid->engine->write(data, ops);
+                handled = true;
+            }
+        }
+        for (HidFfb& op : ops) {
+            op.slot = slot;
+            if (m_onFfb) m_onFfb(op);
+        }
+        if (handled || !m_onRequest) return;
         HidRequest r;
         r.slot = slot;
         r.kind = kind == input::IVirtualHid::Request::Output       ? HidRequest::Kind::Output
@@ -120,7 +154,9 @@ std::string HidPassthrough::attach(int slot, const HidDeviceInfo& device)
     char ids[16];
     std::snprintf(ids, sizeof ids, "%04x:%04x", device.vendorId, device.productId);
     log::info("[hid] slot " + std::to_string(slot) + ": " + device.name + " " + ids +
-              " created, descriptor " + std::to_string(descriptor.size()) + " bytes");
+              " created, descriptor " + std::to_string(descriptor.size()) + " bytes" +
+              (pidId ? ", force feedback (PID reports from " + std::to_string(pidId) + ")"
+                     : std::string()));
     return {};
 }
 

@@ -50,7 +50,7 @@ public:
     enum class Request
     {
         Output,     // an output report written by an application
-        GetFeature, // answered at once with an error until P3 forwards it
+        GetFeature, // answered by the FeatureHandler, or with an error
         SetFeature, // acknowledged at once
     };
     /// Called on a backend thread, never under a lock the caller holds; data
@@ -67,10 +67,17 @@ public:
     /// Removes the device; also done by the destructor.
     virtual void destroy() = 0;
 
+    /// Answers a GET_FEATURE at once: the report, id first when the descriptor
+    /// numbers its reports, or empty to fail the request. Called on a backend
+    /// thread; the request handler still hears of the request afterwards.
+    using FeatureHandler = std::function<std::vector<uint8_t>(uint8_t reportId)>;
+
     void setRequestHandler(RequestHandler handler) { m_onRequest = std::move(handler); }
+    void setFeatureHandler(FeatureHandler handler) { m_onGetFeature = std::move(handler); }
 
 protected:
     RequestHandler m_onRequest;
+    FeatureHandler m_onGetFeature;
 };
 
 /// A backend for this OS, or null where there is none (macOS).

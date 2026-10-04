@@ -31,6 +31,7 @@ add_library(mw-native-host STATIC
     # The HID passthrough's descriptor, rebuilt from WebHID's collections and
     # checked before the host creates anything. Pure as well, so tested anywhere.
     src/input/HidDescriptor.cpp
+    src/input/HidPid.cpp
     # The devices a session recreates from them, with their watchdog; the OS
     # backend behind it is chosen below (uhid, the driver, or none).
     src/input/HidPassthrough.cpp
@@ -522,6 +523,7 @@ if(MW_BUILD_TESTS)
         tests/test_ds4_mapping.cpp
         tests/test_hid_descriptor.cpp
         tests/test_hid_passthrough.cpp
+        tests/test_hid_pid.cpp
         tests/test_stage_stats.cpp
         tests/test_frame_cadence.cpp
         tests/test_resample_cost.cpp

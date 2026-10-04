@@ -91,10 +91,15 @@ private:
                                   ev->ReportId, data);
             break;
         }
-        case WINUHID_EVENT_GET_FEATURE:
-            WinUHidCompleteReadEvent(device, ev, nullptr, 0);
+        case WINUHID_EVENT_GET_FEATURE: {
+            // VHF hands the report buffer id byte first, as HidD_GetFeature does.
+            std::vector<uint8_t> answer;
+            if (self->m_onGetFeature) answer = self->m_onGetFeature(ev->ReportId);
+            WinUHidCompleteReadEvent(device, ev, answer.empty() ? nullptr : answer.data(),
+                                     static_cast<DWORD>(answer.size()));
             if (self->m_onRequest) self->m_onRequest(Request::GetFeature, ev->ReportId, {});
             break;
+        }
         default: break;
         }
     }
