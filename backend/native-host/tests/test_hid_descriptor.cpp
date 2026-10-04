@@ -323,6 +323,57 @@ void run_hid_descriptor_tests()
         CHECK(!validate(encode(hiding)).empty());
     }
 
+    SECTION(
+        "HID descriptor — the rest report: sticks centred, pedals and throttles at their rest end");
+    {
+        // The G923's report 1 as received: hat, 23 buttons, wheel X, pedals Y Z
+        // Rz at 255 when released, 3 vendor bits.
+        std::vector<Collection> wheel = g923AsChromeShowsIt();
+        repairBounds(wheel);
+        const Parsed p = parse(encode(wheel));
+        const std::vector<uint8_t> first = {0x08, 0x00, 0x00, 0x00, 0x29,
+                                            0x80, 0xff, 0xff, 0xff, 0x05};
+        // Held: hat right (2), buttons 1 and 9, full lock left, throttle down,
+        // brake half, clutch released, a vendor bit set.
+        const std::vector<uint8_t> held = {0x12, 0x01, 0x00, 0x00, 0x00,
+                                           0x00, 0x00, 0x80, 0xff, 0x05};
+        const std::vector<uint8_t> rest = restReport(p, 1, held, first);
+        CHECK_EQ(rest[0] & 0x0f, 8);                                  // hat null
+        CHECK_EQ(rest[0] >> 4, 0);                                    // buttons 1 to 4 up
+        CHECK(rest[1] == 0 && rest[2] == 0 && (rest[3] & 0x07) == 0); // the others up
+        CHECK(rest[4] == 0x00 && rest[5] == 0x80);                    // wheel at 32768
+        CHECK(rest[6] == 0xff && rest[7] == 0xff &&
+              rest[8] == 0xff);      // pedals released, as first seen
+        CHECK_EQ(rest[9] & 0x07, 5); // vendor bits as they were
+
+        // The TX12: eight 0..2047 axes. First report: throttle (Z here) at its
+        // bottom, the other sticks near the middle, a switch (Slider) at its top.
+        std::vector<uint8_t> tx(19, 0);
+        auto put = [](std::vector<uint8_t>& r, int axis, int v) {
+            r[3 + 2 * axis] = static_cast<uint8_t>(v & 0xff);
+            r[4 + 2 * axis] = static_cast<uint8_t>(v >> 8);
+        };
+        auto get = [](const std::vector<uint8_t>& r, int axis) {
+            return r[3 + 2 * axis] | (r[4 + 2 * axis] << 8);
+        };
+        std::vector<uint8_t> txFirst = tx;
+        for (int a = 0; a < 8; ++a)
+            put(txFirst, a, 1020);
+        put(txFirst, 2, 0);    // throttle down
+        put(txFirst, 6, 2047); // a switch up
+        std::vector<uint8_t> txHeld = tx;
+        for (int a = 0; a < 8; ++a)
+            put(txHeld, a, 1700);
+        txHeld[0] = 0xff; // buttons 1-8 down
+        const Parsed tp = parse(kEdgeTxClassic);
+        const std::vector<uint8_t> txRest = restReport(tp, 0, txHeld, txFirst);
+        CHECK_EQ(txRest[0], 0);
+        CHECK_EQ(get(txRest, 0), 1024); // centred
+        CHECK_EQ(get(txRest, 2), 0);    // throttle back down
+        CHECK_EQ(get(txRest, 6), 2047); // the switch where it rests
+        CHECK_EQ(get(txRest, 7), 0);    // Dial, mid-way at first: its usage says the low end
+    }
+
     SECTION("HID descriptor — bounds are written so a parser reads them back");
     {
         Report r;

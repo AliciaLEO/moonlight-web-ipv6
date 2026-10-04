@@ -546,9 +546,49 @@ void setBits(std::vector<uint8_t>& r, uint32_t offset, uint32_t size, uint32_t v
     }
 }
 
+uint32_t getBits(const std::vector<uint8_t>& r, uint32_t offset, uint32_t size)
+{
+    uint32_t v = 0;
+    for (uint32_t b = 0; b < size; ++b) {
+        const uint32_t bit = offset + b;
+        if (bit / 8 >= r.size()) break;
+        if ((r[bit / 8] >> (bit % 8)) & 1u) v |= 1u << b;
+    }
+    return v;
+}
+
+/// Usages whose rest is the low end when nothing else says: pedals and
+/// throttles (Simulation page), sliders and dials (Generic Desktop).
+bool restsLow(uint32_t usage)
+{
+    switch (usage) {
+    case 0x200BB: // Throttle
+    case 0x200C4: // Accelerator
+    case 0x200C5: // Brake
+    case 0x200C6: // Clutch
+    case 0x10036: // Slider
+    case 0x10037: // Dial
+        return true;
+    default: return false;
+    }
+}
+
+/// Where an axis rests: see restReport() in the header.
+int64_t axisRest(uint32_t usage, int64_t lo, int64_t hi, const int64_t* first)
+{
+    if (first) {
+        const int64_t near = (hi - lo) / 20; // 5 % of the range
+        if (*first <= lo + near) return lo;
+        if (*first >= hi - near) return hi;
+    }
+    if (restsLow(usage)) return lo;
+    return lo + (hi - lo + 1) / 2;
+}
+
 } // namespace
 
-std::vector<uint8_t> restReport(const Parsed& p, uint8_t reportId, const std::vector<uint8_t>& last)
+std::vector<uint8_t> restReport(const Parsed& p, uint8_t reportId, const std::vector<uint8_t>& last,
+                                const std::vector<uint8_t>& first)
 {
     std::vector<uint8_t> r = last;
     for (const Field& f : p.fields) {
@@ -562,6 +602,7 @@ std::vector<uint8_t> restReport(const Parsed& p, uint8_t reportId, const std::ve
                                                          : f.usages.back();
             const uint32_t offset = f.bitOffset + static_cast<uint32_t>(k) * f.size;
             const bool button = pageOf(usage) == 0x09;
+            if (pageOf(usage) >= 0xFF00) continue; // vendor: opaque, as it was
             if (!f.isVariable()) {
                 // An array of buttons selects none; any other array (vendor
                 // bytes, HID++) is left as it was.
@@ -581,8 +622,21 @@ std::vector<uint8_t> restReport(const Parsed& p, uint8_t reportId, const std::ve
                 setBits(r, offset, f.size, static_cast<uint32_t>(rest));
             } else if (button || f.size == 1) {
                 setBits(r, offset, f.size, 0);
+            } else if (f.logicalMinimum < f.logicalMaximum) {
+                const int64_t lo = f.logicalMinimum;
+                const int64_t hi = f.logicalMaximum;
+                const bool haveFirst = (offset + f.size + 7) / 8 <= first.size();
+                int64_t firstValue = 0;
+                if (haveFirst) {
+                    const uint32_t raw = getBits(first, offset, f.size);
+                    // Signed when the range is: the top bit of the field is its sign.
+                    firstValue = lo < 0 && f.size < 32 && (raw >> (f.size - 1)) & 1u
+                                     ? static_cast<int64_t>(raw) - (int64_t{1} << f.size)
+                                     : static_cast<int64_t>(raw);
+                }
+                const int64_t rest = axisRest(usage, lo, hi, haveFirst ? &firstValue : nullptr);
+                setBits(r, offset, f.size, static_cast<uint32_t>(rest));
             }
-            // Axes, pedals, throttles: as they were.
         }
     }
     return r;

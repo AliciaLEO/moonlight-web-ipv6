@@ -153,11 +153,25 @@ constexpr size_t kMaxReportBytes = 1024;
 std::string validate(const std::vector<uint8_t>& descriptor);
 
 /// The input report `reportId` put back to rest, from the last one the device
-/// sent (id byte excluded): buttons and other one-bit inputs released, hats
-/// and any variable with a null state set to a value outside their logical
-/// range, everything else — axes, pedals, throttles, padding — as it was.
-/// Sent once after a silence, so a lost connection never leaves a button held.
-std::vector<uint8_t> restReport(const Parsed& p, uint8_t reportId,
-                                const std::vector<uint8_t>& last);
+/// sent and the first one it sent (both without the id byte). Sent once after
+/// a silence, so a lost connection never leaves the game with a held input.
+///
+/// Rest, field by field (Bruno's rule, 04/10):
+///  - buttons and other one-bit inputs: released;
+///  - hats and any variable with a null state: the null value (outside the
+///    logical range, a 4-bit hat of 0..7 rests at 8);
+///  - an axis that sat at one end of its range in the device's first report
+///    rests at that end. That is how pedals and throttles are told apart when
+///    their usage does not say it: the G923 declares its pedals as Y, Z and Rz
+///    and reports them at 255 when released, the TX12's throttle stick sits at
+///    its bottom when the radio is plugged in;
+///  - otherwise an axis whose usage is a pedal or a throttle (Accelerator,
+///    Brake, Clutch, Throttle on the Simulation page; Slider, Dial on Generic
+///    Desktop) rests at its logical minimum;
+///  - any other axis (X, Y, Z, Rx, Ry, Rz, Steering, Rudder…) rests at the
+///    middle of its logical range;
+///  - vendor fields, arrays and padding: as they were (opaque to us).
+std::vector<uint8_t> restReport(const Parsed& p, uint8_t reportId, const std::vector<uint8_t>& last,
+                                const std::vector<uint8_t>& first);
 
 } // namespace mw::native::input::hid

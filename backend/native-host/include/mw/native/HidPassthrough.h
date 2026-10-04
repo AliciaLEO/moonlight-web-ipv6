@@ -149,8 +149,9 @@ struct HidRequest
 ///  - an input report of the wrong size for its id is dropped, as is one older
 ///    than the newest already applied (the channel is unordered);
 ///  - after kSilenceMs without a report, each input report goes back to rest
-///    once: buttons up, hats centred, axes left where they are (a centred
-///    throttle or a half-pressed pedal is worse than a held one).
+///    once: buttons up, hats centred, sticks and wheels centred, pedals and
+///    throttles at their rest end, read from the device's first report when
+///    its usages do not say (hid::restReport, Bruno's rule of 04/10).
 class HidPassthrough
 {
 public:

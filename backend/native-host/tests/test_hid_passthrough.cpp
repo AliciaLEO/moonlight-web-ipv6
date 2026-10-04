@@ -162,7 +162,9 @@ void run_hid_passthrough_tests()
         CHECK_EQ(log.inputs.size(), static_cast<size_t>(5));
     }
 
-    SECTION("HID passthrough — after a silence, buttons up and hat centred, axes kept, once");
+    SECTION(
+        "HID passthrough — after a silence, everything to rest once: buttons up, hat null, wheel "
+        "centred, pedal released");
     {
         FakeLog log;
         int64_t now = 0;
@@ -176,8 +178,9 @@ void run_hid_passthrough_tests()
         CHECK_EQ(log.inputs.size(), static_cast<size_t>(1));
         hp.checkSilence(HidPassthrough::kSilenceMs);
         CHECK_EQ(log.inputs.size(), static_cast<size_t>(2));
-        // hat null (8), no button, wheel and pedal as they were
-        CHECK(log.inputs[1] == (std::vector<uint8_t>{1, 0x08, 0x34, 0x12, 200}));
+        // hat null (8), no button, wheel at the middle of 0..65535, the
+        // accelerator (first seen half-pressed, so its usage decides) at 0
+        CHECK(log.inputs[1] == (std::vector<uint8_t>{1, 0x08, 0x00, 0x80, 0}));
         hp.checkSilence(HidPassthrough::kSilenceMs * 3);
         CHECK_EQ(log.inputs.size(), static_cast<size_t>(2));
         // A device already at rest needs no rest report.

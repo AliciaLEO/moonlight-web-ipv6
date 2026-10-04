@@ -43,6 +43,8 @@ struct HidPassthrough::Slot
     bool numbered = false;
     std::map<uint8_t, size_t> inputBytes; // per report id, without the id byte
     std::map<uint8_t, std::vector<uint8_t>> last;
+    // The first report of each id: where its pedals and throttles rest (restReport).
+    std::map<uint8_t, std::vector<uint8_t>> first;
     std::map<uint8_t, uint16_t> lastSeq;
     int64_t lastAtMs = 0;
     bool resting = true;
@@ -141,6 +143,7 @@ void HidPassthrough::input(int slot, uint8_t reportId, uint16_t seq, const uint8
     report.insert(report.end(), bytes, bytes + size);
     s.device->input(report.data(), report.size());
     s.last[reportId].assign(bytes, bytes + size);
+    if (!s.first.count(reportId)) s.first[reportId].assign(bytes, bytes + size);
     s.lastAtMs = m_clock();
     s.resting = false;
 }
@@ -175,7 +178,7 @@ void HidPassthrough::checkSilence(int64_t nowMs)
         if (s.resting || nowMs - s.lastAtMs < kSilenceMs) continue;
         s.resting = true;
         for (auto& [id, last] : s.last) {
-            std::vector<uint8_t> rest = input::hid::restReport(s.parsed, id, last);
+            std::vector<uint8_t> rest = input::hid::restReport(s.parsed, id, last, s.first[id]);
             if (rest == last) continue;
             last = rest;
             if (s.numbered) rest.insert(rest.begin(), id);
