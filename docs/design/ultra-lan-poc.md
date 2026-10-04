@@ -462,12 +462,34 @@ cadence (déjà à 240 i/s) n'a plus de marge.
 - L'AV1 ne gagne rien sur le HEVC à la même barre (+1 à 4 ms, +20 à 50 % de
   débit, UM790Pro), et il casse sur le N95. Il ne sert pas de référence.
 
+**Le 04/10 (UM790Pro, build `2ef56bfe` : `sctpburst=0` et `retrcut=3`
+par défaut depuis ce build, à dire en comparant aux passes d'avant)** :
+- **`6a7c3b43` est vérifié.** En « Auto » sur l'Arc, un stream AV1 monte à
+  240 i/s comme un HEVC : décision prise vers 5-18 s, gardée. Le filet joue
+  aussi en AV1 : une fois, une file de décodeur qui tient a fait redescendre la
+  détection, qui a ensuite regagné 240 i/s. L'AV1 reste derrière : clic de
+  43 ms contre 37, 40-46 Mbit/s contre 25-27.
+- **Sous charge GPU** (`mw-gpu-load` à ~45 i/s, `4ba3f0d1`), deux passes par
+  mode :
+
+  | GPU chargé | Mode | Âge montré | E2E hôte → dessin | Avant la capture | Clic → drapeau |
+  |---|---|---|---|---|---|
+  | Arc | D | 126-127 ms | 38 ms | ~67 ms | 84-86 ms |
+  | Arc | U | 129-137 ms | 39-52 ms | ~67 ms | 84-86 ms |
+  | iGPU AMD | D | 163-164 ms | 13-14 ms | 137-158 ms | 135-137 ms |
+  | iGPU AMD | U | 168-187 ms | 13 ms | 137-158 ms | 131-135 ms |
+
+  Sous charge, c'est surtout la page de banc elle-même qui attend son GPU,
+  avant la capture. Le stream n'ajoute que 13 ms (AMD) à 38-52 ms (Arc). U n'y
+  change rien de net. **Réserve** : la fenêtre de charge était sur l'écran
+  virtuel capturé, qui devient l'écran principal pendant le stream, et elle
+  recouvrait une partie de la page (la bande restait lisible). C'est corrigé
+  dans `beeabde4`, et les cases sont à refaire à l'occasion.
+
 **Reste avant la porte U0** : l'iPad et RE9 sur l'écran de la RTX (avec
-Bruno), les cases sous charge GPU (`4ba3f0d1`, prêtes, pas encore passées),
+Bruno), les cases sous charge à refaire sans la fenêtre sur le contenu,
 les TV (U0.3 quater), la borne Steam (U0.4, si Bruno l'accepte) et le
-rapport U0.5. **À vérifier au banc avant le push** : `6a7c3b43`. La détection
-mesure maintenant un stream AV1 ; il faut quatre passes AV1 en « Auto » sur
-l'UM790Pro.
+rapport U0.5.
 
 ## 7. Concrètement, pour l'utilisateur
 
