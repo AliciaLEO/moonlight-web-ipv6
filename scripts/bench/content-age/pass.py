@@ -477,6 +477,16 @@ def main():
         data["stepper"] = stepper
         data["clicks"] = clicks
         data["uplink"] = uplink
+        # POC Ultra U1.1: the synthetic Ultra stream's sink, when the page ran
+        # one (localStorage mw_ultra_sink): its totals and every second.
+        ultra = d.eval("globalThis.__mwUltra ? JSON.stringify(__mwUltra) : null")
+        if ultra:
+            data["ultra"] = json.loads(ultra)
+            last = data["ultra"].get("last") or {}
+            print("  ultra: %s frames, %s lost, %s Mbit/s, spread p95 %s ms, delay p95 %s ms" % (
+                data["ultra"]["totals"].get("frames"), data["ultra"]["totals"].get("lost"),
+                last.get("mbps"), (last.get("spreadMs") or {}).get("p95"),
+                (last.get("extraDelayMs") or {}).get("p95")), flush=True)
         if load_seen:
             data["load"] = load_seen
             print("  load: " + " | ".join("%s %s fps, GPU %s ms, level %s%s" % (
