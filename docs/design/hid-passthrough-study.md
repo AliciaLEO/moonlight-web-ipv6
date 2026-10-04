@@ -3,6 +3,23 @@
 > Étude du 29/09/2026. **Aucun code.** Elle remplace l'étude « retour de force »
 > (ex-T5 du plan radios, fusionnée le même jour à la demande de Bruno).
 >
+> **Statut au 04/10/2026** : le plan est lancé (`flickering-dazzling-feigenbaum.md`).
+> - Le code de P0 à P2 est écrit :
+>   - l'encodeur et la validation des descripteurs ;
+>   - le pilote « MoonlightWeb Virtual HID » (WinUHid, MIT, `backend/native-host/third_party/winuhid` et
+>     `drivers/vhid`), pour l'instant **signé en mode test seulement** ;
+>   - `HidPassthrough` dans le moteur natif ;
+>   - le canal `hid` (id 4) dans les relais ;
+>   - le panneau « Transmettre un périphérique tel quel » dans Réglages → Manettes.
+> - Vérifié : un G923 recréé sous Windows (UM790Pro en mode test) est lu par le système
+>   (046D:C26E, `joyGetPosEx`).
+> - Restent :
+>   - le banc `uhid` sous Linux ;
+>   - l'essai en jeu de Bruno (porte P1) ;
+>   - la signature du produit, puis la pose du pilote par l'installeur ;
+>   - le retour de force (P3, P4).
+> - Écart à la §3.2 : SignPath a refusé MoonlightWeb (02/10).
+>
 > Légende : **[V]** vérifié (code Chromium, documentation officielle, dépôt du
 > projet cité ou notre propre dépôt) ; **[S]** supposition, à confirmer au banc.
 
