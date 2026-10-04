@@ -64,10 +64,12 @@ class RemoteHost:
         raise NotImplementedError
 
     def sh(self, script, timeout=60):
-        p = subprocess.run(self.ssh() + ["bash -s"], input=script, capture_output=True,
-                           text=True, encoding="utf-8", errors="replace", timeout=timeout,
-                           creationflags=NOWIN)
-        return (p.stdout or "") + (p.stderr or "")
+        # Bytes, not text: in text mode Windows writes each line end as CR LF,
+        # and a CR ends every line of the script on the host.
+        p = subprocess.run(self.ssh() + ["bash -s"], input=script.replace(chr(13), "").encode(),
+                           capture_output=True, timeout=timeout, creationflags=NOWIN)
+        out = (p.stdout or b"") + (p.stderr or b"")
+        return out.decode("utf-8", "replace")
 
     def settings_path(self):
         raise NotImplementedError
@@ -124,10 +126,10 @@ class RemoteHost:
             with open(os.path.join(CONTENT, name), encoding="utf-8") as f:
                 body = f.read()
             p = subprocess.run(self.ssh() + ["mkdir -p /tmp/mw-content && cat > /tmp/mw-content/" +
-                                             name], input=body, capture_output=True, text=True,
-                               encoding="utf-8", timeout=30, creationflags=NOWIN)
+                                             name], input=body.encode(), capture_output=True,
+                               timeout=30, creationflags=NOWIN)
             if p.returncode:
-                return "push failed: %s" % (p.stderr or "")[-200:]
+                return "push failed: %s" % (p.stderr or b"").decode("utf-8", "replace")[-200:]
         return "content pushed"
 
     def content_start(self, page):
@@ -168,23 +170,23 @@ class LinuxHost(RemoteHost):
         url = "file:///tmp/mw-content/" + page
         # The desktop session's own environment (X11 or Wayland, its bus): a
         # browser launched over SSH otherwise has no screen to go to.
+        # A unit of the user's systemd, as the DEV runs: detached from this SSH
+        # session (a browser started from it kept the session open), in the
+        # desktop session's own environment (X11 or Wayland, its bus).
         script = r"""
-eval "$(systemctl --user show-environment | grep -E '^(DISPLAY|XAUTHORITY|WAYLAND_DISPLAY|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS)=' | sed 's/^/export /')"
+systemctl --user stop mw-content 2>/dev/null
 pkill -f "user-data-dir=%(p)s" 2>/dev/null
 sleep 1
-setsid -f google-chrome-stable --user-data-dir=%(p)s --no-first-run --no-default-browser-check \
-    --ozone-platform-hint=auto --kiosk --start-fullscreen --disable-infobars \
-    --disable-search-engine-choice-screen --disable-sync --password-store=basic \
-    --disable-features=CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows \
-    --disable-renderer-backgrounding %(u)s >/tmp/mw-content-chrome.log 2>&1
+ENVS=$(systemctl --user show-environment | grep -E '^(DISPLAY|XAUTHORITY|WAYLAND_DISPLAY|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS)=' | sed 's/^/--setenv=/' | tr '\n' ' ')
+systemd-run --user --collect --unit=mw-content $ENVS google-chrome-stable --user-data-dir=%(p)s     --no-first-run --no-default-browser-check --ozone-platform-hint=auto --kiosk --start-fullscreen     --disable-infobars --disable-search-engine-choice-screen --disable-sync --password-store=basic     --disable-features=CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows     --disable-renderer-backgrounding %(u)s >/dev/null 2>&1
 sleep 3
 pgrep -f "user-data-dir=%(p)s" >/dev/null && echo "content up: %(u)s" || echo "content did not start"
 """ % {"p": self.PROFILE, "u": shlex.quote(url)}
         return self.sh(script, timeout=60).strip()
 
     def content_stop(self):
-        return self.sh('pkill -f "user-data-dir=%s" 2>/dev/null; echo content stopped' %
-                       self.PROFILE).strip()
+        return self.sh("systemctl --user stop mw-content 2>/dev/null; pkill -f \"user-data-dir=%s\" "
+                       "2>/dev/null; echo content stopped" % self.PROFILE).strip()
 
 
 class MacHost(RemoteHost):
