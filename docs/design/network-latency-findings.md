@@ -501,15 +501,24 @@ bench page on its screen. Driven from DualRTX by `series.py --host um790pro`
 (`8fd33518`, `1231e818`): the band is not read on a remote host. Two
 alternated rounds per arm; Linux's own defaults: no retrcut, burst 10.
 
+> **Correction (04/10/2026, 23:45): no client in this section was on Wi-Fi.**
+> With `--host`, `pass.py` drove a kiosk of its own on DualRTX instead of the
+> client `series.py` named (fixed in `09df1c3c`); the host's logs show
+> 192.168.1.66 as the peer. The rows first labelled "N95, Wi-Fi" are DualRTX's
+> Chrome decoding on the RTX 5060 Ti (`DISPLAY5`), the rows labelled
+> "DualRTX Chrome, wired" the same machine decoding on its AMD iGPU
+> (`DISPLAY9`). Both are Ethernet. The gains below are real for a wired
+> client; the Linux host has **not** been measured with a Wi-Fi client.
+
 Without clicks (19:45-20:36; the `input` group was not yet granted):
 
 | Client | Arm | Frame age med / p90 | `inSctp` all frames | Messages med | Retr. |
 |---|---|---|---|---|---|
-| N95, Wi-Fi | base | 18.4 / 23.9, 18.8 / 23.3 | 9.3 / 9.7 ms | 4.4-5.0 | 0-0.02 % |
+| DualRTX, RTX (first: "N95") | base | 18.4 / 23.9, 18.8 / 23.3 | 9.3 / 9.7 ms | 4.4-5.0 | 0-0.02 % |
 | | `retrcut=3` | 17.8 / 22.3, 18.7 / 23.0 | 9.1 / 9.8 ms | 4.4-5.0 | 0 % |
 | | `sctpburst=0` | 13.3 / 17.6, 11.9 / 15.8 | 2.9 / 2.5 ms | 3.2 | 0.03-0.12 % |
 | | both | 13.1 / 17.6, 13.2 / 17.4 | 3.1 / 3.2 ms | 3.3 | 0.01-0.13 % |
-| DualRTX Chrome, wired | base | 17.1 / 21.4, 21.0 / 35.5 | | 4.2, 8.3 | 0-0.01 % |
+| DualRTX, AMD iGPU | base | 17.1 / 21.4, 21.0 / 35.5 | | 4.2, 8.3 | 0-0.01 % |
 | | `retrcut=3` | 17.3 / 21.2, 21.6 / 37.9 | | 5.2, 8.7 | 0 % |
 | | `sctpburst=0` | 11.9 / 18.1, 13.3 / 19.0 | | 3.3, 7.4 | 0-0.03 % |
 | | both | 12.5 / 17.8, 12.9 / 18.5 | | 3.8, 7.5 | 0-0.01 % |
@@ -518,23 +527,24 @@ With clicks (20:38-21:01; bruno added to `input` for the series, removed after):
 
 | Client | Arm | Click (p90) | `net` / `inSctp` of the flag | Frame age med |
 |---|---|---|---|---|
-| N95, Wi-Fi | base | 63.6 / 65.6 ms (86 / 92) | 13.9 / 11.0 ms | 20.6 / 21.0 |
+| DualRTX, RTX (first: "N95") | base | 63.6 / 65.6 ms (86 / 92) | 13.9 / 11.0 ms | 20.6 / 21.0 |
 | | `sctpburst=0` | 58.7 / 58.8 ms (80 / 81) | 6.1 / 2.6 ms | 14.4 / 14.7 |
-| DualRTX Chrome, wired | base | 86.5 / 87.2 ms (126 / 107) | 20.3 / 17.1 ms | 20.9 / 21.3 |
+| DualRTX, AMD iGPU | base | 86.5 / 87.2 ms (126 / 107) | 20.3 / 17.1 ms | 20.9 / 21.3 |
 | | `sctpburst=0` | 78.4 / 78.4 ms (111 / 101) | 10.9 / 7.9 ms | 13.5 / 12.8 |
 
-- **`sctpburst=0` gains on the Linux host too**: ~6.5 ms less inside usrsctp
-  per frame, a frame ~6 ms younger, the click 6-8 ms faster. A few more
-  retransmissions on the N95 (to ~0.1 %) and, in one set, more frames
-  dropped (71 → 128 a minute).
-- **`retrcut=3` changes nothing there**: this link barely retransmits
-  (0-0.1 %), unlike the Windows host to the Mac's Wi-Fi.
+- **`sctpburst=0` gains on the Linux host too, for a wired client**: ~6.5 ms
+  less inside usrsctp per frame, a frame ~6 ms younger, the click 6-8 ms
+  faster. A few more retransmissions on the RTX client (to ~0.1 %) and, in
+  one set, more frames dropped (71 → 128 a minute).
+- **`retrcut=3` changes nothing there**: a wired link barely retransmits
+  (0-0.1 %), unlike the Windows host to the Mac's Wi-Fi. Untested on Wi-Fi.
 - On this host ~37 ms pass between the flag going up and the capture that
   shows it (`toCap`: KMS at 60 Hz plus the X11 flag window), against 3-4 ms on
   the Windows host: the largest share of a Linux click, and not the network.
-- The wired client here is DualRTX's Chrome through its Hyper-V switch (2-3 ms
-  with spikes to 25 ms to the UM790Pro): its clicks are slower than the N95's,
-  so it only counts against its own base.
+- DualRTX reaches the UM790Pro through its Hyper-V switch (2-3 ms with
+  spikes to 25 ms). Its AMD-iGPU client clicks ~23 ms slower than its RTX
+  one (the screen and decoder behind each, not the link), so each counts
+  only against its own base.
 - **Decision (Bruno, 04/10 ~23:20): no max burst is the Linux native host's
   default too, `6a833826`** (`kNativeSctpMaxBurst` = 0 on Windows and Linux);
   `retrcut` stays off on Linux.
@@ -542,9 +552,11 @@ With clicks (20:38-21:01; bruno added to `input` for the series, removed after):
 ### 04/10/2026 — B and W2.5 on the macOS native host: started, not finished
 
 Host: the Mac M1 Pro (Wi-Fi), DEV `0.3.1.g5de-dev` from the CI (`5de1e2af`),
-ScreenCaptureKit, the bench page on its screen; client the N95 in Wi-Fi. Both
-ends are on Wi-Fi here, so this is not the same link as the Windows host to
-the Mac. Two passes only before the screen time Bruno granted ran out:
+ScreenCaptureKit, the bench page on its screen. The client was meant to be
+the N95 in Wi-Fi; it was in fact DualRTX's Chrome on Ethernet, decoding on the
+RTX (same bench-driver fault as the Linux section above, fixed in
+`09df1c3c`), so only the host was on Wi-Fi. Two passes only before the screen
+time Bruno granted ran out:
 
 | Arm | Click (p90) | Frame age med / p90 | fps | Received | Dropped /min | Messages med |
 |---|---|---|---|---|---|---|
@@ -556,9 +568,13 @@ the Mac. Two passes only before the screen time Bruno granted ran out:
   (792,1111 of 1800×1169), probably under the kiosk page that pass. Not
   understood yet.
 - The following passes failed on the bench driver, not the host: it clicked
-  a button labelled "Unlock", and the N95's Chrome is in French
-  ("Déverrouiller"); fixed in `d1900763`. Still to rerun: all four arms, two
-  rounds, on another Mac slot.
+  a button labelled "Unlock", and the bench Chrome is in French
+  ("Déverrouiller"); fixed in `d1900763`.
+- Second slot (04/10, 23:27-23:39): one base pass (frame age 38.1 ms median,
+  p90 45.8; the client again saw none of the 60 flags), then two passes found
+  no host card on the client's page and the series was stopped once the
+  driver fault came to light. Still to do: all four arms, two rounds, with
+  the N95 really driven.
 
 
 ### 04/10/2026 — POC Ultra U0.4: Steam Remote Play, and the browser's present path (session ex-3b)
@@ -649,9 +665,11 @@ What the measurements support, in order of the path:
 - Whether the slightly higher kernel drops with no max burst (422 → 547 a
   pass on the Mac) or the N95's extra T3 timeouts (1 and 3 against 0 and 1)
   matter in the field. Ethernet gained (04/10).
-- Whether GameStream sessions (Sunshine through the same relay) and the
-  Linux and macOS native hosts gain the same from `sctpburst=0`: not measured,
-  so not changed.
+- Whether GameStream sessions (Sunshine through the same relay) gain the same
+  from `sctpburst=0`: not measured, so not changed. The Linux native host
+  gained with a wired client (its default since `6a833826`) but has never had
+  a Wi-Fi client; the macOS native host has no clean measurement yet (§3,
+  04/10 corrections).
 - What receive buffer Chrome gives its UDP socket on macOS and on Windows, and
   whether a page can influence it (it cannot directly). Whether Windows counts
   a full-socket drop anywhere (the N95 showed 0 "received errors").
