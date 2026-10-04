@@ -59,7 +59,8 @@ import statistics
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 CA_OUT = os.path.join(REPO, "bench-out", "content-age")
-FLAG = re.compile(r"\[LatencyFlag\] injected click at .* shown at steady (\d+) us")
+# Windows and macOS name where the click landed, X11 does not.
+FLAG = re.compile(r"\[LatencyFlag\] injected click.* shown at steady (\d+) us")
 LEGS = ["up", "inject", "raise", "toCap", "encode", "send", "net", "decode", "draw", "detect"]
 relay_every = {}  # tag → [(net, net less half SCTP's round trip)] for every frame
 
