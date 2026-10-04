@@ -1,5 +1,5 @@
 /*
- * MoonlightWeb — native capture & encoding engine: lab tools.
+ * MoonlightWeb — browser-based Sunshine/GameStream client.
  * Copyright (C) 2026 Bruno Martin <brunoocto@gmail.com>
  *
  * This program is free software: you can redistribute it and/or modify it
@@ -15,7 +15,7 @@
  * this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "WebHidJson.h"
+#include "HidCollectionsJson.h"
 
 #include <QJsonObject>
 
@@ -92,7 +92,7 @@ private:
         int64_t v = 0;
         if (intIn(numberOf(o, "usagePage"), 0, 0xFFFF, &v)) c.usagePage = static_cast<uint16_t>(v);
         if (intIn(numberOf(o, "usage"), 0, 0xFFFF, &v)) c.usage = static_cast<uint16_t>(v);
-        if (intIn(numberOf(o, "type"), 0, 0xFF, &v)) c.type = static_cast<uint8_t>(v);
+        if (intIn(numberOf(o, "type", Application), 0, 0xFF, &v)) c.type = static_cast<uint8_t>(v);
         c.inputReports = reports(o.value(QLatin1String("inputReports")).toArray());
         c.outputReports = reports(o.value(QLatin1String("outputReports")).toArray());
         c.featureReports = reports(o.value(QLatin1String("featureReports")).toArray());

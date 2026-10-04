@@ -603,6 +603,7 @@ int runStreamWorker(QCoreApplication& app)
         InputMsg::Policy policy;
         policy.gamepad = pol["gamepad"].toBool(false);
         policy.keyboardMouse = pol["keyboardMouse"].toBool(false);
+        policy.hid = pol["hid"].toBool(false);
         session->setInputPolicy(policy);
         qInfo() << "[StreamWorker] Input policy: gamepad=" << policy.gamepad
                 << "keyboardMouse=" << policy.keyboardMouse;
@@ -703,6 +704,7 @@ int runStreamWorker(QCoreApplication& app)
                 InputMsg::Policy policy;
                 policy.gamepad = msg["gamepad"].toBool(false);
                 policy.keyboardMouse = msg["keyboardMouse"].toBool(false);
+                policy.hid = msg["hid"].toBool(false);
                 qInfo() << "[StreamWorker] Input policy now: gamepad=" << policy.gamepad
                         << "keyboardMouse=" << policy.keyboardMouse;
                 QMetaObject::invokeMethod(

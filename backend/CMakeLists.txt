@@ -292,6 +292,8 @@ add_executable(mw-server
     src/streaming/InputWatchdog.cpp
     src/streaming/MoonlightShim.cpp
     src/streaming/NativeMediaEngine.cpp
+    # The HID passthrough's hidattach: the page's WebHID collections, read.
+    src/streaming/HidCollectionsJson.cpp
     src/streaming/FeedInfo.cpp
     src/streaming/FeedPublisher.cpp
     src/streaming/FeedSubscriber.cpp

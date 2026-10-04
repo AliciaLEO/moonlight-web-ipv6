@@ -31,7 +31,7 @@
 //                       stats {slot, received, lost, injectUs {median, p95}} · pong {t}
 
 #include "VirtualHid.h"
-#include "WebHidJson.h"
+#include "streaming/HidCollectionsJson.h"
 #include "input/HidDescriptor.h"
 
 #include <QCommandLineParser>

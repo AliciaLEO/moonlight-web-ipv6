@@ -52,6 +52,7 @@ add_executable(run_tests
     # Test sources
     main.cpp
     test_input_encoder.cpp
+    test_hid_collections_json.cpp
     test_stream_config.cpp
     test_input_crypto.cpp
     test_rest_router.cpp
@@ -107,6 +108,9 @@ add_executable(run_tests
     ${_src}/src/streaming/InputEncoder.cpp
     # The input dead-man switch, exercised against a fake wire.
     ${_src}/src/streaming/InputWatchdog.cpp
+    # The HID passthrough's hidattach, read and rebuilt into a descriptor.
+    ${_src}/src/streaming/HidCollectionsJson.cpp
+    ${_src}/native-host/src/input/HidDescriptor.cpp
     ${_src}/src/streaming/StreamConfig.cpp
     ${_src}/src/streaming/InputCrypto.cpp
     ${_src}/src/server/RestRouter.cpp

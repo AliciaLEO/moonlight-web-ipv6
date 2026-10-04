@@ -1,5 +1,5 @@
 /*
- * MoonlightWeb — native capture & encoding engine: lab tools.
+ * MoonlightWeb — browser-based Sunshine/GameStream client.
  * Copyright (C) 2026 Bruno Martin <brunoocto@gmail.com>
  *
  * This program is free software: you can redistribute it and/or modify it
@@ -17,7 +17,7 @@
 
 #pragma once
 
-#include "input/HidDescriptor.h"
+#include "mw/native/HidPassthrough.h"
 
 #include <QJsonArray>
 #include <QString>
