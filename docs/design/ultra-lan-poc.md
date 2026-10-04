@@ -581,6 +581,68 @@ lui-même. 60 clics par passe, aucun manqué ; résultats dans
 - Reste à faire : l'hôte à iGPU, et MoonlightWeb repassé sans le drapeau de
   banc.
 
+### 6.6 U0.5 — rapport de la phase U0, brouillon (04/10/2026)
+
+Brouillon, sans les TV (U0.3 quater) ni l'hôte à iGPU de la borne Steam.
+
+**1. Budget par étape, mesuré.** Les deux couples les mieux couverts, en ms :
+
+| Étape | UM790Pro en Ethernet, hôte RTX/Arc/AMD (U0.3, flagpath) | iPhone / iPad en Wi-Fi (U0.3, détail de latence) |
+|---|---|---|
+| Montée du clic | 1,5-3 | — |
+| Hôte : capture → remis au relais | 2-6 (encodage NVENC 1,4-2, Arc 3,5-4,5, AMF 4-4,3) | 4-6 |
+| Réseau, dont l'attente dans usrsctp | 6-10, dont 3-5 | 2-20 (pointes des coupures Wi-Fi) |
+| Décodage | 0,4-5 | iPhone 5-10 ; iPad 16-22 à 50-62 i/s, 8 à 26 i/s |
+| Attente et dessin | 0,2-6 | 7-11 (file de rendu) |
+| Âge de l'hôte au dessin (journal par image) | 8-14 médiane | iPhone 31-48 ; iPad 31-82 |
+
+En Wi-Fi, le réseau domine quand la cadence monte. La fenêtre de congestion
+d'usrsctp retient la vidéo : 186-232 ms au p90 sur le N95 à 120 i/s, 50-79 ms
+sur le Mac (plan Wi-Fi, `docs/design/network-latency-findings.md`). Sur un
+client mobile, c'est le décodeur. En Ethernet, aucun poste ne dépasse 6 ms.
+
+**2. Le modèle du §3, recalé.**
+- Le segment codec du HEVC est bien de 3 à 6 ms sur la RTX et l'Arc, en
+  Ethernet, comme prévu.
+- La cadence pèse plus que le codec, comme prévu. La détection de l'« Auto »
+  la règle déjà au mieux : 240 i/s sur l'UM790Pro, 120 sur le Mac, la cadence
+  de l'écran sur le N95 et l'iPad. La barre « HEVC réglé Ultra » du §2 ne
+  bat donc jamais l'« Auto » détecté (§6.4).
+- Ce que le modèle n'avait pas : **le chemin de présentation du navigateur.**
+  Le même clic, mesuré sur le bureau composé du client (`click-photon.ps1`),
+  coûte 58 ms dans Chrome contre 33-43 ms lu dans le canevas : 15 à 25 ms
+  passent dans la composition de Chrome et du DWM. Steam, client natif, n'a
+  pas ce poste.
+
+**3. La borne Steam (U0.4, RTX).** PyroWave natif bat le HEVC de Steam de 7 à
+15 ms en médiane (42,6 contre 49,9-57,9 ms, §6.5). La porte de U0.4 est
+franchie.
+- Ce gain dépasse ce que le codec peut gagner seul : le modèle du §3 prédisait
+  plutôt une légère perte sur NVIDIA, et l'encodage plus le décodage du HEVC ne
+  coûtent ici que 3 à 7 ms.
+- Steam semble donc mettre sur sa voie HEVC une attente que sa voie PyroWave
+  n'a pas : une file de décodage ou un rythme de présentation. Ce n'est pas
+  vérifié : il faudrait le relevé de performance de Steam, ou une caméra.
+- Lecture prudente : PyroWave dans un navigateur ne gagnera sur notre HEVC que
+  ce que le codec fait vraiment gagner, soit 3 à 7 ms en Ethernet sur ces
+  hôtes. Et seulement si le décodeur et le présentateur ne reprennent pas ce
+  gain (U3).
+
+**4. Le verdict de l'essai « cadence de l'hôte »** (plan 1 `framerate-hote`,
+U0.3 bis et ter). C'est la détection côté client (« Auto » avec détection, UA)
+qui est sur `main` et sert de référence. `host-guarded` n'a pas battu
+l'« Auto » d'aujourd'hui (UA.3).
+
+**5. Proposition pour la porte U0** (décision de Bruno) :
+- Continuer vers U1 (labo transport), avec trois corrections au plan.
+  1. La référence de U3 et U5 devient l'« Auto » détecté.
+  2. Ultra reste réservé à l'Ethernet.
+  3. Le chemin de présentation (U3) passe avant le décodeur : il pèse 15 à
+     25 ms, plus que tout le segment codec.
+- Avant la porte : les TV (U0.3 quater) et l'hôte à iGPU de la borne Steam
+  (quand l'écran de l'AMD peut être le principal), parce que le gain attendu y
+  est le plus grand (§3 : 4 à 12 ms).
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
