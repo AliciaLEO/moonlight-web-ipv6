@@ -610,6 +610,14 @@ in `bench-out/photon/*.json`.
   `sctpburst=0`): median 58.2 ms, p90 75.0 ms (42-108), 60 of 60. A second pass
   is void (58 of 60 missed): most likely the bench's `latency_flag_enabled`
   overlay drew over the pixel read.
+- **Correction (05/10, 00:10)**: a bench Chrome of the Wi-Fi session ran on
+  DualRTX, on the RTX and DISPLAY5 (the streamed screen), from 22:40 to 23:00
+  and from 23:27 (its `pass.py --host` fault, fixed in `09df1c3c`). Pass 1
+  (HEVC, ended 22:56) is tainted by it; every other pass ran after 23:00. On
+  the clean passes only: PyroWave 42.6-42.7 ms against HEVC 57.9 (58.6 with
+  Low Latency Networking), 15 ms. MoonlightWeb's void second pass
+  (23:26:40-23:27:41) met that Chrome's restart on the streamed screen, the
+  likeliest cause.
 - **The browser's present path**: MoonlightWeb's own click → flag on this pair
   read 33-43 ms (U0.3, the flag read in the canvas at draw). Read on the
   composed desktop it is 58 ms. The 15-25 ms between them are Chrome's
