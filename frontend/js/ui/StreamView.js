@@ -3785,7 +3785,14 @@ export class StreamView {
             frame._mwLog = submit.frame;
             backendTs = submit.backendTs;
         }
-        if (this._contentAge.running) this._contentAge.onDecoded(frame, backendTs);
+        // The frame's host stamp for what measures its age: AV1 hands its
+        // pacer a zero (synthetic chunk timestamps, presented on decode), not
+        // its stamp, which rides with the frame's log entry. The detection,
+        // the content-age probe and the frame log read it there; the pacer
+        // and the vsync grid keep the zero.
+        const hostTs = backendTs || (submit && submit.frame && submit.frame.hostTs) || 0;
+        frame._mwHostTs = hostTs;
+        if (this._contentAge.running) this._contentAge.onDecoded(frame, hostTs);
         // The vsync grid's ready time: decoded, on vsync — the render loop
         // draws the freshest frame at the refresh. Drawn, when tearing (below).
         frame._mwBackendTs = backendTs;
@@ -4502,6 +4509,7 @@ export class StreamView {
         // draw — the renderer closes the VideoFrame.
         const decodedPerf = frame._mwDecodedPerf;
         const frameBackendTs = frame._mwBackendTs;
+        const frameHostTs = frame._mwHostTs;
         const frameLog = frame._mwLog;
         const drawStart = performance.now();
         // Queue stage: how long the decoded frame waited for its turn to draw
@@ -4521,10 +4529,10 @@ export class StreamView {
                 if (this._immediateRender && this._vsyncGrid.running)
                     this._vsyncGrid.noteReady(frameBackendTs, drawStart + renderMs);
                 // …and what the detection measures: capture → painted.
-                if (this._stepper) this._stepper.notePainted(frameBackendTs, drawStart + renderMs);
+                if (this._stepper) this._stepper.notePainted(frameHostTs, drawStart + renderMs);
                 // …and the frame's whole way, on the host's clock.
                 const e2e = this._frameLog.noteDrawn({
-                    backendTs: frameBackendTs || (frameLog ? frameLog.hostTs : 0),
+                    backendTs: frameHostTs,
                     drawnMs: drawStart + renderMs,
                     arrivedMs: frameLog ? frameLog.arrived : 0,
                     decodedMs: decodedPerf,
@@ -7604,7 +7612,8 @@ export class StreamView {
             });
             // AV1 has no backendTs here (synthetic chunk timestamps), so the
             // pacer sees 0 and this path keeps presenting on decode. The
-            // frame's stamp still reaches the frame log (hostTs), alone.
+            // frame's stamp (hostTs) still reaches what measures its age: the
+            // detection, the content-age probe, the frame log.
             this._trackChunkSubmit(timestamp, 0, {
                 arrived: arrivalAbs > 0 ? arrivalAbs - performance.timeOrigin : 0,
                 bytes: obuData.length,
