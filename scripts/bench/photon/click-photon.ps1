@@ -22,6 +22,10 @@ param(
     [int] $Clicks = 60,
     [int] $IntervalMs = 700,
     [int] $TimeoutMs = 1500,
+    # The pixel read, from the click: MoonlightWeb's bench flag
+    # (latency_flag_enabled) is drawn where the click lands and would hide it.
+    [int] $ReadDx = 0,
+    [int] $ReadDy = 0,
     [string] $Out = ''
 )
 Add-Type @"
@@ -51,15 +55,15 @@ public static class Photon {
     SendInput(2, i, Marshal.SizeOf(typeof(INPUT)));
   }
   // One click; ms until the pixel at (x, y) moved past half the range, or -1.
-  public static double Once(int x, int y, int timeoutMs) {
+  public static double Once(int x, int y, int rx, int ry, int timeoutMs) {
     SetCursorPos(x, y);
     Thread.Sleep(30);
-    int before = Luma(x, y);
+    int before = Luma(rx, ry);
     long t0 = Stopwatch.GetTimestamp();
     Click();
     long end = t0 + (long)timeoutMs * Stopwatch.Frequency / 1000;
     while (Stopwatch.GetTimestamp() < end) {
-      if (Math.Abs(Luma(x, y) - before) > 127)
+      if (Math.Abs(Luma(rx, ry) - before) > 127)
         return (Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency;
     }
     return -1;
@@ -74,13 +78,13 @@ if (-not $p) { throw "no window of process '$Process'$(if ($Title) { " titled *$
 $r = New-Object Photon+RECT
 [void][Photon]::GetWindowRect($p.MainWindowHandle, [ref]$r)
 $x = [int](($r.L + $r.R) / 2); $y = [int](($r.T + $r.B) / 2)
-"window '$($p.MainWindowTitle)' ($($p.ProcessName) $($p.Id)) at $($r.L),$($r.T)-$($r.R),$($r.B); clicks at $x,$y"
+"window '$($p.MainWindowTitle)' ($($p.ProcessName) $($p.Id)) at $($r.L),$($r.T)-$($r.R),$($r.B); clicks at $x,$y, reads at $($x + $ReadDx),$($y + $ReadDy)"
 [void][Photon]::SetForegroundWindow($p.MainWindowHandle)
 Start-Sleep -Milliseconds 500
 $samples = New-Object System.Collections.Generic.List[double]
 $missed = 0
 for ($i = 0; $i -lt $Clicks; $i++) {
-    $ms = [Photon]::Once($x, $y, $TimeoutMs)
+    $ms = [Photon]::Once($x, $y, $x + $ReadDx, $y + $ReadDy, $TimeoutMs)
     if ($ms -lt 0) { $missed++ } else { $samples.Add([math]::Round($ms, 2)) }
     Start-Sleep -Milliseconds ([math]::Max(50, $IntervalMs - [int][math]::Max(0, $ms)))
 }

@@ -8,6 +8,8 @@ param(
     [string] $Process = 'streaming_client',
     [string] $Title = '',
     [int] $Clicks = 60,
+    [int] $ReadDx = 0,
+    [int] $ReadDy = 0,
     [string] $Dir = $PSScriptRoot
 )
 $script = Join-Path $Dir 'click-photon.ps1'
@@ -15,7 +17,7 @@ $out = Join-Path $Dir "$Tag.json"
 $log = Join-Path $Dir "$Tag.txt"
 $task = 'MwClickPhoton'
 $args = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"& '$script' -Process '$Process' " +
-        "-Title '$Title' -Clicks $Clicks -Out '$out' *> '$log'`""
+        "-Title '$Title' -Clicks $Clicks -ReadDx $ReadDx -ReadDy $ReadDy -Out '$out' *> '$log'`""
 Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $args
 $user = (Get-CimInstance Win32_ComputerSystem).UserName
