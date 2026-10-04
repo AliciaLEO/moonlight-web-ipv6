@@ -528,8 +528,44 @@ par défaut depuis ce build, à dire en comparant aux passes d'avant)** :
   niveau, la charge tourne à 30 i/s sur l'Arc au lieu de 45 le matin : sa
   fenêtre, posée sur un écran physique, ne pèse plus pareil.
 
-**Reste avant la porte U0** : les TV (U0.3 quater), la borne Steam (U0.4, si Bruno l'accepte) et le
+**Reste avant la porte U0** : les TV (U0.3 quater), la borne Steam sur l'iGPU et MoonlightWeb au même outil (U0.4) et le
 rapport U0.5.
+
+### 6.5 U0.4 — la borne Steam, hôte RTX (04/10/2026, 22:10-22:40)
+
+Steam Remote Play (bêta « Steam Beta Update »), hôte DualRTX, l'écran
+principal étant celui de la RTX (NVENC pour le HEVC). Client l'UM790Pro sous
+Windows en 1 GbE (780M, décodage matériel, 1920×1080, débit automatique,
+modificateur de qualité au milieu, 4:4:4 coupé). Mesure sans caméra
+(`scripts/bench/photon/`, `2e0a012b`, `5de1e2af`) : l'hôte affiche une
+fenêtre qui passe du noir au blanc à chaque clic, streamée comme jeu non-Steam.
+Le client clique dans la fenêtre du stream et relit ce pixel sur son propre
+bureau composé (GDI), jusqu'au changement. Le clic → photon compte donc tout,
+de la montée du clic à la composition du client, sauf le balayage de l'écran
+lui-même. 60 clics par passe, aucun manqué ; résultats dans
+`bench-out/photon/steam-*.json`.
+
+| Passe | Codec | Low Latency Networking | Médiane | p90 | Min - max |
+|---|---|---|---|---|---|
+| 1 | HEVC | non | 49,9 ms | 58,9 ms | 32,6 - 67,2 |
+| 2 | PyroWave | non | 42,7 ms | 59,0 ms | 32,7 - 66,6 |
+| 3 | HEVC | non | 57,9 ms | 66,6 ms | 40,6 - 91,7 |
+| 4 | PyroWave | non | 42,6 ms | 58,3 ms | 32,4 - 83,9 |
+| 5 | HEVC | oui | 58,6 ms | 83,2 ms | 41,3 - 375,8 |
+| 6 | PyroWave | oui | 49,7 ms | 59,1 ms | 32,9 - 92,3 |
+
+- **PyroWave natif bat le HEVC de Steam de 7 à 15 ms en médiane sur la RTX**
+  (42,6-42,7 contre 49,9-57,9 ms). Il est très stable d'une passe à l'autre,
+  là où le HEVC varie de 8 ms. Les p90 sont proches (58-59 contre 59-67 ms).
+  **La porte de U0.4 (au moins 2 ms sur NVIDIA) est franchie** : le POC ne se
+  resserre pas sur les hôtes à iGPU.
+- « Low Latency Networking » de Steam dégrade les deux codecs (+7 ms en
+  médiane pour PyroWave ; pour le HEVC, une queue à 83 ms au p90 et une pointe
+  à 376 ms).
+- Ce n'est pas encore une comparaison avec MoonlightWeb : ses clics se
+  mesurent autrement (le drapeau de l'overlay de banc, 33-43 ms sur ce couple
+  en U0.3). La même mesure par `click-photon.ps1` sur MoonlightWeb, et l'hôte
+  à iGPU, restent à faire.
 
 ## 7. Concrètement, pour l'utilisateur
 
