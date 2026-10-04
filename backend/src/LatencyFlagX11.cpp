@@ -511,8 +511,13 @@ void overlayThread()
                 hideAt = Clock::now() + std::chrono::milliseconds(LatencyFlag::kShowMs);
                 // One line per injected click, so a run can be matched against
                 // the browser's table (and a source that never fires shows as
-                // silence).
-                qInfo() << "[LatencyFlag] injected click";
+                // silence), with when the flag went up on the steady clock the
+                // relay stamps frames with: a pass joins it to the frame that
+                // first showed it (plan Wi-Fi W1, scripts/bench/wifi).
+                const long long shownUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                                              Clock::now().time_since_epoch())
+                                              .count();
+                qInfo() << "[LatencyFlag] injected click — shown at steady" << shownUs << "us";
             }
         }
 

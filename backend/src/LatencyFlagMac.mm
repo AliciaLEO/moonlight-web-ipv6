@@ -287,10 +287,16 @@ CGEventRef tapCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef event
         if (injected) {
             flash();
             // One line per injected click, so a run can be matched against the
-            // browser's table (and a tap that never fires shows as silence).
+            // browser's table (and a tap that never fires shows as silence),
+            // with when the flag was asked up on the steady clock the relay
+            // stamps frames with (plan Wi-Fi W1, scripts/bench/wifi). The
+            // window shows on the main thread just after.
+            const long long shownUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch())
+                                          .count();
             const CGPoint p = CGEventGetLocation(event);
             qInfo() << "[LatencyFlag] injected click at" << static_cast<int>(p.x) << ","
-                    << static_cast<int>(p.y);
+                    << static_cast<int>(p.y) << "— shown at steady" << shownUs << "us";
         }
     }
     return event;
