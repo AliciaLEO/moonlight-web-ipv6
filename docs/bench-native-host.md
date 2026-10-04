@@ -6149,6 +6149,68 @@ hauts d'à peu près ce coût. Les écarts entre modes le portent des deux côt�
 La copie se fait maintenant dans un worker (`b83f3dac`) et ne coûte plus que
 0,1 à 0,2 ms (`docs/design/ultra-lan-poc.md` §6.2).
 
+## 8u. Wi-Fi : la vidéo qui attend dans SCTP (03-04/10/2026)
+
+Plan `wifi-sctp-descente.md`, né de l'étude T7 du plan des radios. Le détail,
+passe par passe, est en anglais dans `docs/design/network-latency-findings.md`
+(§3, entrées du 03 et du 04/10) ; ce paragraphe en garde l'essentiel. Hôte
+DualRTX (natif Windows), clic → drapeau (`mwLatency`) et journal par image
+`relaylog=1` + `scripts/bench/wifi/flagpath.py`, séries à tours alternés
+(`scripts/bench/wifi/series.py`).
+
+### 8u.1 Le constat
+
+- En Wi-Fi, le clic **monte** en 2 à 8 ms ; le surplus est sur la **descente**.
+  Ligne de base (W0) : clic → drapeau 71 ms sur le Mac, 99 sur le N95, 34 en
+  Ethernet (UM790Pro), pour un ping UDP de 4,6-5,1 ms sur le même Wi-Fi.
+- Cause (W1, W1 bis) : la socket UDP de Chrome a un petit tampon de réception
+  et déborde quand Chrome lit en retard pendant une rafale du Wi-Fi (noyau du
+  Mac : 1 000 à 2 300 pertes par passe de 2 min). SCTP lit chaque perte comme
+  de la congestion, ferme sa fenêtre, et les images attendent dans usrsctp.
+- Le tampon d'envoi d'usrsctp fait **toujours 256 Kio** : libdatachannel porte
+  `SO_SNDBUF` à `maxMessageSize`. Le dimensionnement à 100 ms de débit
+  (`fe359154`, 17/09) n'a jamais pris.
+
+### 8u.2 Les pistes
+
+| Piste | Clé de banc | Résultat | Produit |
+|---|---|---|---|
+| A : lisser les envois de l'hôte | `pace=` | rien sur le N95, `pace=4` pire sur le Mac | non |
+| **B : le débit suit les retransmissions SCTP** | `retrcut=<‰>` | Mac : clic 73,6 → **62,6 ms** (p90 112 → 86), messages p90 ~330 → 35 ms ; N95 : 109 → 100 ms ; Ethernet neutre | **défaut Windows, 3 ‰** (`55dd9cde`) |
+| C : petit tampon usrsctp + image retenue | `sctpbuf=`, `linkhold=<ms>` | Mac : 31 i/s, clic +14 à +20 ms ; un octet reste ~16 ms non acquitté | non |
+| **W2.5 : sans limite de rafale** | `sctpburst=<n>` | Mac : clic 66,9 → **58,5 ms** (p90 98 → 69), attente dans usrsctp 15,5 → 9,4 ms ; N95 : rien ; Ethernet : âge d'une image 13,0 → 8,4 ms | **défaut Windows et Linux, 0** (`2ef56bfe`, `6a833826`) |
+| W2.3 : ordonnanceur de flux | `sctpss=` | module 4 sans effet ; module 2 casse l'association (refusé, `ce23c9c9`) | non |
+| RTCC (T7) | `sctpcc=3` | retransmissions ÷2, clic inchangé | non |
+
+- Sur le N95 (~6 Mbit/s, 60 i/s), une image fait ~10 paquets : la rafale de 10
+  la retient rarement, d'où l'absence de gain.
+- Il reste ~9 ms dans usrsctp sur le Mac, contre ~4,5 en Ethernet : l'horloge
+  des SACK du lien Wi-Fi.
+
+### 8u.3 Hôtes Linux et macOS
+
+- `retrcut=` atteint aussi leurs régulateurs (`bcfe5734`, éteint sauf clé).
+- ⚠️ Les passes `--host` du 04/10 avaient toutes pour client DualRTX en
+  Ethernet, pas le N95 annoncé (`pass.py` pilotait son propre kiosque ; corrigé
+  `09df1c3c`, les journaux des hôtes montraient 192.168.1.66).
+- **Linux** (UM790Pro, X11, KMS 1080p60), client filaire : `sctpburst=0`, clic
+  64,6 → 58,8 ms et 86,9 → 78,4 ms selon le GPU du client, image ~6 ms plus
+  jeune ; `retrcut=3` sans effet. ~37 ms entre la levée du drapeau et la
+  capture qui le montre (KMS à 60 Hz + fenêtre X11), hors réseau. À refaire
+  avec un vrai client Wi-Fi.
+- **macOS** : aucune mesure propre ; `kNativeSctpMaxBurst` y reste à 10.
+
+### 8u.4 Reproduire
+
+- `MW_NATIVE_TUNING` / `--tuning` de `local_matrix.py` et de `series.py` :
+  `relaylog=1,retrcut=3,sctpburst=0` ; `retrcut=0` et `sctpburst=10`
+  rendent l'ancien comportement.
+- `python scripts/bench/wifi/flagpath.py --prefix <préfixe>` coupe chaque clic
+  en jambes (`net`, `inSctp` = `net` − SRTT/2) ; `report.py` donne `burstT`
+  (envois coupés par la rafale) et les retenues par seconde.
+- Hôte distant : `series.py <client> --host um790pro|mw-mac` ; vérifier à la
+  première passe l'adresse du pair dans le journal de l'hôte.
+
 ## 9. Pour l'A/B
 
 Le banc encode vers un puits ; l'A/B se fait sur un vrai flux. Une session
