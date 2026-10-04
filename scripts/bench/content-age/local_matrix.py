@@ -152,6 +152,9 @@ def main():
     ap.add_argument("--target", default="vdisplay",
                     help="vdisplay (the product's virtual display) | display (a physical screen, "
                          "named by --display-gpu): a game on a real screen (pass.py --target)")
+    ap.add_argument("--gpu-load", default="",
+                    help="mw-gpu-load on this GPU under each pass's measurement and clicks "
+                         "(pass.py --gpu-load)")
     ap.add_argument("--display-gpu", default="",
                     help="with --target display: the screen this GPU drives (\"RTX\", \"Arc\"), its "
                          "tile found from the instance's /api/native/status at each pass")
@@ -169,6 +172,8 @@ def main():
         client += ["--clicks", str(a.clicks)]
     if a.codec:
         client += ["--codec", a.codec]
+    if a.gpu_load:
+        client += ["--gpu-load", a.gpu_load]
     if a.uplink:
         client += ["--uplink", a.uplink]
     global EXE, TUNING

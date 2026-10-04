@@ -164,6 +164,66 @@ def stepper_state(d, content_ms):
     return st
 
 
+def start_load(gpu, name, level=None):
+    """mw-gpu-load on @p gpu, calibrated (or at @p level), its window kept off
+    the captured content: the tool moves it onto the screen that GPU drives,
+    which can be the virtual display under test. Returns (load, level)."""
+    import gpu_load
+    load = gpu_load.Load(gpu, os.path.join(age.OUT, name), level=level)
+    line = load.wait_calibrated()
+    moved = keep_off_content(load.proc.pid)
+    if moved:
+        print("  load window moved off the content:", moved, flush=True)
+    return load, level or line.get("level")
+
+
+def keep_off_content(pid):
+    """Move @p pid's windows that overlap MW_BENCH_CONTENT_RECT onto the
+    primary screen, still topmost (a hidden load window stops rendering)."""
+    import ctypes
+    from ctypes import wintypes
+    rect = os.environ.get("MW_BENCH_CONTENT_RECT")
+    if not rect:
+        return []
+    x, y, w, h = (int(v) for v in rect.split(","))
+    prim = next((m for m in monitors() if "primary" in m), None)
+    if not prim:
+        return []
+    px, py = (int(v) for v in prim[1].split(","))
+    user32 = ctypes.windll.user32
+    found = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def each(hwnd, _):
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value == pid and user32.IsWindowVisible(hwnd):
+            found.append(hwnd)
+        return True
+
+    user32.EnumWindows(each, 0)
+    moved = []
+    for hwnd in found:
+        r = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(r))
+        if r.left < x + w and r.right > x and r.top < y + h and r.bottom > y:
+            # HWND_TOPMOST, SWP_NOSIZE | SWP_NOACTIVATE
+            user32.SetWindowPos(hwnd, wintypes.HWND(-1), px + 80, py + 80, 0, 0, 0x0001 | 0x0010)
+            moved.append((r.left, r.top))
+    return moved
+
+
+def band_seen(d, secs=2.0):
+    """Whether the client reads the bench page's band on the stream: two
+    seconds of the probe, every frame. False only when it read no age and
+    found no band at all (every read "block"), a screen without the page."""
+    d.eval("mwContentAge.start({every: 1})")
+    time.sleep(secs)
+    raw = d.eval("JSON.stringify(mwContentAge.stop())")
+    s = json.loads(raw) if raw and raw != "null" else {}
+    return (s.get("ages") or 0) > 0 or not (s.get("invalid") or {}).get("block")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fps", type=int, default=0, help="stream_fps; 0 = Auto")
@@ -195,6 +255,10 @@ def main():
                          "latency_flag_enabled in the instance's settings.json)")
     ap.add_argument("--local-storage", action="append", default=[], metavar="KEY=VALUE",
                     help="a bench switch the page reads at launch (mw_decodequeue=pending)")
+    ap.add_argument("--gpu-load", default="",
+                    help="mw-gpu-load on this GPU (a part of its name: Arc, RTX, AMD) under the "
+                         "measurement, then again under the clicks: the tool stops at 60 s, a run "
+                         "each (acceptance/gpu_load.py)")
     ap.add_argument("--autostep", action="store_true",
                     help="\"Auto\" with detection on (localStorage mw_autostep=1; design "
                          "§33.10): the stream may step above the client's rate. Off otherwise "
@@ -293,9 +357,8 @@ def main():
             return
         if d.eval("typeof (window.mwContentAge && window.mwContentAge.onDecoded)") != "function":
             raise SystemExit("the page runs an older content-age probe")
-        run.content_start("scroll.html?band=time&px=%d%s" % (
-                              a.px, "&fps=" + a.game_fps if a.game_fps else ""), probe=False,
-                          debug_port=CONTENT_PORT)
+        page = "scroll.html?band=time&px=%d%s" % (a.px, "&fps=" + a.game_fps if a.game_fps else "")
+        run.content_start(page, probe=False, debug_port=CONTENT_PORT)
         shown = True
         # When the content began to move, on the client's clock: what the
         # detection's decisions are timed from (it tries nothing on a still
@@ -303,10 +366,31 @@ def main():
         content_ms = d.eval("performance.now()")
         time.sleep(4)
         age.calibrate(argparse.Namespace(port=CONTENT_PORT, tries=40))
+        # The kiosk can stay a blank white window (run.content_start), and its
+        # own check cannot read the virtual display: the stream is looked at
+        # instead. A band the client cannot read at all is a page not on the
+        # screen; it is launched again (U0.3, 03/10/2026: one pass lost so).
+        for _again in range(2):
+            if band_seen(d):
+                break
+            print("  the stream shows no band (a blank kiosk?): the page launched again",
+                  flush=True)
+            run.content_start(page, probe=False, debug_port=CONTENT_PORT)
+            time.sleep(4)
+            age.calibrate(argparse.Namespace(port=CONTENT_PORT, tries=40))
         time.sleep(a.settle)
+        load_seen = {}
+        level = None
+        if a.gpu_load:
+            # Calibration (8 s) and the measurement fit the tool's 60 s.
+            a.secs = min(a.secs, 45)
+            load, level = start_load(a.gpu_load, a.tag + ".load.jsonl")
         age.run(argparse.Namespace(client="localhost:%d" % (a.client_port or run.DEBUG_PORT),
                                    needle="", secs=a.secs, every=a.every, tag=a.tag,
                                    local=not remote))
+        if a.gpu_load:
+            load_seen["measure"] = load.snapshot(a.secs)
+            load.stop()
         # cadence=deadline: the client's side of the grid — whether the host
         # followed it, the lead it asked for, and how many frames came late.
         grid = d.eval("window.mwVsyncGrid && window.mwVsyncGrid.running ? "
@@ -314,7 +398,13 @@ def main():
         # "Auto" with detection: where it stands and what it decided, read
         # before the clicks (they move nothing on the screen's content).
         stepper = stepper_state(d, content_ms)
+        if a.gpu_load and a.clicks > 0:
+            # The same cost again, for the clicks: the level found above.
+            load, _ = start_load(a.gpu_load, a.tag + ".load-clicks.jsonl", level)
         clicks = click_flag(d, a.clicks, tag=a.tag) if a.clicks > 0 else None
+        if a.gpu_load and a.clicks > 0:
+            load_seen["clicks"] = load.snapshot(30)
+            load.stop()
         uplink = uplink_runs(d, a.uplink, a.tag)
         d.expand_latency_detail()
         stats = d.stats()
@@ -326,6 +416,12 @@ def main():
         data["stepper"] = stepper
         data["clicks"] = clicks
         data["uplink"] = uplink
+        if load_seen:
+            data["load"] = load_seen
+            print("  load: " + " | ".join("%s %s fps, GPU %s ms, level %s%s" % (
+                k, v.get("fps"), v.get("gpuMs"), v.get("level"),
+                "" if v.get("running") else ", ENDED " + str((v.get("end") or {}).get("reason")))
+                for k, v in load_seen.items()), flush=True)
         if grid:
             print("  grid: followed %s, lead %s ms, margin %s ms, %s misses in %s frames, "
                   "slack median %s ms (p5 %s)" % (
