@@ -548,6 +548,24 @@ DataChannelRelay::DataChannelRelay(IMediaEngine* engine, QObject* parent)
         } catch (const std::exception&) {}
     });
 
+    // What the host's OS asked of a recreated HID device, for the page to
+    // pass to the real one (output reports, features). Same thread as rumble.
+    connect(m_Shim, &IMediaEngine::hidRequest, this,
+            [this](int slot, int kind, int reportId, QByteArray data) {
+                if (m_Stopping.load() || !m_InputDc) return;
+                static const char* const kKinds[] = {"output", "getfeature", "setfeature"};
+                QJsonObject m;
+                m["type"] = "hidrequest";
+                m["slot"] = slot;
+                m["kind"] = QLatin1String(kKinds[qBound(0, kind, 2)]);
+                m["reportId"] = reportId;
+                m["data"] = QString::fromLatin1(data.toBase64());
+                QByteArray j = QJsonDocument(m).toJson(QJsonDocument::Compact);
+                try {
+                    m_InputDc->send(std::string(j.constData(), j.size()));
+                } catch (const std::exception&) {}
+            });
+
     // Forward the mouse pointer's shape when the browser is the one drawing it.
     // Rare by construction — one message per shape change, never per frame —
     // so the base64 of a small PNG on the input channel costs nothing.
@@ -1166,6 +1184,21 @@ void DataChannelRelay::createDataChannels()
                 ClipboardBridge::instance()->requestAnnounce();
             }
 
+            // Whether this host recreates WebHID devices: the page shows its
+            // "Transmit a device" panel from this answer.
+            {
+                const QString why = !m_InputPolicy.hid
+                                        ? QStringLiteral("not allowed for this player")
+                                        : m_Shim->hidUnavailableReason();
+                QJsonObject caps{{QStringLiteral("type"), QStringLiteral("hidcaps")},
+                                 {QStringLiteral("available"), why.isEmpty()},
+                                 {QStringLiteral("why"), why}};
+                const QByteArray j = QJsonDocument(caps).toJson(QJsonDocument::Compact);
+                try {
+                    m_InputDc->send(std::string(j.constData(), j.size()));
+                } catch (const std::exception&) {}
+            }
+
             // Start periodic stats timer — marshal to the Qt main thread:
             // this callback runs on a libdatachannel thread and QTimer::start()
             // is thread-affine (silently fails otherwise).
@@ -1203,6 +1236,30 @@ void DataChannelRelay::createDataChannels()
                 this, [this, text, recvUs]() { onInputMessage(text, recvUs); },
                 Qt::QueuedConnection);
         });
+    }
+
+    // --- HID DataChannel (the HID passthrough's input reports, plan P2) ---
+    // Unordered and never retransmitted: each report carries the device's
+    // whole state, so the next one repairs a loss, and the page sends an
+    // unchanged report again every 500 ms. Negotiated, so it adds nothing to
+    // the offer; binary [slot][report id][seq u16 LE][report], applied on this
+    // thread like the direct input, under the same lock and the same policy.
+    {
+        rtc::DataChannelInit hidConfig;
+        hidConfig.negotiated = true;
+        hidConfig.id = 4;
+        hidConfig.reliability.unordered = true;
+        hidConfig.reliability.maxRetransmits = 0;
+        m_HidDc = m_Pc->createDataChannel("hid", hidConfig);
+        if (m_HidDc) {
+            m_HidDc->onMessage([this](const std::variant<rtc::binary, rtc::string>& msg) {
+                if (!std::holds_alternative<rtc::binary>(msg)) return;
+                const rtc::binary& frame = std::get<rtc::binary>(msg);
+                std::lock_guard<std::mutex> lk(m_InputMutex);
+                if (m_Stopping.load() || !m_InputPolicy.hid) return;
+                m_Shim->hidInput(reinterpret_cast<const uint8_t*>(frame.data()), frame.size());
+            });
+        }
     }
 
     // --- Flood DataChannel (bench only: `flood=`, plan Idées Punktfunk A0) ---
@@ -1959,6 +2016,22 @@ void DataChannelRelay::onInputMessage(const std::string& message, int64_t recvUs
         // engine's encoding of it.
         m_Shim->sendControllerRemoval(static_cast<uint8_t>(msg["index"].toInt(0)),
                                       static_cast<uint16_t>(msg["mask"].toInt(0)));
+    } else if (type == "hidattach") {
+        // A device the page reads through WebHID, to recreate here. The answer
+        // says whether it was, and why not: the page shows it by the device.
+        const int slot = msg["slot"].toInt(-1);
+        const QString why = (slot < 0 || slot > 7) ? QStringLiteral("slot out of range")
+                                                   : m_Shim->hidAttach(slot, msg);
+        QJsonObject r{{QStringLiteral("type"), QStringLiteral("hidattached")},
+                      {QStringLiteral("slot"), slot},
+                      {QStringLiteral("ok"), why.isEmpty()},
+                      {QStringLiteral("why"), why}};
+        const QByteArray j = QJsonDocument(r).toJson(QJsonDocument::Compact);
+        try {
+            if (m_InputDc) m_InputDc->send(std::string(j.constData(), j.size()));
+        } catch (const std::exception&) {}
+    } else if (type == "hiddetach") {
+        m_Shim->hidDetach(msg["slot"].toInt(-1));
     } else if (type == "uprobe") {
         // The uplink bench's dated message: nothing to inject, only its stamp
         // to answer (above).
@@ -2501,6 +2574,7 @@ void DataChannelRelay::stop()
     }
 
     closeDc(m_InputDc, "input");
+    closeDc(m_HidDc, "hid");
 
     // The bench's flood: its channel closed first, so a send blocked on it
     // errors out and the thread joins at once.

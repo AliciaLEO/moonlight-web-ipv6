@@ -21,6 +21,7 @@
 #include "IMediaEngine.h"
 
 #include "mw/native/FpsStep.h"
+#include "mw/native/HidPassthrough.h"
 #include "mw/native/LinkFeedback.h"
 #include "mw/native/SessionConfig.h"
 #include "mw/native/StageStats.h"
@@ -259,6 +260,12 @@ public:
                              short leftStickX, short leftStickY, short rightStickX,
                              short rightStickY) override;
     void sendControllerRemoval(uint8_t controllerNumber, uint16_t activeGamepadMask) override;
+    /// The HID passthrough: devices the page reads through WebHID, recreated
+    /// here by mw::native::HidPassthrough (made at the first attach).
+    QString hidUnavailableReason() const override;
+    QString hidAttach(int slot, const QJsonObject& message) override;
+    void hidInput(const uint8_t* frame, size_t size) override;
+    void hidDetach(int slot) override;
     /// Kept at the browser's own numbering. A native session owns its virtual
     /// pads — one table per worker, see VigemGamepad — so concurrent sessions
     /// never meet on one pad; the shift that keeps GameStream sessions apart
@@ -487,6 +494,12 @@ private:
     void onCursor(const mw::native::CursorUpdate& cursor);
 
     std::unique_ptr<mw::native::Session> m_Session;
+
+    /// The HID passthrough's devices. Made at the first hidattach, gone with
+    /// the session. The mutex guards the pointer only: HidPassthrough is
+    /// thread-safe, and hidInput comes from the 'hid' channel's thread.
+    std::mutex m_HidMutex;
+    std::unique_ptr<mw::native::HidPassthrough> m_Hid;
 
     /// See setDirectFrameSink. The mutex is held for the whole sink call, so
     /// clearing the sink waits out a frame in flight; it is uncontended

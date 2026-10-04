@@ -81,6 +81,23 @@ MediaTrackRelay::MediaTrackRelay(IMediaEngine* engine, QObject* parent)
         } catch (const std::exception&) {}
     });
 
+    // What the host's OS asked of a recreated HID device — see DataChannelRelay.
+    connect(m_Shim, &IMediaEngine::hidRequest, this,
+            [this](int slot, int kind, int reportId, QByteArray data) {
+                if (m_Stopping.load() || !m_InputDc) return;
+                static const char* const kKinds[] = {"output", "getfeature", "setfeature"};
+                QJsonObject m;
+                m["type"] = "hidrequest";
+                m["slot"] = slot;
+                m["kind"] = QLatin1String(kKinds[qBound(0, kind, 2)]);
+                m["reportId"] = reportId;
+                m["data"] = QString::fromLatin1(data.toBase64());
+                QByteArray j = QJsonDocument(m).toJson(QJsonDocument::Compact);
+                try {
+                    m_InputDc->send(std::string(j.constData(), j.size()));
+                } catch (const std::exception&) {}
+            });
+
     // The input gate (native host) — see DataChannelRelay for the message.
     connect(m_Shim, &IMediaEngine::inputGateChanged, this,
             [this](bool blocked, QString reason, QString window) {
@@ -454,6 +471,19 @@ void MediaTrackRelay::createTracksAndChannels()
                     ClipboardBridge::instance()->requestAnnounce();
                 }
 
+                {
+                    const QString why = !m_InputPolicy.hid
+                                            ? QStringLiteral("not allowed for this player")
+                                            : m_Shim->hidUnavailableReason();
+                    QJsonObject caps{{QStringLiteral("type"), QStringLiteral("hidcaps")},
+                                     {QStringLiteral("available"), why.isEmpty()},
+                                     {QStringLiteral("why"), why}};
+                    const QByteArray j = QJsonDocument(caps).toJson(QJsonDocument::Compact);
+                    try {
+                        m_InputDc->send(std::string(j.constData(), j.size()));
+                    } catch (const std::exception&) {}
+                }
+
                 // Start periodic stats timer on the relay's own thread: this
                 // callback runs on a libdatachannel thread and QTimer::start()
                 // must be invoked from the timer's owning thread (otherwise Qt
@@ -478,6 +508,34 @@ void MediaTrackRelay::createTracksAndChannels()
                     QMetaObject::invokeMethod(
                         this, [this, text]() { onInputMessage(text); }, Qt::QueuedConnection);
                 }
+            });
+        }
+    }
+
+    // ── HID DataChannel (the HID passthrough's input reports) ─────────────
+    // See DataChannelRelay. Handled on the relay thread like this relay's
+    // input, which is where the policy and the engine are safe to touch.
+    {
+        rtc::DataChannelInit hidConfig;
+        hidConfig.negotiated = true;
+        hidConfig.id = 4;
+        hidConfig.reliability.unordered = true;
+        hidConfig.reliability.maxRetransmits = 0;
+        m_HidDc = m_Pc->createDataChannel("hid", hidConfig);
+        if (m_HidDc) {
+            m_HidDc->onMessage([this](const std::variant<rtc::binary, rtc::string>& msg) {
+                if (!std::holds_alternative<rtc::binary>(msg)) return;
+                const rtc::binary& b = std::get<rtc::binary>(msg);
+                QByteArray frame(reinterpret_cast<const char*>(b.data()),
+                                 static_cast<int>(b.size()));
+                QMetaObject::invokeMethod(
+                    this,
+                    [this, frame]() {
+                        if (m_Stopping.load() || !m_InputPolicy.hid) return;
+                        m_Shim->hidInput(reinterpret_cast<const uint8_t*>(frame.constData()),
+                                         static_cast<size_t>(frame.size()));
+                    },
+                    Qt::QueuedConnection);
             });
         }
     }
@@ -925,6 +983,21 @@ void MediaTrackRelay::onInputMessage(const std::string& message)
         // and not an empty state.
         m_Shim->sendControllerRemoval(static_cast<uint8_t>(msg["index"].toInt(0)),
                                       static_cast<uint16_t>(msg["mask"].toInt(0)));
+    } else if (type == "hidattach") {
+        // See DataChannelRelay.
+        const int slot = msg["slot"].toInt(-1);
+        const QString why = (slot < 0 || slot > 7) ? QStringLiteral("slot out of range")
+                                                   : m_Shim->hidAttach(slot, msg);
+        QJsonObject r{{QStringLiteral("type"), QStringLiteral("hidattached")},
+                      {QStringLiteral("slot"), slot},
+                      {QStringLiteral("ok"), why.isEmpty()},
+                      {QStringLiteral("why"), why}};
+        const QByteArray j = QJsonDocument(r).toJson(QJsonDocument::Compact);
+        try {
+            if (m_InputDc) m_InputDc->send(std::string(j.constData(), j.size()));
+        } catch (const std::exception&) {}
+    } else if (type == "hiddetach") {
+        m_Shim->hidDetach(msg["slot"].toInt(-1));
     } else {
         qWarning() << "[MediaTrackRelay] Unknown input type:" << type;
     }
@@ -1079,6 +1152,7 @@ void MediaTrackRelay::stop()
     };
 
     closeDc(m_InputDc, "input");
+    closeDc(m_HidDc, "hid");
 
     // Close the audio track under the audio send lock, so an in-flight audio
     // sendFrame finishes before the track is destroyed.

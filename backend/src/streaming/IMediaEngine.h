@@ -305,6 +305,30 @@ public:
     /// flag set at construction.
     virtual bool intraRefreshActive() const { return false; }
 
+    /// The HID passthrough (docs/design/hid-passthrough-study.md, plan P2): a
+    /// device the page reads through WebHID, recreated on the host. Only the
+    /// native engine can; a GameStream host has no way to, and says so.
+    virtual QString hidUnavailableReason() const
+    {
+        return QStringLiteral("the HID passthrough needs MoonlightWeb's native host");
+    }
+    /// The page's hidattach. Empty on success, otherwise why the device was
+    /// refused (for the page and the log).
+    virtual QString hidAttach(int slot, const QJsonObject& message)
+    {
+        Q_UNUSED(slot);
+        Q_UNUSED(message);
+        return hidUnavailableReason();
+    }
+    /// One message of the 'hid' channel: [slot][report id][seq u16 LE][report].
+    /// Called on the channel's own thread; never blocks.
+    virtual void hidInput(const uint8_t* frame, size_t size)
+    {
+        Q_UNUSED(frame);
+        Q_UNUSED(size);
+    }
+    virtual void hidDetach(int slot) { Q_UNUSED(slot); }
+
 signals:
     /// presentationTimeUs travels WITH the frame through the queued connection:
     /// relays must not re-read a "latest frame" atomic at drain time, or a
@@ -325,6 +349,11 @@ signals:
 
     /// The host asked to rumble a controller (forwarded to the browser).
     void rumble(int controllerNumber, int lowFreqMotor, int highFreqMotor);
+
+    /// The host's OS asked something of a recreated HID device (an output
+    /// report, a feature): forwarded to the page, on the engine's thread.
+    /// kind: 0 output, 1 get feature, 2 set feature.
+    void hidRequest(int slot, int kind, int reportId, QByteArray data);
 
     /// The mouse pointer's SHAPE changed, and the browser is the one drawing it.
     ///

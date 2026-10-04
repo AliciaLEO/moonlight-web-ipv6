@@ -339,6 +339,9 @@ private:
     // packet no longer head-of-line-blocks the audio (the periodic dropouts).
     std::shared_ptr<rtc::Track> m_AudioTrack;
     std::shared_ptr<rtc::DataChannel> m_InputDc;
+    // The HID passthrough's reports (id 4, unordered, never retransmitted): a
+    // lost one is repaired by the next, the page repeats an unchanged report.
+    std::shared_ptr<rtc::DataChannel> m_HidDc;
 
     // The bench's link keys (setLinkBench). m_Loss is the video path's, under
     // m_VideoMutex; the rest is read once, at setup.

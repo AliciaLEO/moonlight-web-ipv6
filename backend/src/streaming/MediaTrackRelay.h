@@ -152,6 +152,8 @@ private:
     // the audio stream, eliminating the periodic micro-dropouts.
     std::shared_ptr<rtc::Track> m_AudioTrack;
     std::shared_ptr<rtc::DataChannel> m_InputDc;
+    // The HID passthrough's reports (id 4) — see DataChannelRelay.
+    std::shared_ptr<rtc::DataChannel> m_HidDc;
 
     std::atomic<bool> m_Connected{false};
     std::atomic<bool> m_Stopping{false};

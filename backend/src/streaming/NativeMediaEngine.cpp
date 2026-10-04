@@ -19,6 +19,7 @@
 #include "FeedInfo.h"
 #include "FeedPublisher.h"
 #include "FeedSubscriber.h"
+#include "HidCollectionsJson.h"
 #include "InputWatchdog.h"
 #include "NativeBench.h"
 #include "backend/VirtualDisplay.h"
@@ -800,6 +801,11 @@ void NativeMediaEngine::stopConnection()
     }
     if (!m_Session) return;
     m_Connected.store(false, std::memory_order_release);
+    {
+        // The recreated devices leave with the session that made them.
+        std::lock_guard<std::mutex> lock(m_HidMutex);
+        m_Hid.reset();
+    }
     m_Session->stop();
     m_Session.reset();
     m_Publisher = nullptr;
@@ -1326,6 +1332,62 @@ void NativeMediaEngine::sendControllerRemoval(uint8_t controllerNumber, uint16_t
     event.controllerNumber = padNumber(controllerNumber);
     event.activeGamepadMask = activeGamepadMask;
     m_Session->sendInput(event);
+}
+
+QString NativeMediaEngine::hidUnavailableReason() const
+{
+    return QString::fromStdString(mw::native::HidPassthrough::unavailableReason());
+}
+
+QString NativeMediaEngine::hidAttach(int slot, const QJsonObject& message)
+{
+    if (!m_Session) return QStringLiteral("no native session");
+    QString error;
+    mw::native::HidDeviceInfo device;
+    device.collections =
+        collectionsFromJson(message.value(QStringLiteral("collections")).toArray(), &error);
+    if (!error.isEmpty()) return QStringLiteral("unreadable collections: ") + error;
+    device.name = message.value(QStringLiteral("productName")).toString().left(120).toStdString();
+    device.vendorId = static_cast<uint16_t>(message.value(QStringLiteral("vendorId")).toInt());
+    device.productId = static_cast<uint16_t>(message.value(QStringLiteral("productId")).toInt());
+
+    std::lock_guard<std::mutex> lock(m_HidMutex);
+    if (!m_Hid) {
+        // What the host's OS asks of a device leaves on a backend thread; the
+        // relay that sends it to the page lives on this engine's thread.
+        m_Hid =
+            std::make_unique<mw::native::HidPassthrough>([this](const mw::native::HidRequest& r) {
+                const int kind = static_cast<int>(r.kind);
+                const QByteArray data(reinterpret_cast<const char*>(r.data.data()),
+                                      static_cast<int>(r.data.size()));
+                QMetaObject::invokeMethod(
+                    this,
+                    [this, r, kind, data]() { emit hidRequest(r.slot, kind, r.reportId, data); },
+                    Qt::QueuedConnection);
+            });
+    }
+    const std::string why = m_Hid->attach(slot, device);
+    if (!why.empty()) {
+        qWarning().noquote() << "[NativeMediaEngine] HID device refused:"
+                             << QString::fromStdString(why);
+        return QString::fromStdString(why);
+    }
+    return {};
+}
+
+void NativeMediaEngine::hidInput(const uint8_t* frame, size_t size)
+{
+    if (size < 4) return;
+    std::lock_guard<std::mutex> lock(m_HidMutex);
+    if (!m_Hid) return;
+    const uint16_t seq = static_cast<uint16_t>(frame[2] | (frame[3] << 8));
+    m_Hid->input(frame[0], frame[1], seq, frame + 4, size - 4);
+}
+
+void NativeMediaEngine::hidDetach(int slot)
+{
+    std::lock_guard<std::mutex> lock(m_HidMutex);
+    if (m_Hid) m_Hid->detach(slot);
 }
 
 void NativeMediaEngine::syncLockKeys(bool numLock, bool capsLock, bool scrollLock)
