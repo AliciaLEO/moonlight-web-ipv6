@@ -2066,6 +2066,15 @@ private:
         governor.start(m_Config.bitrateKbps, steadyNowUs() / 1000,
                        m_Config.tuning.linkGovernor == EncoderTuning::Choice::Off,
                        m_Config.governorFloorPercent);
+        // The bench's retrcut= (plan Wi-Fi W2 B): SCTP's retransmissions as a
+        // reason to cut. The Windows host's own since 03/10/2026; here it is
+        // off unless named, until it is measured on this host.
+        governor.setRetransCut(
+            m_Config.tuning.retransCutPermille > 0 ? m_Config.tuning.retransCutPermille : 0);
+        if (governor.retransCut() > 0)
+            log::info("[native] rate governor: also cuts at " +
+                      std::to_string(governor.retransCut()) +
+                      " SCTP chunks retransmitted in a thousand (bench retrcut=)");
         int baseKbps = governor.targetKbps();
         m_LinkKbps = baseKbps;
         bool boosted = false;
@@ -2191,6 +2200,9 @@ private:
                             fb.resumed ? "the receiver is back from the background"
                             : fb.gaps > 0 || fb.evictions > 0                  ? "frames lost"
                             : fb.owdRiseMs >= encode::RateGovernor::kOveruseMs ? "delay rising"
+                            : governor.retransCut() > 0 &&
+                                    fb.retransPermille >= governor.retransCut()
+                                ? "SCTP retransmitting"
                             : governor.lastRaiseFast() ? "quiet, back to the link's last good rate"
                                                        : "quiet, raising");
                 } else if (governor.tick(nowMs)) {
