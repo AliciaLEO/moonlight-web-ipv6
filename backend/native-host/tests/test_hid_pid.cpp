@@ -74,6 +74,75 @@ std::vector<Collection> wheel()
     return {joystick, vendor};
 }
 
+/// A PID wheel (Moza, Simucube…): the wheel above with a PID block of its own,
+/// a Set Effect output report 2 in a logical collection, a Block Load feature
+/// report 3, and a PID "Device Paused" bit sharing input report 1 with the axis.
+std::vector<Collection> pidWheel()
+{
+    std::vector<Collection> c = wheel();
+    ReportItem paused;
+    paused.usages = {P(0x9F)};
+    paused.reportSize = 1;
+    paused.reportCount = 1;
+    paused.logicalMaximum = 1;
+    ReportItem pad;
+    pad.isConstant = true;
+    pad.reportSize = 7;
+    pad.reportCount = 1;
+    c[0].inputReports[0].items.push_back(paused);
+    c[0].inputReports[0].items.push_back(pad);
+
+    ReportItem index;
+    index.usages = {P(0x22)};
+    index.reportSize = 8;
+    index.reportCount = 1;
+    index.logicalMinimum = 1;
+    index.logicalMaximum = 40;
+    ReportItem x;
+    x.usages = {0x10030};
+    x.reportSize = 1;
+    x.reportCount = 1;
+    x.logicalMaximum = 1;
+    Report setEffect;
+    setEffect.reportId = 2;
+    setEffect.items = {index};
+    Report axes;
+    axes.reportId = 2;
+    axes.items = {x};
+    Collection axesEnable;
+    axesEnable.usagePage = 0x0F;
+    axesEnable.usage = 0x55;
+    axesEnable.type = Logical;
+    axesEnable.outputReports = {axes};
+    Collection effect;
+    effect.usagePage = 0x0F;
+    effect.usage = 0x21;
+    effect.type = Logical;
+    effect.outputReports = {setEffect};
+    effect.children = {axesEnable};
+    Report load;
+    load.reportId = 3;
+    load.items = {index};
+    Collection blockLoad;
+    blockLoad.usagePage = 0x0F;
+    blockLoad.usage = 0x89;
+    blockLoad.type = Logical;
+    blockLoad.featureReports = {load};
+    c[0].children = {effect, blockLoad};
+    return c;
+}
+
+bool anyPid(const Parsed& p)
+{
+    for (const Field& f : p.fields) {
+        if ((f.application >> 16) == 0x0F) return true;
+        for (uint32_t u : f.usages)
+            if ((u >> 16) == 0x0F) return true;
+        if (f.range && (f.usageMinimum >> 16) == 0x0F) return true;
+    }
+    return false;
+}
+
 /// Writes reports the way pid.dll would, by usage, from the parsed block.
 struct Writer
 {
@@ -407,6 +476,56 @@ void run_hid_pid_tests()
         hidpp[0] = 17;
         dev->write(input::IVirtualHid::Request::Output, hidpp);
         CHECK_EQ(requests.size(), static_cast<size_t>(1));
+    }
+
+    SECTION("HID PID — a wheel's own PID block is taken out, its input layout kept");
+    {
+        std::vector<Collection> c = pidWheel();
+        CHECK_EQ(static_cast<int>(pidFirstId(c)), 19);
+        stripPid(c);
+        const Parsed p = parse(encode(c));
+        CHECK(p.ok);
+        CHECK(!anyPid(p));
+        // Report 1 still carries the axis and 8 bits after it, now padding.
+        CHECK_EQ(reportBytes(p, Kind::Input, 1), static_cast<size_t>(1 + 3));
+        CHECK_EQ(reportBytes(p, Kind::Output, 2), static_cast<size_t>(0));
+        CHECK_EQ(reportBytes(p, Kind::Feature, 3), static_cast<size_t>(0));
+        CHECK(c[0].children.empty());
+        // The vendor collection is untouched.
+        CHECK_EQ(c.size(), static_cast<size_t>(2));
+        CHECK_EQ(reportBytes(p, Kind::Output, 18), static_cast<size_t>(64));
+        // A wheel without PID comes out as it went in.
+        std::vector<Collection> plain = wheel();
+        stripPid(plain);
+        CHECK(encode(plain) == encode(wheel()));
+    }
+
+    SECTION("HID PID — a PID wheel through HidPassthrough: the host's block, or none");
+    {
+        for (bool ffb : {false, true}) {
+            FeatureFake* dev = nullptr;
+            std::vector<HidRequest> requests;
+            HidPassthrough hp([&](const HidRequest& r) { requests.push_back(r); },
+                              [&] { return std::make_unique<FeatureFake>(&dev); });
+            HidDeviceInfo info;
+            info.collections = pidWheel();
+            info.forceFeedback = ffb;
+            CHECK(hp.attach(0, info).empty());
+            CHECK(dev != nullptr);
+            if (!dev) continue;
+            const Parsed p = parse(dev->descriptor);
+            CHECK(p.ok);
+            CHECK_EQ(anyPid(p), ffb);
+            // Never the wheel's own Set Effect (2) or Block Load (3).
+            CHECK_EQ(reportBytes(p, Kind::Output, 2), static_cast<size_t>(0));
+            CHECK_EQ(reportBytes(p, Kind::Feature, 3), static_cast<size_t>(0));
+            if (ffb) {
+                // The host's Block Load answers at once, from ids after the wheel's.
+                const std::vector<uint8_t> load = dev->getFeature(19 + 11);
+                CHECK(!load.empty());
+                CHECK(requests.empty());
+            }
+        }
     }
 
     SECTION("HID PID — without force feedback asked, no block");

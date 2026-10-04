@@ -84,8 +84,10 @@ std::string HidPassthrough::attach(int slot, const HidDeviceInfo& device)
     std::vector<input::hid::Collection> collections = device.collections;
     input::hid::repairBounds(collections);
     // Force feedback: a PID block after the device's own reports, when the
-    // page can play it and the device numbers its reports.
+    // page can play it and the device numbers its reports. A wheel's own PID
+    // block never reaches the host's OS: the host answers for it, or nobody.
     const uint8_t pidId = device.forceFeedback ? input::hid::pidFirstId(collections) : 0;
+    input::hid::stripPid(collections);
     const std::vector<uint8_t> descriptor =
         pidId ? input::hid::encodeWithPid(collections, pidId) : input::hid::encode(collections);
     if (std::string why = input::hid::validate(descriptor); !why.empty()) return why;

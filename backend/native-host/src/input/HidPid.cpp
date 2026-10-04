@@ -308,7 +308,86 @@ void setBitsOf(std::vector<uint8_t>& r, uint32_t offset, uint32_t size, uint32_t
     }
 }
 
+bool onPidPage(uint32_t usage)
+{
+    return (usage >> 16) == kPagePid;
+}
+
+bool isPidItem(const ReportItem& it)
+{
+    if (it.isRange) return onPidPage(it.usageMinimum);
+    return std::any_of(it.usages.begin(), it.usages.end(), onPidPage);
+}
+
+void padPid(Collection& c, bool inPid)
+{
+    inPid = inPid || c.usagePage == kPagePid;
+    for (auto* list : {&c.inputReports, &c.outputReports, &c.featureReports})
+        for (Report& r : *list)
+            for (ReportItem& it : r.items) {
+                if (it.isConstant || !(inPid || isPidItem(it))) continue;
+                ReportItem pad;
+                pad.isConstant = true;
+                pad.reportSize = it.reportSize;
+                pad.reportCount = it.reportCount;
+                it = pad;
+            }
+    for (Collection& ch : c.children)
+        padPid(ch, inPid);
+}
+
+// (kind, id) of every report that still carries a field of the device's own.
+using ReportKey = std::pair<int, uint8_t>;
+
+void usedReports(const Collection& c, std::vector<ReportKey>& used)
+{
+    int kind = 0;
+    for (const auto* list : {&c.inputReports, &c.outputReports, &c.featureReports}) {
+        for (const Report& r : *list)
+            if (std::any_of(r.items.begin(), r.items.end(),
+                            [](const ReportItem& it) { return !it.isConstant; }))
+                used.emplace_back(kind, r.reportId);
+        ++kind;
+    }
+    for (const Collection& ch : c.children)
+        usedReports(ch, used);
+}
+
+// Drops padding-only reports nobody else shares, then the collections left
+// with nothing; true when `c` itself is left with nothing.
+bool prune(Collection& c, const std::vector<ReportKey>& used)
+{
+    int kind = 0;
+    bool empty = true;
+    for (auto* list : {&c.inputReports, &c.outputReports, &c.featureReports}) {
+        list->erase(std::remove_if(list->begin(), list->end(),
+                                   [&](const Report& r) {
+                                       return std::find(used.begin(), used.end(),
+                                                        ReportKey(kind, r.reportId)) == used.end();
+                                   }),
+                    list->end());
+        empty = empty && list->empty();
+        ++kind;
+    }
+    c.children.erase(std::remove_if(c.children.begin(), c.children.end(),
+                                    [&](Collection& ch) { return prune(ch, used); }),
+                     c.children.end());
+    return empty && c.children.empty();
+}
+
 } // namespace
+
+void stripPid(std::vector<Collection>& collections)
+{
+    for (Collection& c : collections)
+        padPid(c, false);
+    std::vector<ReportKey> used;
+    for (const Collection& c : collections)
+        usedReports(c, used);
+    collections.erase(std::remove_if(collections.begin(), collections.end(),
+                                     [&](Collection& c) { return prune(c, used); }),
+                      collections.end());
+}
 
 uint8_t pidFirstId(const std::vector<Collection>& collections)
 {

@@ -58,6 +58,20 @@ constexpr int kPidMaxEffects = 40;
 /// must be all zero or all non-zero.
 uint8_t pidFirstId(const std::vector<Collection>& collections);
 
+/// Takes the device's own PID block out of what the page sent (P3: Moza,
+/// Simucube, Fanatec, Thrustmaster… carry one). The recreated device must not
+/// show it: two blocks would confuse pid.dll, and the device's would talk to
+/// a motor the host cannot reach. With force feedback, the host's block takes
+/// its place and the page re-encodes what it says into the device's own PID
+/// reports (frontend/js/hid/pidFfb.js).
+///
+/// Every item inside a PID collection, or with a PID usage, becomes padding
+/// of the same size, so a report the device shares with its own fields keeps
+/// its layout; reports left with padding alone, and collections left empty,
+/// are dropped. Call pidFirstId() before, on the device's collections as they
+/// came: the block's ids must stay clear of the reports the device still sends.
+void stripPid(std::vector<Collection>& collections);
+
 /// The PID block alone: logical collections for each PID report, to sit inside
 /// a game application collection. Its globals are its own; encodeWithPid()
 /// re-emits the device's after it.
