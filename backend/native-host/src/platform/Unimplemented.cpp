@@ -66,6 +66,14 @@ VirtualGamepad probeVirtualGamepad()
     return result;
 }
 
+std::vector<Codec> offerSessionCodecs(Capabilities& caps, const SessionConfig& config)
+{
+    // No backend: nothing to add.
+    (void)caps;
+    (void)config;
+    return {};
+}
+
 } // namespace mw::native::platform
 
 namespace mw::native::detail {

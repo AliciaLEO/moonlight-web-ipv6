@@ -23,6 +23,8 @@
 #include "Selector.h"
 #include "Session.h"
 
+#include <algorithm>
+
 #ifdef _WIN32
 #include "../platform/windows/InputDesktop.h"
 #endif
@@ -162,6 +164,10 @@ std::unique_ptr<Session> NativeHost::createSession(const SessionConfig& config,
                   "streams as Auto");
 #endif
 
+    // What the session's own settings unlock: on Linux, AV1 where it asks for
+    // the Vulkan Video chain (C13.12). Nothing elsewhere.
+    const std::vector<Codec> offered = platform::offerSessionCodecs(caps, asked);
+
     Selection selection;
     if (!select(caps, asked, selection, error)) return nullptr;
 
@@ -224,6 +230,10 @@ std::unique_ptr<Session> NativeHost::createSession(const SessionConfig& config,
     target.encodeGpuName = gpuName;
     target.encoder = selection.encoder;
     target.codec = selection.codec;
+    if (!offered.empty() && selection.gpu && !selection.fallbackEncoder)
+        for (Codec c : selection.gpu->codecs)
+            if (std::find(offered.begin(), offered.end(), c) == offered.end())
+                target.codecsWithoutOffer.push_back(c);
     target.crossGpuCopy = selection.crossGpuCopy;
     target.hdr = selection.hdr;
     target.hdrCapable = selection.hdrCapable;

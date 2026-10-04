@@ -25,6 +25,7 @@
 #include <opus.h>
 #endif
 #if defined(MW_NATIVE_LINUX_VULKAN)
+#include "encode/linux/Dav1dDecoder.h"
 #include "platform/linux/vulkan/VulkanDevice.h"
 #endif
 
@@ -301,8 +302,24 @@ void run_linux_session_tests()
     // ── And in AV1 ──────────────────────────────────────────────────────────
     {
         SECTION("Linux — the same session in AV1");
-        const bool offersAv1 = !h264Only && std::find(gpu->codecs.begin(), gpu->codecs.end(),
-                                                      Codec::Av1) != gpu->codecs.end();
+        bool offersAv1 = !h264Only && std::find(gpu->codecs.begin(), gpu->codecs.end(),
+                                                Codec::Av1) != gpu->codecs.end();
+        // AV1 through Vulkan Video (C13.12): offered only to a session that asks
+        // for that chain — as the setting does — where the driver shows the
+        // encoder and the build can prove it.
+        bool throughVulkan = false;
+#if defined(MW_NATIVE_LINUX_VULKAN)
+        if (!h264Only && !offersAv1 && encode::Dav1dDecoder::built()) {
+            for (int minor = 128; minor < 136 && !throughVulkan; ++minor) {
+                vulkan::DeviceIdentity id;
+                std::string why;
+                throughVulkan = vulkan::VulkanDevice::identify(
+                                    "/dev/dri/renderD" + std::to_string(minor), id, why) &&
+                                id.vendorId == gpu->vendorId && id.encodesAv1;
+            }
+            offersAv1 = throughVulkan;
+        }
+#endif
         if (h264Only) {
             std::fprintf(stderr, "  skipped: this route encodes H.264 only (CPU pair)\n");
         } else if (!offersAv1) {
@@ -310,6 +327,7 @@ void run_linux_session_tests()
         } else {
             SessionConfig av1Config = config;
             av1Config.clientCodecs = {Codec::Av1};
+            if (throughVulkan) av1Config.videoPipeline = VideoPipeline::Vulkan;
             std::atomic<int> av1Frames{0};
             std::atomic<int> av1Keyframes{0};
             std::ofstream av1Out("/tmp/mw-linux-session.av1", std::ios::binary | std::ios::trunc);
@@ -342,6 +360,9 @@ void run_linux_session_tests()
                              av1Ended.empty() ? "" : (", ended: " + av1Ended).c_str());
                 CHECK(av1Ended.empty());
                 CHECK(av1Frames.load() >= 3);
+                CHECK(av1Session->info().codec == Codec::Av1);
+                std::fprintf(stderr, "  %dx%d, %s\n", av1Session->info().width,
+                             av1Session->info().height, av1Session->info().videoRoute.c_str());
                 std::fprintf(stderr, "  wrote /tmp/mw-linux-session.av1\n");
             }
         }

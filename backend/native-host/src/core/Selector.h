@@ -144,6 +144,19 @@ FrameSize frameForDisplay(FrameSize display, FrameSize frame, FramePolicy policy
 /// two; anything else, or a frame with no size, comes back unchanged.
 FrameSize alignedToBlocks(FrameSize frame, int block);
 
+/// The same for an encoder whose blocks are not square: the largest frame
+/// whose width is a whole number of @p blockWidth and height of
+/// @p blockHeight, inside @p frame, closest to its shape — exactly it where
+/// the grid allows. The 780M's AV1 encoder codes 64×16 (C13.12): 1920x1080
+/// becomes 1792x1008, the same 16:9; 1280x720, 2560x1440 and 3840x2160 are
+/// whole already. An encoder told a size off its grid codes a larger frame
+/// and says the picture's in AV1's render size — which Chrome ignores: it
+/// shows the whole frame, padding and all (05/10/2026).
+///
+/// Never less than one block on a side; a block below 1, or a frame with no
+/// size, comes back unchanged.
+FrameSize alignedToGrid(FrameSize frame, int blockWidth, int blockHeight);
+
 /// The FramePolicy a session's config asks for.
 inline FramePolicy policyOf(const SessionConfig& config)
 {

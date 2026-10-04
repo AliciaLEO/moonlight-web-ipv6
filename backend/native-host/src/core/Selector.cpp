@@ -433,6 +433,33 @@ FrameSize alignedToBlocks(FrameSize frame, int block)
     return best;
 }
 
+FrameSize alignedToGrid(FrameSize frame, int blockWidth, int blockHeight)
+{
+    if (blockWidth < 1 || blockHeight < 1) return frame;
+    if (frame.width <= 0 || frame.height <= 0) return frame;
+    const int w = frame.width / blockWidth * blockWidth;
+    const int h = frame.height / blockHeight * blockHeight;
+    if (w == frame.width && h == frame.height) return frame;
+    if (w < blockWidth || h < blockHeight)
+        return FrameSize{std::max(w, blockWidth), std::max(h, blockHeight)};
+    // Down the width's grid, the height that keeps the shape best at each
+    // width; the first exact shape ends it, a tie goes to the larger frame.
+    const double wanted = double(frame.width) / double(frame.height);
+    FrameSize best{w, h};
+    double bestErr = std::abs(double(w) / double(h) - wanted);
+    for (int cw = w; cw >= blockWidth && bestErr > 1e-12 && cw * 2 >= w; cw -= blockWidth) {
+        int ch = int(std::lround(double(cw) / wanted)) / blockHeight * blockHeight;
+        if (ch > h) ch = h;
+        if (ch < blockHeight) continue;
+        const double err = std::abs(double(cw) / double(ch) - wanted);
+        if (err < bestErr - 1e-12) {
+            bestErr = err;
+            best = FrameSize{cw, ch};
+        }
+    }
+    return best;
+}
+
 FrameSize frameForDisplay(FrameSize display, FrameSize frame, FramePolicy policy)
 {
     if (display.width <= 0 || display.height <= 0 || frame.width <= 0 || frame.height <= 0)

@@ -28,6 +28,7 @@
 #include "../../convert/linux/GlConvert.h"
 #if defined(MW_NATIVE_LINUX_VULKAN)
 #include "../../convert/linux/VulkanConvert.h"
+#include "../../encode/linux/VulkanAv1Encoder.h"
 #include "../../encode/linux/VulkanHevcEncoder.h"
 #include "../../encode/linux/VulkanHevcProof.h"
 #include "vulkan/VulkanDevice.h"
@@ -367,8 +368,11 @@ using GpuPipeline = VaapiPipeline<convert::GlConvert>;
 ///
 /// Built only once the route choice let it (LinuxRouteChoice.h) — the pixel
 /// proof passed for this GPU (VulkanHevcProof) — and given up on at the first
-/// failure, opening or streaming: the session goes on through VA-API.
-class VulkanPipeline final : public VideoPipeline
+/// failure, opening or streaming: the session goes on through VA-API, or —
+/// AV1, which nothing else here encodes (C13.12) — ends.
+///
+/// @p Encoder: VulkanHevcEncoder or VulkanAv1Encoder, the same interface.
+template <typename Encoder> class VulkanPipeline final : public VideoPipeline
 {
 public:
     bool init(const capture::IScreenCapture& capture, Codec codec, int outputWidth,
@@ -380,11 +384,12 @@ public:
         // encode queue keeps the default (VulkanHevcEncoder).
         vulkan::DeviceOptions options;
         options.wantHigh = tuning.prioVk != EncoderTuning::PriorityVk::Normal;
-        options.encodeHevc = true;
+        options.encodeHevc = codec != Codec::Av1;
+        options.encodeAv1 = codec == Codec::Av1;
         std::shared_ptr<vulkan::VulkanDevice> device =
             vulkan::VulkanDevice::open(capture.renderNodePath(), options, error);
         if (!device) return false;
-        m_Encoder = std::make_unique<encode::VulkanHevcEncoder>();
+        m_Encoder = std::make_unique<Encoder>();
         if (!m_Encoder->init(device, codec, outputWidth > 0 ? outputWidth : capture.width(),
                              outputHeight > 0 ? outputHeight : capture.height(), fps, bitrateKbps,
                              intraRefresh, tuning, error, encode::witnessFromEnvironment()))
@@ -451,7 +456,7 @@ public:
 private:
     // The converter goes first, then the encoder, then — with the last of
     // them — the device they share.
-    std::unique_ptr<encode::VulkanHevcEncoder> m_Encoder;
+    std::unique_ptr<Encoder> m_Encoder;
     std::unique_ptr<convert::VulkanConvert> m_Converter;
     bool m_ScalerPinned = false;
     bool m_Failed = false;
@@ -522,6 +527,7 @@ public:
         : m_Config(config)
         , m_Target(target)
         , m_Callbacks(callbacks)
+        , m_SessionCodec(target.codec)
     {}
 
     ~LinuxSession() override { stop(); }
@@ -1638,6 +1644,38 @@ private:
                 facts.vulkanEncoderRefusal = proofRefusal(outputWidth, outputHeight);
 #endif
             m_Route = chooseLinuxRoute(facts);
+            // ⚠️ A codec only Vulkan Video encodes (AV1, C13.12), and the chain
+            // will not carry it. Before the stream: the client's next codec
+            // the GPU encodes without it, chosen again from the top — its own
+            // chain may well be Vulkan Video. While streaming: nothing here
+            // encodes AV1 another way, and a stream cannot change its codec,
+            // so it ends, saying why.
+            if (linuxVulkanOnlyCodec(m_SessionCodec) &&
+                m_Route.encoder != LinuxRoute::Encoder::Vulkan) {
+                const std::string why =
+                    std::string(toString(m_SessionCodec)) +
+                    " runs through Vulkan Video alone here, which cannot: " + m_Route.reason;
+                if (m_PairBuilt) {
+                    error = why + " — and the stream cannot change its codec";
+                    return false;
+                }
+                Codec next = m_SessionCodec;
+                for (Codec c : m_Config.clientCodecs)
+                    if (std::find(m_Target.codecsWithoutOffer.begin(),
+                                  m_Target.codecsWithoutOffer.end(),
+                                  c) != m_Target.codecsWithoutOffer.end()) {
+                        next = c;
+                        break;
+                    }
+                if (next == m_SessionCodec) {
+                    error = why + "; the client decodes nothing else this GPU encodes";
+                    return false;
+                }
+                log::info("[native] " + why + " — streaming " + toString(next) +
+                          ", the client's next codec");
+                m_SessionCodec = next;
+                continue;
+            }
             m_UsingCpuPair = m_Route.encoder == LinuxRoute::Encoder::Cpu;
             if (buildPair(outputWidth, outputHeight, error)) break;
             // The Vulkan Video chain did not come up — a device, an encoder
@@ -1675,6 +1713,7 @@ private:
             log::info("[native] route: " + m_Route.route + " (" + m_Route.reason + ")");
         }
         noteRoute();
+        m_PairBuilt = true;
         m_PipelineCaptureWidth = m_Capture->width();
         m_PipelineCaptureHeight = m_Capture->height();
         return true;
@@ -1698,7 +1737,7 @@ private:
         f.setting = m_Config.videoPipeline;
         f.convertKey = m_Config.tuning.convertLinux;
         f.encoder = m_Target.encoder;
-        f.codec = m_Target.codec;
+        f.codec = m_SessionCodec;
         f.vendorId = m_VendorId;
         f.portal = m_Target.capture == CaptureApi::PipeWire;
         f.sharedMemory = sharedMemory;
@@ -1720,12 +1759,18 @@ private:
     {
         const int width = outputWidth > 0 ? outputWidth : m_Capture->width();
         const int height = outputHeight > 0 ? outputHeight : m_Capture->height();
-        if (!m_ProofDone || width != m_ProofWidth || height != m_ProofHeight) {
-            const encode::VulkanHevcProof proof = encode::vulkanHevcVerdict(
-                m_Capture->renderNodePath(), width, height, m_EncodeFps, m_Config.tuning);
+        if (!m_ProofDone || width != m_ProofWidth || height != m_ProofHeight ||
+            m_SessionCodec != m_ProofCodec) {
+            const encode::VulkanHevcProof proof =
+                m_SessionCodec == Codec::Av1
+                    ? encode::vulkanAv1Verdict(m_Capture->renderNodePath(), width, height,
+                                               m_EncodeFps, m_Config.tuning)
+                    : encode::vulkanHevcVerdict(m_Capture->renderNodePath(), width, height,
+                                                m_EncodeFps, m_Config.tuning);
             m_ProofDone = true;
             m_ProofWidth = width;
             m_ProofHeight = height;
+            m_ProofCodec = m_SessionCodec;
             m_ProofRefusal = proof.passed ? std::string()
                              : proof.ran  ? "the pixel proof failed: " + proof.summary
                                           : "the pixel proof could not run: " + proof.summary;
@@ -1772,8 +1817,11 @@ private:
         if (m_Pipeline->vulkanChainGivenUp()) {
             m_VulkanEncoderRefusal =
                 "the Vulkan Video chain gave up while streaming (" + error + ")";
-            log::warning("[native] " + m_VulkanEncoderRefusal +
-                         " — encoding through VA-API from here");
+            log::warning(
+                "[native] " + m_VulkanEncoderRefusal +
+                (linuxVulkanOnlyCodec(m_SessionCodec)
+                     ? std::string(" — and nothing else here encodes ") + toString(m_SessionCodec)
+                     : std::string(" — encoding through VA-API from here")));
         } else if (m_Pipeline->conversionGivenUp()) {
             m_VulkanConvertRefusal =
                 "the Vulkan conversion gave up while streaming (" + error + ")";
@@ -1813,7 +1861,7 @@ private:
         // same reason the pair could not: whether the compositor hands over a
         // DMA-BUF or shared memory is known only once the stream has
         // negotiated, and on a DMA-BUF the Selector's HEVC is exactly right.
-        m_Codec = m_Target.codec;
+        m_Codec = m_SessionCodec;
         if (m_UsingCpuPair && m_Codec != Codec::H264) {
             // Asked, not assumed. Every browser decodes H.264 and the list is
             // never empty here (the Selector rejects that before a session
@@ -1839,8 +1887,10 @@ private:
 
         if (m_UsingCpuPair) m_Pipeline = std::make_unique<CpuPipeline>();
 #if defined(MW_NATIVE_LINUX_VULKAN)
+        else if (m_Route.encoder == LinuxRoute::Encoder::Vulkan && m_Codec == Codec::Av1)
+            m_Pipeline = std::make_unique<VulkanPipeline<encode::VulkanAv1Encoder>>();
         else if (m_Route.encoder == LinuxRoute::Encoder::Vulkan)
-            m_Pipeline = std::make_unique<VulkanPipeline>();
+            m_Pipeline = std::make_unique<VulkanPipeline<encode::VulkanHevcEncoder>>();
         else if (m_Route.conversion == LinuxRoute::Conversion::Vulkan)
             m_Pipeline = std::make_unique<VaapiPipeline<convert::VulkanConvert>>();
 #endif
@@ -2900,6 +2950,13 @@ private:
     /// see buildPipeline. Read by SessionInfo, so the client is never promised
     /// a codec the route cannot produce.
     Codec m_Codec = Codec::H264;
+    /// The codec every build starts from: the Selector's, unless it was one
+    /// only Vulkan Video encodes (AV1, C13.12) and that chain was refused
+    /// before the stream began — then the client's next codec the GPU
+    /// encodes without it. Never changed once a pair has streamed.
+    Codec m_SessionCodec = Codec::H264;
+    /// A pair came up: the stream has begun under m_SessionCodec.
+    bool m_PairBuilt = false;
     /// Said once per session, like the shared-memory line beside it.
     bool m_LoggedCodecDowngrade = false;
 
@@ -2923,10 +2980,12 @@ private:
     std::string m_VulkanConvertRefusal;
     /// The same for the Vulkan Video chain: VA-API encodes from then on.
     std::string m_VulkanEncoderRefusal;
-    /// The pixel proof's verdict for this session, and the size it was for.
+    /// The pixel proof's verdict for this session, and the size and codec it
+    /// was for.
     std::string m_ProofRefusal;
     int m_ProofWidth = 0;
     int m_ProofHeight = 0;
+    Codec m_ProofCodec = Codec::Hevc;
     bool m_ProofDone = false;
     /// The pair was rebuilt under the loop (leaveVulkan): the loop puts its
     /// bitrate back on the new encoder.

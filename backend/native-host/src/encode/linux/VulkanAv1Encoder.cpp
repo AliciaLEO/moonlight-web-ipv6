@@ -19,6 +19,7 @@
 
 #include "../../core/Log.h"
 #include "../../platform/linux/vulkan/VulkanDevice.h"
+#include "../../core/Selector.h"
 #include "../Av1EncodeNegotiation.h"
 #include "../RateControl.h"
 
@@ -340,13 +341,27 @@ bool VulkanAv1Encoder::init(const std::shared_ptr<vulkan::VulkanDevice>& device,
     // The superblock: 64, the smaller, where the driver has it — one tile
     // holds 4K either way.
     d->sb128 = !(d->av1Caps.superblockSizes & VK_VIDEO_ENCODE_AV1_SUPERBLOCK_SIZE_64_BIT_KHR);
-    // The frame at the driver's alignment; the render size says the picture.
-    d->codedWidth =
-        alignUp(static_cast<uint32_t>(width), std::max(d->av1Caps.codedPictureAlignment.width, 1u));
-    d->codedHeight = alignUp(static_cast<uint32_t>(height),
-                             std::max(d->av1Caps.codedPictureAlignment.height, 1u));
-    d->codedWidth += d->codedWidth & 1;
-    d->codedHeight += d->codedHeight & 1;
+    // ⚠️ The picture on the driver's grid, the same shape, never a frame
+    // padded past it: a padded frame says the picture in AV1's render size,
+    // and Chrome — software and hardware decoders alike — shows the whole
+    // frame, padding included (1920x1088 for 1080p on the 780M, 05/10/2026).
+    // The conversion scales to the size kept here; the session says it.
+    {
+        const int gw = static_cast<int>(std::max(d->av1Caps.codedPictureAlignment.width, 2u));
+        const int gh = static_cast<int>(std::max(d->av1Caps.codedPictureAlignment.height, 2u));
+        const FrameSize grid = alignedToGrid(FrameSize{width, height}, gw, gh);
+        if (grid.width != width || grid.height != height)
+            log::info("[native] Vulkan Video AV1: " + std::to_string(width) + "x" +
+                      std::to_string(height) + " is off the driver's " + std::to_string(gw) + "x" +
+                      std::to_string(gh) + " grid — encoding " + std::to_string(grid.width) + "x" +
+                      std::to_string(grid.height) +
+                      ", the same shape (a browser shows an AV1 frame whole, never its render "
+                      "size)");
+        m_Width = width = grid.width & ~1;
+        m_Height = height = grid.height & ~1;
+    }
+    d->codedWidth = static_cast<uint32_t>(width);
+    d->codedHeight = static_cast<uint32_t>(height);
     if (d->codedWidth < d->caps.minCodedExtent.width ||
         d->codedHeight < d->caps.minCodedExtent.height ||
         d->codedWidth > d->caps.maxCodedExtent.width ||

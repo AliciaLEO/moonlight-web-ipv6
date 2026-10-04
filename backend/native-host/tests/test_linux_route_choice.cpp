@@ -325,11 +325,33 @@ void run_linux_route_choice_tests()
         CHECK_EQ(r.route, std::string("Vulkan compute → Vulkan Video"));
         CHECK(!r.refused);
 
-        // H.264 and AV1 come later (Phase 9): VA-API carries them meanwhile.
+        // AV1 too (C13.12); H.264 comes later: VA-API carries it meanwhile.
+        f.codec = Codec::Av1;
+        r = chooseLinuxRoute(f);
+        CHECK(r.encoder == LinuxRoute::Encoder::Vulkan);
         f.codec = Codec::H264;
         r = chooseLinuxRoute(f);
         CHECK(r.encoder == LinuxRoute::Encoder::Vaapi);
         CHECK(contains(r.reason, "H.264 is not done by the Vulkan Video encoder yet"));
+    }
+
+    SECTION("LinuxRoute — AV1 is Vulkan Video's alone, asked for by the bench key or the setting "
+            "and never by the vendor table today");
+    {
+        CHECK(linuxVulkanOnlyCodec(Codec::Av1));
+        CHECK(!linuxVulkanOnlyCodec(Codec::Hevc));
+        CHECK(!linuxVulkanOnlyCodec(Codec::H264));
+        CHECK(linuxWantedPipeline(VideoPipeline::Auto, VideoPipeline::Auto, 0x1002) ==
+              VideoPipeline::Vaapi);
+        CHECK(linuxWantedPipeline(VideoPipeline::Auto, VideoPipeline::Vulkan, 0x1002) ==
+              VideoPipeline::Vulkan);
+        CHECK(linuxWantedPipeline(VideoPipeline::Vaapi, VideoPipeline::Vulkan, 0x1002) ==
+              VideoPipeline::Vaapi);
+        CHECK(linuxWantedPipeline(VideoPipeline::Vulkan, VideoPipeline::Auto, 0x8086) ==
+              VideoPipeline::Vulkan);
+        // Windows' values are no opinion here.
+        CHECK(linuxWantedPipeline(VideoPipeline::D3d12, VideoPipeline::Auto, 0x1002) ==
+              VideoPipeline::Vaapi);
     }
 
     SECTION("LinuxRoute — NVIDIA: no VA-API encoder, the CPU; Vulkan Video, once trusted, "

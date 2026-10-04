@@ -462,6 +462,10 @@ VulkanHevcProof proveVulkanAv1(const std::string& renderNode, int width, int hei
     if (!encoder.init(device, Codec::Av1, width, height, fps, kbps, /*intraRefresh=*/true, tuning,
                       error, sweeping))
         return refused(error);
+    // The size the encoder kept: on the driver's grid (alignedToGrid), which
+    // is what the conversion scales to in a stream.
+    width = encoder.input().width;
+    height = encoder.input().height;
 
     const int bandRows = encoder.sequence().sb128 ? 128 : 64;
     double worstPicture = 99.0, worstBand = 99.0, worstChroma = 99.0;

@@ -18,6 +18,9 @@
 #pragma once
 
 #include "mw/native/Capabilities.h"
+#include "mw/native/SessionConfig.h"
+
+#include <vector>
 
 // The platform seam for capability detection.
 //
@@ -71,6 +74,15 @@ Unavailability enumerate(Capabilities& caps);
 /// offer leaves the vector empty, which is a clean "this machine cannot stream"
 /// rather than a failure. Must not throw.
 void probeFallbackEncoders(Capabilities& caps);
+
+/// The codecs a session's own settings unlock on top of the probe's, added to
+/// the GPUs that carry them, before the Selector walks the client's list:
+/// on Linux, AV1 where the session asks for the Vulkan Video chain and the
+/// GPU's Vulkan driver encodes AV1 (C13.12) — the one encoder Linux has for
+/// it. Returns the codecs added, so that a session whose added codec turns
+/// out not to run (its pixel proof) knows what the GPU encodes without it.
+/// The other platforms add nothing. Must not throw.
+std::vector<Codec> offerSessionCodecs(Capabilities& caps, const SessionConfig& config);
 
 /// Whether a virtual gamepad can be created on this machine right now, asked of
 /// the driver rather than of the registry (see VirtualGamepad).

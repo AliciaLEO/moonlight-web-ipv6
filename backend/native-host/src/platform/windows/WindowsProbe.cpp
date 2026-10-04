@@ -609,4 +609,12 @@ VirtualGamepad probeVirtualGamepad()
     return result;
 }
 
+std::vector<Codec> offerSessionCodecs(Capabilities& caps, const SessionConfig& config)
+{
+    // Every encoder here is in the probe already: a setting unlocks no codec.
+    (void)caps;
+    (void)config;
+    return {};
+}
+
 } // namespace mw::native::platform

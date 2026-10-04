@@ -22,9 +22,14 @@
 #include "../../capture/linux/MutterScreenCast.h"
 #include "../../capture/linux/PortalScreenCast.h"
 #endif
+#include "../../core/LinuxRouteChoice.h"
 #include "../../core/Log.h"
 #include "../../core/Probe.h"
 #include "../../encode/OpenH264Encoder.h"
+#if defined(MW_NATIVE_LINUX_VULKAN)
+#include "../../encode/linux/Dav1dDecoder.h"
+#include "vulkan/VulkanDevice.h"
+#endif
 #include "../../input/linux/UinputGamepad.h"
 
 #include <fcntl.h>
@@ -658,6 +663,57 @@ void probeFallbackEncoders(Capabilities& caps)
     cpu.hardware = false;
     cpu.name = encode::OpenH264Encoder::version();
     caps.fallbacks.push_back(std::move(cpu));
+}
+
+std::vector<Codec> offerSessionCodecs(Capabilities& caps, const SessionConfig& config)
+{
+    // AV1, the one codec only Vulkan Video encodes here (C13.12): added to a
+    // GPU that encodes through VA-API already — the chain falls back to it for
+    // everything else — only for a session whose bench key or setting asks
+    // for the Vulkan Video chain on that GPU, and only where the GPU's Vulkan
+    // driver shows an AV1 encoder and this build can prove one at the pixel.
+    // A session that would have encoded through VA-API is never handed AV1;
+    // the proof itself runs in the session, which falls back to the client's
+    // next codec if it does not pass (LinuxSession::buildPipeline).
+    std::vector<Codec> added;
+#if defined(MW_NATIVE_LINUX_VULKAN)
+    if (!encode::Dav1dDecoder::built()) return added;
+    for (GpuInfo& gpu : caps.gpus) {
+        if (std::find(gpu.encoders.begin(), gpu.encoders.end(), EncoderApi::VaApi) ==
+                gpu.encoders.end() ||
+            std::find(gpu.codecs.begin(), gpu.codecs.end(), Codec::Av1) != gpu.codecs.end())
+            continue;
+        if (linuxWantedPipeline(config.tuning.pipeline, config.videoPipeline, gpu.vendorId) !=
+            VideoPipeline::Vulkan)
+            continue;
+        std::string renderNode;
+        for (const std::string& card : cardPaths()) {
+            if (cardHandle(card) != gpu.nativeHandle) continue;
+            const int fd = ::open(card.c_str(), O_RDWR | O_CLOEXEC);
+            if (fd < 0) break;
+            if (char* node = drmGetRenderDeviceNameFromFd(fd)) {
+                renderNode = node;
+                std::free(node);
+            }
+            ::close(fd);
+            break;
+        }
+        vulkan::DeviceIdentity id;
+        std::string error;
+        if (renderNode.empty() || !vulkan::VulkanDevice::identify(renderNode, id, error) ||
+            !id.encodesAv1)
+            continue;
+        gpu.codecs.push_back(Codec::Av1);
+        if (added.empty()) added.push_back(Codec::Av1);
+        log::info("[native] " + gpu.name +
+                  ": AV1 offered to this session, through Vulkan Video (the chain it asks for), "
+                  "once the pixel proof passes");
+    }
+#else
+    (void)caps;
+    (void)config;
+#endif
+    return added;
 }
 
 VirtualGamepad probeVirtualGamepad()

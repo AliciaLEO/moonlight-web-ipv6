@@ -22,6 +22,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace mw::native {
 
@@ -96,6 +97,11 @@ struct ResolvedTarget
     uint64_t encodeDriverVersion = 0;
     EncoderApi encoder = EncoderApi::None;
     Codec codec = Codec::H264;
+    /// Linux: the encoding GPU's codecs without the ones the session's own
+    /// settings offered (platform::offerSessionCodecs, AV1 through Vulkan
+    /// Video). Where an offered codec cannot run after all, the session
+    /// takes the client's next codec among these; empty when none was offered.
+    std::vector<Codec> codecsWithoutOffer;
 
     /// True when the two adapters differ, so the frame has to cross between
     /// them. Costly, rare, and always worth a log line.

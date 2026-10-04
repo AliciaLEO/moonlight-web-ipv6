@@ -525,6 +525,34 @@ void run_selector_tests()
         CHECK_EQ(a.width, 8);
         CHECK_EQ(a.height, 8);
 
+        // A grid of 64x16, the 780M's AV1 (C13.12): 1080p down to the largest
+        // exact 16:9 on it; the other common sizes are whole already.
+        a = alignedToGrid({1920, 1080}, 64, 16);
+        CHECK_EQ(a.width, 1792);
+        CHECK_EQ(a.height, 1008);
+        for (const FrameSize& s :
+             {FrameSize{1280, 720}, FrameSize{2560, 1440}, FrameSize{3840, 2160}}) {
+            const FrameSize kept = alignedToGrid(s, 64, 16);
+            CHECK_EQ(kept.width, s.width);
+            CHECK_EQ(kept.height, s.height);
+        }
+        // Off the grid and with no exact shape on it: whole blocks, within
+        // the frame, close to its shape.
+        a = alignedToGrid({1366, 768}, 64, 16);
+        CHECK_EQ(a.width % 64, 0);
+        CHECK_EQ(a.height % 16, 0);
+        CHECK(a.width <= 1366 && a.height <= 768);
+        CHECK(std::abs(double(a.width) / a.height - 1366.0 / 768.0) < 0.01);
+        // Square blocks: what alignedToBlocks gives.
+        a = alignedToGrid({1366, 768}, 8, 8);
+        CHECK_EQ(a.width, 1352);
+        CHECK_EQ(a.height, 760);
+        a = alignedToGrid({1920, 1080}, 0, 16);
+        CHECK_EQ(a.width, 1920);
+        a = alignedToGrid({40, 10}, 64, 16);
+        CHECK_EQ(a.width, 64);
+        CHECK_EQ(a.height, 16);
+
         // Unknown sizes change nothing.
         f = frameForDisplay({0, 0}, {1920, 1080});
         CHECK_EQ(f.width, 1920);

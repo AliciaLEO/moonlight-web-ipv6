@@ -65,8 +65,11 @@
 //
 // ── Size ────────────────────────────────────────────────────────────────────
 //
-// AV1 codes its frame at the driver's alignment (codedPictureAlignment), and
-// the render size says the picture: the D3D12 chain's rule (C9.2).
+// The picture is brought onto the driver's grid (codedPictureAlignment, 64×16
+// on the 780M), its shape kept (alignedToGrid): 1080p is encoded 1792x1008,
+// and input() says so — the conversion scales to it. A frame padded past the
+// picture would say it in AV1's render size, which Chrome does not read: it
+// shows the whole frame, padding included.
 
 namespace mw::native::encode {
 

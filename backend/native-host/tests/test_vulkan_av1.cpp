@@ -143,7 +143,14 @@ void run_vulkan_av1_tests()
                              seq.width, seq.height, seq.levelIdx, seq.sb128 ? "128" : "64",
                              seq.orderHintBits, seq.cdef ? 1 : 0, seq.restoration ? 1 : 0,
                              encoder.sequenceHeader().size());
-                CHECK(seq.width >= 1920u && seq.height >= 1080u);
+                // The frame is the picture, on the driver's grid: never padded
+                // past it (1792x1008 on the 780M, whose grid is 64x16).
+                CHECK_EQ(seq.width, static_cast<uint32_t>(encoder.input().width));
+                CHECK_EQ(seq.height, static_cast<uint32_t>(encoder.input().height));
+                CHECK_EQ(encoder.input().codedHeight, encoder.input().height);
+                CHECK(encoder.input().width * 1080 == encoder.input().height * 1920);
+                std::fprintf(stderr, "  1920x1080 asked: %dx%d encoded\n", encoder.input().width,
+                             encoder.input().height);
                 CHECK_EQ(seq.orderHintBits, 8);
                 CHECK(encoder.input().image != VK_NULL_HANDLE);
                 const char* dumpPath = std::getenv("MW_AV1_DUMP");
@@ -242,10 +249,13 @@ void run_vulkan_av1_tests()
             uint32_t seed = 1;
             size_t bytes[2] = {0, 0};
             for (uint32_t n = 0; n < 120; ++n) {
-                for (size_t i = 0; i < 1920u * 1080u; ++i) {
+                // At the size the encoder kept (1792x1008 on the 780M).
+                const size_t w = static_cast<size_t>(encoder.input().width);
+                const size_t h = static_cast<size_t>(encoder.input().height);
+                for (size_t i = 0; i < w * h; ++i) {
                     seed = seed * 1103515245u + 12345u;
                     picture[i] =
-                        static_cast<uint8_t>(16 + ((i % 1920) + n * 13 + ((seed >> 16) & 3)) % 200);
+                        static_cast<uint8_t>(16 + ((i % w) + n * 13 + ((seed >> 16) & 3)) % 200);
                 }
                 if (n == 60) CHECK(encoder.setBitrate(1500, error));
                 CHECK(encoder.upload(picture.data(), error));

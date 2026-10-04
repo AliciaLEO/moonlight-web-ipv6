@@ -175,7 +175,7 @@ inline std::string vulkanEncoderRefusal(const LinuxRouteFacts& f)
 {
     if (!f.vulkanEncoderBuilt) return "the Vulkan Video encoder is not built in";
     if (!f.vulkanEncoderRefusal.empty()) return f.vulkanEncoderRefusal;
-    if (f.codec != Codec::Hevc)
+    if (f.codec != Codec::Hevc && f.codec != Codec::Av1)
         return std::string(toString(f.codec)) + " is not done by the Vulkan Video encoder yet";
     // The chain converts in Vulkan too: what refused the conversion refuses it.
     if (!f.vulkanConvertBuilt) return "the Vulkan conversion is not built in";
@@ -205,19 +205,36 @@ inline LinuxRoute cpuRoute(std::string reason, bool refused)
 
 } // namespace linuxroute_detail
 
+/// The chain the bench key, then the setting, then the vendor table ask for:
+/// VA-API or Vulkan Video.
+inline VideoPipeline linuxWantedPipeline(VideoPipeline benchKey, VideoPipeline setting,
+                                         uint32_t vendorId)
+{
+    using namespace linuxroute_detail;
+    return linuxValue(benchKey) != VideoPipeline::Auto  ? benchKey
+           : linuxValue(setting) != VideoPipeline::Auto ? setting
+                                                        : autoLinuxPipeline(vendorId);
+}
+
 /// Whether this build would take the Vulkan Video chain if nothing refused
 /// it — the bench key, the setting or the vendor table asks for it, the
-/// codec is HEVC, and nothing already learned stands in the way. The one
-/// case the session runs the pixel proof for (VulkanHevcProof): a machine
+/// codec is HEVC or AV1, and nothing already learned stands in the way. The
+/// one case the session runs the pixel proof for (VulkanHevcProof): a machine
 /// that was not going to encode in Vulkan is never made to prove it can.
 inline bool linuxRouteWantsVulkanVideo(const LinuxRouteFacts& f)
 {
     using namespace linuxroute_detail;
-    const VideoPipeline wanted = linuxValue(f.benchKey) != VideoPipeline::Auto ? f.benchKey
-                                 : linuxValue(f.setting) != VideoPipeline::Auto
-                                     ? f.setting
-                                     : autoLinuxPipeline(f.vendorId);
-    return wanted == VideoPipeline::Vulkan && vulkanEncoderRefusal(f).empty();
+    return linuxWantedPipeline(f.benchKey, f.setting, f.vendorId) == VideoPipeline::Vulkan &&
+           vulkanEncoderRefusal(f).empty();
+}
+
+/// The codecs only Vulkan Video encodes on Linux: AV1, which Mesa's VA-API
+/// lists and describes no encoder for (LinuxProbe.cpp). Offered to a session
+/// only when its chain is asked to be Vulkan Video (offerSessionCodecs), so
+/// that no session that would have encoded through VA-API is ever handed one.
+inline bool linuxVulkanOnlyCodec(Codec codec)
+{
+    return codec == Codec::Av1;
 }
 
 inline LinuxRoute chooseLinuxRoute(const LinuxRouteFacts& f)
