@@ -481,13 +481,28 @@ par défaut depuis ce build, à dire en comparant aux passes d'avant)** :
 
   Sous charge, c'est surtout la page de banc elle-même qui attend son GPU,
   avant la capture. Le stream n'ajoute que 13 ms (AMD) à 38-52 ms (Arc). U n'y
-  change rien de net. **Réserve** : la fenêtre de charge était sur l'écran
-  virtuel capturé, qui devient l'écran principal pendant le stream, et elle
-  recouvrait une partie de la page (la bande restait lisible). C'est corrigé
-  dans `beeabde4`, et les cases sont à refaire à l'occasion.
+  change rien de net. Mais la fenêtre de charge était sur l'écran virtuel
+  capturé, qui devient l'écran principal pendant le stream (corrigé dans
+  `beeabde4`).
+- **Cases refaites** (04/10, 17:04-17:25, build `ded56fc6`, fenêtre de charge
+  sur un écran à part, deux passes par mode). L'écran virtuel de l'UM790Pro
+  était entre-temps passé de 120 à 240 Hz, sans le banc : ce n'est pas tout à
+  fait la même case que le matin.
+
+  | GPU chargé (charge) | Mode | Âge montré | E2E hôte → dessin | Avant la capture | Clic → drapeau |
+  |---|---|---|---|---|---|
+  | Arc (30 i/s) | D | 192 ms | 48 ms | ~105 ms | 99 ms |
+  | Arc (30 i/s) | U | 189 ms | 50 ms | ~105 ms | 96 ms |
+  | iGPU AMD (47-52 i/s) | D | 107 ms | 23 ms | 70-75 ms | 93 ms |
+  | iGPU AMD (47-52 i/s) | U | 118 ms | 28 ms | 70-75 ms | 97 ms |
+
+  Le verdict ne change pas. Sous charge, la page de banc attend son GPU, U et
+  D font jeu égal, et le stream reste la plus petite part de l'âge. Au même
+  niveau, la charge tourne à 30 i/s sur l'Arc au lieu de 45 le matin : sa
+  fenêtre, posée sur un écran physique, ne pèse plus pareil.
 
 **Reste avant la porte U0** : l'iPad et RE9 sur l'écran de la RTX (avec
-Bruno), les cases sous charge à refaire sans la fenêtre sur le contenu,
+Bruno),
 les TV (U0.3 quater), la borne Steam (U0.4, si Bruno l'accepte) et le
 rapport U0.5.
 
