@@ -356,6 +356,19 @@ export class StreamViewTouch {
             return;
         }
 
+        if (count === 1 && this._tvCursor && !this._touchDragging) {
+            // A TV browser has no finger to drag. TV Bro scrolls a page whose
+            // cursor pushes against an edge by faking a swipe from well inside
+            // it — read as a touch-screen scroll, it pulled the host's pointer
+            // to the swipe's start and scrolled whatever window was there, as
+            // soon as the cursor went past the picture (Freebox, 04/10/2026).
+            // The stream page has nothing to scroll: the swipe sends nothing,
+            // and is no tap either.
+            this._touchMoved = true;
+            this._clearLongPress();
+            return;
+        }
+
         if (count === 1) {
             // Single finger: relative trackpad movement (also drags when the
             // long-press grab is active — the left button stays held down).
@@ -614,8 +627,17 @@ export class StreamViewTouch {
                 : this._touchMaxFingers === 2
                   ? 450
                   : this._touchTapTimeThreshold;
+        // A cancelled touch is never a tap: the system took it back. TV Bro's
+        // edge scroll cancels each fake swipe and opens the next with a
+        // touchstart cancelled at once — as taps, a cursor held against an edge
+        // clicked a dozen times a second where the swipes began (Freebox,
+        // 04/10/2026).
         const isTap =
-            !this._touchMoved && dist < distTol && elapsed < timeTol && this._touchStartTime > 0;
+            e.type !== 'touchcancel' &&
+            !this._touchMoved &&
+            dist < distTol &&
+            elapsed < timeTol &&
+            this._touchStartTime > 0;
 
         if (this._touchDragging) {
             // End the long-press drag — release the held left button.

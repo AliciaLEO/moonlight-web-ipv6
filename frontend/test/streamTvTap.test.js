@@ -40,6 +40,12 @@ function view(touchScreen, tvCursor = false) {
         _sendMouseButton: (b, down) => buttons.push([b, down]),
         handleTouchStart: P.handleTouchStart,
         handleTouchEnd: P.handleTouchEnd,
+        handleTouchMove: P.handleTouchMove,
+        _emitScroll: P._emitScroll,
+        _curScrollScale: P._curScrollScale,
+        _touchScrollScale: 1,
+        _scrollScale: 1,
+        _zoom: 1,
         _sendAbsTouch: P._sendAbsTouch,
         _tvTapOffPicture: P._tvTapOffPicture,
         _clearLongPress: P._clearLongPress,
@@ -106,6 +112,51 @@ describe('a TV cursor tap in a stream', () => {
         v.handleTouchEnd(touch('touchend', 1500, 400, false));
         expect(v.sent).toEqual([]);
         expect(v.buttons).toEqual([]);
+    });
+
+    it("TV Bro's edge scroll, a swipe it fakes, neither moves the pointer nor scrolls", () => {
+        // The cursor pushed past the picture's right edge: TV Bro swipes from
+        // well inside the page, leftwards (Freebox, 04/10/2026). As a
+        // touch-screen scroll it pulled the host's pointer to the swipe's
+        // start and scrolled the window there.
+        const v = view(true, true);
+        v.handleTouchStart(touch('touchstart', 810, 357, true));
+        for (let x = 772; x >= 525; x -= 21) v.handleTouchMove(touch('touchmove', x, 357, true));
+        v.handleTouchEnd(touch('touchend', 525, 357, false));
+        expect(v.sent).toEqual([]);
+        expect(v.buttons).toEqual([]);
+        // And the next OK on the picture is a tap again.
+        tap(v, 634, 314);
+        expect(v.sent).toEqual([
+            { type: 'mousemove', x: 634, y: 314, referenceWidth: 1280, referenceHeight: 720 },
+        ]);
+        expect(v.buttons.length).toBe(2);
+    });
+
+    it('a touch the browser cancels is no tap', () => {
+        // TV Bro held against an edge opens each fake swipe with a touchstart
+        // it cancels at once: as taps, a click a dozen times a second.
+        const v = view(true, true);
+        for (let i = 0; i < 5; i++) {
+            v.handleTouchStart(touch('touchstart', 810, 150, true));
+            v.handleTouchEnd(touch('touchcancel', 810, 150, false));
+        }
+        expect(v.sent).toEqual([]);
+        expect(v.buttons).toEqual([]);
+    });
+
+    it('a finger dragged on a phone still scrolls, from where it landed', () => {
+        const v = view(true, false);
+        v.handleTouchStart(touch('touchstart', 810, 357, true));
+        v.handleTouchMove(touch('touchmove', 770, 357, true));
+        expect(v.sent[0]).toEqual({
+            type: 'mousemove',
+            x: 810,
+            y: 357,
+            referenceWidth: 1280,
+            referenceHeight: 720,
+        });
+        expect(v.sent.some((m) => m.type === 'mousehwheel')).toBe(true);
     });
 
     it('a finger off the picture on a phone keeps landing on the nearest edge', () => {
