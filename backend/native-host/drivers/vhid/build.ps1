@@ -144,9 +144,16 @@ if (-not (Test-Path $pfx)) {
     Set-Content -Path $passFile -Value $pass -Encoding ascii
     $key = Join-Path $certDir 'key.pem'
     $pem = Join-Path $certDir 'cert.pem'
-    Run $openssl @('req', '-x509', '-newkey', 'rsa:3072', '-sha256', '-days', '3650', '-nodes',
-        '-keyout', $key, '-out', $pem, '-subj', '/CN=MoonlightWeb Virtual HID (test)',
-        '-addext', 'extendedKeyUsage=codeSigning', '-addext', 'keyUsage=digitalSignature')
+    # A config of our own: openssl's default marks a self-signed certificate CA:TRUE, and
+    # Windows refuses a CA certificate as a driver's signer (TRUST_E_BASIC_CONSTRAINTS).
+    $cnf = Join-Path $certDir 'openssl.cnf'
+    Set-Content -Path $cnf -Encoding ascii -Value @(
+        '[req]', 'distinguished_name = dn', 'x509_extensions = ext', 'prompt = no',
+        '[dn]', 'CN = MoonlightWeb Virtual HID (test)',
+        '[ext]', 'basicConstraints = critical, CA:FALSE', 'keyUsage = critical, digitalSignature',
+        'extendedKeyUsage = codeSigning', 'subjectKeyIdentifier = hash')
+    Run $openssl @('req', '-x509', '-config', $cnf, '-newkey', 'rsa:3072', '-sha256', '-days', '3650',
+        '-nodes', '-keyout', $key, '-out', $pem)
     Run $openssl @('pkcs12', '-export', '-inkey', $key, '-in', $pem, '-out', $pfx, '-passout', "pass:$pass")
     Run $openssl @('x509', '-in', $pem, '-outform', 'der', '-out', $cer)
     Remove-Item $key

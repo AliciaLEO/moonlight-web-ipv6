@@ -75,7 +75,8 @@ public static class MwDevice {
 '@
 
 function OurDevices {
-    Get-PnpDevice -Class System -ErrorAction SilentlyContinue | Where-Object { $_.HardwareID -contains $hwid }
+    # No class filter: a node made by an earlier run that never got its driver has no class yet.
+    Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.HardwareID -contains $hwid }
 }
 
 if ($Uninstall) {

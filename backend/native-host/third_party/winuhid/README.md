@@ -25,7 +25,7 @@ MoonlightWeb's changes to these files are listed below, each one in its own comm
 All behind `MOONLIGHTWEB_VHID`, which our build defines, so the files still build as upstream's
 without it:
 
-- `Public.h`: the control device is `\.\MoonlightWebVHid`, never `\.\WinUHid`, so a WinUHid
+- `Public.h`: the control device is `\\.\MoonlightWebVHid`, never `\\.\WinUHid`, so a WinUHid
   installed by someone else never collides with ours;
 - `Trace.h`: a WPP control GUID of our own (8c1f6b0e-3d52-4a77-9e1b-5a2f0c6d7e41), written out
   since tracewpp reads it as text;
