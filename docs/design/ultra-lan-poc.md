@@ -277,7 +277,7 @@ attendent 0,0 à 0,1 ms.
   par image (8,9 contre 9,2 ms en local) : la sonde ne mesure plus son propre
   retard.
 
-### 6.3 U0.3 — première série : le N95 en Wi-Fi (03/10/2026)
+### 6.3 U0.3 — les séries du 03/10/2026 (N95, UM790Pro, iPhone, Mac)
 
 Hôte DualRTX, client le N95 (Chrome, Wi-Fi), de 15:57 à 16:50 : 20 passes,
 chacune avec 30 s d'âge du contenu, le journal par image et 30 clics. Deux modes
@@ -425,6 +425,49 @@ Médianes de deux passes par mode :
   120 i/s, et l'UM790Pro et le Mac font jeu égal ou mieux en Auto. Sur
   l'iPhone, le 120 gagne 5 à 10 ms. Restent l'iPad, RE9 sur la RTX, les cases
   sous charge GPU et Android.
+
+### 6.4 U0.3 — synthèse provisoire (04/10/2026)
+
+**La barre à battre n'est pas « HEVC réglé Ultra », c'est l'« Auto » détecté.**
+Sur les trois clients d'ordinateur, la barre du plan (§2 : 120 i/s, écran
+virtuel à 240 Hz, tearing, P1) ne fait jamais mieux que l'« Auto » avec
+détection (UA, sur `main`). Sur un client qui suit, la détection monte d'elle-même
+au-dessus : 230-240 i/s sur l'UM790Pro, la cadence de l'écran (120 i/s) sur le
+Mac. Sur un client qui ne suit pas (le N95 en Wi-Fi), elle reste à la cadence
+de l'écran, là où forcer 120 i/s fait décrocher le lien.
+
+| Client, lien | « Auto » détecté : âge montré / clic | Barre Ultra : âge montré / clic | File usrsctp p90 (D / U) |
+|---|---|---|---|
+| UM790Pro, Ethernet | 24-27 / 35-43 ms | 23-29 / 33-40 ms | 5-12 / 5-12 ms |
+| Mac M1, Wi-Fi | 29-37 / 61-75 ms | 36-44 / 61-71 ms | 50-67 / 55-79 ms |
+| N95, Wi-Fi | 45-58 / 83-94 ms | 130-320 ms / un clic sur deux perdu | 35-54 / 186-232 ms |
+| iPhone, Wi-Fi (« Mesurée ») | 41-48 ms | 31-40 ms | — |
+
+**Le budget d'un clic sur l'UM790Pro en Ethernet** (`flagpath.py`, médianes
+des 20 passes, en ms) : montée du clic 1,5-3, le drapeau dessiné sur l'hôte
+12-19 (la boucle de messages de l'overlay de banc, pas le produit), jusqu'à la
+capture 1-5, encodage 2-6, envoi 0,2, réseau 6-10, décodage 0,5-5, dessin
+3-6. Hors drapeau de banc, il reste environ 20 ms. Un codec intra ne peut
+gagner que sur l'encodage et le décodage, soit 3 à 10 ms à se partager, et la
+cadence (déjà à 240 i/s) n'a plus de marge.
+
+**Ce que cela change pour la suite du POC (proposition pour la porte U0)** :
+- La référence de U3 et U5 devient l'« Auto » détecté, plus la barre §2. Le
+  critère de §2 (− 2 ms ou − 20 % de médiane, p99 pas pire) se lit contre
+  elle.
+- Le Wi-Fi n'est pas un terrain pour Ultra. Même en HEVC à 20-30 Mbit/s, la
+  fenêtre de congestion d'usrsctp retient déjà la vidéo à 120 i/s (plan Wi-Fi,
+  W1). À 150-200 Mbit/s, elle ne passerait pas. Ultra reste « Ethernet
+  seulement », comme prévu en §1.
+- L'AV1 ne gagne rien sur le HEVC à la même barre (+1 à 4 ms, +20 à 50 % de
+  débit, UM790Pro), et il casse sur le N95. Il ne sert pas de référence.
+
+**Reste avant la porte U0** : l'iPad et RE9 sur l'écran de la RTX (avec
+Bruno), les cases sous charge GPU (`4ba3f0d1`, prêtes, pas encore passées),
+les TV (U0.3 quater), la borne Steam (U0.4, si Bruno l'accepte) et le
+rapport U0.5. **À vérifier au banc avant le push** : `6a7c3b43`. La détection
+mesure maintenant un stream AV1 ; il faut quatre passes AV1 en « Auto » sur
+l'UM790Pro.
 
 ## 7. Concrètement, pour l'utilisateur
 
