@@ -5673,14 +5673,7 @@ export class StreamView {
         slider.addEventListener('change', () => slider.blur());
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
-            if (streamVolume.outputLevel() > 0) {
-                streamVolume.setMuted(true);
-            } else {
-                streamVolume.setMuted(false);
-                // Unmuting a level dragged down to nothing would change nothing.
-                if (streamVolume.getLevel() === 0) streamVolume.setLevel(0.5);
-            }
-            this._applyVolume();
+            this.toggleMute();
             // Same reason: Space in the game would toggle it again.
             btn.blur();
         });
@@ -5691,13 +5684,31 @@ export class StreamView {
         this._applyVolume();
     }
 
+    /**
+     * Sound off, or back on: the volume button, and Ctrl+Alt+Shift+S
+     * (Cmd+Option+Ctrl+S on a Mac) — issue #29. @returns {boolean} muted now.
+     */
+    toggleMute() {
+        if (streamVolume.outputLevel() > 0) {
+            streamVolume.setMuted(true);
+        } else {
+            streamVolume.setMuted(false);
+            // Unmuting a level dragged down to nothing would change nothing.
+            if (streamVolume.getLevel() === 0) streamVolume.setLevel(0.5);
+        }
+        this._applyVolume();
+        return streamVolume.outputLevel() === 0;
+    }
+
     /** Send the stream volume to whatever plays this view's audio, and redraw the control. */
     _applyVolume() {
-        const ctl = this._volumeCtl;
-        if (!ctl) return;
         const out = streamVolume.outputLevel();
         if (this.audioEl) this.audioEl.volume = out;
         if (this.audioPipeline) this.audioPipeline.setVolume(out);
+        // A phone or a tablet has no control to redraw, but the shortcut
+        // still mutes it (a keyboard paired to a tablet).
+        const ctl = this._volumeCtl;
+        if (!ctl) return;
 
         const slider = /** @type {HTMLInputElement} */ (ctl.querySelector('.stream-volume-slider'));
         const btn = /** @type {HTMLButtonElement} */ (ctl.querySelector('.stream-volume-btn'));
@@ -9492,6 +9503,20 @@ export class StreamView {
             if (chk('m', 'KeyM')) {
                 e.preventDefault();
                 this.toggleMouseMode();
+                return;
+            }
+
+            // Sound off / on: Ctrl+Alt+Shift+S (Win) / Cmd+Option+Ctrl+S (Mac),
+            // issue #29. Said on screen: in fullscreen the volume control,
+            // and with it any sign of the change, is out of sight.
+            if (chk('s', 'KeyS')) {
+                e.preventDefault();
+                if (!e.repeat) {
+                    const muted = this.toggleMute();
+                    Toast.info(t(muted ? 'stream.soundOff' : 'stream.soundOn'), {
+                        durationMs: 1500,
+                    });
+                }
                 return;
             }
 

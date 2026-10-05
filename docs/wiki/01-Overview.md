@@ -38,7 +38,7 @@ Desktop and mobile get the same pipeline with adapted input:
 |:---:|:---:|
 | ![Desktop streaming in the browser](../screenshots/desktop.png) | ![iPhone streaming with virtual keyboard](../screenshots/mobile.png) |
 
-- **Desktop**: pointer-lock ("gaming mode") or absolute mouse, keyboard capture (Escape is forwarded as a normal key; `Ctrl/Cmd+Alt+Shift+Z` releases the mouse; `Q` quits, `Z` toggles stats, `X` fullscreen, `M` mouse mode).
+- **Desktop**: pointer-lock ("gaming mode") or absolute mouse, keyboard capture (Escape is forwarded as a normal key; `Ctrl/Cmd+Alt+Shift+Z` releases the mouse; `Q` quits, `Z` toggles stats, `X` fullscreen, `M` mouse mode, `S` sound off/on).
 - **Mobile**: the whole screen is a **relative trackpad** — 1 finger moves the mouse, 2 fingers scroll/pinch, 3 fingers pan; taps click; a toolbar summons the virtual keyboard (input captured by diffing `input` events with a sentinel, the only reliable technique across iOS/Gboard).
 - An **overlay header** exposes stats, fullscreen, settings and quit.
 
