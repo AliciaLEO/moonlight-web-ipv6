@@ -139,6 +139,8 @@ The native engine streams **the machine MoonlightWeb runs on**. Moonlight‑Web 
 
 Both integrations are documented in [`docs/integration-multiseat-wolf.md`](docs/integration-multiseat-wolf.md).
 
+**On Sunshine and Apollo, Stop leaves the game running, as in Moonlight.** Its card then shows **Running**: click it to resume, or **Quit** to close it. Launching another app while one runs asks first: quit it and launch, or resume it instead. **Settings → Quit the app when the stream stops** brings back the old behaviour. A game Sunshine started detached (a Steam launch, for instance) still survives Quit: Sunshine no longer tracks it, in Moonlight too.
+
 > ⚠️ MultiSeat's per‑seat stream path is **not yet tested end to end**: provisioning a seat needs a free Windows session the bench cannot offer.
 
 Using MoonlightWeb only as a front end? Set `"native_host_enabled": false` in [`settings.json`](#advanced-config--settingsjson) to hide this machine's card.
