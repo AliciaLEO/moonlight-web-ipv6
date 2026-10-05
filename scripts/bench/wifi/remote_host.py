@@ -215,14 +215,19 @@ class MacHost(RemoteHost):
         return self._log
 
     def content_start(self, page):
+        # Not --kiosk: a full-screen Chrome goes to a Space of its own, which
+        # the screen did not show on 05/10/2026, and macOS blacks out the band
+        # around the notch where the click's flag sits (the client read 0,0,0
+        # there, every click timed out). A window as large as the screen stays
+        # on the desktop's Space, under the flag.
         self.push_content()
         url = "file:///tmp/mw-content/" + page
         script = r"""
 pkill -f "user-data-dir=%(p)s" 2>/dev/null
 sleep 1
 open -na "Google Chrome" --args --user-data-dir=%(p)s --no-first-run --no-default-browser-check \
-    --kiosk --disable-infobars --disable-backgrounding-occluded-windows \
-    --disable-renderer-backgrounding %(u)s
+    --app=%(u)s --window-position=0,0 --window-size=4000,3000 --disable-infobars \
+    --disable-backgrounding-occluded-windows --disable-renderer-backgrounding
 sleep 3
 pgrep -f "user-data-dir=%(p)s" >/dev/null && echo "content up: %(u)s" || echo "content did not start"
 """ % {"p": self.PROFILE, "u": shlex.quote(url)}
