@@ -719,6 +719,32 @@ what lands. Medians of the last 30 s, POC doc §6.8 (`039ad899`).
   ceiling sits (host send thread and libjuice, Chrome's SCTP receive, usrsctp)
   is U1.3's question.
 
+### 05/10/2026 — The bench's "1 GbE" path has a Wi-Fi 7 hop (session ex-3b)
+
+DualRTX and the UM790Pro are each wired, at 1 Gbit/s, to a Freebox repeater,
+but the two repeaters (ground floor, second floor) talk to each other over
+**Wi-Fi 7**. DualRTX also goes through a Hyper-V virtual switch
+("vEthernet (LAN)"). Measured with a socket probe (TCP and paced UDP,
+server DualRTX, client the UM790Pro under Windows; ICMP is blocked on the
+UM790Pro, so the round trip is a UDP echo):
+
+| Test | Result |
+|---|---|
+| UDP round trip, idle (64 B every 10 ms) | p50 2.6 ms, p90 3.2, p99 5.4-15 (a cable gives ~0.3) |
+| TCP down, 1 stream / 4 streams, 10 s | 74 / 90 Mbit/s, 36-124 per second |
+| UDP down paced at 50 / 100 Mbit/s | no loss; extra one-way delay p99 2.2 / 5.1 ms |
+| UDP down paced at 150 Mbit/s | no loss; p90 +16 ms, p99 +47 ms |
+| UDP down paced at 200 Mbit/s | 175 received, 3.7 % lost, p50 +158 ms |
+| UDP down paced at 300-800 Mbit/s | 152-157 received, 48-77 % lost, +620-660 ms |
+
+- **The U1.2 ceiling of 95-107 Mbit/s comes first from this path**, not from
+  the DataChannel: TCP itself gets 74-90 Mbit/s, and the hop carries ~150
+  Mbit/s at best before it queues and drops. Every "1 GbE, Ethernet" pass
+  between these two machines (U0, U1.2, U3, Steam U0.4) ran over it.
+- Next: Bruno puts the two PCs on one cable (evening of 05/10); the probe is
+  replayed there, then U1.2. Before that, RTP against SCTP is measured on
+  this Wi-Fi path on purpose, for its losses (POC plan U1.4).
+
 ## 4. The model so far (04/10/2026)
 
 What the measurements support, in order of the path:
