@@ -6392,6 +6392,86 @@ là où on vise sur un bureau à plusieurs écrans. Un écran que le pilote NVID
 tient hors de portée n'est plus proposé pour rien. Et le paquet installé n'est
 plus refusé par le portail, dont dépend l'écran virtuel sous Wayland.
 
+### 32.27 Linux : l'AV1 par Vulkan Video (C13.12, 04-05/10/2026)
+
+Plan C13.12 (`max`), « Go » de Bruno le 29/09, repris le 04/10 au soir ; banc
+§8o.18. Commits `6045301d` (l'encodeur, la preuve) et `72471fbf` (l'offre, la
+route, la session).
+
+**Pourquoi.** Sous Linux, l'hôte natif ne proposait jamais l'AV1 : le VA-API
+de Mesa liste le profil et ne décrit aucun encodeur (§19.13). RADV 26 en
+expose un par Vulkan Video, sur le même périphérique que la conversion.
+
+**L'encodeur** (`encode/linux/VulkanAv1Encoder`), le jumeau de
+`VulkanHevcEncoder` :
+- l'entrée NV12 écrite en place par la conversion, une soumission qui attend
+  la conversion sur le GPU, le CPU qui n'attend que l'encodage ;
+- l'en-tête de séquence est le nôtre en structure StdVideo, ses octets ceux du
+  pilote (`vkGetEncodedVideoSessionParametersKHR`), relus par
+  `av1::parseSequenceHeader` ;
+- devant chaque image un délimiteur temporel, et l'en-tête de séquence devant
+  une image clé, posés juste avant les octets du pilote : une image part d'un
+  seul tenant ;
+- les références : la tenue de `HevcDpb`, une image du pool pour un des huit
+  emplacements de l'AV1. Une image rafraîchit l'emplacement de sa texture,
+  jamais celui d'une image gardée, et ses sept noms de référence pointent
+  l'image dont elle prédit. Une perte laisse périmés, chez le récepteur, les
+  emplacements des images perdues ; rien ne les nomme plus avant qu'ils soient
+  rafraîchis, donc la réparation prédit d'une image que les deux côtés ont ;
+- les premiers en-têtes de trame sont relus (`av1::parseFrameHeader`, jusqu'à
+  `delta_q_present`) : type, numéro d'ordre, taille affichée, emplacement
+  rafraîchi, référence ;
+- l'intra-refresh comme en HEVC (§32.24).
+
+**⚠️ VBR, jamais CBR.** Le CBR de RADV demande au micrologiciel de bourrer
+chaque image, et en AV1 le VCN 4.0.2 ne revient pas de la première : anneau
+bloqué 22 s, réinitialisé par le noyau (8 fois sur 8). Le VBR, son pic au
+débit visé, tient le même budget sans bourrage. Plancher q-index 90 (le QP 18
+du moteur, la règle de D3D12 VE). Le quantificateur n'est pas rapporté : RADV
+écrit `base_q_idx` 127 et règle le débit par des deltas par superbloc.
+
+**⚠️ La taille : sur la grille du pilote, la même forme.** Le 780M code l'AV1
+par blocs de 64×16. Un cadre allongé jusqu'à la grille dit l'image dans la
+taille d'affichage de l'AV1, que Chrome ignore (WebCodecs, logiciel et
+matériel : 1920×1088 affichés pour 1080p). L'encodeur ramène donc l'image sur
+la grille en gardant sa forme exacte (`alignedToGrid`, à côté de
+`alignedToBlocks` qu'utilise déjà le HEVC de VA-API) : 1080p devient
+1792×1008, la conversion y met l'image à l'échelle (Lanczos-2), la session
+annonce cette taille. 720p, 1440p et 4K sont déjà sur la grille.
+
+**La preuve au pixel** (`proveVulkanAv1`, `vulkanAv1Verdict`) : la séquence
+de la preuve HEVC, relue par dav1d, le décodeur qu'utilise Chrome quand son
+GPU ne décode pas l'AV1. Ouvert à l'exécution (`libdav1d.so.7`, `.6` ou `.5`),
+jamais lié ; ses en-têtes au build seulement (`libdav1d-dev`, ajouté à la CI ;
+les paquets le recommandent). Les structures de la bibliothèque reçoivent une
+place plus large que toute version : seuls leurs premiers champs sont lus,
+stables depuis la 0.9 de la CI (Ubuntu 22.04). Verdict gardé dans le cache,
+sous une clé à part (`av1|…`, la version de dav1d comprise).
+
+**L'offre** (`platform::offerSessionCodecs`) : l'AV1 n'est ajouté aux codecs
+d'un GPU que pour une session dont la clé de banc ou le réglage demande la
+chaîne Vulkan Video, où le pilote Vulkan montre l'encodeur AV1 et où le build
+porte dav1d. La table des vendeurs n'en demande aucune : **le défaut ne change
+pas**. Windows et macOS n'ajoutent rien.
+
+**La route et la session** :
+- `LinuxRouteChoice` prend l'AV1 comme le HEVC, derrière sa preuve ;
+- refusé avant le stream (preuve, chaîne qui ne démarre pas), la session
+  prend le codec suivant du client que le GPU encode sans lui
+  (`ResolvedTarget::codecsWithoutOffer`), et refait le choix de route ;
+- refusé en cours de stream, la session s'arrête en le disant : rien d'autre
+  n'encode l'AV1 sous Linux, et un stream ne change pas de codec.
+
+**Pas fait** : un stream AV1 vers un vrai client par WebRTC (la chaîne d'envoi
+est celle de l'AV1 de Windows) ; la conversion RVB du VCN
+(`VALVE_video_encode_rgb_conversion`), en sonde de labo seulement d'après le
+plan, à revoir sur RDNA4.
+
+**Concrètement, pour l'utilisateur** : sous Linux avec une carte AMD récente,
+choisir la chaîne Vulkan Video dans l'administration rend l'AV1 possible pour
+les navigateurs qui le préfèrent. Le 1080p part en 1792×1008, agrandi par le
+navigateur, à peine moins net. Avec le réglage par défaut, rien ne change.
+
 ## 33. Framerate « Hôte » : le stream à la cadence de l'écran de l'hôte (ouvert le 29/09/2026)
 
 Plan `framerate-hote.md` : l'essai « cadence de l'hôte » du POC Ultra, sorti en

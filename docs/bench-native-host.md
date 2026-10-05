@@ -4646,6 +4646,96 @@ tel que la CI le livre.
 `sudo`, on ne peut ni la déplacer ni la renommer. L'ancienne (`0.3.0.g007`) a
 été relancée, avec ses deux autorisations intactes.
 
+### 8o.18 L'AV1 par Vulkan Video (C13.12, 04-05/10/2026)
+
+**La question.** Sous Linux, aucun hôte natif ne propose l'AV1 : le VA-API de
+Mesa liste le profil sans décrire d'encodeur (§19.13). RADV 26.2.3 expose
+`VK_KHR_video_encode_av1` sur le 780M. Code-t-il juste, à quel coût, et à
+quelle taille un navigateur l'affiche-t-il ?
+
+**Ce que le pilote offre** (`mw-vk-lab caps`) : AV1 Main 8 et 10 bits,
+alignement 64×16, superbloc 64 seulement, une référence, q-index 8 à 255,
+niveau 6.1 au plus, intra-refresh par blocs, rangées ou colonnes (256 images au
+plus), contrôle de débit sans, CBR ou VBR.
+
+**Montage.**
+- UM790Pro, Ubuntu 24.04 en Wayland, noyau 7.0.0-34, Mesa 26.2.3 (kisak),
+  micrologiciel VCN ENC 1.24.
+- Le paquet DEV construit depuis l'arbre (`0.3.1.av1b-dev`, la recette de la
+  CI), installé à côté de la prod en LAN seul ; `--native-bench` par le
+  lanceur (ses capacités), capture KMS, 20 Mbit/s demandés (16 tenus faute de
+  récepteur), `pipeline=vulkan`, 25 s par passe, deux passes par cas.
+- Le contenu : `mw-gpu-load` au niveau 8 (une scène qui bouge, le GPU peu
+  chargé) puis 248 (le 780M plein, la charge de G5).
+- `libdav1d-dev` installé pour le build (`sudo -n apt`, en-têtes seulement).
+- Sorties : `/tmp/c1312c` sur l'UM790Pro (`bench.sh`, `summ.py`).
+
+**Les tests** (`mw-native-tests`) : `vulkan_av1` 332/332, `av1_obu` 101/101,
+`linux_route_choice` + `selector` + `capabilities` 535/535, `linux_session`
+107/107 (la session complète en AV1 par le réglage), `linux_pipeline`
+58/58, `vulkan_hevc` 86/86 (sans régression).
+
+**La preuve au pixel** : les 12 images de la preuve HEVC, une perte et une
+image clé, relues par dav1d 1.4.1. Au pire 48,5 dB par image et 47,3 dB par
+rangée de superblocs, en ~210 ms à 1080p (gardée ensuite dans le cache).
+
+**⚠️ Le CBR de RADV bloque le VCN en AV1.** Dès la première image, l'anneau
+`vcn_unified_0` ne répond plus : 22 s puis réinitialisation par le noyau, et
+`VK_ERROR_DEVICE_LOST`. 8 fois sur 8, avec ou sans bornes de q-index ; la
+machine s'en remet chaque fois. RADV demande au micrologiciel de bourrer chaque
+image en CBR (`enabled_filler_data`), pour tous les codecs ; en HEVC, le
+moteur retire ce bourrage (§8o.13). L'encodeur prend donc le VBR, plafonné au
+débit visé : aucun blocage depuis.
+
+**Le contrôle de débit VBR** (une rampe qui bouge sous un léger bruit,
+1792×1008) : 2,98 Mbit/s pour 3 demandés, puis 1,81 pour 1,5 dit en vol. Sur
+du bruit fort, il dépasse : 4,5 Mbit/s pour 3, quand le q-index 255 fixe en
+donne 2,6.
+
+**Deux constats sur RADV.**
+- Son plafond par image (`useMaxFrameSize`) est passé en octets là où le
+  micrologiciel lit des bits : un plafond d'un VBV ramène l'image clé à
+  1/8 du budget, 25 dB à la preuve. Non utilisé.
+- `base_q_idx` vaut 127 dans chaque en-tête, et le débit passe par des deltas
+  par superbloc (`delta_q_present`). Le quantificateur d'une image n'est donc
+  pas lisible : le moteur n'en rapporte aucun.
+
+**⚠️ Chrome ignore la taille d'affichage AV1.** À 1080p, l'alignement 64×16
+impose un cadre de 1920×1088 ; l'AV1 dit l'image de 1080 lignes dans sa
+taille d'affichage (`render_size`). Relu par WebCodecs dans Chrome, en
+logiciel comme en matériel : `codedHeight`, `displayHeight` et `visibleRect`
+valent 1088. Le navigateur montrerait 8 lignes de trop, et le pointeur
+glisserait d'autant. L'encodeur ramène donc l'image sur la grille du pilote, à
+la même forme (`alignedToGrid`) : 1080p devient **1792×1008**, que Chrome
+relit à l'identique. 720p, 1440p et 4K sont déjà sur la grille.
+
+**Les mesures** (p50, et p95 pour le total ; la passe AV1 sous charge où
+`mw-gpu-load` n'a pas tenu est écartée) :
+
+| cas | cadre | débit | image clé | encodage | conversion | présentation → encodé |
+|---|---|---|---|---|---|---|
+| AV1, niveau 8 | 1792×1008 | 1,30-1,34 Mbit/s | 24 Ko | 1,41 ms | 2,9-3,0 ms | 4,3-4,4 ms (p95 5,5) |
+| HEVC, niveau 8 | 1920×1080 | 5,23-5,25 Mbit/s | 49 Ko | 1,62-1,67 ms | 2,9-3,1 ms | 4,5-4,7 ms (p95 5,8) |
+| AV1, niveau 248 | 1792×1008 | 12,5 Mbit/s | 66 Ko | 1,83 ms | 3,8 ms | 5,7 ms (p95 8,5) |
+| HEVC, niveau 248 | 1920×1080 | 16,6-17,0 Mbit/s | 93 Ko | 1,89-1,90 ms | 4,1-4,2 ms | 6,1 ms (p95 8,6-8,7) |
+
+- Tous les flux se relisent sans erreur (ffmpeg), 1792×1008 en AV1.
+- L'encodage AV1 coûte ce que coûte le HEVC, à 13 % de pixels de moins.
+- Les débits ne comparent pas les codecs : les planchers diffèrent (QP 18 en
+  HEVC, q-index 90 en AV1), le contrôle de débit aussi (CBR contre VBR), et
+  le cadre. Au repos, le CBR du HEVC remplit son budget (5,2 Mbit/s,
+  bourrage retiré) quand le VBR de l'AV1 descend à 1,3.
+- Aucun nouveau blocage du VCN pendant les bancs.
+
+**Pas encore fait** : un stream AV1 vers un vrai client par WebRTC. La chaîne
+d'envoi est celle de l'AV1 de Windows ; le décodage Chrome est vérifié
+ci-dessus sur le flux du banc.
+
+**Concrètement, pour l'utilisateur** : sous Linux avec une carte AMD récente,
+l'hôte natif peut streamer en AV1, quand la chaîne Vulkan Video est choisie
+dans l'administration. Le 1080p part alors en 1792×1008, agrandi par le
+navigateur. Rien ne change pour qui garde le réglage par défaut.
+
 ## 8p. Framerate « Hôte » : l'âge du contenu (29-30/09/2026, provisoire)
 
 Plan `framerate-hote`, design §33. Tout passe par des clés de banc :
