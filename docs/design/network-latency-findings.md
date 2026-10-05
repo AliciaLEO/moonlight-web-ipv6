@@ -686,6 +686,39 @@ Its `retrcut=3` pass lost the N95's Chrome.)
 - Proposed to Bruno: no max burst as the macOS host's default too; `retrcut`
   stays off there.
 
+### 05/10/2026 — POC Ultra U1.2: the DataChannel's ceiling at intra-codec rates (session ex-3b)
+
+Host DualRTX (`--dev` `66f71c56`, Windows defaults `sctpburst=0`,
+`retrcut=3`) streaming a physical screen (DISPLAY1, the Arc's, 120 Hz) with
+the bench page scrolling; client the UM790Pro under Windows, Chrome, 1 GbE.
+Method: `ultra=synthetic:<KiB>` (`e8f02ce0`) sends that many KiB of
+incompressible chunks after every video frame, on channel id 5, same SCTP
+association as the video; the client (`mw_ultra_sink`, `5ee304da`) counts
+what lands. Medians of the last 30 s, POC doc §6.8 (`039ad899`).
+
+| KiB / frame | Asked at 60 / 120 fps | Got at 60 fps | Got at 120 fps | Extra delay p95 (60 / 120) | Video fps (60 / 120) |
+|---|---|---|---|---|---|
+| 40 | 20 / 39 Mbit/s | 19.4 | 37.7 | 77 / 16 ms | 60 / 111 |
+| 200 | 98 / 197 | 19.2 | 98.9 | 1427 / 397 ms | 10 / 59 |
+| 350 | 172 / 344 | 62.4 | 103.3 | 818 / 717 ms | 12 / 34 |
+| 500 | 246 / 492 | 105.7 | 95.1 | 605 / 1320 ms | 25 / 21 |
+| 1000 | 492 / 983 | 105.2 | 95.7 | 1508 / 2685 ms | 11 / 13 |
+| 2000 | 983 / 1966 | 106.7 | 97.0 | 3121 / 3961 ms | 6 / 5 |
+
+- **A ceiling of 95-107 Mbit/s on 1 GbE**, whatever the frame size or rate;
+  past it the wait grows to seconds and **the video falls with it** (5-25
+  fps): one association, one congestion window, whatever sender queue each
+  channel has.
+- Variants at 120 fps: unordered without retransmission 90.7 (350 KiB) / 63.2
+  (1000 KiB) Mbit/s with losses; `sctpburst=10` 97.0 / 15.4 Mbit/s;
+  `sctpbuf=1024` 64.5 / 49.5 Mbit/s and the video no longer shown. None
+  raises the ceiling; `sctpburst=0`, the Windows default, is the better one.
+- An out-of-range key (`sctpbuf=4096`; the key takes 24-1024) voids the whole
+  `MW_NATIVE_TUNING`: two passes lost, set aside.
+- Open: 200 KiB at 60 fps got 19 Mbit/s, far less than 350 KiB (62); where the
+  ceiling sits (host send thread and libjuice, Chrome's SCTP receive, usrsctp)
+  is U1.3's question.
+
 ## 4. The model so far (04/10/2026)
 
 What the measurements support, in order of the path:
