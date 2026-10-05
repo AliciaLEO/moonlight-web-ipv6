@@ -163,9 +163,17 @@ private:
 
 } // namespace
 
-std::unique_ptr<IVirtualHid> makeVirtualHid()
+std::unique_ptr<IVirtualHid> makeUinputWheel(); // linux/UinputWheel.cpp
+
+std::unique_ptr<IVirtualHid> makeVirtualHid(bool forceFeedback)
 {
+    if (forceFeedback) return makeUinputWheel();
     return std::make_unique<UhidDevice>();
+}
+
+bool virtualHidForceFeedback()
+{
+    return ::access("/dev/uinput", R_OK | W_OK) == 0;
 }
 
 std::string virtualHidUnavailableReason()

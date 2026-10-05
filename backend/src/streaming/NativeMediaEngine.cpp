@@ -1400,13 +1400,10 @@ void NativeMediaEngine::hidInput(const uint8_t* frame, size_t size)
 
 bool NativeMediaEngine::hidForceFeedback() const
 {
-#ifdef Q_OS_WIN
-    // pid.dll drives the PID block the recreated device gets. Linux has no
-    // equivalent for uhid devices (hid-pidff binds to usbhid only).
-    return true;
-#else
-    return false;
-#endif
+    // Windows: pid.dll drives the PID block the recreated device gets. Linux:
+    // the wheel is recreated through uinput, whose effects the host services
+    // (hid-pidff and hid-logitech-hidpp refuse a uhid device).
+    return mw::native::HidPassthrough::forceFeedbackAvailable();
 }
 
 void NativeMediaEngine::hidReply(int slot, int reportId, const QByteArray& data)

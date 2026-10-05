@@ -148,9 +148,14 @@ private:
 
 } // namespace
 
-std::unique_ptr<IVirtualHid> makeVirtualHid()
+std::unique_ptr<IVirtualHid> makeVirtualHid(bool)
 {
     return std::make_unique<VhidDevice>();
+}
+
+bool virtualHidForceFeedback()
+{
+    return true; // pid.dll drives the PID block the device gets
 }
 
 std::string virtualHidUnavailableReason()

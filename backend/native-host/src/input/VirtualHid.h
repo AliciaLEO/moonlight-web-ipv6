@@ -24,6 +24,8 @@
 #include <string>
 #include <vector>
 
+#include "mw/native/HidPassthrough.h"
+
 /// One device of the HID passthrough recreated on this host
 /// (docs/design/hid-passthrough-study.md, plan P2): the browser reads it
 /// through WebHID, the host makes the same one here, `uhid` on Linux and the
@@ -72,16 +74,33 @@ public:
     /// thread; the request handler still hears of the request afterwards.
     using FeatureHandler = std::function<std::vector<uint8_t>(uint8_t reportId)>;
 
+    /// Force feedback the backend services itself (slot left at 0 for the
+    /// caller), on a backend thread.
+    using FfbHandler = std::function<void(const HidFfb& op)>;
+
     void setRequestHandler(RequestHandler handler) { m_onRequest = std::move(handler); }
     void setFeatureHandler(FeatureHandler handler) { m_onGetFeature = std::move(handler); }
+    void setFfbHandler(FfbHandler handler) { m_onFfb = std::move(handler); }
+
+    /// How force feedback reaches this backend's device: true when the OS
+    /// drives a PID block in the descriptor (pid.dll on Windows), false when
+    /// the backend takes effects itself and calls the FfbHandler (uinput).
+    virtual bool forceFeedbackByPid() const { return true; }
 
 protected:
     RequestHandler m_onRequest;
     FeatureHandler m_onGetFeature;
+    FfbHandler m_onFfb;
 };
 
-/// A backend for this OS, or null where there is none (macOS).
-std::unique_ptr<IVirtualHid> makeVirtualHid();
+/// A backend for this OS, or null where there is none (macOS). With force
+/// feedback asked, Linux gives a uinput device (UinputWheel) instead of uhid:
+/// the kernel gives a uhid device none (HidEvdev.h).
+std::unique_ptr<IVirtualHid> makeVirtualHid(bool forceFeedback = false);
+
+/// Whether this host can carry a recreated wheel's force feedback now:
+/// Windows always (pid.dll), Linux when /dev/uinput is writable.
+bool virtualHidForceFeedback();
 
 /// Empty when this host can create devices now; otherwise why not, in a short
 /// English sentence (no /dev/uhid access, driver not installed).

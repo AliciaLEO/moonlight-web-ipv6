@@ -32,6 +32,8 @@ add_library(mw-native-host STATIC
     # checked before the host creates anything. Pure as well, so tested anywhere.
     src/input/HidDescriptor.cpp
     src/input/HidPid.cpp
+    # A wheel's evdev layout and Linux force feedback effects (uinput, P4).
+    src/input/HidEvdev.cpp
     # The devices a session recreates from them, with their watchdog; the OS
     # backend behind it is chosen below (uhid, the driver, or none).
     src/input/HidPassthrough.cpp
@@ -456,7 +458,8 @@ if(WIN32)
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party/winuhid/WinUHid)
     target_compile_definitions(mw-native-host PRIVATE WINUHID_STATIC MOONLIGHTWEB_VHID)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    target_sources(mw-native-host PRIVATE src/input/linux/UhidDevice.cpp)
+    target_sources(mw-native-host PRIVATE src/input/linux/UhidDevice.cpp
+                                          src/input/linux/UinputWheel.cpp)
 else()
     target_sources(mw-native-host PRIVATE src/input/VirtualHid_none.cpp)
 endif()
@@ -540,6 +543,7 @@ if(MW_BUILD_TESTS)
         tests/test_hid_descriptor.cpp
         tests/test_hid_passthrough.cpp
         tests/test_hid_pid.cpp
+        tests/test_hid_evdev.cpp
         tests/test_stage_stats.cpp
         tests/test_frame_cadence.cpp
         tests/test_resample_cost.cpp

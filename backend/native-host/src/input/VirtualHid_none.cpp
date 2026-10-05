@@ -21,9 +21,14 @@
 
 namespace mw::native::input {
 
-std::unique_ptr<IVirtualHid> makeVirtualHid()
+std::unique_ptr<IVirtualHid> makeVirtualHid(bool)
 {
     return nullptr;
+}
+
+bool virtualHidForceFeedback()
+{
+    return false;
 }
 
 std::string virtualHidUnavailableReason()

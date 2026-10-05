@@ -77,28 +77,35 @@ std::string HidPassthrough::unavailableReason()
     return input::virtualHidUnavailableReason();
 }
 
+bool HidPassthrough::forceFeedbackAvailable()
+{
+    return input::virtualHidForceFeedback();
+}
+
 std::string HidPassthrough::attach(int slot, const HidDeviceInfo& device)
 {
     if (slot < 0 || slot >= kMaxSlots) return "slot out of range";
 
     std::vector<input::hid::Collection> collections = device.collections;
     input::hid::repairBounds(collections);
-    // Force feedback: a PID block after the device's own reports, when the
-    // page can play it and the device numbers its reports. A wheel's own PID
-    // block never reaches the host's OS: the host answers for it, or nobody.
-    const uint8_t pidId = device.forceFeedback ? input::hid::pidFirstId(collections) : 0;
-    input::hid::stripPid(collections);
-    const std::vector<uint8_t> descriptor =
-        pidId ? input::hid::encodeWithPid(collections, pidId) : input::hid::encode(collections);
-    if (std::string why = input::hid::validate(descriptor); !why.empty()) return why;
-
-    std::unique_ptr<input::IVirtualHid> dev = m_factory ? m_factory() : input::makeVirtualHid();
+    std::unique_ptr<input::IVirtualHid> dev =
+        m_factory ? m_factory() : input::makeVirtualHid(device.forceFeedback);
     if (!dev) {
         // Never empty: on a host where the OS backend is usable, its reason is
         // "" and a missing backend must still read as a refusal.
         const std::string why = unavailableReason();
         return why.empty() ? "no virtual HID backend could be made" : why;
     }
+    // Force feedback: a PID block after the device's own reports, when the
+    // page can play it, the backend's OS drives PID and the device numbers its
+    // reports. A wheel's own PID block never reaches the host's OS: the host
+    // answers for it, or nobody.
+    const uint8_t pidId =
+        device.forceFeedback && dev->forceFeedbackByPid() ? input::hid::pidFirstId(collections) : 0;
+    input::hid::stripPid(collections);
+    const std::vector<uint8_t> descriptor =
+        pidId ? input::hid::encodeWithPid(collections, pidId) : input::hid::encode(collections);
+    if (std::string why = input::hid::validate(descriptor); !why.empty()) return why;
 
     auto s = std::make_unique<Slot>();
     s->parsed = input::hid::parse(descriptor);
@@ -109,6 +116,12 @@ std::string HidPassthrough::attach(int slot, const HidDeviceInfo& device)
     }
     auto pid = std::make_shared<PidState>();
     if (pidId) pid->engine = std::make_unique<input::hid::PidEngine>(s->parsed, pidId);
+    if (device.forceFeedback && !dev->forceFeedbackByPid())
+        dev->setFfbHandler([this, slot](const HidFfb& op) {
+            HidFfb o = op;
+            o.slot = slot;
+            if (m_onFfb) m_onFfb(o);
+        });
     dev->setFeatureHandler([pid](uint8_t reportId) {
         std::lock_guard<std::mutex> lock(pid->mutex);
         return pid->engine ? pid->engine->getFeature(reportId) : std::vector<uint8_t>{};

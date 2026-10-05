@@ -209,6 +209,9 @@ public:
 
     /// Empty when this host can recreate devices; why not otherwise.
     static std::string unavailableReason();
+    /// Whether a recreated wheel can carry force feedback on this host now
+    /// (announced to the page in hidcaps.ffb).
+    static bool forceFeedbackAvailable();
 
     /// Empty on success; otherwise why the device was refused (for the log and
     /// the page). A slot already in use is replaced.

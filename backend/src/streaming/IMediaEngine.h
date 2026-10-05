@@ -344,7 +344,8 @@ public:
     /// Announced in hidcaps as `hidpp`.
     virtual bool hidRelaysHidpp() const { return false; }
     /// Whether a recreated device can carry force feedback back to the page
-    /// (a PID block that pid.dll drives: Windows only). Announced in hidcaps.
+    /// (a PID block pid.dll drives on Windows, a uinput device whose effects
+    /// the host services on Linux). Announced in hidcaps.
     virtual bool hidForceFeedback() const { return false; }
 
 signals:
