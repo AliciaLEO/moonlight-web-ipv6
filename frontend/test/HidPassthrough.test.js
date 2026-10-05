@@ -170,7 +170,12 @@ describe('HidPassthrough (HID passthrough in the stream, P2)', () => {
         t.hp.handleMessage({ type: 'hidcaps', available: false, why: 'needs the native host' });
         await Promise.resolve();
         expect(t.sent).toHaveLength(0);
-        expect(t.hp.caps).toEqual({ available: false, ffb: false, why: 'needs the native host' });
+        expect(t.hp.caps).toEqual({
+            available: false,
+            ffb: false,
+            hidpp: false,
+            why: 'needs the native host',
+        });
 
         t.hp.handleMessage({ type: 'hidcaps', available: true });
         await vi.waitFor(() => expect(t.sent).toHaveLength(1));

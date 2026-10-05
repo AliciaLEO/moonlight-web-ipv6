@@ -18,6 +18,7 @@ import {
 } from './hidWire.js';
 import { HidppFfbPlayer, HidppTransport, findFfbFeature, hasHidpp } from './hidppFfb.js';
 import { PidFfbPlayer, hasNativePid } from './pidFfb.js';
+import { HidppRelay, hidppInputIds, isHidppReport } from './hidppRelay.js';
 
 /**
  * The HID passthrough in the stream (plan « Passthrough HID », P2): the game
@@ -41,6 +42,13 @@ import { PidFfbPlayer, hasNativePid } from './pidFfb.js';
  * speak PID (pidFfb.js: Moza, Simucube, Fanatec…). The host never writes raw
  * bytes to the wheel. When the device stops being sent, the wheel is reset
  * and left free.
+ *
+ * A Linux host (`hidcaps.hidpp`) instead lets its kernel's Logitech driver
+ * talk HID++ to the recreated wheel, force feedback included: this page
+ * relays those requests to the real wheel through a filter (hidppRelay.js)
+ * and sends the answers back as `hidreply`. A HID++ device's own HID++ input
+ * reports never go on the 'hid' channel: they are answers and notifications
+ * for whoever asked on this side, and the channel's repeats would replay them.
  */
 
 export const FORWARD_KEY = 'mw_hid_forward';
@@ -51,6 +59,15 @@ export function deviceKey(device) {
     const h = (n) => (n >>> 0).toString(16).padStart(4, '0');
     return `${h(device.vendorId)}:${h(device.productId)}`;
 }
+
+const toBase64 = (bytes) => globalThis.btoa(String.fromCharCode(...bytes));
+const fromBase64 = (text) => {
+    try {
+        return Uint8Array.from(globalThis.atob(String(text || '')), (c) => c.charCodeAt(0));
+    } catch {
+        return new Uint8Array(0);
+    }
+};
 
 /** The key GamepadManager knows the same device by. */
 export function padKeyOf(device) {
@@ -163,6 +180,7 @@ export class HidPassthrough {
             this._caps = {
                 available: !!msg.available,
                 ffb: !!msg.ffb,
+                hidpp: !!msg.hidpp,
                 why: String(msg.why || ''),
             };
             if (this._caps.available) this.applyWanted();
@@ -178,6 +196,7 @@ export class HidPassthrough {
                     e.state = 'on';
                     e.why = '';
                     if (e.ffb) this._startFfb(e);
+                    else if (this._caps?.hidpp && hasHidpp(device)) this._startRelay(device, e);
                 } else {
                     this._release(device, e);
                     e.state = 'refused';
@@ -190,6 +209,14 @@ export class HidPassthrough {
         }
         if (msg.type === 'hidrequest') {
             this._requests++;
+            const relay = this._entryBySlot(msg.slot)?.[1].relay;
+            if (relay && msg.kind === 'output' && isHidppReport(msg.reportId)) {
+                let bytes = fromBase64(msg.data);
+                // Linux hands the report with its id first.
+                if (bytes[0] === msg.reportId && (bytes.length === 20 || bytes.length === 64))
+                    bytes = bytes.subarray(1);
+                relay.handle(msg.reportId, bytes);
+            }
             return true;
         }
         if (msg.type === 'hidffb') {
@@ -254,7 +281,9 @@ export class HidPassthrough {
             });
             return;
         }
+        const hidppIds = hasHidpp(device) ? hidppInputIds(device) : new Set();
         const listener = (e) => {
+            if (hidppIds.has(e.reportId)) return;
             const bytes = new Uint8Array(e.data.buffer, e.data.byteOffset, e.data.byteLength);
             this._sendFrame(this._pump.report(slot, e.reportId, bytes, this._now()));
         };
@@ -310,9 +339,31 @@ export class HidPassthrough {
             .catch((err) => console.warn('[HID] force feedback init:', err?.message || err));
     }
 
+    // The host's HID++ requests to the real wheel, filtered (Linux host).
+    _startRelay(device, e) {
+        const slot = e.slot;
+        e.relay = new HidppRelay(device, {
+            reply: (reportId, bytes) =>
+                this._send({ type: 'hidreply', slot, reportId, data: toBase64(bytes) }),
+            resetMotor: async () => {
+                const t = new HidppTransport(device);
+                try {
+                    const index = await findFfbFeature(t);
+                    if (index) await new HidppFfbPlayer(t, index).close();
+                } finally {
+                    t.close();
+                }
+            },
+        });
+    }
+
     _release(device, e) {
         if (e.listener) device.removeEventListener('inputreport', e.listener);
         e.listener = null;
+        if (e.relay) {
+            e.relay.close();
+            e.relay = null;
+        }
         if (e.ffb) {
             const f = e.ffb;
             e.ffb = null;
