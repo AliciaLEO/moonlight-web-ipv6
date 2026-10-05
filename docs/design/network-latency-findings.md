@@ -624,6 +624,68 @@ in `bench-out/photon/*.json`.
   compositing and the DWM's, a leg the network and the codec do not touch and
   a native client such as Steam does not have.
 
+### 05/10/2026 — B and W2.5 on the Linux and macOS hosts, with the N95 really in Wi-Fi
+
+Redone after the driver fault (`09df1c3c`); each pass's host log shows the
+N95 (192.168.1.168) as the peer. Every arm explicit (`retrcut=0|3`,
+`sctpburst=10|0`), two alternated rounds, `relaylog=1`. The N95 runs
+~4-7 Mbit/s at ~50 fps, its link noisy: second rounds degraded on both hosts.
+
+**Linux host** (UM790Pro, DEV `0.3.1.av1b-dev`, whose own default is already
+burst 0).
+
+Without clicks, GNOME Wayland (05:30-05:48; the `input` group and X11 need a
+`sudo` the session was not yet allowed):
+
+| Arm | Frame age med (p90) | Way down med | Repeats /min | Dropped /min |
+|---|---|---|---|---|
+| burst 10 | 39.4 / 39.4 (93 / 69) | 34.3 / 33.0 | 108 / 306 | 146 / 240 |
+| `retrcut=3` | 37.0 / 40.4 (119 / 105) | 31.6 / 34.8 | 180 / 188 | 92 / 68 |
+| `sctpburst=0` | 32.9 / 33.0 (60 / 85) | 27.6 / 28.5 | 593 / 797 | 264 / 262 |
+| both | 35.0 / 33.9 (66 / 115) | 28.6 / 28.7 | 506 / 205 | 172 / 270 |
+
+With clicks, GNOME Xorg and the `input` group (06:03-06:31, Bruno's two
+exact permission rules, `um-x11-on.sh` / `um-x11-off.sh`). First round (the
+second's link was worse: all frames' `net` 93-211 ms against 30-44):
+
+| Arm | Click (p90) | `net` of the flag | `inSctp` flag / all frames |
+|---|---|---|---|
+| burst 10 | 138.7 (192) | 38.7 | 20.4 / 14.0 |
+| `retrcut=3` | 158.0 (216) | 48.6 | 31.7 / 22.7 |
+| `sctpburst=0` | 155.4 (184) | 41.8 | 20.3 / 13.1 |
+| both | 144.2 (192) | 38.5 | 20.3 / 11.7 |
+
+- The click's legs: up 18-28 ms, `toCap` ~38 (KMS at 60 Hz + the X11 flag
+  window), encode ~5, `net` 38-56, decode on the N95 16-38, draw ~19.
+  usrsctp is a small share; no arm moves the click outside the noise.
+- Without clicks, no max burst gives a frame ~6 ms younger, with more repeats
+  and drops. The default (`6a833826`) stays.
+
+**macOS host** (the Mac M1 Pro, DEV `0.3.1.g5de-dev`, 06:43-07:13). Its bench
+page now opens in a screen-sized window, not a kiosk (`ba3a7df7`). A
+full-screen Chrome went to a Space of its own, and macOS blacks out the band
+around the notch where the flag sits. The N95 read 0,0,0 there and every click
+timed out. Before that, the night of 04/10, the session was locked: the
+capture showed only the lock screen (a flat 47,90,148, ~1 Mbit/s).
+
+| Arm | Click r1 / r2 (p90) | `net` of the flag | `inSctp` flag | `inSctp` all frames |
+|---|---|---|---|---|
+| burst 10 | 137.0 (175) / 129.0 (195) | 53.2 / 38.1 | 39.8 / 15.0 | 21.9 / 40.7 |
+| `retrcut=3` | 140.5 (169) / failed | 52.3 | 39.4 | 21.1 |
+| `sctpburst=0` | 141.3 (190) / 125.5 (182) | 37.3 / 37.9 | 24.0 / 19.9 | 13.1 / 12.5 |
+| both | 125.4 (179) / 129.3 (168) | 37.6 / 39.1 | 21.2 / 24.4 | 10.1 / 9.8 |
+
+(Round 2's burst-10 pass had a degraded link: frame age 146 ms, 2.7 Mbit/s.
+Its `retrcut=3` pass lost the N95's Chrome.)
+
+- **No max burst halves the time a frame spends in usrsctp on the macOS host**
+  (~22 → ~11 ms over all frames, the flag's `net` 53 → 38 ms), as on the
+  Windows host towards the Mac. The click's median moves within the N95's
+  noise (125-141 ms): decode and draw on the N95 weigh more.
+- `retrcut=3` alone: nothing.
+- Proposed to Bruno: no max burst as the macOS host's default too; `retrcut`
+  stays off there.
+
 ## 4. The model so far (04/10/2026)
 
 What the measurements support, in order of the path:
@@ -674,10 +736,10 @@ What the measurements support, in order of the path:
   pass on the Mac) or the N95's extra T3 timeouts (1 and 3 against 0 and 1)
   matter in the field. Ethernet gained (04/10).
 - Whether GameStream sessions (Sunshine through the same relay) gain the same
-  from `sctpburst=0`: not measured, so not changed. The Linux native host
-  gained with a wired client (its default since `6a833826`) but has never had
-  a Wi-Fi client; the macOS native host has no clean measurement yet (§3,
-  04/10 corrections).
+  from `sctpburst=0`: not measured, so not changed. The Linux and macOS native
+  hosts were measured with the N95 in Wi-Fi on 05/10 (§3): usrsctp's wait
+  halves on macOS, the click stays in the N95's noise on both. Not yet
+  measured: a Mac client in Wi-Fi against them.
 - What receive buffer Chrome gives its UDP socket on macOS and on Windows, and
   whether a page can influence it (it cannot directly). Whether Windows counts
   a full-socket drop anywhere (the N95 showed 0 "received errors").

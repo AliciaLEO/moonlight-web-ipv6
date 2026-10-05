@@ -6286,9 +6286,20 @@ DualRTX (natif Windows), clic → drapeau (`mwLatency`) et journal par image
 - **Linux** (UM790Pro, X11, KMS 1080p60), client filaire : `sctpburst=0`, clic
   64,6 → 58,8 ms et 86,9 → 78,4 ms selon le GPU du client, image ~6 ms plus
   jeune ; `retrcut=3` sans effet. ~37 ms entre la levée du drapeau et la
-  capture qui le montre (KMS à 60 Hz + fenêtre X11), hors réseau. À refaire
-  avec un vrai client Wi-Fi.
-- **macOS** : aucune mesure propre ; `kNativeSctpMaxBurst` y reste à 10.
+  capture qui le montre (KMS à 60 Hz + fenêtre X11), hors réseau.
+- **Linux, N95 en Wi-Fi (05/10)** : clic 139 à 158 ms au premier tour, aucune
+  variante ne se détache ; usrsctp n'y pèse que ~20 ms. Le décodage du N95
+  coûte de 16 à 38 ms. Sans clic, l'image est ~6 ms plus jeune sans limite de
+  rafale. Le défaut (`6a833826`) reste.
+- **macOS, N95 en Wi-Fi (05/10)** : sans limite de rafale, l'attente dans
+  usrsctp est divisée par deux (~22 → ~11 ms par image) et le réseau du
+  drapeau passe de 53 à 38 ms ; le clic reste dans le bruit du N95 (125 à
+  141 ms). `retrcut=3` seul : rien. Proposé : rafale illimitée au défaut
+  macOS aussi. Deux pièges levés en route :
+  - une session verrouillée ne se capture que comme écran de verrouillage ;
+  - une page en kiosque part sur un Space plein écran, et macOS noircit la
+    bande de l'encoche où se trouve le drapeau. Une fenêtre de la taille de
+    l'écran règle ce second piège (`ba3a7df7`).
 
 ### 8u.4 Reproduire
 
