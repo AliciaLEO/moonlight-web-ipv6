@@ -810,6 +810,91 @@ Steam HEVC 57,9-58,5 ms, MoonlightWeb HEVC 57,3-58,2 ms.
   présentateur, mais d'abord du transport (§6.8, plafond à 100 Mbit/s) et de
   la cadence de bout en bout.
 
+### 6.10 Le chemin du banc, et U1.4 : la vidéo sur une piste RTP (05/10/2026, 10:00-11:50)
+
+**Le « 1 GbE » de §6.1-6.9 n'en est pas un.** DualRTX et l'UM790Pro sont
+chacun câblés à 1 Gbit/s sur un répéteur Freebox, mais les deux répéteurs
+(rez-de-chaussée, 2e étage) sont reliés entre eux en Wi-Fi 7. Mesuré par un
+outil socket (TCP, UDP rythmé, écho UDP ; `network-latency-findings.md`,
+`1ffefc13`) :
+- aller-retour à vide de 2,6 ms en médiane, là où un câble donne ~0,3 ms ;
+- TCP à 74-90 Mbit/s ;
+- UDP sans perte jusqu'à 150 Mbit/s, puis ~155-175 Mbit/s reçus avec des
+  pertes.
+
+Le plafond de 95-107 Mbit/s de §6.8 vient donc d'abord du chemin. Toutes les
+passes « Ethernet » entre ces deux machines (U0, U1.2, U3, Steam U0.4) l'ont
+emprunté. Bruno rapproche les deux PC sur un câble le soir du 05/10 : U1.2 et
+U1.4 y seront refaites.
+
+**U1.4 (décision de Bruno, 05/10)** : la vidéo sur une piste RTP plutôt que sur
+le DataChannel, pour les quatre codecs, avec un interrupteur par codec et par
+type d'hôte. Mesurée exprès sur ce chemin Wi-Fi, pour ses pertes.
+- Hôte (`7bae2a56`) : `rtp_video` dans settings.json, ou `MW_RTP_VIDEO` au
+  banc, au format `native:h264+hevc+av1+ultra;other:h264+hevc+av1`. Vide par
+  défaut, donc SCTP partout.
+- Client (`9a0b7940`) : `RTCRtpScriptTransform` dans un worker, avant le
+  décodeur de Chrome, puis le même `onVideo` que le DataChannel.
+- Chrome 154 négocie H.264, H265 et AV1 en RTP.
+
+Banc :
+- **Natif** : client l'UM790Pro, Chrome, l'écran de l'Arc (DISPLAY1) streamé, la
+  page de banc qui défile, 30 s d'âge du contenu, 30 clics, deux manches
+  alternées (`u14_series.py`).
+- **Autre hôte** : le Sunshine de DualRTX (l'écran DISPLAY5), relayé par la
+  `--dev`, une manche.
+
+| Hôte natif, médiane (manches 1 / 2) | Âge du contenu | Hôte → affiché | i/s affichées |
+|---|---|---|---|
+| H.264, RTP | 109 / 100 ms | 23,8 / 26,4 ms | 53 |
+| H.264, SCTP | 86 / 89 ms | 15,3 / 16,0 ms | 52 |
+| HEVC, RTP | 55 / 54 ms | 18,3 / 18,7 ms | 60 |
+| HEVC, SCTP | 42 / 44 ms | 8,8 / 11,6 ms | 60 |
+| AV1, RTP | 112 / 123 ms | 37,5 / 38,9 ms | 42 |
+| AV1, SCTP | 115 / 117 ms | 32,9 / 32,9 ms | 40 |
+
+| Sunshine (une manche) | Âge du contenu | Clic → drapeau, médiane (30 clics sur 30) |
+|---|---|---|
+| H.264, RTP / SCTP | 53,0 / 46,7 ms | 47,1 / 47,2 ms |
+| HEVC, RTP / SCTP | 44,3 / 38,6 ms | 47,8 / 46,7 ms |
+| AV1, RTP / SCTP | 52,2 / 46,5 ms | 59,9 / 48,1 ms |
+
+Sur l'hôte natif, les clics ne passent qu'à 2-7 sur 30, en RTP comme en SCTP
+(le drapeau sur DISPLAY1 n'est pas lu) : on ne s'y fie pas. L'H.264 et l'AV1 de
+l'Arc encodent lentement (11 ms par image en H.264), ce qui gonfle l'âge des
+deux transports de la même façon.
+
+**Ultra (PyroWave simulé, `ultra=synthetic:250`, ~122 Mbit/s à 60 i/s), la
+vidéo HEVC à côté**, deux manches :
+
+| Transport d'Ultra et de la vidéo | Ultra reçu | Attente en plus d'Ultra, p50 / p95 | Vidéo hôte → affiché | i/s vidéo |
+|---|---|---|---|---|
+| RTP | 119-122 Mbit/s, 0 perte | 15 / 25-30 ms | 19,7 / 21,0 ms | 57-60 |
+| SCTP | 122 Mbit/s, 0 perte | 35-52 / 62-90 ms | 42,5 / 64,8 ms | 59-60 |
+
+- **Sans charge, RTP coûte 5 à 10 ms**, sur les trois codecs et sur les deux
+  types d'hôte. Ce retard est fixe, quelle que soit la taille de l'image, et ce
+  n'est pas l'hôte : il envoie l'image 4 ms après la capture dans les deux cas,
+  et `sendFrame` prend 0,37 ms. Le saut du worker vers la page prend 0,2 ms.
+  **C'est Chrome qui retient l'image** entre l'arrivée de son dernier paquet
+  (`receiveTime` de ses métadonnées) et sa remise au transform : 7,5 ms en
+  médiane, p90 14 ms, au plus 17 ms, réparties uniformément sur une période de
+  60 Hz. On dirait une cadence interne de Chrome. `jitterBufferTarget = 0`
+  n'y change rien, ni `--disable-features=WebRtcMetronome`. La cause exacte
+  reste à trouver.
+- **Avec une charge Ultra, RTP gagne nettement.** En SCTP, la vidéo attend
+  derrière Ultra dans la même association (42-65 ms de l'hôte à l'affichage).
+  En RTP, chaque piste a son propre chemin : la vidéo reste à 20 ms et Ultra
+  attend trois fois moins.
+- **Aucune perte n'a été vue sur ce chemin Wi-Fi**, en RTP comme en SCTP : les
+  cas de pertes restent à mesurer, avec pertes injectées.
+- Recommandation provisoire : SCTP reste le défaut pour H.264, HEVC et AV1 tant
+  que la retenue de Chrome n'est pas levée. Pour Ultra, RTP est le bon
+  transport : il porte PyroWave sans faire attendre la vidéo.
+
+À refaire sur câble ce soir : le même jeu de passes, plus une passe de base en
+`sctpburst=0` avec l'UM790Pro pour client (demande de la session Wi-Fi).
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
@@ -845,3 +930,13 @@ son HEVC. C'est ce qui justifie de poursuivre le POC. Une partie de ce gain
 vient sans doute de la façon dont Steam présente l'image, et pas seulement du
 codec : dans le navigateur, le gain à attendre est plus petit, et le chemin
 d'affichage de Chrome (15 à 25 ms) devient le prochain poste à travailler.
+
+Pas encore visible (U1.4, la vidéo sur une piste RTP) : un interrupteur caché
+peut faire passer la vidéo par RTP au lieu du DataChannel, codec par codec,
+séparément pour l'hôte natif et pour Sunshine ou Apollo. Il est coupé par défaut
+et rien ne change pour l'utilisateur. Aujourd'hui, pour un stream seul, RTP fait
+attendre l'image 5 à 10 ms de plus, parce que Chrome la retient avant de nous la
+rendre. En revanche, quand un flux très lourd comme Ultra passe à côté de la
+vidéo, RTP évite que la vidéo attende derrière lui : elle reste aussi fraîche que
+sans charge. Si la retenue de Chrome se lève, RTP pourra servir à tout le monde.
+Sinon, il restera le transport d'Ultra seulement.
