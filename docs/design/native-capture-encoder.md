@@ -6564,7 +6564,13 @@ refus ou un build sans elle.
   - la vague espacée de quatre périodes, comme Vulkan Video.
 - **Touche le défaut restant** : le H.264 sur AMD passe toujours par VA-API.
   Sa vague continue y prend tout le budget sur un écran fixe, pour un client qui
-  traverse les pertes. L'espacer comme Vulkan Video demande un « Go ».
+  traverse les pertes. **Fait le 05/10, « ok » de Bruno** (`644f57e1`) : un
+  balayage toutes les quatre périodes, comme Vulkan Video, en H.264 comme en
+  HEVC, l'horizon annoncé au client étant l'écart plus un balayage ; `irdist=-1`
+  les remet dos à dos, et la clé `vaminqp=` mesure un plancher de QP.
+- **Le libellé** de l'administration devient « Vulkan », sans « (experimental) »
+  (décision de Bruno, `059a970e`) ; `/api/native/status` dit `vulkan` pour ce
+  qu'Auto prend sur AMD (`f7683e83`).
 
 **Reste** : le banc sur l'UM790Pro (le 780M, Mesa 26) ; les bancs de la cause
 (a).
