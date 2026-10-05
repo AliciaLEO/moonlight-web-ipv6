@@ -392,15 +392,11 @@ private:
     // native host's sessions always call.
     int m_SctpMaxBurst = -1;
     // The native host's own max burst when `sctpburst=` is not said: no limit
-    // on Windows (decided on 04/10/2026, plan Wi-Fi W2.5: the click of a Mac
-    // in Wi-Fi 66.9 -> 58.5 ms, p90 98 -> 69) and on Linux (decided the same
-    // night: the UM790Pro to an N95 in Wi-Fi 64.6 -> 58.8 ms, wired 86.9 ->
-    // 78.4); libdatachannel's 10 on macOS, not yet measured there.
-#if defined(_WIN32) || defined(__linux__)
+    // (plan Wi-Fi W2.5). Windows, 04/10/2026: the click of a Mac in Wi-Fi
+    // 66.9 -> 58.5 ms, p90 98 -> 69. Linux, the same night: a frame ~6 ms
+    // younger on a clean link. macOS, 05/10: to an N95 in Wi-Fi, a frame's
+    // time in usrsctp ~22 -> ~11 ms. libdatachannel's own is 10.
     static constexpr int kNativeSctpMaxBurst = 0;
-#else
-    static constexpr int kNativeSctpMaxBurst = -1;
-#endif
     // `sctpss=` (plan Wi-Fi W2.3): usrsctp's stream scheduler, -1 its own.
     int m_SctpScheduler = -1;
     // usrsctp's counters at the last link report, for the share of chunks

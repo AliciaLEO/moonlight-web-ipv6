@@ -439,10 +439,11 @@ struct EncoderTuning
     int linkHoldMs = 0;
     /// usrsctp's max burst, in packets: the most it sends at one opportunity,
     /// a SACK's arrival among them (plan Wi-Fi W2.5). 0: no limit. -1, the
-    /// product: the engine's own, no limit on the Windows and Linux hosts
-    /// since 04/10/2026 (DataChannelRelay::kNativeSctpMaxBurst), libdatachannel's
-    /// 10 on macOS. At 10 a frame of 20 to 35 packets leaves over 2 to 4 SACK
-    /// round trips, 8 to 9 ms each on a Mac in Wi-Fi.
+    /// product: the engine's own, no limit on every native host (Windows and
+    /// Linux since 04/10/2026, macOS since 05/10; DataChannelRelay::
+    /// kNativeSctpMaxBurst). At libdatachannel's 10 a frame of 20 to 35
+    /// packets leaves over 2 to 4 SACK round trips, 8 to 9 ms each on a Mac in
+    /// Wi-Fi.
     int sctpMaxBurst = -1;
     /// usrsctp's stream scheduler, which decides whose message goes next when
     /// several streams wait (plan Wi-Fi W2.3): 0 usrsctp's default, 1 round
