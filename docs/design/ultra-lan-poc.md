@@ -584,8 +584,29 @@ lui-même. 60 clics par passe, aucun manqué ; résultats dans
   présentation du navigateur, qu'un client natif comme Steam n'a pas. Pour
   Ultra, c'est un poste que le codec ne touche pas (U3, présentateurs au
   photon).
-- Reste à faire : l'hôte à iGPU, et MoonlightWeb repassé sans le drapeau de
-  banc.
+- **Passes du 05/10 au matin** (07:10-07:55, même couple, même outil,
+  `bench-out/photon/*-3.json` et `steam-amd-*.json`) :
+
+  | Hôte (encodeur) | Client | Passes, médiane (p90) |
+  |---|---|---|
+  | RTX (NVENC) | Steam HEVC | 58,5 ms (75,6) |
+  | RTX | Steam PyroWave | 49,2 ms (58,0) |
+  | RTX | MoonlightWeb HEVC, lecture à 200 px du clic | 57,3 ms (74,1) |
+  | iGPU AMD (écran de l'AMD en principal) | Steam HEVC | 57,9 (66,7), puis 49,4 ms (59,0) |
+  | iGPU AMD | Steam PyroWave | 41,7 (58,2), puis 49,6 ms (58,6) |
+
+- **Bilan de la borne Steam, passes propres seulement** :
+  - RTX : PyroWave 42,6, 42,7 et 49,2 ms contre 57,9 et 58,5 ms pour le
+    HEVC, soit un gain de 9 à 16 ms ;
+  - iGPU AMD : PyroWave 41,7 et 49,6 ms contre 49,4 et 57,9 ms, soit environ
+    8 ms en moyenne.
+  - MoonlightWeb (57,3 et 58,2 ms) est au niveau du HEVC de Steam, sur les
+    deux passes.
+- **Les médianes tombent sur des marches d'environ 8,3 ms** (41,7, 49,4-49,6,
+  57,3-58,5), la période d'un écran à 120 Hz (le M27Q de l'hôte et le client à
+  120 Hz). Les écarts entre codecs valent donc une ou deux images
+  d'affichage, et une même configuration peut tomber d'une marche à l'autre
+  d'une passe à l'autre. C'est une lecture, pas encore une mesure.
 
 ### 6.6 U0.5 — rapport de la phase U0, brouillon (04/10/2026)
 
