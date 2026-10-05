@@ -797,8 +797,12 @@ Steam HEVC 57,9-58,5 ms, MoonlightWeb HEVC 57,3-58,2 ms.
   HEVC de Steam. L'écart avec PyroWave natif (10 à 16 ms) n'est donc pas une
   affaire de présentateur dans Chrome.
 - **Non vérifié** : que chaque case a bien tourné avec le présentateur
-  demandé. Le réglage passe par `video_enhancement_algo`, et le banc ne relit
-  pas encore le nom du présentateur dans l'overlay. Les paliers de 6,5 ms
+  demandé. Le réglage passe par `video_enhancement_algo`, mais aucune trace ne
+  le confirme après coup. Le pilote coupait la passe `pass.py` avant qu'elle
+  écrive son JSON (overlay compris), et la page ne nomme son présentateur qu'à
+  un endroit : la sonde de latence, et seulement sur un clic manqué
+  (`LatencyProbe.js`, `via`). Une reprise doit relever le présentateur en
+  direct par CDP, pendant la case. Les paliers de 6,5 ms
   laissent aussi penser que la cadence de présentation du client découpe les
   mesures, plus que le présentateur lui-même. À refaire en relevant le
   présentateur et la cadence d'affichage du client.
