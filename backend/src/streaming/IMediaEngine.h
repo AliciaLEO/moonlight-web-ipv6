@@ -338,8 +338,9 @@ public:
     }
     /// Whether the page should relay the host OS's Logitech HID++ requests to
     /// the real wheel (filtered there) and answer with hidreply. Linux only:
-    /// hid-logitech-hidpp binds to the recreated wheel by its VID/PID, waits
-    /// on those answers at probe, and drives the motor through HID++ 0x8123.
+    /// hid-logitech-hidpp binds to the recreated wheel by its VID/PID and
+    /// waits on those answers at probe (unanswered, input stalled ~15 s).
+    /// Its force feedback refuses a non-USB device, so none comes this way.
     /// Announced in hidcaps as `hidpp`.
     virtual bool hidRelaysHidpp() const { return false; }
     /// Whether a recreated device can carry force feedback back to the page

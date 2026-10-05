@@ -44,7 +44,7 @@ import { HidppRelay, hidppInputIds, isHidppReport } from './hidppRelay.js';
  * and left free.
  *
  * A Linux host (`hidcaps.hidpp`) instead lets its kernel's Logitech driver
- * talk HID++ to the recreated wheel, force feedback included: this page
+ * talk HID++ to the recreated wheel (its probe waits on the answers): this page
  * relays those requests to the real wheel through a filter (hidppRelay.js)
  * and sends the answers back as `hidreply`. A HID++ device's own HID++ input
  * reports never go on the 'hid' channel: they are answers and notifications

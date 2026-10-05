@@ -13,12 +13,16 @@
  * HID », P4 under Linux; Bruno's choice B of 05/10).
  *
  * On a Linux host the kernel's hid-logitech-hidpp binds to the recreated
- * G923 by its VID/PID and talks HID++ to it: at probe (protocol version,
- * feature lookup), then to drive the motor through feature 0x8123 — that is
- * how Linux games get force feedback from a G920 or G923. The host sends
- * those requests to the page (`hidrequest`); this file passes them to the
- * real wheel and sends its answers back (`hidreply`), injected once into the
- * recreated wheel.
+ * G923 by its VID/PID and talks HID++ to it at probe (protocol version,
+ * feature lookup, name). Unanswered, the probe held the wheel's input for
+ * about 15 s (H2 bench, 04/10). The host sends those requests to the page
+ * (`hidrequest`); this file passes them to the real wheel and sends its
+ * answers back (`hidreply`), injected once into the recreated wheel: the
+ * probe then ends within a second (05/10).
+ *
+ * Force feedback does not follow: the driver's 0x8123 setup refuses any
+ * device that is not usbhid ("device is not USB"), and a uhid device never
+ * is. 0x8123 stays on the list for its probe questions.
  *
  * Filtered, because the wheel's HID++ also reaches its firmware updates and
  * on-board settings: a host must not reprogram the wheel in the viewer's
