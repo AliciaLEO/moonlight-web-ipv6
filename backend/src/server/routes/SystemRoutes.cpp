@@ -803,8 +803,14 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
             }
 #if defined(Q_OS_WIN) || defined(Q_OS_LINUX)
             if (gpuEncodes) {
+#if defined(Q_OS_LINUX)
+                // Linux's table goes by vendor: Vulkan Video on AMD (§32.28).
+                mw::native::VideoPipeline autoPipeline =
+                    mw::native::autoLinuxPipeline(gpu->vendorId);
+#else
                 mw::native::VideoPipeline autoPipeline =
                     mw::native::autoVideoPipeline(gpu->encoders.front());
+#endif
                 // A driver the D3D12 route stays off keeps D3D11, and says why.
                 const std::string excluded =
                     autoPipeline == mw::native::VideoPipeline::D3d12

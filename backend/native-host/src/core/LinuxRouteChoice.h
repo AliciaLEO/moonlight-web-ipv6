@@ -118,27 +118,6 @@ struct LinuxRoute
     bool refused = false;
 };
 
-/// The vendor table's chain on Linux.
-///
-/// AMD: Vulkan Video — Bruno's decision of 05/10/2026, on the bench's word
-/// (design §32.25): under Mesa 26 VA-API no longer settles on a desktop that
-/// barely moves (14.3 Mbit/s of 20 on a page where a 48 px square turns), and
-/// the Vulkan Video chain stays at 0.8 on the same page. In HEVC and AV1, the
-/// codecs it encodes; H.264 keeps VA-API (chooseLinuxRoute). Only where the
-/// pixel proof passes: anything that refuses it drops to VA-API, then to the
-/// CPU, on its own. VA-API for the others, until a bench has measured a vendor
-/// and Bruno has moved its line. On the CPU tier (NVIDIA today: VA-API does
-/// not encode there) the table has no opinion.
-inline VideoPipeline autoLinuxPipeline(uint32_t vendorId)
-{
-    switch (vendorId) {
-    case 0x1002: return VideoPipeline::Vulkan; // AMD: §32.25, Bruno 05/10/2026
-    case 0x8086: return VideoPipeline::Vaapi;  // Intel: ANV's encoder still young (§4.8)
-    case 0x10DE: return VideoPipeline::Vaapi;  // NVIDIA: the Selector gives it the CPU
-    default: return VideoPipeline::Vaapi;
-    }
-}
-
 /// The vendor table's conversion in front of VA-API.
 ///
 /// AMD: Vulkan on a compute queue, the split route — Bruno's decision of

@@ -102,8 +102,29 @@ inline VideoPipeline autoVideoPipeline(EncoderApi api)
     case EncoderApi::Nvenc: return VideoPipeline::D3d11; // G2, then G4 (NVENC on D3D12)
     case EncoderApi::Amf: return VideoPipeline::D3d11;   // G2, then G4 (AMF on D3D12)
     case EncoderApi::Vpl: return VideoPipeline::D3d12;   // G3 and C5.7: Bruno, 28/09 (§9-23)
-    case EncoderApi::VaApi: return VideoPipeline::Vaapi; // Linux: until G5 (Phase 13)
+    case EncoderApi::VaApi: return VideoPipeline::Vaapi; // Linux: autoLinuxPipeline
     default: return VideoPipeline::D3d11;                // no D3D12 route at all
+    }
+}
+
+/// The vendor table's chain on Linux.
+///
+/// AMD: Vulkan Video — Bruno's decision of 05/10/2026, on the bench's word
+/// (design §32.25): under Mesa 26 VA-API no longer settles on a desktop that
+/// barely moves (14.3 Mbit/s of 20 on a page where a 48 px square turns), and
+/// the Vulkan Video chain stays at 0.8 on the same page. In HEVC and AV1, the
+/// codecs it encodes; H.264 keeps VA-API (chooseLinuxRoute). Only where the
+/// pixel proof passes: anything that refuses it drops to VA-API, then to the
+/// CPU, on its own. VA-API for the others, until a bench has measured a vendor
+/// and Bruno has moved its line. On the CPU tier (NVIDIA today: VA-API does
+/// not encode there) the table has no opinion.
+inline VideoPipeline autoLinuxPipeline(uint32_t vendorId)
+{
+    switch (vendorId) {
+    case 0x1002: return VideoPipeline::Vulkan; // AMD: §32.25, Bruno 05/10/2026
+    case 0x8086: return VideoPipeline::Vaapi;  // Intel: ANV's encoder still young (§4.8)
+    case 0x10DE: return VideoPipeline::Vaapi;  // NVIDIA: the Selector gives it the CPU
+    default: return VideoPipeline::Vaapi;
     }
 }
 
