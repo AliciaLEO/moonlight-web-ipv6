@@ -816,7 +816,7 @@ Steam HEVC 57,9-58,5 ms, MoonlightWeb HEVC 57,3-58,2 ms.
 chacun câblés à 1 Gbit/s sur un répéteur Freebox, mais les deux répéteurs
 (rez-de-chaussée, 2e étage) sont reliés entre eux en Wi-Fi 7. Mesuré par un
 outil socket (TCP, UDP rythmé, écho UDP ; `network-latency-findings.md`,
-`1ffefc13`) :
+`4aebfc9a`) :
 - aller-retour à vide de 2,6 ms en médiane, là où un câble donne ~0,3 ms ;
 - TCP à 74-90 Mbit/s ;
 - UDP sans perte jusqu'à 150 Mbit/s, puis ~155-175 Mbit/s reçus avec des
@@ -830,10 +830,10 @@ U1.4 y seront refaites.
 **U1.4 (décision de Bruno, 05/10)** : la vidéo sur une piste RTP plutôt que sur
 le DataChannel, pour les quatre codecs, avec un interrupteur par codec et par
 type d'hôte. Mesurée exprès sur ce chemin Wi-Fi, pour ses pertes.
-- Hôte (`7bae2a56`) : `rtp_video` dans settings.json, ou `MW_RTP_VIDEO` au
+- Hôte (`e399d604`) : `rtp_video` dans settings.json, ou `MW_RTP_VIDEO` au
   banc, au format `native:h264+hevc+av1+ultra;other:h264+hevc+av1`. Vide par
   défaut, donc SCTP partout.
-- Client (`9a0b7940`) : `RTCRtpScriptTransform` dans un worker, avant le
+- Client (`b2f6d264`) : `RTCRtpScriptTransform` dans un worker, avant le
   décodeur de Chrome, puis le même `onVideo` que le DataChannel.
 - Chrome 154 négocie H.264, H265 et AV1 en RTP.
 
@@ -895,6 +895,62 @@ vidéo HEVC à côté**, deux manches :
 À refaire sur câble ce soir : le même jeu de passes, plus une passe de base en
 `sctpburst=0` avec l'UM790Pro pour client (demande de la session Wi-Fi).
 
+### 6.11 U1.4 ter : le métronome de Chrome, et la route audio (05/10/2026, 12:40-14:25)
+
+Demande de Bruno : « il y a un gain énorme à faire sur ce point ». Même chemin,
+mêmes machines, HEVC sur l'hôte natif sauf mention contraire.
+`network-latency-findings.md`, `b01d9454`. Code : `36f1a492`, `c83acc30`.
+
+**La cause.** Chrome remet les images vidéo reçues au transform sur une grille
+fixe de 15,625 ms, soit 64 fois par seconde :
+- **La preuve par la mesure.** Les heures de remise se calent sur cette période
+  (cohérence de phase 0,98). Les heures d'arrivée des paquets ne s'y calent pas
+  (0,01-0,07). Les images du DataChannel, sur le même socket, non plus.
+- **La source.** `VideoMetronomeWorker`, dans
+  `rtc_encoded_video_stream_transformer.cc`, met chaque image en file jusqu'au
+  prochain tick d'un métronome à 64 Hz. Il est actif par défaut depuis 2024,
+  pour réveiller moins souvent le JavaScript des grosses visios. Son
+  interrupteur (`RTCAlignReceivedEncodedVideoTransforms`) a été retiré en
+  octobre 2025.
+- **Ce qui n'y change rien :**
+  - l'ancienne API `createEncodedStreams`, sur le thread de la page ;
+  - les réglages de minuteur de Chrome.
+- **`VSyncDecoding` empire les choses :** 50 ms de retenue.
+- **Les images audio ne sont pas retenues.**
+
+**Le contournement : la « route audio ».** L'item `aroad` de `rtp_video` (banc
+seulement) découpe chaque image en paquets Opus sur une piste audio, avec 8
+octets d'en-tête. Le worker du transform les réassemble. La retenue de Chrome
+tombe de 7,8 ms à 0,2 ms.
+
+| Hôte → affiché, médiane | Piste vidéo RTP | Route audio | SCTP |
+|---|---|---|---|
+| HEVC, sans charge | 17,3 / 18,1 ms | 9,1 / 9,3 / 10,1 ms | 9,6 / 9,8 ms |
+| H.264, sans charge | 23,7 ms | 14,6 ms | 14,8 ms |
+| AV1, sans charge (40 i/s seulement, à refaire) | 30,9 ms | 31,1 ms | 21,1 ms |
+| HEVC sous Ultra 250 (~122 Mbit/s) | 21,4 ms | 11,1-11,6 ms | 123-129 ms |
+
+Sous la charge Ultra, l'attente en plus d'Ultra, en médiane / p95, est de :
+- 16,8 / 41,4 ms sur une piste vidéo ;
+- 7,2 / 22,3 ms sur la route audio ;
+- 141-155 / 185-200 ms en SCTP.
+
+- **La route audio efface toute la pénalité du RTP** : sans charge, elle fait
+  jeu égal avec SCTP. Sous charge, elle garde la vidéo presque aussi fraîche
+  que sans charge, et elle rend Ultra deux fois plus réactif que la piste
+  vidéo.
+- **Il lui manque la retransmission.** Chrome n'envoie pas de NACK pour une
+  piste audio dont il ne joue rien. Sous 122 Mbit/s, il y a eu 10 demandes
+  d'image clé en 2 minutes. Prochaine étape (U1.4 quater) : un NACK à nous,
+  qui envoie au hôte les morceaux manquants par le canal d'entrée.
+- **Le Wi-Fi 7 du banc est partagé avec la maison.** De 13h27 à 13h55, un
+  iPhone mal capté streamait de la vidéo par rafales :
+  - Ultra en RTP est tombé de 122 à 78-109 Mbit/s, avec des pertes ;
+  - la sonde UDP cadencée restait propre jusqu'à ~200 Mbit/s ;
+  - une fois l'iPhone arrêté, les chiffres du matin sont revenus.
+
+  Les passes sous charge de 14h10-14h25 ont été faites sans lui.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
@@ -940,3 +996,12 @@ rendre. En revanche, quand un flux très lourd comme Ultra passe à côté de la
 vidéo, RTP évite que la vidéo attende derrière lui : elle reste aussi fraîche que
 sans charge. Si la retenue de Chrome se lève, RTP pourra servir à tout le monde.
 Sinon, il restera le transport d'Ultra seulement.
+
+Pas encore visible (U1.4 ter, la route audio) : la retenue de Chrome vient d'une
+horloge interne que la page ne peut pas couper. Mais elle ne touche que les
+pistes vidéo. En faisant voyager les images de la vidéo par une piste audio,
+qu'on ne joue jamais, le RTP rattrape le DataChannel pour un stream seul. Quand
+un flux lourd passe à côté, la vidéo reste fraîche, à 11 ms de l'hôte à l'écran
+au lieu de 21 ms sur une piste vidéo et de 125 ms sur le DataChannel. Avant d'en
+faire profiter les joueurs, il faut lui apprendre à redemander un morceau perdu.
+Aujourd'hui, une perte coûte une image clé.
