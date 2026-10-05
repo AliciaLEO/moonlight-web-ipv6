@@ -683,8 +683,9 @@ Its `retrcut=3` pass lost the N95's Chrome.)
   Windows host towards the Mac. The click's median moves within the N95's
   noise (125-141 ms): decode and draw on the N95 weigh more.
 - `retrcut=3` alone: nothing.
-- Proposed to Bruno: no max burst as the macOS host's default too; `retrcut`
-  stays off there.
+- **Decision (Bruno, 05/10 ~10:30): no max burst is the macOS host's default
+  too, `6194297c`** (`kNativeSctpMaxBurst` = 0 on every native host);
+  `retrcut` stays off on macOS.
 
 ### 05/10/2026 — POC Ultra U1.2: the DataChannel's ceiling at intra-codec rates (session ex-3b)
 
