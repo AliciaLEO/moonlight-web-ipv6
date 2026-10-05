@@ -286,6 +286,12 @@ def main():
                          "latency_flag_enabled in the instance's settings.json)")
     ap.add_argument("--local-storage", action="append", default=[], metavar="KEY=VALUE",
                     help="a bench switch the page reads at launch (mw_decodequeue=pending)")
+    ap.add_argument("--setting", action="append", default=[], metavar="KEY=VALUE",
+                    help="a streaming setting over the bench's, the value read as JSON when it "
+                         "parses (video_enhancement=\"on\", video_enhancement_algo=\"video\")")
+    ap.add_argument("--fullscreen", action="store_true",
+                    help="the client's browser window full screen once the picture is up "
+                         "(CDP Browser.setWindowBounds), instead of maximized")
     ap.add_argument("--gpu-load", default="",
                     help="mw-gpu-load on this GPU (a part of its name: Arc, RTX, AMD) under the "
                          "measurement, then again under the clicks: the tool stops at 60 s, a run "
@@ -353,6 +359,12 @@ def main():
                          "tearing_enabled": a.vsync == "off"})
         if a.codec:
             settings["video_codec"] = a.codec
+        for kv in a.setting:
+            k, _, v = kv.partition("=")
+            try:
+                settings[k] = json.loads(v)
+            except ValueError:
+                settings[k] = v
         if a.bitrate > 0:
             settings.update({"stream_bitrate_auto": False, "stream_bitrate": a.bitrate})
         d.apply_settings(settings)
@@ -363,6 +375,14 @@ def main():
         before = {m[0] for m in monitors()}
         d.launch(card, app)
         d.wait_picture(timeout=60)
+        if a.fullscreen:
+            # The window, not the page's element: a page may only go full screen
+            # on a user gesture, the browser's window on CDP's word.
+            win = d.call("Browser.getWindowForTarget")
+            d.call("Browser.setWindowBounds", windowId=win["windowId"],
+                   bounds={"windowState": "fullscreen"})
+            time.sleep(2)
+            print("  client window full screen", flush=True)
         # The Virtual Display only exists once the stream is up: it is the
         # screen that was not there before the launch.
         if a.target == "vdisplay":
