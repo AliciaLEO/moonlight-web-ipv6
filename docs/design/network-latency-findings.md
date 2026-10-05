@@ -1004,6 +1004,8 @@ What the measurements support, in order of the path:
   DataChannels do not. The same frames on an Opus track came out at 11.1 ms
   under the Ultra load, against 21.4 on the video track and 123-129 on SCTP.
   Leaving SCTP therefore does not have to cost the metronome's ~8 ms.
+  U1.4 quater (§3): the audio road repairs its own losses by NACK. With 5 %
+  of chunks dropped, no frame was lost and the video was 2.5 ms later.
 - The Wi-Fi 7 hop of the POC benches is shared with the house: from 13:27 to
   13:55 on 05/10 an iPhone with a weak signal streaming video in bursts took
   Ultra on RTP from 122 down to 78-109 Mbit/s, with losses, while the paced
