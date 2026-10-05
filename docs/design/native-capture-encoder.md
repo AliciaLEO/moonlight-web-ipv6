@@ -6329,7 +6329,8 @@ du bourrage.
 **Ouvert, à Bruno** : la route par défaut sur AMD est touchée. En chercher la
 cause (le contrôle de débit du pilote, ou nos références), un plancher de QP
 pour VA-API, ou la chaîne Vulkan Video par défaut sur AMD. Rien n'est changé
-d'ici là.
+d'ici là. **Tranché le 05/10** : la chaîne Vulkan Video par défaut sur AMD, la
+cause cherchée à côté (§32.28).
 
 **Concrètement, pour l'utilisateur** : rien ne change pour l'instant. Sous
 Linux avec une carte AMD et un Mesa récent, un bureau presque immobile peut
@@ -6460,8 +6461,9 @@ sous une clé à part (`av1|…`, la version de dav1d comprise).
 **L'offre** (`platform::offerSessionCodecs`) : l'AV1 n'est ajouté aux codecs
 d'un GPU que pour une session dont la clé de banc ou le réglage demande la
 chaîne Vulkan Video, où le pilote Vulkan montre l'encodeur AV1 et où le build
-porte dav1d. La table des vendeurs n'en demande aucune : **le défaut ne change
-pas**. Windows et macOS n'ajoutent rien.
+porte dav1d. La table des vendeurs n'en demandait aucune : **le défaut ne
+changeait pas** (jusqu'au 05/10 : AMD y prend la chaîne, §32.28). Windows et
+macOS n'ajoutent rien.
 
 **La route et la session** :
 - `LinuxRouteChoice` prend l'AV1 comme le HEVC, derrière sa preuve ;
@@ -6471,7 +6473,7 @@ pas**. Windows et macOS n'ajoutent rien.
 - refusé en cours de stream, la session s'arrête en le disant : rien d'autre
   n'encode l'AV1 sous Linux, et un stream ne change pas de codec.
 
-**Le client qui recadre (05/10, `9a94db45`, accord de Bruno).** Un navigateur
+**Le client qui recadre (05/10, `2bdda3a8`, accord de Bruno).** Un navigateur
 qui sait couper une image décodée le dit au `/start` (`crops_to_frame`,
 essayé une fois par `stream/FrameCrop.js`) ; la session reçoit
 `SessionConfig::clientCropsToFrame`, l'encodeur remplit alors le cadre
@@ -6495,6 +6497,51 @@ plan, à revoir sur RDNA4.
 choisir la chaîne Vulkan Video dans l'administration rend l'AV1 possible pour
 les navigateurs qui le préfèrent, le 1080p à pleine taille (1792×1008 agrandi
 seulement pour un frontend ancien). Avec le réglage par défaut, rien ne change.
+
+### 32.28 Linux : la chaîne Vulkan Video par défaut sur AMD (décision de Bruno, 05/10/2026)
+
+**La décision.** Bruno, le 05/10, sur le constat du §32.25 (VA-API à
+14,3 Mbit/s sur 20 sur un bureau presque immobile sous Mesa 26, la chaîne
+Vulkan Video à 0,8) :
+- (c) la chaîne Vulkan Video devient la route par défaut sur AMD sous Linux, là
+  où la sonde et la preuve au pixel la valident ; VA-API reste le repli
+  automatique, puis OpenH264 ;
+- (a) la cause est cherchée à côté (le contrôle de débit de radeonsi 26, ou nos
+  références), sans retenir (c).
+
+**Le code** (`LinuxRouteChoice.h`, `4e998380`) :
+- la ligne AMD de la table des vendeurs (`autoLinuxPipeline`) passe de VA-API à
+  Vulkan Video ; Intel et NVIDIA ne bougent pas ;
+- la table ne demande que ce que la chaîne peut porter. En H.264, que
+  l'encodeur Vulkan Video ne fait pas encore, et dans un build sans la chaîne,
+  VA-API tourne par la ligne de la table elle-même, sans refus : la route
+  scindée (Vulkan compute → VA-API) comme avant ;
+- ce que la preuve ou le stream ont appris reste un refus, dit comme tel
+  (« the vendor table for AMD asks for Vulkan Video, which cannot run: … ;
+  VA-API runs »), comme la table de Windows (`VideoPipelineChoice.h`) ;
+- la preuve au pixel ne tourne que là où la chaîne serait prise
+  (`linuxRouteWantsVulkanVideo`) : désormais toute session HEVC ou AV1 sur AMD,
+  une fois par taille, gardée dans le cache de l'utilisateur ;
+- l'AV1 est offert par défaut sur AMD (`offerSessionCodecs`), là où le pilote
+  montre l'encodeur ; un client ne le reçoit que s'il l'a choisi (le codec
+  « Auto » du client demande HEVC puis H.264) ;
+- le réglage « VA-API » de l'administration reste le chemin de retour : GL
+  devant VA-API, la chaîne telle qu'elle a toujours tourné.
+
+**Les tests** : `linux_route_choice` (table, H.264, build sans la chaîne,
+preuve refusée, mémoire partagée du portail, VA-API sans jeux de paramètres,
+retour par le réglage) ; `linux_session` dit la route de la session HEVC sans
+réglage et vérifie que, sur AMD, ce qui n'est pas la chaîne Vulkan Video est un
+refus ou un build sans elle.
+
+**Reste** : le banc sur l'UM790Pro (le 780M, Mesa 26) ; la cause côté VA-API
+(a).
+
+**Concrètement, pour l'utilisateur** : sous Linux avec une carte AMD récente,
+le HEVC et l'AV1 passent par Vulkan Video sans rien régler. Un bureau presque
+immobile ne prend plus presque tout le débit. Si le pilote ne prouve pas qu'il
+encode juste, le stream passe par VA-API de lui-même. Le réglage « VA-API »
+de l'administration ramène l'ancien chemin.
 
 ## 33. Framerate « Hôte » : le stream à la cadence de l'écran de l'hôte (ouvert le 29/09/2026)
 
