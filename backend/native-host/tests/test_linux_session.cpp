@@ -478,7 +478,18 @@ void run_linux_session_tests()
                 const SessionInfo& hevcInfo = hevcSession->info();
                 std::fprintf(stderr, "  session: %dx%d %s via %s\n", hevcInfo.width,
                              hevcInfo.height, toString(hevcInfo.codec), toString(hevcInfo.encoder));
+                std::fprintf(stderr, "  route \"%s\"%s\n    reason: %s\n",
+                             hevcInfo.videoRoute.c_str(),
+                             hevcInfo.videoPipelineRefused ? " (refused)" : "",
+                             hevcInfo.videoPipelineReason.c_str());
                 CHECK_EQ(static_cast<int>(hevcInfo.codec), static_cast<int>(Codec::Hevc));
+                // Nothing asked, on AMD: the vendor table's Vulkan Video
+                // (§32.25) — or VA-API, saying why, where the build lacks the
+                // chain or the pixel proof did not pass.
+                if (gpu->vendorId == 0x1002 &&
+                    hevcInfo.videoRoute != std::string("Vulkan compute → Vulkan Video"))
+                    CHECK((hevcInfo.videoPipelineRefused ||
+                           hevcInfo.videoPipelineReason.find("not built in") != std::string::npos));
                 std::this_thread::sleep_for(std::chrono::seconds(2));
 
                 // The same named loss as in H.264. HEVC is where it is harder:

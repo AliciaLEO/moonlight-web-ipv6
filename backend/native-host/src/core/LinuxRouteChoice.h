@@ -20,12 +20,12 @@
 // Which chain a build of a Linux session runs its pictures through (plan
 // pipeline-video-d3d12-v2, Phase 13). Pure, so that it is tested everywhere.
 //
-// Two questions, in this order. The encoder: VA-API (today's), Vulkan Video,
-// or the CPU — the bench key over the setting over the vendor table. Then,
-// in front of VA-API, the conversion: GL, or Vulkan on a compute queue (the
-// split route, plan §9-17) — the bench key, then VA-API asked for by name
-// (GL in front, the chain as it always ran: the way back from whatever the
-// table moved), then the vendor table.
+// Two questions, in this order. The encoder: Vulkan Video (AMD's since
+// 05/10/2026, in HEVC and AV1), VA-API, or the CPU — the bench key over the
+// setting over the vendor table. Then, in front of VA-API, the conversion:
+// GL, or Vulkan on a compute queue (the split route, plan §9-17) — the bench
+// key, then VA-API asked for by name (GL in front, the chain as it always
+// ran: the way back from whatever the table moved), then the vendor table.
 //
 // Whatever cannot carry THIS build is refused, by name, and the chain drops to
 // the next one down — Vulkan Video → VA-API → the CPU, Vulkan compute → GL —
@@ -118,16 +118,23 @@ struct LinuxRoute
     bool refused = false;
 };
 
-/// The vendor table's chain on Linux: VA-API wherever the Selector found a
-/// VA-API encoder, until G5 (C13.7) has measured Vulkan Video on a vendor and
-/// Bruno has moved its line. On the CPU tier (NVIDIA today: VA-API does not
-/// encode there) the table has no opinion.
+/// The vendor table's chain on Linux.
+///
+/// AMD: Vulkan Video — Bruno's decision of 05/10/2026, on the bench's word
+/// (design §32.25): under Mesa 26 VA-API no longer settles on a desktop that
+/// barely moves (14.3 Mbit/s of 20 on a page where a 48 px square turns), and
+/// the Vulkan Video chain stays at 0.8 on the same page. In HEVC and AV1, the
+/// codecs it encodes; H.264 keeps VA-API (chooseLinuxRoute). Only where the
+/// pixel proof passes: anything that refuses it drops to VA-API, then to the
+/// CPU, on its own. VA-API for the others, until a bench has measured a vendor
+/// and Bruno has moved its line. On the CPU tier (NVIDIA today: VA-API does
+/// not encode there) the table has no opinion.
 inline VideoPipeline autoLinuxPipeline(uint32_t vendorId)
 {
     switch (vendorId) {
-    case 0x1002: return VideoPipeline::Vaapi; // AMD: behind the setting until G5 (§9-21)
-    case 0x8086: return VideoPipeline::Vaapi; // Intel: ANV's encoder still young (§4.8)
-    case 0x10DE: return VideoPipeline::Vaapi; // NVIDIA: the Selector gives it the CPU
+    case 0x1002: return VideoPipeline::Vulkan; // AMD: §32.25, Bruno 05/10/2026
+    case 0x8086: return VideoPipeline::Vaapi;  // Intel: ANV's encoder still young (§4.8)
+    case 0x10DE: return VideoPipeline::Vaapi;  // NVIDIA: the Selector gives it the CPU
     default: return VideoPipeline::Vaapi;
     }
 }
@@ -258,6 +265,20 @@ inline LinuxRoute chooseLinuxRoute(const LinuxRouteFacts& f)
         why = std::string("auto: the vendor table has ") +
               (wanted == VideoPipeline::Vulkan ? "Vulkan Video" : "VA-API") + " for " +
               vendorName(f.vendorId);
+        // The table asks only for what the chain could carry: a codec it does
+        // not encode, or a build without it, is VA-API's by the table's own
+        // line — nothing refused. What the proof or the stream learned is
+        // still a refusal, said as one (as on Windows, VideoPipelineChoice.h).
+        if (wanted == VideoPipeline::Vulkan) {
+            if (f.codec != Codec::Hevc && f.codec != Codec::Av1) {
+                wanted = VideoPipeline::Vaapi;
+                why += std::string(" in HEVC and AV1, VA-API in ") + toString(f.codec) +
+                       " (not done by the Vulkan Video encoder yet)";
+            } else if (!f.vulkanEncoderBuilt) {
+                wanted = VideoPipeline::Vaapi;
+                why += ", not built in here: VA-API";
+            }
+        }
     }
 
     std::string refusedBecause;
@@ -272,7 +293,9 @@ inline LinuxRoute chooseLinuxRoute(const LinuxRouteFacts& f)
             r.reason = why;
             return r;
         }
-        refusedBecause = why + " asks for Vulkan Video, which cannot run: " + no;
+        refusedBecause =
+            (asked ? why : std::string("auto: the vendor table for ") + vendorName(f.vendorId)) +
+            " asks for Vulkan Video, which cannot run: " + no;
     }
 
     // VA-API, or the CPU when there is none to be had.

@@ -669,9 +669,10 @@ std::vector<Codec> offerSessionCodecs(Capabilities& caps, const SessionConfig& c
 {
     // AV1, the one codec only Vulkan Video encodes here (C13.12): added to a
     // GPU that encodes through VA-API already — the chain falls back to it for
-    // everything else — only for a session whose bench key or setting asks
-    // for the Vulkan Video chain on that GPU, and only where the GPU's Vulkan
-    // driver shows an AV1 encoder and this build can prove one at the pixel.
+    // everything else — only for a session whose bench key, setting or vendor
+    // table (AMD's since 05/10/2026) asks for the Vulkan Video chain on that
+    // GPU, and only where the GPU's Vulkan driver shows an AV1 encoder and
+    // this build can prove one at the pixel.
     // A session that would have encoded through VA-API is never handed AV1;
     // the proof itself runs in the session, which falls back to the client's
     // next codec if it does not pass (LinuxSession::buildPipeline).

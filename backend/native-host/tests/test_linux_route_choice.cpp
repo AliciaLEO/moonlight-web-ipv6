@@ -59,22 +59,25 @@ bool contains(const std::string& text, const std::string& piece)
 
 void run_linux_route_choice_tests()
 {
-    SECTION("LinuxRoute — the vendor table: VA-API everywhere; on AMD fed by Vulkan compute "
-            "(§9-20), by GL elsewhere");
+    SECTION("LinuxRoute — the vendor table: Vulkan Video on AMD (§32.25), VA-API elsewhere; in "
+            "front of VA-API, Vulkan compute on AMD (§9-20), GL elsewhere");
     {
-        for (uint32_t vendor : {0x1002u, 0x8086u, 0x10DEu, 0u})
+        CHECK(autoLinuxPipeline(0x1002) == VideoPipeline::Vulkan);
+        for (uint32_t vendor : {0x8086u, 0x10DEu, 0u})
             CHECK(autoLinuxPipeline(vendor) == VideoPipeline::Vaapi);
         CHECK(autoLinuxConversion(0x1002) == EncoderTuning::ConvertLinux::Vulkan);
         for (uint32_t vendor : {0x8086u, 0x10DEu, 0u})
             CHECK(autoLinuxConversion(vendor) == EncoderTuning::ConvertLinux::Gl);
 
+        // A build without the Vulkan Video encoder: the table's VA-API, by
+        // the table's own line — nothing refused.
         LinuxRoute r = chooseLinuxRoute(amd());
         CHECK(r.encoder == LinuxRoute::Encoder::Vaapi);
         CHECK(r.conversion == LinuxRoute::Conversion::Vulkan);
         CHECK(r.pipeline == VideoPipeline::Vaapi);
         CHECK_EQ(r.route, std::string("Vulkan compute → VA-API"));
         CHECK(!r.refused);
-        CHECK(contains(r.reason, "vendor table has VA-API for AMD"));
+        CHECK(contains(r.reason, "vendor table has Vulkan Video for AMD, not built in here"));
         CHECK(contains(r.reason, "converts with Vulkan compute for AMD"));
 
         // Intel: GL, as it always was.
@@ -176,10 +179,10 @@ void run_linux_route_choice_tests()
         CHECK(contains(r.reason, "pipeline=vulkan asks for Vulkan Video"));
     }
 
-    SECTION("LinuxRoute — auto never takes Vulkan Video, even trusted: behind the setting until "
-            "G5 (§9-21)");
+    SECTION("LinuxRoute — auto takes Vulkan Video on AMD alone, trusted (Bruno, 05/10/2026, "
+            "§32.25)");
     {
-        for (uint32_t vendor : {0x1002u, 0x8086u, 0x10DEu, 0u}) {
+        for (uint32_t vendor : {0x8086u, 0x10DEu, 0u}) {
             LinuxRouteFacts f = amdWithVulkanEncoder();
             f.vendorId = vendor;
             CHECK(!linuxRouteWantsVulkanVideo(f));
@@ -187,6 +190,78 @@ void run_linux_route_choice_tests()
             CHECK(r.encoder == LinuxRoute::Encoder::Vaapi);
             CHECK(r.pipeline == VideoPipeline::Vaapi);
             CHECK(!r.refused);
+        }
+
+        LinuxRouteFacts f = amdWithVulkanEncoder();
+        CHECK(linuxRouteWantsVulkanVideo(f));
+        LinuxRoute r = chooseLinuxRoute(f);
+        CHECK(r.encoder == LinuxRoute::Encoder::Vulkan);
+        CHECK(r.conversion == LinuxRoute::Conversion::Vulkan);
+        CHECK(r.pipeline == VideoPipeline::Vulkan);
+        CHECK_EQ(r.route, std::string("Vulkan compute → Vulkan Video"));
+        CHECK(!r.refused);
+        CHECK(contains(r.reason, "auto: the vendor table has Vulkan Video for AMD"));
+
+        // AV1 too, its only encoder here.
+        f.codec = Codec::Av1;
+        CHECK(linuxRouteWantsVulkanVideo(f));
+        CHECK(chooseLinuxRoute(f).encoder == LinuxRoute::Encoder::Vulkan);
+
+        // H.264, which the chain does not encode: VA-API by the table's own
+        // line, behind the split route — no proof asked, nothing refused.
+        f.codec = Codec::H264;
+        CHECK(!linuxRouteWantsVulkanVideo(f));
+        r = chooseLinuxRoute(f);
+        CHECK(r.encoder == LinuxRoute::Encoder::Vaapi);
+        CHECK_EQ(r.route, std::string("Vulkan compute → VA-API"));
+        CHECK(!r.refused);
+        CHECK(contains(r.reason, "Vulkan Video for AMD in HEVC and AV1, VA-API in H.264"));
+
+        // The portal's shared memory: the chain converts in Vulkan, it reads it.
+        f = amdWithVulkanEncoder();
+        f.portal = true;
+        f.sharedMemory = true;
+        CHECK(chooseLinuxRoute(f).encoder == LinuxRoute::Encoder::Vulkan);
+
+        // A VA-API that writes no parameter sets (the 610M): the chain, no CPU.
+        f = amdWithVulkanEncoder();
+        f.vaapiUnusable = true;
+        CHECK(chooseLinuxRoute(f).encoder == LinuxRoute::Encoder::Vulkan);
+
+        // The way back from the table: VA-API by name, GL in front, as always.
+        f = amdWithVulkanEncoder();
+        f.setting = VideoPipeline::Vaapi;
+        CHECK(!linuxRouteWantsVulkanVideo(f));
+        r = chooseLinuxRoute(f);
+        CHECK_EQ(r.route, std::string("EGL → VA-API"));
+        CHECK(!r.refused);
+    }
+
+    SECTION("LinuxRoute — AMD in auto, the chain not trusted: VA-API runs on its own, and the "
+            "refusal is said");
+    {
+        for (const char* learned :
+             {"the pixel proof failed: 4.9 dB after the first P picture",
+              "the Vulkan Video chain gave up while streaming (device lost)"}) {
+            LinuxRouteFacts f = amdWithVulkanEncoder();
+            f.vulkanEncoderRefusal = learned;
+            CHECK(!linuxRouteWantsVulkanVideo(f));
+            LinuxRoute r = chooseLinuxRoute(f);
+            CHECK(r.encoder == LinuxRoute::Encoder::Vaapi);
+            CHECK(r.pipeline == VideoPipeline::Vaapi);
+            // The table's conversion in front of it: nobody asked for VA-API by name.
+            CHECK_EQ(r.route, std::string("Vulkan compute → VA-API"));
+            CHECK(r.refused);
+            CHECK(contains(r.reason, "auto: the vendor table for AMD asks for Vulkan Video, which "
+                                     "cannot run: "));
+            CHECK(contains(r.reason, learned));
+            CHECK(contains(r.reason, "VA-API runs"));
+
+            // And no VA-API either: the CPU, said.
+            f.vaapiUnusable = true;
+            r = chooseLinuxRoute(f);
+            CHECK(r.encoder == LinuxRoute::Encoder::Cpu);
+            CHECK(r.refused);
         }
     }
 
@@ -264,8 +339,9 @@ void run_linux_route_choice_tests()
 
     SECTION("LinuxRoute — the pixel proof runs only where Vulkan Video would be taken");
     {
-        // The vendor table has VA-API everywhere: nobody is made to prove.
+        // The vendor table has VA-API off AMD: nobody there is made to prove.
         LinuxRouteFacts f = amdWithVulkanEncoder();
+        f.vendorId = 0x8086;
         CHECK(!linuxRouteWantsVulkanVideo(f));
         f.setting = VideoPipeline::Vulkan;
         CHECK(linuxRouteWantsVulkanVideo(f));
@@ -335,13 +411,17 @@ void run_linux_route_choice_tests()
         CHECK(contains(r.reason, "H.264 is not done by the Vulkan Video encoder yet"));
     }
 
-    SECTION("LinuxRoute — AV1 is Vulkan Video's alone, asked for by the bench key or the setting "
-            "and never by the vendor table today");
+    SECTION("LinuxRoute — AV1 is Vulkan Video's alone, asked for by the bench key, the setting, "
+            "or AMD's line of the vendor table");
     {
         CHECK(linuxVulkanOnlyCodec(Codec::Av1));
         CHECK(!linuxVulkanOnlyCodec(Codec::Hevc));
         CHECK(!linuxVulkanOnlyCodec(Codec::H264));
         CHECK(linuxWantedPipeline(VideoPipeline::Auto, VideoPipeline::Auto, 0x1002) ==
+              VideoPipeline::Vulkan);
+        CHECK(linuxWantedPipeline(VideoPipeline::Auto, VideoPipeline::Auto, 0x8086) ==
+              VideoPipeline::Vaapi);
+        CHECK(linuxWantedPipeline(VideoPipeline::Auto, VideoPipeline::Vaapi, 0x1002) ==
               VideoPipeline::Vaapi);
         CHECK(linuxWantedPipeline(VideoPipeline::Auto, VideoPipeline::Vulkan, 0x1002) ==
               VideoPipeline::Vulkan);
@@ -349,8 +429,10 @@ void run_linux_route_choice_tests()
               VideoPipeline::Vaapi);
         CHECK(linuxWantedPipeline(VideoPipeline::Vulkan, VideoPipeline::Auto, 0x8086) ==
               VideoPipeline::Vulkan);
-        // Windows' values are no opinion here.
+        // Windows' values are no opinion here: the table's.
         CHECK(linuxWantedPipeline(VideoPipeline::D3d12, VideoPipeline::Auto, 0x1002) ==
+              VideoPipeline::Vulkan);
+        CHECK(linuxWantedPipeline(VideoPipeline::D3d12, VideoPipeline::Auto, 0x8086) ==
               VideoPipeline::Vaapi);
     }
 
