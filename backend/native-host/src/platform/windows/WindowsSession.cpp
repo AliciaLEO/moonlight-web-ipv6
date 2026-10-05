@@ -3069,10 +3069,17 @@ private:
         m_Callbacks.onCursor(update);
     }
 
-    /// Bring the pointer back onto the streamed display when it has wandered
-    /// off it — but only while WE draw it into the picture.
+    /// Bring the pointer onto the streamed display if it is elsewhere when the
+    /// stream starts — but only while WE draw it into the picture.
     ///
-    /// That is the whole condition. When the client draws its own pointer it
+    /// At the start only: once the pointer has been seen on this display, the
+    /// person in front of the host may take it to their other screen, and it is
+    /// theirs to take. Pulling it back all session long (18/09 to 05/10) put it
+    /// in the middle of the streamed display every time they tried (Bruno,
+    /// 05/10: "seulement au démarrage partout"). Seen here in desktop mode
+    /// counts too: the client put it there, the start is over.
+    ///
+    /// The drawing condition. When the client draws its own pointer it
     /// has one on screen wherever the host's is, and its next move places the
     /// host's under it; nothing is lost and nothing should be moved behind the
     /// viewer's back. When the pointer is drawn into the frame instead —
@@ -3095,7 +3102,7 @@ private:
     void recentrePointerIfAway()
     {
         static constexpr int64_t kIntervalUs = 200000;
-        if (!m_CompositeCursor.load() || !m_RecentrePointer.load() || !m_Capture) return;
+        if (m_RecentreDone || !m_Capture) return;
         const int64_t nowUs = steadyNowUs();
         if (nowUs - m_LastRecentreCheckUs < kIntervalUs) return;
         m_LastRecentreCheckUs = nowUs;
@@ -3107,21 +3114,22 @@ private:
         if (!rect.valid()) return;
         if (info.ptScreenPos.x >= rect.left && info.ptScreenPos.x < rect.right &&
             info.ptScreenPos.y >= rect.top && info.ptScreenPos.y < rect.bottom) {
-            // Where it belongs: whatever pulled it away before is over.
-            m_RecentreTries = 0;
+            // Where it belongs, whatever the mode: the start is over.
+            m_RecentreDone = true;
             return;
         }
+        if (!m_CompositeCursor.load() || !m_RecentrePointer.load()) return;
 
         // An application can be holding the pointer on the other display and
         // pulling it back every frame — Counter-Strike left running on the
-        // primary screen does exactly that. We would lose that tug of war
-        // forever, at five warps a second, and the pointer would flicker
-        // between the two screens for as long as the session lasted. A few
-        // attempts say what can be said; after that the pointer is not free to
-        // move, which is not a thing to keep asking about. The count resets the
-        // moment it is seen back on this display.
-        if (m_RecentreTries >= kMaxRecentreTries) return;
-        ++m_RecentreTries;
+        // primary screen does exactly that. We would lose that tug of war,
+        // at five warps a second, and the pointer would flicker between the
+        // two screens. A few attempts say what can be said; after that the
+        // pointer is not free to move, and the start is over all the same.
+        if (++m_RecentreTries > kMaxRecentreTries) {
+            m_RecentreDone = true;
+            return;
+        }
 
         // Through the input sink like any other position, so the display
         // rectangle, the DPI virtualization and the recentring detector are all
@@ -3141,8 +3149,8 @@ private:
         }
         if (!m_LoggedRecentre) {
             m_LoggedRecentre = true;
-            log::info("[native] cursor: the pointer had left this display while we draw it into "
-                      "the picture — put back in the middle (once per session)");
+            log::info("[native] cursor: the pointer was on another display at the start while we "
+                      "draw it into the picture — put in the middle (once per session)");
         }
     }
 
@@ -3646,8 +3654,8 @@ private:
     /// True — the default — draws the pointer into the picture. False reports
     /// its shape to the client, which draws it itself at its own refresh rate.
     std::atomic<bool> m_CompositeCursor{true};
-    /// Whether a drawn pointer that leaves the display is brought back onto
-    /// it. See Session::setRecentrePointer.
+    /// Whether a drawn pointer elsewhere at the start is brought onto the
+    /// display. See Session::setRecentrePointer.
     std::atomic<bool> m_RecentrePointer{true};
     /// How wide the client wants the composited pointer, in frame pixels; 0 for
     /// the size it has on the desktop. See Session::setCompositeCursor.
@@ -3664,9 +3672,11 @@ private:
     /// re-sent on every frame.
     uint64_t m_ReportedShape = 0;
     bool m_ReportedVisible = false;
-    /// See recentrePointerIfAway(): when Windows was last asked, and whether
-    /// the one line has been said. Capture-thread only.
+    /// See recentrePointerIfAway(): when Windows was last asked, whether the
+    /// start is over, and whether the one line has been said. Capture-thread
+    /// only.
     int64_t m_LastRecentreCheckUs = 0;
+    bool m_RecentreDone = false;
     int m_RecentreTries = 0;
     static constexpr int kMaxRecentreTries = 5;
     bool m_LoggedRecentre = false;

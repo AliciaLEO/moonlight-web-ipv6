@@ -305,8 +305,8 @@ public:
     /// a feed that came back, which starts knowing nothing.
     void setCompositeCursor(bool composite, int cursorFramePx);
 
-    /// Whether the session may bring the host's pointer back onto its display
-    /// when it wanders off while drawn into the picture — see
+    /// Whether the session may bring the host's pointer onto its display when
+    /// it is elsewhere at the start while drawn into the picture — see
     /// Session::setRecentrePointer. The guests' feed turns it off, then on and
     /// off as its guests ask. Remembered, and given to a session before its
     /// capture starts. Safe at any time.

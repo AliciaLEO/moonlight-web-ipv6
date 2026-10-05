@@ -297,8 +297,9 @@ public:
     virtual void setCompositeCursor(bool composite, int cursorFramePx) = 0;
 
     /// Whether a session that draws the pointer into the picture may bring the
-    /// host's pointer back onto the streamed display when it wanders off: a
-    /// viewer who sees it nowhere else steers it blind on another monitor.
+    /// host's pointer onto the streamed display when it is on another monitor
+    /// at the start: a viewer who sees it nowhere else would steer it blind.
+    /// At the start only — once seen on the display, the pointer stays free.
     /// True by default, the session's one viewer being that viewer. The
     /// guests' shared feed draws it for every guest, and asks this only while
     /// one of them sees the pointer nowhere else (FeedArbiter) — the pointer is

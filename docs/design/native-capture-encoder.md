@@ -4842,6 +4842,15 @@ principal fait exactement ça, cf. §29.6). On perdrait ce bras de fer cinq fois
 par seconde pour toute la session, avec un pointeur qui clignote entre les deux
 écrans. Le compteur repart à zéro dès que le pointeur est revu sur cet écran.
 
+**Au démarrage seulement (05/10).** Ramené toute la session, le pointeur ne
+pouvait plus partir sur l'autre écran de l'hôte : la personne devant l'hôte le
+voyait revenir au milieu de l'écran streamé à chaque essai (test manuel du flux
+commun, S9). Décision de Bruno : « seulement au démarrage partout ». Dès que le
+pointeur est vu sur l'écran capturé, quel que soit le mode, le démarrage est
+fini et plus rien ne le ramène. Les 5 tentatives épuisées finissent aussi le
+démarrage. L'exception des jeux qui détachent le pointeur (Roblox bouton droit
+tenu sur le Mac, `CgInput::postRelative`) est une autre affaire et ne change pas.
+
 ### 29.6 Mode bureau + jeu qui recentre le pointeur : la visée tournait
 
 Cinquième signalement, le même jour, et le plus grave : Counter-Strike (GoldSrc)
@@ -7187,9 +7196,9 @@ worker owner (slots 0/1) : inchangé, son propre encodeur
   (`ref_invalidation = false` dans l'`info`).
 - **Pointeur** : le flux dessine le pointeur de l'hôte dans l'image commune,
   quel que soit le mode de chaque invité. Une session qui dessine le pointeur
-  le ramène au milieu de l'écran streamé quand il en sort : c'est la règle du
-  18/09, pour un spectateur qui ne le voit que dans l'image. Le flux ne le
-  ramène que tant qu'un invité ne voit le pointeur nulle part ailleurs
+  le ramène au milieu de l'écran streamé s'il est ailleurs au démarrage
+  (règle du 18/09, réduite au démarrage le 05/10, §29.5), pour un spectateur
+  qui ne le voit que dans l'image. Le flux ne le ramène que tant qu'un invité ne voit le pointeur nulle part ailleurs
   (pointeur verrouillé, trackpad d'un téléphone).
   - La page le dit à son worker (`cursormode`), qui le redit au flux, et encore
     à chaque relance du flux.

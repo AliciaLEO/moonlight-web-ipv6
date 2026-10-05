@@ -53,8 +53,8 @@ namespace mw::native {
 ///    every report of the period says so: one guest back from the background
 ///    is not every guest's link recovering.
 ///  - **Pointer**: the feed draws the host's pointer into the picture they
-///    share, and a session that draws it brings it back onto its display when
-///    it wanders off (Session::setRecentrePointer). The feed does that only
+///    share, and a session that draws it brings it onto its display when it
+///    is elsewhere at the start (Session::setRecentrePointer). The feed does that only
 ///    while some guest sees the pointer nowhere else — pointer lock, a phone's
 ///    trackpad — as its page tells its own worker (`cursormode`). A guest in
 ///    desktop mode has its own pointer and asks nothing, and the host's stays
