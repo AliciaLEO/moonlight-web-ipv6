@@ -768,6 +768,38 @@ stream bursts.
 - Worth replaying on the cable Bruno lays on the evening of 05/10: one round
   of base / `sctpburst=0`, UM790Pro client, to anchor the wired figures.
 
+### 05/10/2026 — POC Ultra U1.4: the video on an RTP track, against SCTP (session ex-3b)
+
+Same path (the Wi-Fi 7 hop above), on purpose. Host DualRTX (`--dev`,
+`7bae2a56`): the video on a send-only RTP track when `MW_RTP_VIDEO` names the
+codec. Client the UM790Pro under Windows, Chrome 154 (`9a0b7940`), which takes
+each frame off the track with an `RTCRtpScriptTransform`, before its own
+decoder, into the DataChannel's decode path. POC doc §6.10.
+
+- **Idle, RTP costs 5-10 ms** of host stamp → drawn on every codec and both
+  host types. Native HEVC: 18.3-18.7 ms against 8.8-11.6 ms for SCTP; H.264
+  23.8-26.4 against 15.3-16.0; AV1 37.5-38.9 against 32.9. Sunshine host:
+  content age +6 ms on all three.
+- **It is Chrome's wait, not the host or the link.**
+  - The host sends 4 ms after capture either way (`sendFrame` 0.37 ms).
+  - The worker → page hop is 0.2 ms.
+  - Between the frame's last packet (`receiveTime` in its metadata) and the
+    transform, Chrome holds it 7.5 ms median, p90 14, at most 17 ms, uniform
+    over a 60 Hz period: a receive-side tick.
+  - Neither `jitterBufferTarget = 0` nor `--disable-features=WebRtcMetronome`
+    changes it.
+- **Under an Ultra load, RTP wins clearly.** With `ultra=synthetic:250`
+  (~122 Mbit/s at 60 fps) next to HEVC video, both transports deliver it all,
+  with no loss:
+  - RTP: Ultra's extra wait 15 / 25-30 ms (p50 / p95), video 20-21 ms host →
+    drawn.
+  - SCTP: Ultra's extra wait 35-52 / 62-90 ms, video 42-65 ms, because the
+    video waits behind Ultra in the one association.
+- No loss was seen on this hop, either way: RTP under loss is still to measure
+  (NACK, the keyframe path).
+- Open: where Chrome's receive tick comes from, and whether a page can avoid
+  it.
+
 ## 4. The model so far (04/10/2026)
 
 What the measurements support, in order of the path:
