@@ -38,7 +38,7 @@ depends=('glibc' 'gcc-libs' 'libglvnd' 'libx11' 'libxkbcommon-x11'
          'libdrm' 'libva' 'mesa' 'pipewire' 'libcap')
 # Opened at run time, never linked: without it the host converts through GL
 # and encodes through VA-API, as it always has.
-optdepends=('vulkan-icd-loader: the Vulkan conversion and the experimental Vulkan Video encoder'
+optdepends=('vulkan-icd-loader: the Vulkan conversion and the Vulkan Video encoder'
             'vulkan-radeon: the same on AMD'
             'vulkan-intel: the same on Intel')
 
