@@ -6462,6 +6462,21 @@ pas**. Windows et macOS n'ajoutent rien.
 - refusé en cours de stream, la session s'arrête en le disant : rien d'autre
   n'encode l'AV1 sous Linux, et un stream ne change pas de codec.
 
+**Le client qui recadre (05/10, `9a94db45`, accord de Bruno).** Un navigateur
+qui sait couper une image décodée le dit au `/start` (`crops_to_frame`,
+essayé une fois par `stream/FrameCrop.js`) ; la session reçoit
+`SessionConfig::clientCropsToFrame`, l'encodeur remplit alors le cadre
+jusqu'à la grille (1920×1088), l'image entière dans la taille d'affichage, et
+la session annonce 1920×1080. La vue coupe à la sortie du décodeur
+(`StreamView`, `VideoDecodeWorker`), en AV1 seulement, avant tout renderer :
+une `VideoFrame` sur la même image, `visibleRect` réduit, sans copie, et
+seulement si l'image dépasse la taille annoncée de moins d'un superbloc. Sans
+le drapeau (frontend ancien, invité), l'image reste sur la grille (1792×1008).
+La preuve au pixel code désormais le cadre rempli (révision 2, 48,6 dB).
+Vérifié : `linux_session` (1920×1080 annoncés sur un cadre 1920×1088), et
+Chrome headless, décodeurs logiciel et matériel — l'image coupée fait
+1920×1080, sa dernière rangée est la rangée 1079 de l'image.
+
 **Pas fait** : un stream AV1 vers un vrai client par WebRTC (la chaîne d'envoi
 est celle de l'AV1 de Windows) ; la conversion RVB du VCN
 (`VALVE_video_encode_rgb_conversion`), en sonde de labo seulement d'après le
@@ -6469,8 +6484,8 @@ plan, à revoir sur RDNA4.
 
 **Concrètement, pour l'utilisateur** : sous Linux avec une carte AMD récente,
 choisir la chaîne Vulkan Video dans l'administration rend l'AV1 possible pour
-les navigateurs qui le préfèrent. Le 1080p part en 1792×1008, agrandi par le
-navigateur, à peine moins net. Avec le réglage par défaut, rien ne change.
+les navigateurs qui le préfèrent, le 1080p à pleine taille (1792×1008 agrandi
+seulement pour un frontend ancien). Avec le réglage par défaut, rien ne change.
 
 ## 33. Framerate « Hôte » : le stream à la cadence de l'écran de l'hôte (ouvert le 29/09/2026)
 
