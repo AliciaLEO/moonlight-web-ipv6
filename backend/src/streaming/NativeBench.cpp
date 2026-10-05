@@ -131,6 +131,7 @@ const char* const kUsage =
     "  quality=speed|balanced|quality   AMF quality preset\n"
     "  lowlatency=0|1   AMF internal low-latency mode (H.264/HEVC)\n"
     "  amfminqp=<qp>    AMF QP floor (H.264/HEVC); -1 = none, default 18\n"
+    "  vaminqp=<qp>     VA-API QP floor (H.264/HEVC), 1..51; default none\n"
     "  tu=1..7          oneVPL TargetUsage (1 quality .. 7 speed)\n"
     "  lowpower=0|1     oneVPL fixed-function engine (VDENC); engine's own is on\n"
     "  mbbrc=0|1        oneVPL macroblock-level rate control\n"
@@ -140,8 +141,8 @@ const char* const kUsage =
     "  winbrc=<frames>  oneVPL sliding-window rate cap, in frames\n"
     "  rc=cbr|vbr|qvbr<q>   oneVPL bitrate controller, same cap and buffer (qvbr26 = quality 26)\n"
     "  irqp=<delta>     oneVPL QP offset of the intra-refresh band (with intra=1)\n"
-    "  irdist=<frames>  oneVPL and Vulkan Video: frames between intra-refresh sweep starts\n"
-    "                   (with intra=1); -1 = back to back, default = four periods\n"
+    "  irdist=<frames>  oneVPL, Vulkan Video and VA-API: frames between intra-refresh sweep\n"
+    "                   starts (with intra=1); -1 = back to back, default = four periods\n"
     "  vbv=<frames>     VBV of exactly N frames at the stream rate, no floor\n"
     "  governor=0|1     the link governor; 0: the encoder gets bitrate= (and ramp=) as\n"
     "                   they are — no receiver here to report on the link\n"
@@ -306,6 +307,9 @@ bool applyTuningKey(const QString& key, const QString& value, mw::native::Encode
     } else if (key == "amfminqp") {
         tuning.amfMinQp = value.toInt(&ok);
         ok = ok && (tuning.amfMinQp == -1 || (tuning.amfMinQp >= 1 && tuning.amfMinQp <= 51));
+    } else if (key == "vaminqp") {
+        tuning.vaapiMinQp = value.toInt(&ok);
+        ok = ok && tuning.vaapiMinQp >= 1 && tuning.vaapiMinQp <= 51;
     } else if (key == "nvirperiod") {
         tuning.nvencIntraRefreshPeriod = value.toInt(&ok);
         ok = ok && tuning.nvencIntraRefreshPeriod >= 1 && tuning.nvencIntraRefreshPeriod <= 3600;

@@ -157,7 +157,14 @@ public:
     /// Whether the stream really refreshes by intra-refresh: what the driver
     /// DOES, never what was asked.
     bool intraRefreshEnabled() const { return m_IntraRefresh; }
-    int intraRefreshFrames() const { return m_IntraRefreshPeriod; }
+    /// The horizon the receiver waits for: the gap plus a sweep, as Vulkan
+    /// Video announces it; a sweep alone when they run back to back.
+    int intraRefreshFrames() const
+    {
+        return m_IntraRefreshDistance > m_IntraRefreshPeriod
+                   ? m_IntraRefreshDistance + m_IntraRefreshPeriod
+                   : m_IntraRefreshPeriod;
+    }
 
     void stop();
 
@@ -173,6 +180,7 @@ private:
     bool createSurfaces(std::string& error);
     bool exportInput(std::string& error);
     bool renderRateControl(std::string& error);
+    bool refreshesThisFrame();
     bool renderH264(bool idr, std::string& error);
     bool renderHevc(bool idr, std::string& error);
     bool renderAv1(bool key, std::string& error);
@@ -198,6 +206,10 @@ private:
     /// Which column band the rolling refresh is at, in macroblocks (H.264) or
     /// CTBs (HEVC). Advances every encoded frame.
     int m_RefreshPosition = 0;
+    /// Frames from one sweep's start to the next (encode::
+    /// intraRefreshDistanceFrames), and how far into that the wave is.
+    int m_IntraRefreshDistance = 0;
+    int m_RefreshClock = 0;
 
     uint32_t m_FrameNum = 0;
     uint32_t m_IdrPicId = 0;

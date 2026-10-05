@@ -31,6 +31,7 @@
 #include <va/va_enc_h264.h>
 #include <va/va_enc_hevc.h>
 
+#include <algorithm>
 #include <cstring>
 
 namespace mw::native::encode {
@@ -479,6 +480,15 @@ bool VaapiEncoder::open(const std::string& renderNode, bool packedHeaders, std::
     // reported honestly so the receiver keeps its own recovery.
     m_IntraRefresh = m_WantIntraRefresh && d->rollingColumnRefresh;
     m_IntraRefreshPeriod = m_IntraRefresh ? intraRefreshPeriodFrames(m_Fps) : 0;
+    // One sweep every four periods, as Vulkan Video and the Windows encoders
+    // (Bruno, 05/10/2026, design §32.28): back to back, the wave took the
+    // whole budget of a still screen. The bench's irdist= moves the gap, -1
+    // puts the sweeps back to back.
+    m_IntraRefreshDistance = !m_IntraRefresh                 ? 0
+                             : m_Tuning.intraRefreshDist < 0 ? m_IntraRefreshPeriod
+                             : m_Tuning.intraRefreshDist > 0
+                                 ? std::max(m_Tuning.intraRefreshDist, m_IntraRefreshPeriod)
+                                 : intraRefreshDistanceFrames(m_Fps);
     // Said on the first open only (packed for HEVC, not for H.264): a second
     // one would repeat it.
     if (m_WantIntraRefresh && !m_IntraRefresh && packedHeaders == (codec == Codec::Hevc))
@@ -490,6 +500,7 @@ bool VaapiEncoder::open(const std::string& renderNode, bool packedHeaders, std::
     m_HaveReference = false;
     m_RateDirty = true;
     m_RefreshPosition = 0;
+    m_RefreshClock = 0;
 
     if (!parameterSetsAreWritten(error)) return false;
 
@@ -501,7 +512,10 @@ bool VaapiEncoder::open(const std::string& renderNode, bool packedHeaders, std::
                   8 / 1024) +
               " KB" +
               (m_IntraRefresh
-                   ? ", intra-refresh over " + std::to_string(m_IntraRefreshPeriod) + " frames"
+                   ? ", intra-refresh over " + std::to_string(m_IntraRefreshPeriod) + " frames" +
+                         (m_IntraRefreshDistance > m_IntraRefreshPeriod
+                              ? " every " + std::to_string(m_IntraRefreshDistance)
+                              : std::string(", back to back"))
                    : ", keyframes on demand") +
               (d->packedHeaders ? ", headers written here" : ", headers by the driver") +
               (m_Tuning.isDefault() ? "" : " [bench: " + m_Tuning.describe() + "]"));
@@ -533,6 +547,7 @@ bool VaapiEncoder::parameterSetsAreWritten(std::string& error)
     m_HaveReference = false;
     m_RateDirty = true;
     m_RefreshPosition = 0;
+    m_RefreshClock = 0;
     for (auto& state : d->reconState)
         state = {};
     d->reconCurrent = 0;
@@ -549,6 +564,18 @@ bool VaapiEncoder::parameterSetsAreWritten(std::string& error)
         return false;
     }
     return true;
+}
+
+/// Whether this frame carries a band of the wave: one sweep, then nothing
+/// until the next one is due (m_IntraRefreshDistance).
+bool VaapiEncoder::refreshesThisFrame()
+{
+    const int distance = m_IntraRefreshDistance;
+    if (distance <= m_IntraRefreshPeriod) return true;
+    if (m_RefreshClock == 0) m_RefreshPosition = 0; // each sweep from the left edge
+    const bool sweeping = m_RefreshClock < m_IntraRefreshPeriod;
+    m_RefreshClock = (m_RefreshClock + 1) % distance;
+    return sweeping;
 }
 
 bool VaapiEncoder::renderRateControl(std::string& error)
@@ -573,8 +600,11 @@ bool VaapiEncoder::renderRateControl(std::string& error)
     // left the still page byte for byte where it was (3.0-3.15 Mbps over 20 s):
     // that burst runs above QP 26. Mesa 23.2 had no rolling intra-refresh
     // either, so there was no sweep to space out; Mesa 26.2.3 has one
-    // (29/09/2026), and it rolls without a gap (design §32.24).
-    rc.min_qp = 0;
+    // (29/09/2026), which rolled without a gap (design §32.24) until it was
+    // spaced like Vulkan Video's (05/10/2026, §32.28).
+    // Under Mesa 26 the still page no longer settles (design §32.28): the
+    // bench's vaminqp= measures a floor again.
+    rc.min_qp = m_Tuning.vaapiMinQp > 0 ? static_cast<uint32_t>(m_Tuning.vaapiMinQp) : 0;
     rc.max_qp = 51;
     // No filler: on a still desktop CBR padding would be bytes on the wire that
     // carry nothing, and the still-screen floor already keeps the link alive.
@@ -751,7 +781,7 @@ bool VaapiEncoder::renderH264(bool idr, std::string& error)
         }
     }
 
-    if (m_IntraRefresh) {
+    if (m_IntraRefresh && refreshesThisFrame()) {
         // The rolling column: which band of macroblocks is intra this frame.
         // After one period the whole picture has been refreshed — the wave that
         // replaces the periodic keyframe, as on the three Windows encoders.
@@ -964,7 +994,7 @@ bool VaapiEncoder::renderHevc(bool idr, std::string& error)
         }
     }
 
-    if (m_IntraRefresh) {
+    if (m_IntraRefresh && refreshesThisFrame()) {
         const int bandWidth = static_cast<int>((ctbWidth + m_IntraRefreshPeriod - 1) /
                                                static_cast<uint32_t>(m_IntraRefreshPeriod));
         const VABufferID refresh =

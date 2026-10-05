@@ -78,6 +78,9 @@ struct EncoderTuning
     /// AMF (H.264, HEVC): the same floor. 0 is the engine's own (18 — see
     /// AmfEncoder.cpp), -1 none at all.
     int amfMinQp = 0;
+    /// VA-API: a QP floor, for the bench only (design §32.28, the CBR that no
+    /// longer settles under Mesa 26). 0 is the engine's own: none.
+    int vaapiMinQp = 0;
 
     /// NVENC intra-refresh: frames from one sweep's start to the next
     /// (intraRefreshPeriod) and frames the band takes to cross the picture
@@ -163,7 +166,8 @@ struct EncoderTuning
     /// that leave a gap between them: oneVPL (IntRefCycleDist) and Vulkan Video
     /// (encode::IntraRefreshSweep). 0 is the engine's own
     /// (encode::intraRefreshDistanceFrames, four periods); -1 is back to back,
-    /// oneVPL's fallback for a runtime that refuses the gap.
+    /// oneVPL's fallback for a runtime that refuses the gap. VA-API too, since
+    /// 05/10/2026 (design §32.28).
     int intraRefreshDist = 0;
 
     /// How many reference pictures the encoder keeps for healing a lost frame
@@ -459,7 +463,7 @@ struct EncoderTuning
     {
         return nvencPreset == 0 && nvencTuning == Latency::Default &&
                nvencMultiPass == MultiPass::Default && nvencMinQp == 0 && amfMinQp == 0 &&
-               nvencIntraRefreshPeriod == 0 && nvencIntraRefreshCount == 0 &&
+               vaapiMinQp == 0 && nvencIntraRefreshPeriod == 0 && nvencIntraRefreshCount == 0 &&
                spatialAq == Choice::Default && temporalAq == Choice::Default &&
                preAnalysis == Choice::Default && amfQuality == AmfQuality::Default &&
                amfLowLatency == Choice::Default && vplTargetUsage == 0 &&
@@ -503,6 +507,7 @@ struct EncoderTuning
         if (nvencMultiPass == MultiPass::FullRes) add("multipass=full");
         if (nvencMinQp != 0) add("nvminqp=" + std::to_string(nvencMinQp));
         if (amfMinQp != 0) add("amfminqp=" + std::to_string(amfMinQp));
+        if (vaapiMinQp != 0) add("vaminqp=" + std::to_string(vaapiMinQp));
         if (nvencIntraRefreshPeriod > 0)
             add("nvirperiod=" + std::to_string(nvencIntraRefreshPeriod));
         if (nvencIntraRefreshCount > 0) add("nvircnt=" + std::to_string(nvencIntraRefreshCount));
