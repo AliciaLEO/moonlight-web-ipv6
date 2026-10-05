@@ -165,6 +165,16 @@ public:
 
     QString nativeTuning() const;
 
+    // "rtp_video": which codecs ride an RTP video track instead of the video
+    // DataChannel, per host type — `native:h264+hevc+av1+ultra;other:h264+hevc+av1`
+    // (POC Ultra U1.4; "ultra" is the bench's synthetic intra stream). The
+    // browser takes the frames off the track by Encoded Transform, before its
+    // own decoder, into the same decode path as the DataChannel's. Empty, or a
+    // codec not named: SCTP, as before. MW_RTP_VIDEO overrides it. File-only,
+    // read at each stream start.
+
+    QString rtpVideo() const;
+
     // ── Stream bitrate ────────────────────────────────────────────────────────
     //
     // Target bitrate in kbps. Stored as JSON int "stream_bitrate", default 20000.

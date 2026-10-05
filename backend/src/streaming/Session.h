@@ -189,6 +189,9 @@ public:
     /// it, and only when MW_NATIVE_TUNING is absent; empty is the engine's own
     /// settings.
     void setNativeTuning(const QString& spec) { m_NativeTuning = spec; }
+    /// AppSettings::rtpVideo — which codecs ride an RTP video track, per host
+    /// type (POC Ultra U1.4). MW_RTP_VIDEO overrides it.
+    void setRtpVideo(const QString& spec) { m_RtpVideo = spec; }
 
     /// A guest of a native host on the guests' shared feed (plan « flux commun
     /// des invités »): the feed's pipe and the token it asks, and the guest's
@@ -528,6 +531,8 @@ private:
 
     /// See setNativeTuning. Empty — a parent that predates it, or no knob.
     QString m_NativeTuning;
+    /// See setRtpVideo. Empty — every codec on the video DataChannel.
+    QString m_RtpVideo;
 
     /// See setSharedFeed. Empty: this session captures its own pictures.
     QString m_FeedPipe;

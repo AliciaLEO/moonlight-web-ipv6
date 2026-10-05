@@ -568,6 +568,7 @@ int runStreamWorker(QCoreApplication& app)
     session->setNativeVideoPipeline(cfg["nativeVideoPipeline"].toString());
     // Absent (an older parent, or no knob) → empty: the engine's own settings.
     session->setNativeTuning(cfg["nativeTuning"].toString());
+    session->setRtpVideo(cfg["rtpVideo"].toString());
     // A guest on the guests' shared feed: absent → this session captures.
     session->setSharedFeed(cfg["feedPipe"].toString(), cfg["feedToken"].toString().toLatin1(),
                            cfg["feedSlot"].toInt(-1));

@@ -169,6 +169,14 @@ public:
     /// prepare(), like the flags above.
     void setLinkBench(const mw::native::EncoderTuning& tuning);
 
+    /// Which codecs ride an RTP video track instead of the video DataChannel
+    /// (POC Ultra U1.4): `native:h264+hevc+av1+ultra;other:h264+hevc+av1`, the
+    /// section matching @p nativeHost applies. Matched against the engine's
+    /// negotiated codec when the offer is built; empty = the DataChannel, as
+    /// before. The browser may still refuse the track (no Encoded Transform):
+    /// the video then stays on the DataChannel. Set once before prepare().
+    void setRtpVideoPolicy(const QString& spec, bool nativeHost);
+
 private:
     /// Both halves of the bargain, asked at the moment a gap happens.
     ///
@@ -338,6 +346,25 @@ private:
     // FEC + PLC) on the same PeerConnection as the video DataChannel — a lost
     // packet no longer head-of-line-blocks the audio (the periodic dropouts).
     std::shared_ptr<rtc::Track> m_AudioTrack;
+    // POC Ultra U1.4: the video on an RTP track (setRtpVideoPolicy). The
+    // browser takes each frame off it by Encoded Transform, before its own
+    // decoder. The RTP timestamp carries the frame's backendTs in ms as is (the
+    // client reads it raw; nothing on that side runs the 90 kHz clock).
+    QString m_RtpVideoSpec;
+    bool m_RtpVideoNativeHost = false;
+    std::shared_ptr<rtc::Track> m_VideoTrack;
+    bool m_RtpVideoSentKeyframe = false;         // deltas wait for the first keyframe on the track
+    std::atomic<bool> m_RtpVideoAccepted{false}; // set from the answer
+    std::atomic<bool> m_UltraRtpAccepted{false};
+    std::atomic<int> m_RtpPliCount{0};
+    std::vector<int> m_RtpSendUs, m_RtpLateUs; // under m_VideoMutex
+    // The Ultra synthetic stream on its own RTP track (VP8 envelope, every
+    // frame a keyframe so none depends on another), when "ultra" is named.
+    std::shared_ptr<rtc::Track> m_UltraTrack;
+    /// True once the answer accepted the video track: frames go there.
+    bool rtpVideoActive() const;
+    void createRtpVideoTracks();
+    void sendRtpVideo(const QByteArray& frameData, bool isKeyframe, int64_t presentationTimeUs);
     std::shared_ptr<rtc::DataChannel> m_InputDc;
     // The HID passthrough's reports (id 4, unordered, never retransmitted): a
     // lost one is repaired by the next, the page repeats an unchanged report.

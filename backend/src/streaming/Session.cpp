@@ -927,6 +927,15 @@ void StreamSession::onLaunchResult(bool ok, const BackendError& err, const Media
             relay->setLinkBench(tuning);
         }
 
+        // Which codecs ride an RTP video track (POC Ultra U1.4): the relay
+        // matches it against the codec the engine negotiated when it builds
+        // the offer. The bench's variable wins over the settings file.
+        {
+            const QByteArray env = qgetenv("MW_RTP_VIDEO");
+            relay->setRtpVideoPolicy(env.isEmpty() ? m_RtpVideo : QString::fromUtf8(env),
+                                     media.type == MediaType::NativeHost);
+        }
+
         // SignalingServer: WebSocket for SDP/ICE exchange only.
         // NonSecure mode: external tunnel or Cloudflare provides TLS termination.
         auto* signaling = new SignalingServer(relay, m_WsPort, m_ServerHost, nullptr);

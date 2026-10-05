@@ -647,6 +647,12 @@ QString AppSettings::nativeTuning() const
     return obj.value("native_tuning").toString().trimmed();
 }
 
+QString AppSettings::rtpVideo() const
+{
+    QJsonObject obj = readAll();
+    return obj.value("rtp_video").toString().trimmed();
+}
+
 // ── Router ports ─────────────────────────────────────────────────────────────
 // What the allocator obtained last time. Read and rewritten as a whole object
 // so a partial write can never leave the tunnel list and the media map

@@ -49,6 +49,7 @@ extern "C" {
 #include <mutex>
 #include <chrono>
 #include <optional>
+#include <variant>
 #include <random>
 #include <cstring>
 
@@ -906,7 +907,30 @@ bool DataChannelRelay::setRemoteDescription(const std::string& sdp)
         return false;
     }
     try {
-        m_Pc->setRemoteDescription(rtc::Description(sdp));
+        const rtc::Description answer(sdp);
+        m_Pc->setRemoteDescription(answer);
+        // A browser without Encoded Transform answers the video track
+        // inactive: the video then stays on the DataChannel (U1.4).
+        if (m_VideoTrack || m_UltraTrack) {
+            bool video = false, ultra = false;
+            for (int i = 0; i < answer.mediaCount(); ++i) {
+                const auto entry = answer.media(i);
+                if (!std::holds_alternative<const rtc::Description::Media*>(entry)) continue;
+                const auto* media = std::get<const rtc::Description::Media*>(entry);
+                const bool taken = !media->isRemoved() &&
+                                   media->direction() != rtc::Description::Direction::Inactive;
+                if (media->mid() == "video") video = taken;
+                if (media->mid() == "ultra") ultra = taken;
+            }
+            m_RtpVideoAccepted.store(m_VideoTrack && video);
+            m_UltraRtpAccepted.store(m_UltraTrack && ultra);
+            qInfo() << "[DataChannelRelay] RTP video track"
+                    << (m_VideoTrack ? (video ? "accepted"
+                                              : "REFUSED by the browser, video on the DataChannel")
+                                     : "not offered")
+                    << "| Ultra RTP track"
+                    << (m_UltraTrack ? (ultra ? "accepted" : "refused") : "not offered");
+        }
         qInfo() << "[DataChannelRelay] Remote description set — starting ICE timeout ("
                 << m_IceTimeoutMs << "ms)";
         // Start ICE connection timer. The remote description is set, so ICE
@@ -1102,6 +1126,9 @@ void DataChannelRelay::createDataChannels()
     // lifetime is abandoned wherever it is, and the receiver jumps to what is
     // current. A lone loss on a healthy link still gets its fast retransmit
     // within a round trip, and one timer-driven retry inside the lifetime.
+    // Before the first createDataChannel(), like the audio track (above).
+    createRtpVideoTracks();
+
     rtc::DataChannelInit videoConfig;
     videoConfig.reliability.unordered = false;
     // Must match the frontend's negotiated channel config.
@@ -1464,6 +1491,26 @@ void DataChannelRelay::handleVideoFrame(const QByteArray& data, bool isKeyframe,
         m_HevcPatched = true; // Only the first keyframe is checked
     }
 
+    // POC Ultra U1.4: the video on its RTP track, when the answer took it.
+    if (m_RtpVideoAccepted.load(std::memory_order_relaxed)) {
+        if (!m_VideoTrack->isOpen()) {
+            if (isKeyframe) {
+                m_BufferedKeyframe = QByteArray(frameData.constData(), frameData.size());
+                m_BufferedKeyframePresUs = presentationTimeUs;
+                m_HaveBufferedKeyframe = true;
+                m_NewKeyframeArrived = false;
+            }
+            return;
+        }
+        if (!isKeyframe && !m_RtpVideoSentKeyframe) {
+            sendIdrRequestThrottled();
+            return;
+        }
+        if (isKeyframe && m_HaveBufferedKeyframe) m_NewKeyframeArrived = true;
+        sendRtpVideo(frameData, isKeyframe, presentationTimeUs);
+        return;
+    }
+
     // Buffer keyframes arriving before the Video DC is ready.
     // Without this buffer, the keyframe (containing SPS/PPS) is lost, the
     // browser's VideoDecoder can never configure, and we get decoder=null.
@@ -1545,6 +1592,15 @@ void DataChannelRelay::sendBufferedKeyframe()
     std::lock_guard<std::mutex> lk(m_VideoMutex);
 
     if (!m_HaveBufferedKeyframe) return;
+    if (m_RtpVideoAccepted.load()) {
+        // The RTP track's turn (U1.4): it calls back here when it opens.
+        if (m_Stopping.load() || !m_VideoTrack->isOpen()) return;
+        if (!m_NewKeyframeArrived) sendRtpVideo(m_BufferedKeyframe, true, m_BufferedKeyframePresUs);
+        m_BufferedKeyframe.clear();
+        m_HaveBufferedKeyframe = false;
+        m_NewKeyframeArrived = false;
+        return;
+    }
     if (m_Stopping.load() || !m_VideoDc || !m_VideoDc->isOpen()) return;
 
     // Stale buffer guard: if a NEW keyframe was already sent directly
@@ -2412,13 +2468,47 @@ void DataChannelRelay::sendFragmented(const QByteArray& data, bool isKeyframe,
 
     // The bench's synthetic Ultra stream rides on the frames the native
     // engine sends (direct mode), with the same stamp.
-    if (m_DirectVideoSend && m_UltraSender) sendUltraSynthetic(backendTs);
+    if (m_DirectVideoSend && (m_UltraSender || m_UltraTrack)) sendUltraSynthetic(backendTs);
 
     m_FrameCount++;
 }
 
 void DataChannelRelay::sendUltraSynthetic(uint32_t backendTs)
 {
+    if (m_UltraRtpAccepted.load(std::memory_order_relaxed)) {
+        // On its RTP track (U1.4): one frame = a VP8 key frame's 10-byte
+        // header (so Chrome assembles every frame on its own, none depending
+        // on another), then the DataChannel's 17-byte header for a single
+        // chunk, then the payload. The client strips the 10 bytes.
+        if (!m_UltraTrack->isOpen() || m_UltraPayload.empty()) return;
+        static const uint8_t kVp8Key[10] = {0x10, 0x00, 0x00, 0x9d, 0x01,
+                                            0x2a, 0x80, 0x07, 0x38, 0x04}; // 1920x1080
+        const uint32_t size = static_cast<uint32_t>(m_UltraPayload.size());
+        const uint32_t seq = m_UltraSeq++;
+        rtc::binary frame(sizeof(kVp8Key) + kFragHeaderSize + size);
+        std::memcpy(frame.data(), kVp8Key, sizeof(kVp8Key));
+        // [frame_id:4][chunk_index:2][total_chunks:2][is_keyframe:1][payload_size:4][backend_ts:4]
+        auto* h = reinterpret_cast<uint8_t*>(frame.data()) + sizeof(kVp8Key);
+        const auto put32 = [](uint8_t* at, uint32_t v) {
+            for (int i = 0; i < 4; ++i)
+                at[i] = static_cast<uint8_t>(v >> (24 - 8 * i));
+        };
+        put32(h, seq);
+        h[4] = h[5] = h[6] = 0;
+        h[7] = 1;
+        h[8] = 0;
+        put32(h + 9, size);
+        put32(h + 13, backendTs);
+        std::memcpy(h + kFragHeaderSize, m_UltraPayload.data(), size);
+        rtc::FrameInfo info(backendTs);
+        info.isKeyFrame = true;
+        try {
+            m_UltraTrack->sendFrame(std::move(frame), info);
+        } catch (const std::exception& e) {
+            qWarning() << "[DataChannelRelay] Ultra RTP send failed:" << e.what();
+        }
+        return;
+    }
     if (!m_UltraOpen.load(std::memory_order_relaxed) || m_UltraPayload.empty()) return;
     auto fragments =
         FrameSender::buildFragments(m_UltraPayload.data(), m_UltraPayload.size(),
@@ -2787,4 +2877,150 @@ void DataChannelRelay::onIceCheckTimeout()
     if (!m_Stopping.exchange(true)) {
         emit sessionEnded();
     }
+}
+
+// --- RTP video track (POC Ultra U1.4) ---
+
+void DataChannelRelay::setRtpVideoPolicy(const QString& spec, bool nativeHost)
+{
+    m_RtpVideoSpec = spec.trimmed().toLower();
+    m_RtpVideoNativeHost = nativeHost;
+}
+
+bool DataChannelRelay::rtpVideoActive() const
+{
+    return m_RtpVideoAccepted.load(std::memory_order_relaxed);
+}
+
+void DataChannelRelay::createRtpVideoTracks()
+{
+    if (m_RtpVideoSpec.isEmpty() || !m_Pc || !m_Shim) return;
+    // `native:h264+hevc;other:h264`: the section of this host's type.
+    QStringList named;
+    const QString wanted =
+        m_RtpVideoNativeHost ? QStringLiteral("native") : QStringLiteral("other");
+    for (const QString& section : m_RtpVideoSpec.split(';', Qt::SkipEmptyParts)) {
+        const int colon = section.indexOf(':');
+        if (colon < 0 || section.left(colon).trimmed() != wanted) continue;
+        for (QString item : section.mid(colon + 1).split('+', Qt::SkipEmptyParts))
+            named << item.trimmed();
+    }
+    const int format = m_Shim->negotiatedVideoFormat();
+    const QString codec = (format & VIDEO_FORMAT_MASK_AV1)    ? QStringLiteral("av1")
+                          : (format & VIDEO_FORMAT_MASK_H265) ? QStringLiteral("hevc")
+                                                              : QStringLiteral("h264");
+    const bool ultra = named.contains(QStringLiteral("ultra")) && m_UltraSynthKb > 0;
+    qInfo() << "[DataChannelRelay] RTP video policy" << m_RtpVideoSpec << "| host" << wanted
+            << "| codec" << codec << "format" << format << "| video on"
+            << (named.contains(codec) ? "RTP" : "the DataChannel") << "| ultra on"
+            << (ultra ? "RTP" : "-");
+
+    std::random_device rd;
+    if (named.contains(codec)) {
+        auto desc = rtc::Description::Video("video", rtc::Description::Direction::SendOnly);
+        const int pt = 96;
+        if (codec == QLatin1String("av1"))
+            desc.addAV1Codec(pt);
+        else if (codec == QLatin1String("hevc"))
+            desc.addH265Codec(pt);
+        else
+            desc.addH264Codec(pt);
+        const uint32_t ssrc = rd();
+        desc.addSSRC(ssrc, "video"); // before addTrack: else NACK / PLI never route to it
+        m_VideoTrack = m_Pc->addTrack(desc);
+        // The frame's backendTs (ms) as the RTP timestamp, as is: see the header.
+        auto cfg = std::make_shared<rtc::RtpPacketizationConfig>(
+            ssrc, "video", static_cast<uint8_t>(pt), rtc::RtpPacketizer::VideoClockRate);
+        std::shared_ptr<rtc::RtpPacketizer> packetizer;
+        if (codec == QLatin1String("av1"))
+            packetizer = std::make_shared<rtc::AV1RtpPacketizer>(
+                rtc::AV1RtpPacketizer::Packetization::TemporalUnit, cfg);
+        else if (codec == QLatin1String("hevc"))
+            packetizer = std::make_shared<rtc::H265RtpPacketizer>(
+                rtc::NalUnit::Separator::StartSequence, cfg);
+        else
+            packetizer = std::make_shared<rtc::H264RtpPacketizer>(
+                rtc::NalUnit::Separator::StartSequence, cfg);
+        // ~1 s of packets at 100 Mbit/s, for the browser's NACKs.
+        auto nack = std::make_shared<rtc::RtcpNackResponder>(8192);
+        packetizer->addToChain(nack);
+        // Counted, never acted on: the browser's own decoder never gets a
+        // frame (the transform keeps them all), so it asks for a keyframe
+        // over and over. Ours asks on the input channel, as on SCTP.
+        auto pli = std::make_shared<rtc::PliHandler>([this]() {
+            const int n = ++m_RtpPliCount;
+            if (n == 1 || n % 200 == 0)
+                qInfo() << "[DataChannelRelay] RTP video: browser PLIs ignored so far:" << n;
+        });
+        nack->addToChain(pli);
+        m_VideoTrack->setMediaHandler(packetizer);
+        m_VideoTrack->onOpen([this]() {
+            qInfo() << "[DataChannelRelay] RTP video track open";
+            QMetaObject::invokeMethod(
+                this,
+                [this]() {
+                    sendBufferedKeyframe();
+                    std::lock_guard<std::mutex> lk(m_VideoMutex);
+                    if (!m_RtpVideoSentKeyframe) sendIdrRequestThrottled();
+                },
+                Qt::QueuedConnection);
+        });
+    }
+    if (ultra) {
+        auto desc = rtc::Description::Video("ultra", rtc::Description::Direction::SendOnly);
+        const int pt = 97;
+        desc.addVP8Codec(pt);
+        const uint32_t ssrc = rd();
+        desc.addSSRC(ssrc, "ultra");
+        m_UltraTrack = m_Pc->addTrack(desc);
+        auto cfg = std::make_shared<rtc::RtpPacketizationConfig>(
+            ssrc, "ultra", static_cast<uint8_t>(pt), rtc::RtpPacketizer::VideoClockRate);
+        auto packetizer = std::make_shared<rtc::VP8RtpPacketizer>(cfg);
+        packetizer->addToChain(std::make_shared<rtc::RtcpNackResponder>(16384));
+        m_UltraTrack->setMediaHandler(packetizer);
+        m_UltraTrack->onOpen([]() { qInfo() << "[DataChannelRelay] Ultra RTP track open"; });
+    }
+}
+
+void DataChannelRelay::sendRtpVideo(const QByteArray& frameData, bool isKeyframe,
+                                    int64_t presentationTimeUs)
+{
+    // The frame's capture on the host's steady clock, as sendFragmented stamps it.
+    uint32_t backendTs = 0;
+    if (m_Shim) {
+        const int64_t firstMs = m_Shim->firstFrameArrivalSteadyMs();
+        const int64_t presUs =
+            presentationTimeUs >= 0 ? presentationTimeUs : m_Shim->framePresentationTimeUs();
+        if (firstMs > 0 && presUs >= 0)
+            backendTs = static_cast<uint32_t>((firstMs + presUs / 1000) & 0xFFFFFFFF);
+    }
+    if (backendTs == 0)
+        backendTs = static_cast<uint32_t>(QDateTime::currentMSecsSinceEpoch() & 0xFFFFFFFF);
+    rtc::FrameInfo info(backendTs);
+    info.isKeyFrame = isKeyframe;
+    // Stamped now: how long after its capture the frame leaves (POC U1.4).
+    const int64_t sendStartUs = steadyUs();
+    try {
+        m_VideoTrack->sendFrame(reinterpret_cast<const rtc::byte*>(frameData.constData()),
+                                static_cast<size_t>(frameData.size()), info);
+        const int64_t endUs = steadyUs();
+        m_RtpSendUs.push_back(static_cast<int>(endUs - sendStartUs));
+        // backendTs is the steady clock in ms, mod 2^32: the difference wraps alike.
+        const uint32_t nowMs32 = static_cast<uint32_t>((endUs / 1000) & 0xFFFFFFFF);
+        m_RtpLateUs.push_back(static_cast<int>(static_cast<int32_t>(nowMs32 - backendTs)) * 1000);
+        if (m_RtpSendUs.size() >= 600) {
+            std::sort(m_RtpSendUs.begin(), m_RtpSendUs.end());
+            std::sort(m_RtpLateUs.begin(), m_RtpLateUs.end());
+            qInfo() << "[DataChannelRelay] RTP video: sendFrame p50" << m_RtpSendUs[300] << "us p99"
+                    << m_RtpSendUs[594] << "| capture to sent p50" << m_RtpLateUs[300] << "us p99"
+                    << m_RtpLateUs[594];
+            m_RtpSendUs.clear();
+            m_RtpLateUs.clear();
+        }
+        if (isKeyframe) m_RtpVideoSentKeyframe = true;
+        m_AwaitingIdr = false;
+    } catch (const std::exception& e) {
+        qWarning() << "[DataChannelRelay] RTP video send failed:" << e.what();
+    }
+    if (m_DirectVideoSend && (m_UltraSender || m_UltraTrack)) sendUltraSynthetic(backendTs);
 }

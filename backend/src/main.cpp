@@ -3543,6 +3543,7 @@ int main(int argc, char* argv[])
             s->setNativeVideoPipeline(appSettings.nativeVideoPipeline());
             // The bench's knobs, when someone added them to the settings file.
             s->setNativeTuning(appSettings.nativeTuning());
+            s->setRtpVideo(appSettings.rtpVideo());
             QObject::connect(s, &StreamSession::portalGrantReceived, qApp,
                              [&appSettings, portalVirtual](const QString& token) {
                                  appSettings.setPortalRestoreToken(token, portalVirtual);
@@ -3706,6 +3707,7 @@ int main(int argc, char* argv[])
             // The bench's knobs, read here: a SYSTEM worker's own AppData is
             // systemprofile's, where this settings file is not.
             cfg["nativeTuning"] = appSettings.nativeTuning();
+            cfg["rtpVideo"] = appSettings.rtpVideo();
             cfg["clientUniqueId"] = reqClientUniqueId;
             cfg["clientKind"] = NetClassify::toString(clientKind);
             cfg["autoMode"] = true;
@@ -5069,6 +5071,7 @@ int main(int argc, char* argv[])
         cfg["nativeVideoPipeline"] = appSettings.nativeVideoPipeline();
         // The machine's bench knobs too, as the owner path.
         cfg["nativeTuning"] = appSettings.nativeTuning();
+        cfg["rtpVideo"] = appSettings.rtpVideo();
         // Gamepads from different sessions would all arrive as controller 0;
         // offset each player so they land on distinct virtual pads. A native
         // host's session owns its pads and keeps the browser's numbers
