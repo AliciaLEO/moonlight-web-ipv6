@@ -32,15 +32,21 @@ self.onrtctransform = (event) => {
         reader.read().then(({ value: frame, done }) => {
             if (done || !frame) return;
             let ts = frame.timestamp;
+            let held = -1;
             try {
                 const meta = frame.getMetadata();
                 if (meta && typeof meta.rtpTimestamp === 'number') ts = meta.rtpTimestamp;
+                // The browser's own wait, last packet in to this transform.
+                if (meta && typeof meta.receiveTime === 'number')
+                    held = performance.now() - meta.receiveTime;
             } catch {
                 // Older engines: the frame's own timestamp is the RTP one.
             }
             const data = frame.data;
             const at = performance.timeOrigin + performance.now();
-            self.postMessage({ mid, data, key: frame.type === 'key', ts: ts >>> 0, at }, [data]);
+            self.postMessage({ mid, data, key: frame.type === 'key', ts: ts >>> 0, at, held }, [
+                data,
+            ]);
             return pump();
         });
     pump().catch((e) => self.postMessage({ mid, error: String(e && e.message ? e.message : e) }));

@@ -74,9 +74,13 @@ export function attachRtpVideo(event, { onVideo, onUltra, log = console.log } = 
         // Worker → page hop, for the bench (U1.4): kept as a running figure.
         const hop = performance.timeOrigin + performance.now() - m.at;
         if (m.at) {
-            const st = (globalThis.__mwRtp ||= { hops: [] });
+            const st = (globalThis.__mwRtp ||= { hops: [], held: [] });
             st.hops.push(hop);
             if (st.hops.length > 600) st.hops.shift();
+            if (m.held >= 0) {
+                st.held.push(m.held);
+                if (st.held.length > 600) st.held.shift();
+            }
         }
         if (frames === 1) log('[MW-RTP] first frame on ' + mid + (m.key ? ' (key)' : ''));
         if (m.mid === 'ultra') {
