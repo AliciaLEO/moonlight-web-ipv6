@@ -250,6 +250,8 @@ void NativeMediaEngine::startCapture(const StartParams& params)
         config.clientRefreshMilliHz = params.clientRefreshMilliHz;
         config.clientVsync = params.clientVsync;
     }
+    // The client cuts each decoded frame to the size the session says.
+    config.clientCropsToFrame = params.cropsToFrame;
 
     // The bench's encoder knobs, on a real session, from the environment: the
     // one way to put two encoder settings in front of a person on the same
@@ -1401,6 +1403,25 @@ bool NativeMediaEngine::hidForceFeedback() const
 #ifdef Q_OS_WIN
     // pid.dll drives the PID block the recreated device gets. Linux has no
     // equivalent for uhid devices (hid-pidff binds to usbhid only).
+    return true;
+#else
+    return false;
+#endif
+}
+
+void NativeMediaEngine::hidReply(int slot, int reportId, const QByteArray& data)
+{
+    if (slot < 0 || reportId < 0 || reportId > 0xFF || data.isEmpty()) return;
+    std::lock_guard<std::mutex> lock(m_HidMutex);
+    if (!m_Hid) return;
+    m_Hid->reply(slot, static_cast<uint8_t>(reportId),
+                 reinterpret_cast<const uint8_t*>(data.constData()),
+                 static_cast<size_t>(data.size()));
+}
+
+bool NativeMediaEngine::hidRelaysHidpp() const
+{
+#ifdef Q_OS_LINUX
     return true;
 #else
     return false;

@@ -191,6 +191,21 @@ void HidPassthrough::input(int slot, uint8_t reportId, uint16_t seq, const uint8
     s.resting = false;
 }
 
+void HidPassthrough::reply(int slot, uint8_t reportId, const uint8_t* bytes, size_t size)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_slots.find(slot);
+    if (it == m_slots.end()) return;
+    Slot& s = *it->second;
+    auto want = s.inputBytes.find(reportId);
+    if (want == s.inputBytes.end() || want->second != size) return;
+    std::vector<uint8_t> report;
+    report.reserve(size + 1);
+    if (s.numbered) report.push_back(reportId);
+    report.insert(report.end(), bytes, bytes + size);
+    s.device->input(report.data(), report.size());
+}
+
 void HidPassthrough::detach(int slot)
 {
     std::unique_ptr<Slot> gone;

@@ -1208,6 +1208,7 @@ void DataChannelRelay::createDataChannels()
                     {QStringLiteral("type"), QStringLiteral("hidcaps")},
                     {QStringLiteral("available"), why.isEmpty()},
                     {QStringLiteral("ffb"), why.isEmpty() && m_Shim->hidForceFeedback()},
+                    {QStringLiteral("hidpp"), why.isEmpty() && m_Shim->hidRelaysHidpp()},
                     {QStringLiteral("why"), why}};
                 const QByteArray j = QJsonDocument(caps).toJson(QJsonDocument::Compact);
                 try {
@@ -2093,6 +2094,11 @@ void DataChannelRelay::onInputMessage(const std::string& message, int64_t recvUs
         } catch (const std::exception&) {}
     } else if (type == "hiddetach") {
         m_Shim->hidDetach(msg["slot"].toInt(-1));
+    } else if (type == "hidreply") {
+        // The real device's answer to an hidrequest (a HID++ reply under
+        // Linux): one report, at most the 63 bytes of HID++'s longest.
+        const QByteArray data = QByteArray::fromBase64(msg["data"].toString().toLatin1()).left(64);
+        m_Shim->hidReply(msg["slot"].toInt(-1), msg["reportId"].toInt(-1), data);
     } else if (type == "uprobe") {
         // The uplink bench's dated message: nothing to inject, only its stamp
         // to answer (above).

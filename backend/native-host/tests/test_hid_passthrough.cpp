@@ -191,6 +191,32 @@ void run_hid_passthrough_tests()
         CHECK_EQ(log.inputs.size(), static_cast<size_t>(3));
     }
 
+    SECTION("HID passthrough — a relayed reply goes in once, outside the sequence and the rest");
+    {
+        FakeLog log;
+        int64_t now = 0;
+        HidPassthrough hp(
+            nullptr, [&] { return std::make_unique<FakeHid>(log); }, [&] { return now; });
+        CHECK(hp.attach(0, wheel()).empty());
+        const uint8_t r[4] = {0x08, 0x00, 0x80, 0};
+        hp.input(0, 1, 5, r, 4);
+        const uint8_t answer[4] = {0xff, 0x0b, 0x21, 0x02};
+        hp.reply(0, 1, answer, 4);
+        CHECK_EQ(log.inputs.size(), static_cast<size_t>(2));
+        CHECK(log.inputs[1] == (std::vector<uint8_t>{1, 0xff, 0x0b, 0x21, 0x02}));
+        hp.reply(0, 1, answer, 3); // wrong size
+        hp.reply(0, 2, answer, 4); // no report 2
+        hp.reply(4, 1, answer, 4); // no slot 4
+        CHECK_EQ(log.inputs.size(), static_cast<size_t>(2));
+        // The game's own frames keep their sequence: a reply never makes the
+        // next one late.
+        hp.input(0, 1, 6, r, 4);
+        CHECK_EQ(log.inputs.size(), static_cast<size_t>(3));
+        // Nor is a reply what the silence puts back to rest.
+        hp.checkSilence(HidPassthrough::kSilenceMs);
+        CHECK_EQ(log.inputs.size(), static_cast<size_t>(3));
+    }
+
     SECTION("HID passthrough — refused devices, slots replaced and removed, requests reported");
     {
         FakeLog log;

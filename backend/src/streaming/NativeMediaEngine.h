@@ -267,6 +267,8 @@ public:
     void hidInput(const uint8_t* frame, size_t size) override;
     void hidDetach(int slot) override;
     bool hidForceFeedback() const override;
+    void hidReply(int slot, int reportId, const QByteArray& data) override;
+    bool hidRelaysHidpp() const override;
     /// Kept at the browser's own numbering. A native session owns its virtual
     /// pads — one table per worker, see VigemGamepad — so concurrent sessions
     /// never meet on one pad; the shift that keeps GameStream sessions apart

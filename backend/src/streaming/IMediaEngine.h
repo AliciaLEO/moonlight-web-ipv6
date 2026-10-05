@@ -328,6 +328,20 @@ public:
         Q_UNUSED(size);
     }
     virtual void hidDetach(int slot) { Q_UNUSED(slot); }
+    /// The page's hidreply: the real device's answer to an hidrequest, to
+    /// inject once into the recreated one.
+    virtual void hidReply(int slot, int reportId, const QByteArray& data)
+    {
+        Q_UNUSED(slot);
+        Q_UNUSED(reportId);
+        Q_UNUSED(data);
+    }
+    /// Whether the page should relay the host OS's Logitech HID++ requests to
+    /// the real wheel (filtered there) and answer with hidreply. Linux only:
+    /// hid-logitech-hidpp binds to the recreated wheel by its VID/PID, waits
+    /// on those answers at probe, and drives the motor through HID++ 0x8123.
+    /// Announced in hidcaps as `hidpp`.
+    virtual bool hidRelaysHidpp() const { return false; }
     /// Whether a recreated device can carry force feedback back to the page
     /// (a PID block that pid.dll drives: Windows only). Announced in hidcaps.
     virtual bool hidForceFeedback() const { return false; }

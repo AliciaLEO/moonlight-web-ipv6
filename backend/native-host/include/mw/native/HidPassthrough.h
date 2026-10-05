@@ -216,6 +216,11 @@ public:
     /// One frame of the `hid` channel's payload: report id, sequence number and
     /// the report as WebHID gives it (without its id byte).
     void input(int slot, uint8_t reportId, uint16_t seq, const uint8_t* bytes, size_t size);
+    /// The real device's answer to a request the host's OS made (a Logitech
+    /// HID++ reply the page relayed, plan P4 under Linux), injected once as it
+    /// came: no sequence number, never repeated, never put to rest. Ignored when
+    /// the device has no input report of that id and size.
+    void reply(int slot, uint8_t reportId, const uint8_t* bytes, size_t size);
     void detach(int slot);
     void detachAll();
 
