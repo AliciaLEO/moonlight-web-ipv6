@@ -951,6 +951,47 @@ Sous la charge Ultra, l'attente en plus d'Ultra, en médiane / p95, est de :
 
   Les passes sous charge de 14h10-14h25 ont été faites sans lui.
 
+**U1.4 quater, le NACK de la route audio (14h35-15h10, `a95e95d9` ; constats
+`f4ad0dfd`).** Préférence de Bruno : la latence passe avant la qualité, et une
+image partiellement dégradée quelques secondes est acceptable.
+
+Le fonctionnement :
+- Le worker redemande un morceau manquant dès qu'il voit le trou, par le canal
+  d'entrée.
+- L'hôte le renvoie depuis un historique des 60 dernières images.
+- Une image vidéo complète attend au plus 15 ms une image plus ancienne, puis
+  part marquée perdue.
+- `MW_AROAD_DROP` (pour mille) jette des morceaux au premier envoi, au banc
+  seulement.
+
+| HEVC à vide, hôte → affiché | p50 | p90 | i/s affichées | Images abandonnées |
+|---|---|---|---|---|
+| Route audio, sans perte | 9,1-9,3 ms | 13,2 ms | 59,4-59,7 | — |
+| Route audio, 1 % de morceaux jetés | 9,7 ms | 14,5 ms | 59,9 | 0 |
+| Route audio, 5 % de morceaux jetés | 11,8 ms | 16,3 ms | 59,4 | 0 |
+| SCTP, `loss=50` (5 % des messages jetés avant SCTP) | 8,4 ms | 11,2 ms | 38 | — |
+
+- La route audio répare 5 % de pertes pour 2,5 ms de plus, sans perdre une
+  seule image.
+- Le DataChannel, lui, n'affiche plus qu'une image sur deux ou trois et
+  demande 153 reprises en 2 minutes. Ses 8,4 ms ne comptent que les images
+  arrivées intactes.
+- Sous Ultra 250, avec la vidéo à côté, un morceau vidéo renvoyé attend
+  derrière les rafales d'Ultra et dépasse les 15 ms : il reste 11 demandes
+  d'image clé en 2 minutes. Dans le produit, Ultra remplace la vidéo au lieu de
+  rouler à côté, ce cas n'existe donc qu'au banc.
+- **AV1 refait** (deux manches), hôte → affiché en médiane :
+  - route audio : 30,0 / 18,0 ms ;
+  - SCTP : 32,9 / 31,7 ms ;
+  - piste vidéo : 39,9 / 38,8 ms.
+
+  Le 21 ms de SCTP mesuré plus tôt était du bruit.
+
+**Recommandation provisoire, à confirmer sur câble :**
+- la route audio, plutôt que la piste vidéo, pour la case RTP de l'interrupteur
+  U1.4, pour les trois codecs et pour Ultra ;
+- SCTP reste le défaut tant que Bruno n'a pas basculé les cases.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
@@ -1002,6 +1043,8 @@ horloge interne que la page ne peut pas couper. Mais elle ne touche que les
 pistes vidéo. En faisant voyager les images de la vidéo par une piste audio,
 qu'on ne joue jamais, le RTP rattrape le DataChannel pour un stream seul. Quand
 un flux lourd passe à côté, la vidéo reste fraîche, à 11 ms de l'hôte à l'écran
-au lieu de 21 ms sur une piste vidéo et de 125 ms sur le DataChannel. Avant d'en
-faire profiter les joueurs, il faut lui apprendre à redemander un morceau perdu.
-Aujourd'hui, une perte coûte une image clé.
+au lieu de 21 ms sur une piste vidéo et de 125 ms sur le DataChannel. Elle sait
+maintenant redemander un morceau perdu. Même quand 5 % des paquets se perdent,
+chaque image arrive, avec 2 à 3 ms de retard en plus. Le DataChannel, lui, en
+perd une sur trois. Rien de tout cela n'est encore activé pour les joueurs :
+la mesure sur câble vient d'abord, puis Bruno choisit, codec par codec.
