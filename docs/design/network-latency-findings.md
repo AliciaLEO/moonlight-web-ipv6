@@ -867,7 +867,12 @@ What the measurements support, in order of the path:
   (~25 ms median, ~25 p90 with B and `sctpburst=0` on the Mac, against a 7 ms
   UDP ping). Not in usrsctp's stream queues (W2.3). In flight behind video
   chunks, at the AP or in the client's reassembly? A separate association or
-  an unordered small-message channel would tell.
+  an unordered small-message channel would tell. U1.4 (05/10, §3) points the
+  same way: with the video on an RTP track, the video no longer waited behind
+  Ultra's SCTP load (20 ms against 42-65). If the video leaves SCTP, the
+  inputs and the host's messages have the association to themselves. If it
+  stays, the next try is a second PeerConnection for them alone. QUIC for the
+  inputs only was weighed and set aside (05/10).
 - RTO minimum (200 ms) and the lone-frame T3 tail (25/09): never A/B'd.
 - DSCP/WMM marking of the video, from the host (W2 item 5 of the plan): not
   tried.
