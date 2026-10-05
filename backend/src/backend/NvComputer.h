@@ -109,6 +109,12 @@ public:
     PairState pairState = PS_UNKNOWN;
     NvAddress activeAddress;
     int currentGameId = 0;
+    /// Apollo names the running app only on its paired HTTPS port and answers
+    /// 0 on plain HTTP, which is what the host poll reads. Recognised by the
+    /// <Permission> element no Sunshine sends. Its currentGameId is then left
+    /// to ComputerManager::refreshRunningApp (HTTPS), or every poll would wipe
+    /// the Running card 10 s after a Stop (issue #24 bench, 05/10/2026).
+    bool runningAppOverHttpsOnly = false;
     QString gfeVersion;
     QString appVersion;
     QString gpuModel;

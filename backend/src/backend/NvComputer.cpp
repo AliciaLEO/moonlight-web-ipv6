@@ -78,6 +78,7 @@ NvComputer::NvComputer(const QString& serverInfo, const NvAddress& activeAddr)
     QString serverState = NvHTTP::getXmlString(serverInfo, "state");
     isNvidiaServerSoftware = (!serverState.isEmpty() && serverState.contains("MJOLNIR"));
     currentGameId = NvHTTP::getCurrentGame(serverInfo);
+    runningAppOverHttpsOnly = serverInfo.contains(QLatin1String("<Permission>"));
 
     // Version info
     gfeVersion = NvHTTP::getXmlString(serverInfo, "GfeVersion");
@@ -204,7 +205,9 @@ bool NvComputer::update(const NvComputer& that)
 
     ASSIGN_IF_CHANGED(state)
     ASSIGN_IF_CHANGED(activeAddress)
-    ASSIGN_IF_CHANGED(currentGameId)
+    // Not from a reading that cannot see it (runningAppOverHttpsOnly).
+    if (!that.runningAppOverHttpsOnly) ASSIGN_IF_CHANGED(currentGameId)
+    ASSIGN_IF_CHANGED(runningAppOverHttpsOnly)
     ASSIGN_IF_CHANGED(serverCodecModeSupport)
     ASSIGN_IF_CHANGED(maxLumaPixelsHEVC)
     ASSIGN_IF_CHANGED(isNvidiaServerSoftware)
