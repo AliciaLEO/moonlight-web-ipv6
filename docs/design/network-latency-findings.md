@@ -771,8 +771,8 @@ stream bursts.
 ### 05/10/2026 — POC Ultra U1.4: the video on an RTP track, against SCTP (session ex-3b)
 
 Same path (the Wi-Fi 7 hop above), on purpose. Host DualRTX (`--dev`,
-`7bae2a56`): the video on a send-only RTP track when `MW_RTP_VIDEO` names the
-codec. Client the UM790Pro under Windows, Chrome 154 (`9a0b7940`), which takes
+`e399d604`): the video on a send-only RTP track when `MW_RTP_VIDEO` names the
+codec. Client the UM790Pro under Windows, Chrome 154 (`b2f6d264`), which takes
 each frame off the track with an `RTCRtpScriptTransform`, before its own
 decoder, into the DataChannel's decode path. POC doc §6.10.
 
@@ -798,7 +798,91 @@ decoder, into the DataChannel's decode path. POC doc §6.10.
 - No loss was seen on this hop, either way: RTP under loss is still to measure
   (NACK, the keyframe path).
 - Open: where Chrome's receive tick comes from, and whether a page can avoid
-  it.
+  it. Answered in the next entry.
+
+### 05/10/2026 — POC Ultra U1.4 ter: Chrome's 64 Hz metronome on received video frames (session ex-3b)
+
+Same path and machines. Commits `36f1a492` and `c83acc30`. HEVC native host,
+idle unless said.
+
+**The tick is a 64 Hz grid.**
+- In the worker, the times frames reach the transform lock onto a 15.625 ms
+  period: phase coherence 0.98. The times their last packet came do not:
+  0.01-0.07.
+- Gaps between deliveries are 15.7 / 31 ms. The hold is 7.8 ms median, at
+  most 17-18 ms.
+- On the same socket, the DataChannel's frames show no lock (0.01-0.05). The
+  wait is in the RTP video receive path, not in the network service or a
+  Chrome-wide timer.
+
+**Its source in Chromium.**
+- `VideoMetronomeWorker` in
+  `third_party/blink/renderer/platform/peerconnection/rtc_encoded_video_stream_transformer.cc`
+  queues each received video frame. It hands the queue to the transform on the
+  next tick of the decode metronome: `TimerBasedTickProvider`, `kDefaultPeriod
+  = base::Hertz(64)`, ticks snapped to a fixed grid.
+- History:
+  - landed in January 2024 ("Align Encoded Transforms for Receiver Video frames
+    to a metronome", crbug 1502070, to wake JS less in large calls);
+  - on by default since April 2024;
+  - its kill switch `RTCAlignReceivedEncodedVideoTransforms` was removed in
+    October 2025.
+- No flag turns it off in M154.
+- **Audio frames are not held:** the audio transformer posts each frame at
+  once.
+
+**What did not help.**
+
+| Try | Result |
+|---|---|
+| The legacy `createEncodedStreams` on the page thread | Same hold. The hop drops to 0.0 ms, the wait is before it. |
+| `--disable-features=AlignWakeUps,AddTaskLeeway` with `--enable-features=LowerHighResolutionTimerThreshold` | Same hold |
+| `--enable-features=VSyncDecoding` | Worse: ~50 ms hold, ~10 Hz ticks for this window |
+
+**What works: the frames cut in Opus packets** (the `rtp_video` item `aroad`,
+bench only).
+- Each packet is an 8-byte header ('M', key flag, frame seq, index, count)
+  plus up to 1100 bytes, on a send-only audio track. The transform worker puts
+  the frames back together.
+- The hold drops to 0.2 ms.
+
+Host stamp → drawn, p50, one pass per cell unless noted:
+
+| Codec | Video track | Audio road | SCTP |
+|---|---|---|---|
+| HEVC | 17.3 / 18.1 ms | 9.1 / 9.3 / 10.1 ms | 9.6 / 9.8 ms |
+| H.264 | 23.7 ms | 14.6 ms | 14.8 ms |
+| AV1 | 30.9 ms | 31.1 ms | 21.1 ms |
+
+- AV1: the encoder held only ~40 fps, so these are noisy. To redo.
+- No frame lost idle.
+
+**Under an Ultra load** (`ultra=synthetic:250`, ~122 Mbit/s, 14:10-14:20,
+iPhone stopped):
+
+| Video / Ultra | Video p50 | Ultra extra wait p50 / p95 |
+|---|---|---|
+| Video track / video track | 21.4 ms | 16.8 / 41.4 ms |
+| Audio road / video track | 11.6 ms | 16.4 / 35.5 ms |
+| Audio road / audio road | 11.1 ms | 7.2 / 22.3 ms |
+| SCTP / SCTP | 123-129 ms | 141-155 / 185-200 ms |
+
+- The audio road has no retransmission: Chrome sends no NACK for it. In the
+  2-minute pass with both on the audio road, the host got 10 IDR requests.
+  Next: a NACK of our own, carrying the missing chunk indexes on the input
+  channel.
+
+**The hop is shared with the house.** At 13:27-13:55, a household iPhone (weak
+signal) streamed video, ~11 Mbit/s on average, in bursts. Meanwhile:
+- Ultra on RTP fell to 78-109 Mbit/s with 6-12 losses/s, and SCTP's video
+  fell to 113-225 ms.
+- NetProbe's paced UDP stayed clean to ~200 Mbit/s with or without it (198 vs
+  193 Mbit/s).
+- Once it stopped, Ultra on RTP was back to this morning's level: 122.9 Mbit/s,
+  0 loss.
+
+A clean paced probe does not clear the link: compare a burst load with and
+without the suspect.
 
 ## 4. The model so far (04/10/2026)
 
