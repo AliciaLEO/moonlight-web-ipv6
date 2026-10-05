@@ -48,7 +48,12 @@ describe('RtpVideo', () => {
         expect(video.receiver.transform.options).toEqual({ mid: 'video' });
         const data = new Uint8Array([0, 0, 0, 1, 0x65]).buffer;
         workers[0].onmessage({ data: { mid: 'video', data, key: true, ts: 123456 } });
-        expect(onVideo).toHaveBeenCalledWith(new Uint8Array([0, 0, 0, 1, 0x65]), true, 123456);
+        expect(onVideo).toHaveBeenCalledWith(
+            new Uint8Array([0, 0, 0, 1, 0x65]),
+            true,
+            123456,
+            false,
+        );
 
         const ultra = trackEvent('ultra');
         attachRtpVideo(ultra, { onVideo, onUltra, log: () => {} });

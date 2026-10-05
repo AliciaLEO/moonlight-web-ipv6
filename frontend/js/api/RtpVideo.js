@@ -39,6 +39,62 @@ export function rtpVideoSupported() {
 }
 
 /**
+ * The bench's other road (U1.4 ter): localStorage `mw_rtp_api=legacy` takes
+ * the frames by Chrome's older createEncodedStreams on the page's own thread,
+ * no worker. The peer connection must then be made with
+ * `encodedInsertableStreams: true`, and every receiver's frames read.
+ */
+export function rtpLegacyApi() {
+    try {
+        return (
+            globalThis.localStorage?.getItem('mw_rtp_api') === 'legacy' &&
+            typeof globalThis.RTCRtpReceiver?.prototype?.createEncodedStreams === 'function'
+        );
+    } catch {
+        return false;
+    }
+}
+
+/** Lets an audio receiver's frames through untouched, on the legacy road. */
+export function passEncodedAudio(receiver) {
+    const { readable, writable } = receiver.createEncodedStreams();
+    readable.pipeTo(writable).catch(() => {});
+}
+
+/** One encoded frame as the worker posts it (rtpVideoTransformWorker.js). */
+function readEncodedFrame(mid, frame) {
+    let ts = frame.timestamp;
+    let held = -1;
+    try {
+        const meta = frame.getMetadata();
+        if (meta && typeof meta.rtpTimestamp === 'number') ts = meta.rtpTimestamp;
+        if (meta && typeof meta.receiveTime === 'number')
+            held = performance.now() - meta.receiveTime;
+    } catch {
+        // Older engines: the frame's own timestamp is the RTP one.
+    }
+    const at = performance.timeOrigin + performance.now();
+    return { mid, data: frame.data, key: frame.type === 'key', ts: ts >>> 0, at, held };
+}
+
+/** The bench's figures of one frame (U1.4): kept as running windows. */
+function noteFrame(m) {
+    const st = (globalThis.__mwRtp ||= { hops: [], held: [], ats: [], rcv: [] });
+    const keep = (a, v) => {
+        a.push(v);
+        if (a.length > 600) a.shift();
+    };
+    keep(st.hops, performance.timeOrigin + performance.now() - m.at);
+    if (m.lost) st.lost = (st.lost || 0) + 1;
+    // When the frame reached us, and when its last packet came, on one clock.
+    keep(st.ats, m.at);
+    if (m.held >= 0) {
+        keep(st.held, m.held);
+        keep(st.rcv, m.at - m.held);
+    }
+}
+
+/**
  * Takes the frames of the RTP track @p event announced (an `ontrack` event).
  * @param {RTCTrackEvent} event
  * @param {{onVideo?: function(Uint8Array, boolean, number): void,
@@ -58,12 +114,16 @@ export function attachRtpVideo(event, { onVideo, onUltra, log = console.log } = 
         log('[MW-RTP] no RTCRtpScriptTransform here: track ' + mid + ' refused');
         return { mid, worker: null, stop() {} };
     }
-    const worker = new Worker(new URL('./rtpVideoTransformWorker.js', import.meta.url));
+    const legacy = rtpLegacyApi();
     let frames = 0;
-    worker.onmessage = (msg) => {
-        const m = msg.data;
+    const onFrame = (m) => {
         if (m.ready) {
-            log('[MW-RTP] transform of ' + mid + ' running');
+            log(
+                '[MW-RTP] transform of ' +
+                    mid +
+                    ' running' +
+                    (legacy ? ' (legacy, page thread)' : ''),
+            );
             return;
         }
         if (m.error) {
@@ -71,24 +131,14 @@ export function attachRtpVideo(event, { onVideo, onUltra, log = console.log } = 
             return;
         }
         frames++;
-        // Worker → page hop, for the bench (U1.4): kept as a running figure.
-        const hop = performance.timeOrigin + performance.now() - m.at;
-        if (m.at) {
-            const st = (globalThis.__mwRtp ||= { hops: [], held: [] });
-            st.hops.push(hop);
-            if (st.hops.length > 600) st.hops.shift();
-            if (m.held >= 0) {
-                st.held.push(m.held);
-                if (st.held.length > 600) st.held.shift();
-            }
-        }
+        if (m.at) noteFrame(m);
         if (frames === 1) log('[MW-RTP] first frame on ' + mid + (m.key ? ' (key)' : ''));
         if (m.mid === 'ultra') {
             if (onUltra && m.data.byteLength > ULTRA_RTP_PREFIX_BYTES)
                 onUltra(m.data.slice(ULTRA_RTP_PREFIX_BYTES), performance.now());
             return;
         }
-        if (onVideo) onVideo(new Uint8Array(m.data), m.key, m.ts);
+        if (onVideo) onVideo(new Uint8Array(m.data), m.key, m.ts, m.lost === true);
     };
     // Nothing of the browser's own buffering is wanted before the transform.
     try {
@@ -96,8 +146,25 @@ export function attachRtpVideo(event, { onVideo, onUltra, log = console.log } = 
     } catch {
         // Not settable here: the transform sits before it anyway.
     }
-    worker.onerror = (e) => log('[MW-RTP] transform worker of ' + mid + ' failed: ' + e.message);
-    event.receiver.transform = new globalThis.RTCRtpScriptTransform(worker, { mid });
+    let worker = null;
+    let reader = null;
+    if (legacy) {
+        reader = event.receiver.createEncodedStreams().readable.getReader();
+        onFrame({ ready: true });
+        const pump = () =>
+            reader.read().then(({ value: frame, done }) => {
+                if (done || !frame) return;
+                onFrame(readEncodedFrame(mid, frame));
+                return pump();
+            });
+        pump().catch((e) => onFrame({ error: String(e && e.message ? e.message : e) }));
+    } else {
+        worker = new Worker(new URL('./rtpVideoTransformWorker.js', import.meta.url));
+        worker.onmessage = (msg) => onFrame(msg.data);
+        worker.onerror = (e) =>
+            log('[MW-RTP] transform worker of ' + mid + ' failed: ' + e.message);
+        event.receiver.transform = new globalThis.RTCRtpScriptTransform(worker, { mid });
+    }
     log('[MW-RTP] taking the frames of RTP track ' + mid + ' by Encoded Transform');
     // The first seconds in figures: packets that came, frames assembled.
     let looks = 0;
@@ -149,7 +216,8 @@ export function attachRtpVideo(event, { onVideo, onUltra, log = console.log } = 
         },
         stop() {
             clearInterval(look);
-            worker.terminate();
+            worker?.terminate();
+            reader?.cancel().catch(() => {});
         },
     };
 }

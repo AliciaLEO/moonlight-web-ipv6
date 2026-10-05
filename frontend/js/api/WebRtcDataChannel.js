@@ -32,7 +32,7 @@ import { defaultIceServers } from './IceServers.js';
 import { isViewMessage } from './hostMessages.js';
 import { attachFloodCounter, floodMode } from './FloodCounter.js';
 import { attachUltraSink, ultraSinkMode } from './UltraSink.js';
-import { attachRtpVideo } from './RtpVideo.js';
+import { attachRtpVideo, passEncodedAudio, rtpLegacyApi } from './RtpVideo.js';
 import { closeHidChannel, createHidChannel, sendHidFrame } from '../hid/hidWire.js';
 import { setAudioJitterBufferTarget } from '../util/AudioJitter.js';
 
@@ -769,7 +769,17 @@ export class WebRtcDataChannel {
      * before the DataChannels, and the decoder is only made once they are:
      * until then the frames from the latest keyframe on are held.
      */
-    _onRtpVideoFrame(frame, isKeyframe, backendTs) {
+    _onRtpVideoFrame(frame, isKeyframe, backendTs, lost = false) {
+        // A frame went missing before this one (the audio road has no
+        // retransmission): deltas wait for the keyframe asked for.
+        if (lost && !isKeyframe) this._rtpBroken = true;
+        if (this._rtpBroken) {
+            if (!isKeyframe) {
+                this._requestIdrFrame('RTP frame lost');
+                return;
+            }
+            this._rtpBroken = false;
+        }
         if (!this.connected) {
             if (isKeyframe) this._rtpHeld = [];
             if (this._rtpHeld && this._rtpHeld.length < 240)
@@ -801,6 +811,8 @@ export class WebRtcDataChannel {
             bundlePolicy: 'max-bundle',
             rtcpMuxPolicy: 'require',
         };
+        // The bench's other road for the RTP video (U1.4 ter, RtpVideo.js).
+        if (rtpLegacyApi()) config.encodedInsertableStreams = true;
         console.log('[WebRTC] ICE servers:', JSON.stringify(iceServers));
 
         this.pc = new RTCPeerConnection(config);
@@ -814,10 +826,12 @@ export class WebRtcDataChannel {
             // The video on an RTP track (POC Ultra U1.4), when the host's
             // rtp_video setting put the session's codec there: its frames
             // come to the same onVideo as the DataChannel's.
-            if (evt.track.kind === 'video') {
+            // "vaudio": the same frames cut in Opus packets (the bench's
+            // `aroad`, U1.4 ter), never played.
+            if (evt.track.kind === 'video' || evt.transceiver?.mid === 'vaudio') {
                 const rtp = attachRtpVideo(evt, {
-                    onVideo: (frame, isKeyframe, backendTs) =>
-                        this._onRtpVideoFrame(frame, isKeyframe, backendTs),
+                    onVideo: (frame, isKeyframe, backendTs, lost) =>
+                        this._onRtpVideoFrame(frame, isKeyframe, backendTs, lost),
                     onUltra: (buf, arrivalMs) => this._ultra?.sink.onMessage(buf, arrivalMs),
                 });
                 (this._rtpVideo ||= []).push(rtp);
@@ -825,6 +839,7 @@ export class WebRtcDataChannel {
             }
             if (evt.track.kind !== 'audio') return;
             console.log('[WebRTC] Audio track received');
+            if (rtpLegacyApi()) passEncodedAudio(evt.receiver);
             // The browser's buffer is the whole of the audio latency: aim it.
             setAudioJitterBufferTarget(this.pc);
             const stream = new MediaStream([evt.track]);

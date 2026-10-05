@@ -353,6 +353,8 @@ private:
     QString m_RtpVideoSpec;
     bool m_RtpVideoNativeHost = false;
     std::shared_ptr<rtc::Track> m_VideoTrack;
+    bool m_RtpVideoAudioRoad = false; // the bench's `aroad`: frames cut in Opus packets
+    uint16_t m_RtpAudioRoadSeq = 0;
     bool m_RtpVideoSentKeyframe = false;         // deltas wait for the first keyframe on the track
     std::atomic<bool> m_RtpVideoAccepted{false}; // set from the answer
     std::atomic<bool> m_UltraRtpAccepted{false};

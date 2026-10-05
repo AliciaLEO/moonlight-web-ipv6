@@ -919,7 +919,7 @@ bool DataChannelRelay::setRemoteDescription(const std::string& sdp)
                 const auto* media = std::get<const rtc::Description::Media*>(entry);
                 const bool taken = !media->isRemoved() &&
                                    media->direction() != rtc::Description::Direction::Inactive;
-                if (media->mid() == "video") video = taken;
+                if (media->mid() == "video" || media->mid() == "vaudio") video = taken;
                 if (media->mid() == "ultra") ultra = taken;
             }
             m_RtpVideoAccepted.store(m_VideoTrack && video);
@@ -2916,7 +2916,32 @@ void DataChannelRelay::createRtpVideoTracks()
             << (ultra ? "RTP" : "-");
 
     std::random_device rd;
-    if (named.contains(codec)) {
+    // The bench's other road (U1.4 ter, item `aroad`): the frames cut in
+    // packets on an Opus track. Chrome holds each received video frame for
+    // its 64 Hz metronome before the transform; an audio frame goes at once.
+    m_RtpVideoAudioRoad = named.contains(codec) && named.contains(QStringLiteral("aroad"));
+    if (m_RtpVideoAudioRoad) {
+        auto desc = rtc::Description::Audio("vaudio", rtc::Description::Direction::SendOnly);
+        const int pt = 110;
+        desc.addOpusCodec(pt);
+        const uint32_t ssrc = rd();
+        desc.addSSRC(ssrc, "vaudio");
+        m_VideoTrack = m_Pc->addTrack(desc);
+        auto cfg = std::make_shared<rtc::RtpPacketizationConfig>(
+            ssrc, "vaudio", static_cast<uint8_t>(pt), rtc::OpusRtpPacketizer::DefaultClockRate);
+        m_VideoTrack->setMediaHandler(std::make_shared<rtc::OpusRtpPacketizer>(cfg));
+        m_VideoTrack->onOpen([this]() {
+            qInfo() << "[DataChannelRelay] RTP video track open (audio road)";
+            QMetaObject::invokeMethod(
+                this,
+                [this]() {
+                    sendBufferedKeyframe();
+                    std::lock_guard<std::mutex> lk(m_VideoMutex);
+                    if (!m_RtpVideoSentKeyframe) sendIdrRequestThrottled();
+                },
+                Qt::QueuedConnection);
+        });
+    } else if (named.contains(codec)) {
         auto desc = rtc::Description::Video("video", rtc::Description::Direction::SendOnly);
         const int pt = 96;
         if (codec == QLatin1String("av1"))
@@ -3001,8 +3026,34 @@ void DataChannelRelay::sendRtpVideo(const QByteArray& frameData, bool isKeyframe
     // Stamped now: how long after its capture the frame leaves (POC U1.4).
     const int64_t sendStartUs = steadyUs();
     try {
-        m_VideoTrack->sendFrame(reinterpret_cast<const rtc::byte*>(frameData.constData()),
-                                static_cast<size_t>(frameData.size()), info);
+        if (m_RtpVideoAudioRoad) {
+            // One packet per chunk: 'M', flags (1 = key), frame seq, index,
+            // count (u16, big endian), then up to kChunk bytes of the frame.
+            constexpr int kChunk = 1100;
+            const int size = static_cast<int>(frameData.size());
+            const int count = std::max(1, (size + kChunk - 1) / kChunk);
+            const uint16_t seq = m_RtpAudioRoadSeq++;
+            std::vector<rtc::byte> chunk;
+            for (int i = 0; i < count; ++i) {
+                const int off = i * kChunk;
+                const int len = std::min(kChunk, size - off);
+                chunk.resize(8 + static_cast<size_t>(len));
+                const uint8_t head[8] = {'M',
+                                         static_cast<uint8_t>(isKeyframe ? 1 : 0),
+                                         static_cast<uint8_t>(seq >> 8),
+                                         static_cast<uint8_t>(seq),
+                                         static_cast<uint8_t>(i >> 8),
+                                         static_cast<uint8_t>(i),
+                                         static_cast<uint8_t>(count >> 8),
+                                         static_cast<uint8_t>(count)};
+                std::memcpy(chunk.data(), head, 8);
+                std::memcpy(chunk.data() + 8, frameData.constData() + off,
+                            static_cast<size_t>(len));
+                m_VideoTrack->sendFrame(chunk.data(), chunk.size(), info);
+            }
+        } else
+            m_VideoTrack->sendFrame(reinterpret_cast<const rtc::byte*>(frameData.constData()),
+                                    static_cast<size_t>(frameData.size()), info);
         const int64_t endUs = steadyUs();
         m_RtpSendUs.push_back(static_cast<int>(endUs - sendStartUs));
         // backendTs is the steady clock in ms, mod 2^32: the difference wraps alike.
