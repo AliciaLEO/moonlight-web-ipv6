@@ -956,7 +956,17 @@ What the measurements support, in order of the path:
   Ultra's SCTP load (20 ms against 42-65). If the video leaves SCTP, the
   inputs and the host's messages have the association to themselves. If it
   stays, the next try is a second PeerConnection for them alone. QUIC for the
-  inputs only was weighed and set aside (05/10).
+  inputs only was weighed and set aside (05/10). U1.4 ter (§3): a received RTP
+  video track waits for Chrome's 15.625 ms metronome, while audio tracks and
+  DataChannels do not. The same frames on an Opus track came out at 11.1 ms
+  under the Ultra load, against 21.4 on the video track and 123-129 on SCTP.
+  Leaving SCTP therefore does not have to cost the metronome's ~8 ms.
+- The Wi-Fi 7 hop of the POC benches is shared with the house: from 13:27 to
+  13:55 on 05/10 an iPhone with a weak signal streaming video in bursts took
+  Ultra on RTP from 122 down to 78-109 Mbit/s, with losses, while the paced
+  UDP probe stayed clean up to ~200 Mbit/s. Is a dip like that the other
+  station's airtime, or Ultra's own burstiness? Bench results on that hop need
+  their time of day.
 - RTO minimum (200 ms) and the lone-frame T3 tail (25/09): never A/B'd.
 - DSCP/WMM marking of the video, from the host (W2 item 5 of the plan): not
   tried.
