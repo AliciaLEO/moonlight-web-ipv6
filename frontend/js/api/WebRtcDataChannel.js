@@ -32,6 +32,7 @@ import { defaultIceServers } from './IceServers.js';
 import { isViewMessage } from './hostMessages.js';
 import { attachFloodCounter, floodMode } from './FloodCounter.js';
 import { attachUltraSink, ultraSinkMode } from './UltraSink.js';
+import { attachRtpVideo } from './RtpVideo.js';
 import { closeHidChannel, createHidChannel, sendHidFrame } from '../hid/hidWire.js';
 import { setAudioJitterBufferTarget } from '../util/AudioJitter.js';
 
@@ -699,6 +700,10 @@ export class WebRtcDataChannel {
         // Clear reassembly buffers
         this._reassembly.clear();
 
+        if (this._rtpVideo) {
+            for (const rtp of this._rtpVideo) rtp.stop();
+            this._rtpVideo = null;
+        }
         if (this._ultra) {
             this._ultra.stop();
             this._ultra = null;
@@ -759,6 +764,29 @@ export class WebRtcDataChannel {
     // PeerConnection setup
     // =========================================================================
 
+    /**
+     * A frame off the RTP video track (POC Ultra U1.4). The track can open
+     * before the DataChannels, and the decoder is only made once they are:
+     * until then the frames from the latest keyframe on are held.
+     */
+    _onRtpVideoFrame(frame, isKeyframe, backendTs) {
+        if (!this.connected) {
+            if (isKeyframe) this._rtpHeld = [];
+            if (this._rtpHeld && this._rtpHeld.length < 240)
+                this._rtpHeld.push([frame, isKeyframe, backendTs]);
+            return;
+        }
+        if (this.onVideo) this.onVideo(frame, isKeyframe, backendTs, 0);
+    }
+
+    _flushRtpHeld() {
+        const held = this._rtpHeld;
+        this._rtpHeld = null;
+        if (!held || !this.onVideo) return;
+        for (const [frame, isKeyframe, backendTs] of held)
+            this.onVideo(frame, isKeyframe, backendTs, 0);
+    }
+
     _createPeerConnection() {
         console.log('[WebRTC] Creating RTCPeerConnection');
 
@@ -783,6 +811,18 @@ export class WebRtcDataChannel {
         // gesture-blessed element (autoplay unlock); on desktop it returns false
         // and we play it on our own <audio> element.
         this.pc.ontrack = (evt) => {
+            // The video on an RTP track (POC Ultra U1.4), when the host's
+            // rtp_video setting put the session's codec there: its frames
+            // come to the same onVideo as the DataChannel's.
+            if (evt.track.kind === 'video') {
+                const rtp = attachRtpVideo(evt, {
+                    onVideo: (frame, isKeyframe, backendTs) =>
+                        this._onRtpVideoFrame(frame, isKeyframe, backendTs),
+                    onUltra: (buf, arrivalMs) => this._ultra?.sink.onMessage(buf, arrivalMs),
+                });
+                (this._rtpVideo ||= []).push(rtp);
+                return;
+            }
             if (evt.track.kind !== 'audio') return;
             console.log('[WebRTC] Audio track received');
             // The browser's buffer is the whole of the audio latency: aim it.
@@ -946,6 +986,8 @@ export class WebRtcDataChannel {
                 this._clearWsCloseTimer();
 
                 if (this.onOpen) this.onOpen();
+                // RTP frames that came before the decoder existed (U1.4).
+                this._flushRtpHeld();
 
                 // Close signaling WS — no longer needed
                 this._closeSignalingWs();
