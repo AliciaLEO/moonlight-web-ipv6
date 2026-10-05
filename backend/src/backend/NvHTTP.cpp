@@ -72,12 +72,12 @@ QNetworkReply* NvHTTP::getServerInfoAsync(const NvAddress& address, const QStrin
 
 QNetworkReply* NvHTTP::getServerInfoAsyncHttps(const NvAddress& address, const QString& uniqueId,
                                                const QByteArray& clientCertPem,
-                                               const QByteArray& clientKeyPem)
+                                               const QByteArray& clientKeyPem, quint16 httpsPort)
 {
     // Build URL as string to avoid any QUrl encoding quirks
     QString urlStr = QString("https://%1:%2/serverinfo?uniqueid=%3&uuid=%4")
                          .arg(address.address())
-                         .arg(MW_HTTPS_PORT)
+                         .arg(httpsPort ? httpsPort : MW_HTTPS_PORT)
                          .arg(uniqueId, QUuid::createUuid().toString(QUuid::WithoutBraces));
     QUrl url(urlStr);
 

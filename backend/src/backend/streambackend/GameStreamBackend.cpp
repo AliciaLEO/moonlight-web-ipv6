@@ -454,10 +454,19 @@ void GameStreamBackend::runningApp(const QString& seatId, BackendIntCallback cb)
         return;
     }
 
-    // The same plain-HTTP serverinfo the host poll reads `currentgame` from,
-    // asked now: the poll pauses while a stream runs, so its value is stale
-    // exactly when the answer matters (right after a stream stops).
-    QNetworkReply* reply = m_Http->getServerInfoAsync(addr, IdentityManager::get()->getUniqueId());
+    // serverinfo, asked now: the poll pauses while a stream runs, so its value
+    // is stale exactly when the answer matters (right after a stream stops).
+    //
+    // Over HTTPS, as the paired client. Sunshine names `currentgame` on both
+    // ports, but Apollo only on the paired one, and answers 0 on plain HTTP
+    // whatever runs. Read there, a running app looked like none: a launch of
+    // another app was then refused with 400 and fell back to resuming the app
+    // that DID run — the very "click B, get A" this check exists to stop
+    // (issue #24 bench on Apollo 0.4.6, 05/10/2026).
+    auto* identity = IdentityManager::get();
+    QNetworkReply* reply =
+        m_Http->getServerInfoAsyncHttps(addr, identity->getUniqueId(), identity->getCertificate(),
+                                        identity->getPrivateKey(), host->activeHttpsPort);
 
     auto answered = std::make_shared<bool>(false);
     auto answer = [answered, cb](bool ok, const BackendError& e, int appId) {
