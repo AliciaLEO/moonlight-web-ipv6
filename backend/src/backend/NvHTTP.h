@@ -57,6 +57,14 @@ public:
     // /start response. Sunshine answers a healthy launch in well under a second
     // (a wedged one never answers at all), so the margin is generous.
     static constexpr int LAUNCH_TIMEOUT_MS = 20000;
+    // Deadline for /cancel. Sunshine answers it only once the app is gone: it
+    // asks the app to close, waits its exit-timeout (5 s by default) and only
+    // then kills it — so a /cancel of an app with a live process takes longer
+    // than REQUEST_TIMEOUT_MS by construction. At 5 s every such quit timed
+    // out (issue #24 bench, 05/10/2026: 10 s on Sunshine 2026.914 for Windows),
+    // the Stop that quits the app answered 502, and stop-session read back the
+    // app as still running.
+    static constexpr int QUIT_TIMEOUT_MS = 30000;
 
     explicit NvHTTP(QNetworkAccessManager* nam, QObject* parent = nullptr);
 

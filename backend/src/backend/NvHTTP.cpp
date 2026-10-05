@@ -355,7 +355,7 @@ QNetworkReply* NvHTTP::quitAppAsync(const NvAddress& address, quint16 httpsPort,
                  .arg(uuid));
 
     QNetworkRequest req(url);
-    req.setTransferTimeout(REQUEST_TIMEOUT_MS);
+    req.setTransferTimeout(QUIT_TIMEOUT_MS);
     req.setRawHeader("User-Agent", "MoonlightWeb/0.1");
     closeWhenDone(req);
     // Close immediately — see getServerInfoAsyncHttps. This one is the parent
