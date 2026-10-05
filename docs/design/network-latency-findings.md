@@ -884,6 +884,49 @@ signal) streamed video, ~11 Mbit/s on average, in bursts. Meanwhile:
 A clean paced probe does not clear the link: compare a burst load with and
 without the suspect.
 
+### 05/10/2026 — POC Ultra U1.4 quater: the audio road's own NACK (session ex-3b)
+
+Same path, iPhone stopped, 14:35-15:10. Commit `a95e95d9`.
+
+**How it works.**
+- The transform worker asks for a chunk again as soon as it sees a hole in a
+  frame's indexes, or when a newer frame starts while an older one is still
+  missing chunks.
+- The page sends the request on the input channel (`aroadnack`). The host
+  resends from a per-track history of the last 60 frames.
+- A complete video frame waits at most 15 ms for an older one, then goes out
+  marked lost (the keyframe path).
+- Losses are injected on the host with `MW_AROAD_DROP` (per mille), on first
+  sends only.
+
+**Results, HEVC idle.** Host stamp → drawn:
+
+| Case | p50 | p90 | Draws/s | Frames given up |
+|---|---|---|---|---|
+| Audio road, no loss | 9.1-9.3 ms | 13.2 ms | 59.4-59.7 | — |
+| Audio road, 1 % chunks dropped (~1,200 resent) | 9.7 ms | 14.5 ms | 59.9 | 0 |
+| Audio road, 5 % dropped (~4,500 asked again) | 11.8 ms | 16.3 ms | 59.4 | 0 |
+| SCTP, `loss=50` (5 % of messages thrown before SCTP) | 8.4 ms | 11.2 ms | 38 | — |
+
+- With `loss=50`, the client sent 153 recovery requests in 2 minutes.
+- SCTP's p50 counts only the frames that came through whole.
+
+**Under Ultra 250**, with both video and Ultra on the audio road:
+- Ultra's chunks were repaired (~600 resent).
+- A resent video chunk queues behind Ultra's 250 KiB bursts on the Wi-Fi.
+  It comes back past 15 ms, so the host still got 11 IDR requests in 2
+  minutes.
+- On the product path, Ultra replaces the video instead of riding next to it.
+
+**AV1 redone** (two rounds), host stamp → drawn p50. The 21 ms SCTP figure of
+U1.4 ter was noise.
+
+| Road | Round 1 | Round 2 |
+|---|---|---|
+| Audio road | 30.0 ms | 18.0 ms |
+| SCTP | 32.9 ms | 31.7 ms |
+| Video track | 39.9 ms | 38.8 ms |
+
 ## 4. The model so far (04/10/2026)
 
 What the measurements support, in order of the path:
