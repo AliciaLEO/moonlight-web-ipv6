@@ -226,6 +226,53 @@ void run_vulkan_av1_tests()
         }
     }
 
+    SECTION("VulkanAv1Encoder — a viewer that crops: the frame padded to the driver's grid, the "
+            "picture whole in the render size");
+    {
+        vulkan::DeviceOptions options;
+        options.wantHigh = false;
+        options.encodeAv1 = true;
+        std::string error;
+        std::shared_ptr<vulkan::VulkanDevice> device =
+            vulkan::VulkanDevice::open(node, options, error);
+        encode::VulkanAv1Encoder encoder;
+        encoder.setClientCrops(true);
+        const bool ok =
+            device && encoder.init(device, Codec::Av1, 1920, 1080, 60, 20000, false, tuning, error);
+        if (!ok) std::fprintf(stderr, "  init: %s\n", error.c_str());
+        CHECK(ok);
+        if (ok) {
+            const encode::av1::Sequence& seq = encoder.sequence();
+            // The picture at its own size; the frame past it where the grid
+            // asks (1920x1088 on the 780M).
+            CHECK_EQ(encoder.input().width, 1920);
+            CHECK_EQ(encoder.input().height, 1080);
+            CHECK(encoder.input().codedWidth >= 1920);
+            CHECK(encoder.input().codedHeight >= 1080);
+            CHECK_EQ(seq.width, static_cast<uint32_t>(encoder.input().codedWidth));
+            CHECK_EQ(seq.height, static_cast<uint32_t>(encoder.input().codedHeight));
+            std::fprintf(stderr, "  1920x1080 asked: a %ux%u frame\n", seq.width, seq.height);
+            std::vector<uint8_t> picture(1920 * 1080 * 3 / 2, 128);
+            for (size_t i = 0; i < 1920u * 1080u; ++i)
+                picture[i] = static_cast<uint8_t>(16 + (i % 1920 + i / 1920) % 200);
+            std::string why;
+            for (uint32_t n = 0; n < 2; ++n) {
+                CHECK(encoder.upload(picture.data(), error));
+                encode::EncoderOutput out;
+                CHECK(encoder.encode(false, n, out, error));
+                encode::av1::FrameHeader header;
+                CHECK(frameOf(out.data, out.size, seq, header, why));
+                // The render size says the picture wherever the frame is
+                // larger (the encoder's guard read it too).
+                const bool padded = seq.width != 1920 || seq.height != 1080;
+                CHECK_EQ(header.renderWidth, padded ? 1920u : 0u);
+                CHECK_EQ(header.renderHeight, padded ? 1080u : 0u);
+                encoder.releaseOutput();
+            }
+            CHECK(!encoder.lost());
+        }
+    }
+
     SECTION("VulkanAv1Encoder — the rate: a picture full of detail at 3 Mbit/s keeps to it, "
             "and to 1.5 when told in flight");
     {

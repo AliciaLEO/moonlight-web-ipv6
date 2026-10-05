@@ -86,6 +86,12 @@ struct NativeHostMedia
     /// True — the engine's own repairs — for every other client.
     bool refInvalidation = true;
 
+    /// The browser cuts each decoded frame to the size the host announces
+    /// (/start's crops_to_frame): an encoder may pad the frame past the
+    /// picture — see mw::native::SessionConfig::clientCropsToFrame. False for
+    /// every other client.
+    bool cropsToFrame = false;
+
     /// "MoonlightWeb Virtual Display" only: the GPU that draws it, and the one
     /// that drew the display it took the primary role from, when they differ.
     /// An app started before the stream stays on the second, and every picture

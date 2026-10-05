@@ -375,6 +375,12 @@ using GpuPipeline = VaapiPipeline<convert::GlConvert>;
 template <typename Encoder> class VulkanPipeline final : public VideoPipeline
 {
 public:
+    /// @p clientCrops: SessionConfig::clientCropsToFrame, which AV1 alone
+    /// reads (VulkanAv1Encoder::setClientCrops).
+    explicit VulkanPipeline(bool clientCrops = false)
+        : m_ClientCrops(clientCrops)
+    {}
+
     bool init(const capture::IScreenCapture& capture, Codec codec, int outputWidth,
               int outputHeight, int fps, int bitrateKbps, bool intraRefresh,
               const EncoderTuning& tuning, std::string& error) override
@@ -390,6 +396,8 @@ public:
             vulkan::VulkanDevice::open(capture.renderNodePath(), options, error);
         if (!device) return false;
         m_Encoder = std::make_unique<Encoder>();
+        if constexpr (std::is_same_v<Encoder, encode::VulkanAv1Encoder>)
+            m_Encoder->setClientCrops(m_ClientCrops);
         if (!m_Encoder->init(device, codec, outputWidth > 0 ? outputWidth : capture.width(),
                              outputHeight > 0 ? outputHeight : capture.height(), fps, bitrateKbps,
                              intraRefresh, tuning, error, encode::witnessFromEnvironment()))
@@ -458,6 +466,7 @@ private:
     // them — the device they share.
     std::unique_ptr<Encoder> m_Encoder;
     std::unique_ptr<convert::VulkanConvert> m_Converter;
+    bool m_ClientCrops = false;
     bool m_ScalerPinned = false;
     bool m_Failed = false;
 };
@@ -1888,7 +1897,8 @@ private:
         if (m_UsingCpuPair) m_Pipeline = std::make_unique<CpuPipeline>();
 #if defined(MW_NATIVE_LINUX_VULKAN)
         else if (m_Route.encoder == LinuxRoute::Encoder::Vulkan && m_Codec == Codec::Av1)
-            m_Pipeline = std::make_unique<VulkanPipeline<encode::VulkanAv1Encoder>>();
+            m_Pipeline = std::make_unique<VulkanPipeline<encode::VulkanAv1Encoder>>(
+                m_Config.clientCropsToFrame);
         else if (m_Route.encoder == LinuxRoute::Encoder::Vulkan)
             m_Pipeline = std::make_unique<VulkanPipeline<encode::VulkanHevcEncoder>>();
         else if (m_Route.conversion == LinuxRoute::Conversion::Vulkan)

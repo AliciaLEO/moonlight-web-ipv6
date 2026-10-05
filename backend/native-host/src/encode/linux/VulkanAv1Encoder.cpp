@@ -346,7 +346,16 @@ bool VulkanAv1Encoder::init(const std::shared_ptr<vulkan::VulkanDevice>& device,
     // and Chrome — software and hardware decoders alike — shows the whole
     // frame, padding included (1920x1088 for 1080p on the 780M, 05/10/2026).
     // The conversion scales to the size kept here; the session says it.
-    {
+    // A viewer that cuts the frame to that size (setClientCrops) is sent the
+    // padded frame instead, the picture whole at its own size.
+    if (m_ClientCrops) {
+        d->codedWidth = alignUp(static_cast<uint32_t>(width),
+                                std::max(d->av1Caps.codedPictureAlignment.width, 1u));
+        d->codedHeight = alignUp(static_cast<uint32_t>(height),
+                                 std::max(d->av1Caps.codedPictureAlignment.height, 1u));
+        d->codedWidth += d->codedWidth & 1;
+        d->codedHeight += d->codedHeight & 1;
+    } else {
         const int gw = static_cast<int>(std::max(d->av1Caps.codedPictureAlignment.width, 2u));
         const int gh = static_cast<int>(std::max(d->av1Caps.codedPictureAlignment.height, 2u));
         const FrameSize grid = alignedToGrid(FrameSize{width, height}, gw, gh);
@@ -359,9 +368,9 @@ bool VulkanAv1Encoder::init(const std::shared_ptr<vulkan::VulkanDevice>& device,
                       "size)");
         m_Width = width = grid.width & ~1;
         m_Height = height = grid.height & ~1;
+        d->codedWidth = static_cast<uint32_t>(width);
+        d->codedHeight = static_cast<uint32_t>(height);
     }
-    d->codedWidth = static_cast<uint32_t>(width);
-    d->codedHeight = static_cast<uint32_t>(height);
     if (d->codedWidth < d->caps.minCodedExtent.width ||
         d->codedHeight < d->caps.minCodedExtent.height ||
         d->codedWidth > d->caps.maxCodedExtent.width ||

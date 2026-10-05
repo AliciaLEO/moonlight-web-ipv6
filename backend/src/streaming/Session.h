@@ -146,6 +146,11 @@ public:
     /// every other path.
     void setRefInvalidation(bool allowed) { m_RefInvalidation = allowed; }
 
+    /// True when the browser cuts each decoded frame to the size the host
+    /// announces (mw::native::SessionConfig::clientCropsToFrame). Ignored by
+    /// every path except the native engine.
+    void setCropsToFrame(bool crops) { m_CropsToFrame = crops; }
+
     /// Whether the viewer administers MoonlightWeb here — HttpRequest::isLocal
     /// at /start. Only the native engine acts on it: anyone else is kept out
     /// of the host's windows that run as administrator (InputGate).
@@ -496,6 +501,10 @@ private:
     /// See setRefInvalidation. True, the engine's own repairs, unless the
     /// /start request said otherwise.
     bool m_RefInvalidation = true;
+
+    /// See setCropsToFrame. False, the frame on the encoder's grid, unless the
+    /// /start request said otherwise.
+    bool m_CropsToFrame = false;
 
     /// See setViewerAdmin. Defaults to the trusting value only because every
     /// caller sets it; a worker whose parent predates the field is the owner

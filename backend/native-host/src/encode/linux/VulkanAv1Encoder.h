@@ -70,6 +70,11 @@
 // and input() says so — the conversion scales to it. A frame padded past the
 // picture would say it in AV1's render size, which Chrome does not read: it
 // shows the whole frame, padding included.
+//
+// Unless the client crops (setClientCrops): the frame is then padded to the
+// grid (1920x1088), the render size says the picture (1920x1080), input()
+// keeps the picture's size, and the viewer cuts the decoded frame to the size
+// the session announces.
 
 namespace mw::native::encode {
 
@@ -91,6 +96,11 @@ public:
     bool init(const std::shared_ptr<vulkan::VulkanDevice>& device, Codec codec, int width,
               int height, int fps, int bitrateKbps, bool intraRefresh, const EncoderTuning& tuning,
               std::string& error, const Witness& witness = Witness());
+
+    /// Before init: the viewer cuts the decoded frame to the picture's size
+    /// (SessionConfig::clientCropsToFrame), so the frame may be padded past
+    /// the picture rather than the picture scaled onto the driver's grid.
+    void setClientCrops(bool crops) { m_ClientCrops = crops; }
 
     const VulkanPicture& input() const { return m_Input; }
     bool upload(const uint8_t* nv12, std::string& error);
@@ -129,6 +139,7 @@ private:
     int m_Fps = 60;
     int m_BitrateKbps = 20000;
     int m_VbvFrames = 0;
+    bool m_ClientCrops = false;
     Witness m_Witness;
     VulkanPicture m_Input;
     HevcDpb m_Dpb;

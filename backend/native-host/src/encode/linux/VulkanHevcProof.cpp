@@ -109,8 +109,9 @@ std::string firstLine(const std::string& path)
 }
 
 /// The AV1 encoder's revision, as kEncoderRevision is HEVC's: raised whenever
-/// what VulkanAv1Encoder hands the driver changes. 1: C13.12.
-constexpr int kAv1EncoderRevision = 1;
+/// what VulkanAv1Encoder hands the driver changes. 1: C13.12. 2: the frame
+/// padded past the picture, as for a viewer that crops.
+constexpr int kAv1EncoderRevision = 2;
 
 /// What could change a verdict, as one line. HEVC's keys stay what they
 /// were; AV1's start with "av1|" and carry its own revision and the decoder.
@@ -458,12 +459,15 @@ VulkanHevcProof proveVulkanAv1(const std::string& renderNode, int width, int hei
     const int kbps = std::max(10000, static_cast<int>(50000.0 * scale));
     VulkanEncodeWitness sweeping = witness;
     sweeping.sweepPictures = kProofSweep;
+    // The frame padded past the picture, as a viewer that crops is sent it:
+    // the larger frame, and the render size the stream depends on there. A
+    // stream on the driver's grid (alignedToGrid) codes a smaller frame with
+    // the same encoder.
     VulkanAv1Encoder encoder;
+    encoder.setClientCrops(true);
     if (!encoder.init(device, Codec::Av1, width, height, fps, kbps, /*intraRefresh=*/true, tuning,
                       error, sweeping))
         return refused(error);
-    // The size the encoder kept: on the driver's grid (alignedToGrid), which
-    // is what the conversion scales to in a stream.
     width = encoder.input().width;
     height = encoder.input().height;
 

@@ -50,6 +50,9 @@ struct LaunchRequest
     /// The client's decoder takes the encoder's reference repairs. Only the
     /// native engine acts on it, as on rideOutLoss.
     bool refInvalidation = true;
+    /// The client cuts each decoded frame to the size the host announces.
+    /// Only the native engine acts on it, as on rideOutLoss.
+    bool cropsToFrame = false;
     QByteArray rikey;
     int rikeyid = 0;
     QString clientUniqueId;

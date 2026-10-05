@@ -3504,6 +3504,10 @@ int main(int argc, char* argv[])
             // reference and keyframes for it. Absent (every other client, an
             // older frontend) → the engine's own repairs, as before.
             s->setRefInvalidation(body["ref_invalidation"].toBool(true));
+            // The browser cuts each decoded frame to the size the host says:
+            // an encoder may then pad the frame. Absent (an older frontend) →
+            // the picture is kept on the encoder's grid, as before.
+            s->setCropsToFrame(body["crops_to_frame"].toBool(false));
             // The client's screen: its measured refresh and whether it paints
             // on vsync. Absent (an older frontend) → unknown, no alignment.
             s->setClientPresentation(body["client_refresh_mhz"].toInt(0),
@@ -3659,6 +3663,8 @@ int main(int argc, char* argv[])
             cfg["rideOutLoss"] = body["ride_out_loss"].toBool(false);
             // And the reference repairs, the same way (setRefInvalidation).
             cfg["refInvalidation"] = body["ref_invalidation"].toBool(true);
+            // And the cropping, the same way (setCropsToFrame).
+            cfg["cropsToFrame"] = body["crops_to_frame"].toBool(false);
             cfg["fpsCeiling"] = reqFpsCeiling;
             cfg["clientRefreshMilliHz"] = body["client_refresh_mhz"].toInt(0);
             cfg["clientVsync"] = body["client_vsync"].toBool(false);

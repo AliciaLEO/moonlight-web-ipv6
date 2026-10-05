@@ -32,7 +32,7 @@
  * codec handling. Render quirks (green tint, stride) are preserved and must be
  * re-validated per browser/codec when this path is enabled.
  *
- * Messages in:  init | frame | frameloss | stop
+ * Messages in:  init | frame | frameloss | framesize | stop
  * Messages out: requestidr | codecfallback | firstframe | status | counters | fatal
  */
 import {
@@ -60,6 +60,7 @@ import { shouldFlushAtKeyframe } from './DecodeQueuePolicy.js';
 import { EnhancerGovernor, ladderRung, rendererAlgo } from './EnhancerGovernor.js';
 import { drawCapFor } from './RenderPacing.js';
 import { FramePacer } from './FramePacer.js';
+import { cropToAnnounced } from './FrameCrop.js';
 
 // ── Worker-local pipeline state (mirrors the StreamView fields) ──────────────
 const S = {
@@ -70,6 +71,8 @@ const S = {
     videoCodec: 'h264',
     isChromeWindowsHevc: false,
     transport: 'webrtc',
+    /** @type {{width: number, height: number} | null} */
+    frameSize: null,
 
     decoder: null,
     decoderConfigured: false,
@@ -331,6 +334,8 @@ function setupDecoder() {
                         (frame.format || 'null'),
                 );
             }
+            // AV1 padded past the picture: cut to the host's size (FrameCrop.js).
+            if (S.videoCodec === CODEC_AV1) frame = cropToAnnounced(frame, S.frameSize);
             onDecodedFrame(frame);
         },
         error: (err) => {
@@ -1051,6 +1056,8 @@ self.onmessage = (e) => {
             S.videoCodec = m.videoCodec;
             S.isChromeWindowsHevc = !!m.isChromeWindowsHevc;
             S.transport = m.transport || 'webrtc';
+            // The native host's frame size, null elsewhere (StreamView._frameSize).
+            S.frameSize = m.frameSize || null;
             // Adaptive presentation reserve (mw_pacing, resolved on main — the
             // worker has no localStorage). Null keeps present-on-decode.
             S.pacer = m.pacing ? new FramePacer() : null;
@@ -1102,6 +1109,10 @@ self.onmessage = (e) => {
         }
         case 'frameloss':
             S._referenceValid = false;
+            break;
+        case 'framesize':
+            // The host's display changed size (`displayformat`).
+            S.frameSize = m.frameSize || null;
             break;
         case 'resync':
             // The tab is back from the background: the burst of frames that

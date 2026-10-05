@@ -108,6 +108,9 @@ public:
         /// NVENC's invalidated DPB). False when the client's decoder falls
         /// silent under them — see refInvalidation in MediaDescriptor.h.
         bool refInvalidation = true;
+        /// The client cuts each decoded frame to the announced size — see
+        /// SessionConfig::clientCropsToFrame.
+        bool cropsToFrame = false;
         /// Rebuild at the display's new shape when its mode changes under the
         /// session — see SessionConfig::followDisplayShape.
         bool followDisplayShape = false;

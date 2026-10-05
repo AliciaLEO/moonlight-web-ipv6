@@ -104,6 +104,7 @@ import {
 import { drawCapFor } from '../stream/RenderPacing.js';
 import { ContentAgeProbe } from '../stream/ContentAgeProbe.js';
 import { FrameLog } from '../stream/FrameLog.js';
+import { cropToAnnounced } from '../stream/FrameCrop.js';
 import { VsyncGrid } from '../stream/VsyncGrid.js';
 import { CadenceStepper, autostepEnabled, stepMemory } from '../stream/CadenceStepper.js';
 import { LatencyProbe } from '../stream/LatencyProbe.js';
@@ -1035,6 +1036,13 @@ export class StreamView {
         // frames it missed and keeps decoding, instead of discarding deltas
         // until a keyframe — see handleVideoFrame.
         this._refInvalidation = opts.refInvalidation === true;
+        // The size the native host streams, then each `displayformat`'s: a
+        // decoded AV1 frame padded past it is cut back to it at the decoder's
+        // output (stream/FrameCrop.js). Null for every other host.
+        this._frameSize =
+            opts.frameSize && opts.frameSize.width > 0 && opts.frameSize.height > 0
+                ? { width: opts.frameSize.width, height: opts.frameSize.height }
+                : null;
         // "NVENC" / "AMF" / "oneVPL" — which silicon block encodes this stream.
         // Empty for every other host. Shown in the latency detail, not in the
         // always-visible block: it is a "why is it this fast" answer, and the
@@ -2461,6 +2469,7 @@ export class StreamView {
                     enhancerProfile: this._governorProfile(),
                     hdr: this._hdrEnabled,
                     pacing: this._pacingEnabled,
+                    frameSize: this._frameSize,
                 },
                 [offscreen],
             );
@@ -2618,6 +2627,9 @@ export class StreamView {
                             (frame.format || 'null'),
                     );
                 }
+                // AV1 padded past the picture: cut to the host's size, before
+                // anything reads the frame (stream/FrameCrop.js).
+                if (this.videoCodec === CODEC_AV1) frame = cropToAnnounced(frame, this._frameSize);
                 this.onDecodedFrame(frame);
             },
             error: (err) => {
@@ -6801,6 +6813,14 @@ export class StreamView {
                     msg.frameHeight +
                     (msg.hdr ? ' HDR' : ' SDR'),
             );
+            if (this._frameSize && msg.frameWidth > 0 && msg.frameHeight > 0) {
+                this._frameSize = { width: msg.frameWidth, height: msg.frameHeight };
+                if (this._videoWorker)
+                    this._videoWorker.postMessage({
+                        type: 'framesize',
+                        frameSize: this._frameSize,
+                    });
+            }
             if (this.onHostDisplayFormat) this.onHostDisplayFormat(msg);
             return;
         }

@@ -272,6 +272,7 @@ LaunchRequest StreamSession::buildLaunchRequest() const
     req.muteHostAudio = m_Config.muteHostAudio;
     req.rideOutLoss = m_RideOutLoss;
     req.refInvalidation = m_RefInvalidation;
+    req.cropsToFrame = m_CropsToFrame;
     req.rikey = m_Config.rikey;
     req.rikeyid = m_Config.rikeyid;
     // Empty means "the provider's default identity"; effectiveUniqueId() would
@@ -668,6 +669,8 @@ void StreamSession::onLaunchResult(bool ok, const BackendError& err, const Media
         nativeParams.intraRefresh = media.nativeHost.rideOutLoss;
         // And its decoder's word on the reference repairs.
         nativeParams.refInvalidation = media.nativeHost.refInvalidation;
+        // And whether it cuts its frames to the size the host says.
+        nativeParams.cropsToFrame = media.nativeHost.cropsToFrame;
         // The client's screen, so the cadence can land on its grid when it
         // paints on vsync — see SessionConfig::clientRefreshMilliHz.
         nativeParams.clientRefreshMilliHz = m_ClientRefreshMilliHz;

@@ -469,6 +469,7 @@ void NativeHostBackend::launch(const QString& seatId, const LaunchRequest& req,
     media.nativeHost.hdrRequested = req.hdrEnabled;
     media.nativeHost.rideOutLoss = req.rideOutLoss;
     media.nativeHost.refInvalidation = req.refInvalidation;
+    media.nativeHost.cropsToFrame = req.cropsToFrame;
     if (req.appId == kVirtualDisplayAppId) {
         gpusApart(caps, displayId, &media.nativeHost.virtualDisplayGpu,
                   &media.nativeHost.previousPrimaryGpu);

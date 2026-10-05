@@ -3240,6 +3240,12 @@ const MoonlightApp = {
             // Its encoder heals a lost frame with a delta (reference
             // invalidation): the view then decodes through a gap.
             refInvalidation: result.ref_invalidation === true,
+            // The size the native host streams: the view cuts a decoded AV1
+            // frame padded past it back to it (stream/FrameCrop.js).
+            frameSize:
+                result.native === true && result.stream_width > 0 && result.stream_height > 0
+                    ? { width: result.stream_width, height: result.stream_height }
+                    : null,
             // Frames per intra-refresh wave (0 when the stream does not
             // refresh that way): sizes the ride-out watchdog in frames.
             intraRefreshFrames: Number(result.intra_refresh_frames) || 0,

@@ -172,6 +172,14 @@ struct SessionConfig
     /// on: the setting is followed as it is, which is the lowest latency.
     bool clientVsync = false;
 
+    /// True when the viewer cuts every decoded frame to the size the session
+    /// announces (SessionInfo, DisplayFormat). An encoder that has to pad the
+    /// frame past the picture says the picture in a field browsers skip — AV1's
+    /// render size, which Chrome ignores — and a frame shown whole shows the
+    /// padding. With this, the Linux Vulkan AV1 encoder pads (1920x1088 for
+    /// 1080p); without, it scales the picture onto its grid (1792x1008).
+    bool clientCropsToFrame = false;
+
     /// Let the viewer act on windows that run elevated (as administrator).
     ///
     /// True — the default — is the trusting setting, right for the machine's
