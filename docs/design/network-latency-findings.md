@@ -745,6 +745,28 @@ UM790Pro, so the round trip is a UDP echo):
   replayed there, then U1.2. Before that, RTP against SCTP is measured on
   this Wi-Fi path on purpose, for its losses (POC plan U1.4).
 
+### 05/10/2026 — What that hop means for the Wi-Fi plan's "Ethernet" witnesses
+
+Every "Ethernet" or "wired" row of the Wi-Fi plan between DualRTX and the
+UM790Pro ran over the path above, not a cable end to end:
+- W0, W1 (the UM790Pro under Windows as the client of the DualRTX host);
+- the W2 B and W2.5 witnesses (the same);
+- the Linux host's 04/10 section (DualRTX's Chrome as the client of the
+  UM790Pro).
+
+What they show still holds for what they were: **a clean link**. SCTP
+retransmitted 0-8 chunks a session there, against 0.2-0.6 % on the Mac's and
+the N95's Wi-Fi, and nothing regressed on it. The absolute figures carry the
+hop: ~2.6 ms of round trip instead of ~0.3, and a few ms of queue when the
+stream bursts.
+- The W1 reading "~4.5 ms in usrsctp on Ethernet" is ~4.5 ms over this path:
+  part of it is the hop's round trip, which paces the SACKs.
+- W2.5's gain there (frame age 13.0 → 8.4 ms, usrsctp 2-3 ms → almost
+  nothing) is a gain on a short, lossless path. A cable may leave less to
+  gain.
+- Worth replaying on the cable Bruno lays on the evening of 05/10: one round
+  of base / `sctpburst=0`, UM790Pro client, to anchor the wired figures.
+
 ## 4. The model so far (04/10/2026)
 
 What the measurements support, in order of the path:
