@@ -29,7 +29,7 @@
  * endian), then the frame's bytes — and is put back together here. A frame
  * that never completes is skipped, and the next one says so (`lost`).
  */
-function audioRoad(reader) {
+function audioRoad(reader, outMid) {
     const open = new Map();
     let lastDone = -1;
     let lost = false;
@@ -76,7 +76,7 @@ function audioRoad(reader) {
             lastDone = seq;
             const now = performance.timeOrigin + performance.now();
             self.postMessage(
-                { mid: 'video', data: data.buffer, key: f.key, ts: ts >>> 0, at: now, held, lost },
+                { mid: outMid, data: data.buffer, key: f.key, ts: ts >>> 0, at: now, held, lost },
                 [data.buffer],
             );
             lost = false;
@@ -90,8 +90,10 @@ self.onrtctransform = (event) => {
     const mid = (transformer.options && transformer.options.mid) || 'video';
     const reader = transformer.readable.getReader();
     self.postMessage({ mid, ready: true });
-    if (mid === 'vaudio') {
-        audioRoad(reader).catch((e) =>
+    // "uaudio": the bench's Ultra stream on the same road, posted without
+    // the VP8 header of its video track.
+    if (mid === 'vaudio' || mid === 'uaudio') {
+        audioRoad(reader, mid === 'vaudio' ? 'video' : 'ultraraw').catch((e) =>
             self.postMessage({ mid, error: String(e && e.message ? e.message : e) }),
         );
         return;

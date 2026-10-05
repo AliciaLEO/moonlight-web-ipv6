@@ -828,7 +828,7 @@ export class WebRtcDataChannel {
             // come to the same onVideo as the DataChannel's.
             // "vaudio": the same frames cut in Opus packets (the bench's
             // `aroad`, U1.4 ter), never played.
-            if (evt.track.kind === 'video' || evt.transceiver?.mid === 'vaudio') {
+            if (evt.track.kind === 'video' || /^[vu]audio$/.test(evt.transceiver?.mid || '')) {
                 const rtp = attachRtpVideo(evt, {
                     onVideo: (frame, isKeyframe, backendTs, lost) =>
                         this._onRtpVideoFrame(frame, isKeyframe, backendTs, lost),

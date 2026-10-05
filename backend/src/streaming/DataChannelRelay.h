@@ -354,6 +354,8 @@ private:
     bool m_RtpVideoNativeHost = false;
     std::shared_ptr<rtc::Track> m_VideoTrack;
     bool m_RtpVideoAudioRoad = false; // the bench's `aroad`: frames cut in Opus packets
+    bool m_UltraAudioRoad = false;    // the same for the Ultra track
+    uint16_t m_UltraAudioRoadSeq = 0;
     uint16_t m_RtpAudioRoadSeq = 0;
     bool m_RtpVideoSentKeyframe = false;         // deltas wait for the first keyframe on the track
     std::atomic<bool> m_RtpVideoAccepted{false}; // set from the answer
@@ -367,6 +369,8 @@ private:
     bool rtpVideoActive() const;
     void createRtpVideoTracks();
     void sendRtpVideo(const QByteArray& frameData, bool isKeyframe, int64_t presentationTimeUs);
+    void sendAudioRoad(rtc::Track& track, uint16_t seq, const uint8_t* data, size_t size,
+                       bool isKeyframe, uint32_t timestamp);
     std::shared_ptr<rtc::DataChannel> m_InputDc;
     // The HID passthrough's reports (id 4, unordered, never retransmitted): a
     // lost one is repaired by the next, the page repeats an unchanged report.

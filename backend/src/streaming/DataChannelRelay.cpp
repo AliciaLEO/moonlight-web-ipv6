@@ -920,7 +920,7 @@ bool DataChannelRelay::setRemoteDescription(const std::string& sdp)
                 const bool taken = !media->isRemoved() &&
                                    media->direction() != rtc::Description::Direction::Inactive;
                 if (media->mid() == "video" || media->mid() == "vaudio") video = taken;
-                if (media->mid() == "ultra") ultra = taken;
+                if (media->mid() == "ultra" || media->mid() == "uaudio") ultra = taken;
             }
             m_RtpVideoAccepted.store(m_VideoTrack && video);
             m_UltraRtpAccepted.store(m_UltraTrack && ultra);
@@ -2483,12 +2483,14 @@ void DataChannelRelay::sendUltraSynthetic(uint32_t backendTs)
         if (!m_UltraTrack->isOpen() || m_UltraPayload.empty()) return;
         static const uint8_t kVp8Key[10] = {0x10, 0x00, 0x00, 0x9d, 0x01,
                                             0x2a, 0x80, 0x07, 0x38, 0x04}; // 1920x1080
+        // On the audio road (U1.4 ter) no VP8 header: the chunks carry it all.
+        const size_t prefix = m_UltraAudioRoad ? 0 : sizeof(kVp8Key);
         const uint32_t size = static_cast<uint32_t>(m_UltraPayload.size());
         const uint32_t seq = m_UltraSeq++;
-        rtc::binary frame(sizeof(kVp8Key) + kFragHeaderSize + size);
-        std::memcpy(frame.data(), kVp8Key, sizeof(kVp8Key));
+        rtc::binary frame(prefix + kFragHeaderSize + size);
+        std::memcpy(frame.data(), kVp8Key, prefix);
         // [frame_id:4][chunk_index:2][total_chunks:2][is_keyframe:1][payload_size:4][backend_ts:4]
-        auto* h = reinterpret_cast<uint8_t*>(frame.data()) + sizeof(kVp8Key);
+        auto* h = reinterpret_cast<uint8_t*>(frame.data()) + prefix;
         const auto put32 = [](uint8_t* at, uint32_t v) {
             for (int i = 0; i < 4; ++i)
                 at[i] = static_cast<uint8_t>(v >> (24 - 8 * i));
@@ -2503,7 +2505,12 @@ void DataChannelRelay::sendUltraSynthetic(uint32_t backendTs)
         rtc::FrameInfo info(backendTs);
         info.isKeyFrame = true;
         try {
-            m_UltraTrack->sendFrame(std::move(frame), info);
+            if (m_UltraAudioRoad)
+                sendAudioRoad(*m_UltraTrack, m_UltraAudioRoadSeq++,
+                              reinterpret_cast<const uint8_t*>(frame.data()), frame.size(), true,
+                              backendTs);
+            else
+                m_UltraTrack->sendFrame(std::move(frame), info);
         } catch (const std::exception& e) {
             qWarning() << "[DataChannelRelay] Ultra RTP send failed:" << e.what();
         }
@@ -2991,7 +2998,20 @@ void DataChannelRelay::createRtpVideoTracks()
                 Qt::QueuedConnection);
         });
     }
-    if (ultra) {
+    m_UltraAudioRoad = ultra && named.contains(QStringLiteral("aroad"));
+    if (m_UltraAudioRoad) {
+        auto desc = rtc::Description::Audio("uaudio", rtc::Description::Direction::SendOnly);
+        const int pt = 109;
+        desc.addOpusCodec(pt);
+        const uint32_t ssrc = rd();
+        desc.addSSRC(ssrc, "uaudio");
+        m_UltraTrack = m_Pc->addTrack(desc);
+        auto cfg = std::make_shared<rtc::RtpPacketizationConfig>(
+            ssrc, "uaudio", static_cast<uint8_t>(pt), rtc::OpusRtpPacketizer::DefaultClockRate);
+        m_UltraTrack->setMediaHandler(std::make_shared<rtc::OpusRtpPacketizer>(cfg));
+        m_UltraTrack->onOpen(
+            []() { qInfo() << "[DataChannelRelay] Ultra RTP track open (audio road)"; });
+    } else if (ultra) {
         auto desc = rtc::Description::Video("ultra", rtc::Description::Direction::SendOnly);
         const int pt = 97;
         desc.addVP8Codec(pt);
@@ -3004,6 +3024,34 @@ void DataChannelRelay::createRtpVideoTracks()
         packetizer->addToChain(std::make_shared<rtc::RtcpNackResponder>(16384));
         m_UltraTrack->setMediaHandler(packetizer);
         m_UltraTrack->onOpen([]() { qInfo() << "[DataChannelRelay] Ultra RTP track open"; });
+    }
+}
+
+void DataChannelRelay::sendAudioRoad(rtc::Track& track, uint16_t seq, const uint8_t* data,
+                                     size_t size, bool isKeyframe, uint32_t timestamp)
+{
+    rtc::FrameInfo info(timestamp);
+    info.isKeyFrame = isKeyframe;
+    // One Opus packet per chunk: 'M', flags (1 = key), frame seq, index,
+    // count (u16, big endian), then up to kChunk bytes of the frame.
+    constexpr size_t kChunk = 1100;
+    const size_t count = std::max<size_t>(1, (size + kChunk - 1) / kChunk);
+    std::vector<rtc::byte> chunk;
+    for (size_t i = 0; i < count; ++i) {
+        const size_t off = i * kChunk;
+        const size_t len = std::min(kChunk, size - off);
+        chunk.resize(8 + len);
+        const uint8_t head[8] = {'M',
+                                 static_cast<uint8_t>(isKeyframe ? 1 : 0),
+                                 static_cast<uint8_t>(seq >> 8),
+                                 static_cast<uint8_t>(seq),
+                                 static_cast<uint8_t>(i >> 8),
+                                 static_cast<uint8_t>(i),
+                                 static_cast<uint8_t>(count >> 8),
+                                 static_cast<uint8_t>(count)};
+        std::memcpy(chunk.data(), head, 8);
+        std::memcpy(chunk.data() + 8, data + off, len);
+        track.sendFrame(chunk.data(), chunk.size(), info);
     }
 }
 
@@ -3026,32 +3074,11 @@ void DataChannelRelay::sendRtpVideo(const QByteArray& frameData, bool isKeyframe
     // Stamped now: how long after its capture the frame leaves (POC U1.4).
     const int64_t sendStartUs = steadyUs();
     try {
-        if (m_RtpVideoAudioRoad) {
-            // One packet per chunk: 'M', flags (1 = key), frame seq, index,
-            // count (u16, big endian), then up to kChunk bytes of the frame.
-            constexpr int kChunk = 1100;
-            const int size = static_cast<int>(frameData.size());
-            const int count = std::max(1, (size + kChunk - 1) / kChunk);
-            const uint16_t seq = m_RtpAudioRoadSeq++;
-            std::vector<rtc::byte> chunk;
-            for (int i = 0; i < count; ++i) {
-                const int off = i * kChunk;
-                const int len = std::min(kChunk, size - off);
-                chunk.resize(8 + static_cast<size_t>(len));
-                const uint8_t head[8] = {'M',
-                                         static_cast<uint8_t>(isKeyframe ? 1 : 0),
-                                         static_cast<uint8_t>(seq >> 8),
-                                         static_cast<uint8_t>(seq),
-                                         static_cast<uint8_t>(i >> 8),
-                                         static_cast<uint8_t>(i),
-                                         static_cast<uint8_t>(count >> 8),
-                                         static_cast<uint8_t>(count)};
-                std::memcpy(chunk.data(), head, 8);
-                std::memcpy(chunk.data() + 8, frameData.constData() + off,
-                            static_cast<size_t>(len));
-                m_VideoTrack->sendFrame(chunk.data(), chunk.size(), info);
-            }
-        } else
+        if (m_RtpVideoAudioRoad)
+            sendAudioRoad(*m_VideoTrack, m_RtpAudioRoadSeq++,
+                          reinterpret_cast<const uint8_t*>(frameData.constData()),
+                          static_cast<size_t>(frameData.size()), isKeyframe, backendTs);
+        else
             m_VideoTrack->sendFrame(reinterpret_cast<const rtc::byte*>(frameData.constData()),
                                     static_cast<size_t>(frameData.size()), info);
         const int64_t endUs = steadyUs();

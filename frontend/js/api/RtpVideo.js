@@ -133,6 +133,10 @@ export function attachRtpVideo(event, { onVideo, onUltra, log = console.log } = 
         frames++;
         if (m.at) noteFrame(m);
         if (frames === 1) log('[MW-RTP] first frame on ' + mid + (m.key ? ' (key)' : ''));
+        if (m.mid === 'ultraraw') {
+            if (onUltra) onUltra(m.data, performance.now());
+            return;
+        }
         if (m.mid === 'ultra') {
             if (onUltra && m.data.byteLength > ULTRA_RTP_PREFIX_BYTES)
                 onUltra(m.data.slice(ULTRA_RTP_PREFIX_BYTES), performance.now());
