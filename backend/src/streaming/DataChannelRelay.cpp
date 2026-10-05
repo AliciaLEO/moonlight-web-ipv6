@@ -37,6 +37,7 @@ extern "C" {
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
+#include <QRandomGenerator>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMetaObject>
@@ -2038,6 +2039,8 @@ void DataChannelRelay::onInputMessage(const std::string& message, int64_t recvUs
             ClipboardBridge::instance()->pasteFromClient(m_Shim, msg["text"].toString(),
                                                          msg["injectCtrl"].toBool(false));
         }
+    } else if (type == "aroadnack") {
+        resendAudioRoad(msg);
     } else if (type == "requestidr") {
         qInfo() << "[DataChannelRelay] Requesting IDR frame from Sunshine (browser request)";
         std::lock_guard<std::mutex> lk(m_VideoMutex);
@@ -2506,7 +2509,7 @@ void DataChannelRelay::sendUltraSynthetic(uint32_t backendTs)
         info.isKeyFrame = true;
         try {
             if (m_UltraAudioRoad)
-                sendAudioRoad(*m_UltraTrack, m_UltraAudioRoadSeq++,
+                sendAudioRoad(*m_UltraTrack, m_UltraRoadHistory, m_UltraAudioRoadSeq++,
                               reinterpret_cast<const uint8_t*>(frame.data()), frame.size(), true,
                               backendTs);
             else
@@ -3027,8 +3030,9 @@ void DataChannelRelay::createRtpVideoTracks()
     }
 }
 
-void DataChannelRelay::sendAudioRoad(rtc::Track& track, uint16_t seq, const uint8_t* data,
-                                     size_t size, bool isKeyframe, uint32_t timestamp)
+void DataChannelRelay::sendAudioRoad(rtc::Track& track, AudioRoadHistory& history, uint16_t seq,
+                                     const uint8_t* data, size_t size, bool isKeyframe,
+                                     uint32_t timestamp)
 {
     rtc::FrameInfo info(timestamp);
     info.isKeyFrame = isKeyframe;
@@ -3036,11 +3040,14 @@ void DataChannelRelay::sendAudioRoad(rtc::Track& track, uint16_t seq, const uint
     // count (u16, big endian), then up to kChunk bytes of the frame.
     constexpr size_t kChunk = 1100;
     const size_t count = std::max<size_t>(1, (size + kChunk - 1) / kChunk);
-    std::vector<rtc::byte> chunk;
+    AudioRoadHistory::Frame kept;
+    kept.seq = seq;
+    kept.timestamp = timestamp;
+    kept.chunks.reserve(count);
     for (size_t i = 0; i < count; ++i) {
         const size_t off = i * kChunk;
         const size_t len = std::min(kChunk, size - off);
-        chunk.resize(8 + len);
+        std::vector<rtc::byte> chunk(8 + len);
         const uint8_t head[8] = {'M',
                                  static_cast<uint8_t>(isKeyframe ? 1 : 0),
                                  static_cast<uint8_t>(seq >> 8),
@@ -3051,7 +3058,52 @@ void DataChannelRelay::sendAudioRoad(rtc::Track& track, uint16_t seq, const uint
                                  static_cast<uint8_t>(count)};
         std::memcpy(chunk.data(), head, 8);
         std::memcpy(chunk.data() + 8, data + off, len);
-        track.sendFrame(chunk.data(), chunk.size(), info);
+        // The bench's loss (MW_AROAD_DROP, per mille): first sends only, so
+        // the page's NACK path is what brings the chunk back.
+        static const int dropPerMille = qEnvironmentVariableIntValue("MW_AROAD_DROP");
+        if (dropPerMille <= 0 ||
+            static_cast<int>(QRandomGenerator::global()->bounded(1000)) >= dropPerMille)
+            track.sendFrame(chunk.data(), chunk.size(), info);
+        kept.chunks.push_back(std::move(chunk));
+    }
+    std::lock_guard<std::mutex> lk(history.mutex);
+    history.frames.push_back(std::move(kept));
+    while (history.frames.size() > history.maxFrames)
+        history.frames.pop_front();
+}
+
+void DataChannelRelay::resendAudioRoad(const QJsonObject& msg)
+{
+    // {"type":"aroadnack","t":"v"|"u","s":seq,"i":[indexes]} from the page's
+    // transform worker: the chunks it saw missing, sent again as they went.
+    const bool ultra = msg["t"].toString() == QLatin1String("u");
+    const std::shared_ptr<rtc::Track> track = ultra ? m_UltraTrack : m_VideoTrack;
+    AudioRoadHistory& history = ultra ? m_UltraRoadHistory : m_VideoRoadHistory;
+    if (!track || !track->isOpen()) return;
+    const uint16_t seq = static_cast<uint16_t>(msg["s"].toInt());
+    const QJsonArray indexes = msg["i"].toArray();
+    std::lock_guard<std::mutex> lk(history.mutex);
+    for (const auto& f : history.frames) {
+        if (f.seq != seq) continue;
+        rtc::FrameInfo info(f.timestamp);
+        int n = 0;
+        for (const QJsonValue& v : indexes) {
+            const int i = v.toInt(-1);
+            if (i < 0 || i >= static_cast<int>(f.chunks.size())) continue;
+            try {
+                track->sendFrame(f.chunks[static_cast<size_t>(i)].data(),
+                                 f.chunks[static_cast<size_t>(i)].size(), info);
+                ++n;
+            } catch (const std::exception& e) {
+                qWarning() << "[DataChannelRelay] audio road resend failed:" << e.what();
+                return;
+            }
+        }
+        history.resent += n;
+        if (history.resent == n || history.resent / 200 != (history.resent - n) / 200)
+            qInfo() << "[DataChannelRelay] audio road" << (ultra ? "Ultra" : "video")
+                    << "chunks resent so far:" << history.resent;
+        return;
     }
 }
 
@@ -3075,7 +3127,7 @@ void DataChannelRelay::sendRtpVideo(const QByteArray& frameData, bool isKeyframe
     const int64_t sendStartUs = steadyUs();
     try {
         if (m_RtpVideoAudioRoad)
-            sendAudioRoad(*m_VideoTrack, m_RtpAudioRoadSeq++,
+            sendAudioRoad(*m_VideoTrack, m_VideoRoadHistory, m_RtpAudioRoadSeq++,
                           reinterpret_cast<const uint8_t*>(frameData.constData()),
                           static_cast<size_t>(frameData.size()), isKeyframe, backendTs);
         else

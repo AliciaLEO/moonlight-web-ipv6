@@ -28,9 +28,12 @@
 #include "mw/native/EncoderTuning.h"
 #include <QByteArray>
 #include <QElapsedTimer>
+#include <QJsonObject>
 #include <QMutex>
 #include <QTimer>
 #include <array>
+#include <deque>
+#include <vector>
 #include <memory>
 #include <atomic>
 #include <string>
@@ -369,8 +372,26 @@ private:
     bool rtpVideoActive() const;
     void createRtpVideoTracks();
     void sendRtpVideo(const QByteArray& frameData, bool isKeyframe, int64_t presentationTimeUs);
-    void sendAudioRoad(rtc::Track& track, uint16_t seq, const uint8_t* data, size_t size,
-                       bool isKeyframe, uint32_t timestamp);
+    // What the audio road sent lately, per track, for the page's NACKs (U1.4
+    // quater): the chunks of the last frames as they went, with their RTP
+    // timestamp.
+    struct AudioRoadHistory
+    {
+        struct Frame
+        {
+            uint16_t seq = 0;
+            uint32_t timestamp = 0;
+            std::vector<std::vector<std::byte>> chunks;
+        };
+        std::mutex mutex;
+        std::deque<Frame> frames;
+        size_t maxFrames = 60;
+        int resent = 0;
+    };
+    AudioRoadHistory m_VideoRoadHistory, m_UltraRoadHistory;
+    void sendAudioRoad(rtc::Track& track, AudioRoadHistory& history, uint16_t seq,
+                       const uint8_t* data, size_t size, bool isKeyframe, uint32_t timestamp);
+    void resendAudioRoad(const QJsonObject& msg);
     std::shared_ptr<rtc::DataChannel> m_InputDc;
     // The HID passthrough's reports (id 4, unordered, never retransmitted): a
     // lost one is repaired by the next, the page repeats an unchanged report.

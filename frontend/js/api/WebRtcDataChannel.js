@@ -833,6 +833,12 @@ export class WebRtcDataChannel {
                     onVideo: (frame, isKeyframe, backendTs, lost) =>
                         this._onRtpVideoFrame(frame, isKeyframe, backendTs, lost),
                     onUltra: (buf, arrivalMs) => this._ultra?.sink.onMessage(buf, arrivalMs),
+                    // The audio road's missing chunks, asked again (U1.4 quater).
+                    onNack: (nack) => {
+                        const dc = this.dataChannels.input;
+                        if (dc && dc.readyState === 'open')
+                            dc.send(JSON.stringify({ type: 'aroadnack', ...nack }));
+                    },
                 });
                 (this._rtpVideo ||= []).push(rtp);
                 return;
