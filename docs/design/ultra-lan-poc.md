@@ -712,6 +712,64 @@ Une première matrice, sans code neuf :
 Ce qui en sortira : le présentateur et le mode d'écran qui rendent le plus de
 ces 15-25 ms. Le décodeur d'Ultra (U3.4) se branchera sur ce présentateur-là.
 
+### 6.8 U1.2 — ce que le DataChannel porte à haut débit (05/10/2026, 06:56-08:46)
+
+Hôte DualRTX : la `--dev` du build `66f71c56`, avec les défauts Windows
+`sctpburst=0` et `retrcut=3`. L'écran streamé est un écran physique, DISPLAY1
+(celui de l'Arc, à 120 Hz), choisi par Bruno pour ne faire aucune bascule
+d'écran virtuel ; la page de banc défile dessus. Client l'UM790Pro sous
+Windows, Chrome, en 1 GbE. Chaque passe ajoute `ultra=synthetic:<Kio>`
+(§6.7), `relaylog=1`, 30 s d'âge du contenu et 30 clics. Médianes sur les
+30 dernières secondes, lues par le client (`mw_ultra_sink`) ; le retard est
+le p95 au-dessus du plus petit de la session.
+
+| Kio / image | Débit demandé à 60 / 120 i/s | Reçu à 60 i/s | Reçu à 120 i/s | Retard p95 (60 / 120) | Vidéo à 60 / 120 i/s |
+|---|---|---|---|---|---|
+| 40 | 20 / 39 Mbit/s | 19,4 | 37,7 | 77 / 16 ms | 60 / 111 i/s |
+| 200 | 98 / 197 | 19,2 | 98,9 | 1 427 / 397 ms | 10 / 59 i/s |
+| 350 | 172 / 344 | 62,4 | 103,3 | 818 / 717 ms | 12 / 34 i/s |
+| 500 | 246 / 492 | 105,7 | 95,1 | 605 / 1 320 ms | 25 / 21 i/s |
+| 1 000 | 492 / 983 | 105,2 | 95,7 | 1 508 / 2 685 ms | 11 / 13 i/s |
+| 2 000 | 983 / 1 966 | 106,7 | 97,0 | 3 121 / 3 961 ms | 6 / 5 i/s |
+
+Variantes, à 120 i/s (reçu, retard p95, images Ultra perdues) :
+
+| Variante | 350 Kio | 1 000 Kio |
+|---|---|---|
+| canal Ultra non ordonné, sans retransmission (`ultrachannel=unordered`) | 90,7 Mbit/s, 820 ms, 3 | 63,2, 2 809 ms, 15 |
+| l'ancien burst maximal (`sctpburst=10`) | 97,0, 810 ms, 0 | 15,4, 3 421 ms, 22 |
+| un tampon d'envoi de 1 Mio (`sctpbuf=1024`, le plus que la clé accepte) | 64,5, 765 ms, 11 ; **la vidéo ne s'affiche plus** | 49,5, 4 357 ms, 22 ; idem |
+
+- **Le DataChannel plafonne à 95-107 Mbit/s sur ce lien 1 GbE**, quelle que
+  soit la taille des images, à 60 comme à 120 i/s. PyroWave en demande 170 à
+  son seuil subjectif (§3) : **avec le transport d'aujourd'hui, Ultra ne tient
+  pas**. Au-delà du plafond, l'attente monte à des secondes, et la vidéo tombe
+  avec elle.
+- **Un expéditeur à part ne protège pas la vidéo.** Ultra et la vidéo
+  partagent la même association SCTP, donc sa fenêtre de congestion et ses
+  tampons : une charge Ultra au plafond fait tomber la vidéo à 5-25 i/s. La
+  promesse de U1.1 (« jamais la vidéo ») ne vaut que pour la file de
+  l'expéditeur, pas pour le lien.
+- Aucune variante ne relève le plafond.
+  - Le canal non ordonné perd des images.
+  - L'ancien burst maximal s'effondre à 1 000 Kio : le défaut `sctpburst=0`
+    est le bon.
+  - Le tampon de 1 Mio fait pire, et casse la vidéo : `sctpbuf` fixe aussi la
+    taille du plus grand message.
+- **Un piège de banc** : une valeur hors bornes (`sctpbuf=4096`) fait ignorer
+  **toute** la chaîne `MW_NATIVE_TUNING`, Ultra compris. Deux passes perdues,
+  mises de côté dans `bench-out/content-age/u1-void/`.
+- À 200 Kio et 60 i/s, le débit reçu (19 Mbit/s) est bien plus bas qu'à 350
+  Kio (62). Ce n'est pas expliqué, ni encore refait.
+
+**Ce que U1.3 doit trancher** : d'où vient ce plafond. L'hôte (le fil d'envoi
+et libjuice) ? Le client (la réception SCTP de Chrome, la boucle de messages) ?
+Ou usrsctp lui-même, dont le plan Punktfunk relevait déjà le plafond sous
+pertes (A0, §8r.1) ? La table U1.1 prévoit encore le MTU de 1 500 et la
+réception dans un worker. Si rien ne passe nettement 170 Mbit/s, la porte U1
+ouvre la sonde du plan B (le flux Ultra dans une piste RTP, par Encoded
+Transform).
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
