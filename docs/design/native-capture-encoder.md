@@ -6534,7 +6534,39 @@ retour par le réglage) ; `linux_session` dit la route de la session HEVC sans
 réglage et vérifie que, sur AMD, ce qui n'est pas la chaîne Vulkan Video est un
 refus ou un build sans elle.
 
-**Reste** : le banc sur l'UM790Pro (le 780M, Mesa 26) ; la cause côté VA-API
+**(a) La cause, lue dans les sources** (Mesa 23.2.1 contre 26.2.3, sans banc) :
+- **La vague d'intra-refresh de VA-API, la part de 14 à 20 Mbit/s.**
+  - Mesa 23.2 forçait `RENCODE_INTRA_REFRESH_MODE_NONE`. Le rafraîchissement
+    par colonnes arrive avec Mesa 24.1 (MR 27101).
+  - `VaapiEncoder` le prend dès que le pilote l'offre et le balaie sans écart :
+    une colonne par image, 120 images, et ça recommence.
+  - Mesa élargit la bande d'une unité quand le filtre de boucle est actif : en
+    HEVC 1080p, 128 px de large ; en H.264, 32.
+  - Mesa n'applique pas `qp_delta_for_inserted_intra`, et le QP n'a pas de plancher.
+  - La chaîne Vulkan Video balaie, elle, une période sur quatre, avec un QP
+    plancher de 18 : la comparaison n'était pas à réglages égaux.
+  - Les autres clients VA-API (ffmpeg, OBS, GStreamer) n'envoient pas de
+    rafraîchissement par défaut.
+- **Le fond de 14,3 Mbit/s sans intra-refresh n'est pas expliqué par là**
+  (§8o.15, colonne « sans »). Écartés dans le code de Mesa : `min_qp`/`max_qp`
+  (même sens), VBAQ, pré-encodage et niveau de qualité (éteints sans tampon
+  `QualityLevel`), bourrage (coupé), saut d'images (codé à 0), remise à zéro du
+  contrôle de débit (seulement si le débit ou la cadence change), HRD.
+- **Reste en lice** :
+  - en HEVC sur VCN 2 à 4, le preset « speed » devient « balance » tant que le
+    SAO n'est pas coupé (Mesa 26, MR 40766) ;
+  - le micrologiciel VCN (1.24) et le noyau (7.0), qui ont changé avec Mesa.
+- **Bancs proposés**, sur la page de §8o.15 :
+  - H.264 contre HEVC par VA-API, sans intra-refresh (pas de changement de
+    preset en H.264) ;
+  - le SAO coupé en HEVC ;
+  - un plancher `min_qp` de 18 ;
+  - la vague espacée de quatre périodes, comme Vulkan Video.
+- **Touche le défaut restant** : le H.264 sur AMD passe toujours par VA-API.
+  Sa vague continue y prend tout le budget sur un écran fixe, pour un client qui
+  traverse les pertes. L'espacer comme Vulkan Video demande un « Go ».
+
+**Reste** : le banc sur l'UM790Pro (le 780M, Mesa 26) ; les bancs de la cause
 (a).
 
 **Concrètement, pour l'utilisateur** : sous Linux avec une carte AMD récente,
