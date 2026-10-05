@@ -770,6 +770,42 @@ réception dans un worker. Si rien ne passe nettement 170 Mbit/s, la porte U1
 ouvre la sonde du plan B (le flux Ultra dans une piste RTP, par Encoded
 Transform).
 
+### 6.9 U3 d'abord — le chemin de présentation de Chrome (05/10/2026, 08:47-09:00)
+
+Hôte DualRTX (`--dev` `66f71c56`), qui streame l'écran de la RTX (DISPLAY5,
+sans écran virtuel), le drapeau de `click-photon` par-dessus. Client
+l'UM790Pro sous Windows, Chrome, en 1 GbE, « Auto » avec détection, en
+tearing. Pour chaque case : 60 clics, le pixel lu à 200 px du clic
+(`u3_series.py`, `pass.py --setting/--fullscreen`, `885070b2`) ;
+`bench-out/photon/u3-*.json`.
+
+| Présentateur | Fenêtre agrandie, médiane (p90) | Plein écran, médiane (p90) |
+|---|---|---|
+| Canvas2D (le défaut) | 58,8 ms (68,1) | 65,4 ms (74,3) |
+| `<video>` nourri au décodage | 65,3 ms (73,6) | 59,4 ms (74,3) |
+| WebGL2 (`gl-fsr1`) | 65,0 ms (82,2) | 65,5 ms (81,9), 2 clics manqués |
+| WebGPU (`fsr1`) | 65,3 ms (74,2) | 65,7 ms (74,5) |
+
+Repères, même couple, même outil (§6.5) : Steam PyroWave 42,6-49,2 ms,
+Steam HEVC 57,9-58,5 ms, MoonlightWeb HEVC 57,3-58,2 ms.
+
+- **Aucun présentateur ni le plein écran ne rend les 15-25 ms.** Toutes les
+  cases tombent entre 58,8 et 65,7 ms : deux paliers à 6,5 ms d'écart,
+  sans tendance par présentateur ni par mode. Le plein écran, qui pouvait
+  laisser le DWM passer en « independent flip », ne gagne rien ici.
+- Le meilleur reste le défaut (Canvas2D en fenêtre, 58,8 ms), au niveau du
+  HEVC de Steam. L'écart avec PyroWave natif (10 à 16 ms) n'est donc pas une
+  affaire de présentateur dans Chrome.
+- **Non vérifié** : que chaque case a bien tourné avec le présentateur
+  demandé. Le réglage passe par `video_enhancement_algo`, et le banc ne relit
+  pas encore le nom du présentateur dans l'overlay. Les paliers de 6,5 ms
+  laissent aussi penser que la cadence de présentation du client découpe les
+  mesures, plus que le présentateur lui-même. À refaire en relevant le
+  présentateur et la cadence d'affichage du client.
+- Conséquence pour la suite (U3) : le gain ne viendra pas d'un autre
+  présentateur, mais d'abord du transport (§6.8, plafond à 100 Mbit/s) et de
+  la cadence de bout en bout.
+
 ## 7. Concrètement, pour l'utilisateur
 
 Pendant le POC, rien ne change : Ultra est caché derrière deux clés de banc et
