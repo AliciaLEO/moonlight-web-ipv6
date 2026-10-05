@@ -2345,13 +2345,13 @@ const MoonlightApp = {
                     }),
                 )}</p>
                 <p class="pairing-instruction app-running-error" hidden></p>
-                <div class="pairing-actions app-running-actions">
-                    <button class="btn btn-secondary app-running-cancel">${escapeHtml(
-                        t('common.cancel'),
-                    )}</button>
-                    ${resumeHtml}
+                <div class="pairing-actions pairing-actions-stack app-running-actions">
                     <button class="btn btn-danger app-running-quit">${escapeHtml(
                         t('appRunning.quitAndLaunch', { name: app.name }),
+                    )}</button>
+                    ${resumeHtml}
+                    <button class="btn btn-secondary app-running-cancel">${escapeHtml(
+                        t('common.cancel'),
                     )}</button>
                 </div>
             </div>
