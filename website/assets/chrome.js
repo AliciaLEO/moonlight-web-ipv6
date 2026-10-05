@@ -35,6 +35,10 @@
         '<a href="/guides/" data-nav="guides" data-i18n="nav.guides">Guides</a>' +
         '<a href="/faq.html" data-nav="faq" data-i18n="nav.faq">FAQ</a>' +
         '<a href="/contact.html" data-nav="contact" data-i18n="nav.contact">Contact</a>' +
+        /* Opens a host by typing its code — for a device with no address bar,
+           which can reach this site from a search but cannot type the host's
+           link (Discord, 05/10/2026). */
+        '<a href="/server-access/" data-nav="connect" data-i18n="nav.connect">Connect</a>' +
       '</nav>' +
       /* Controls, not nav links — kept OUTSIDE <nav> so mobile can hoist them
          onto the brand row (top right) while the links wrap to their own row. */
@@ -58,6 +62,7 @@
         '<a href="/guides/" data-i18n="nav.guides">Guides</a> · ' +
         '<a href="/faq.html" data-i18n="nav.faq">FAQ</a> · ' +
         '<a href="/contact.html" data-i18n="nav.contact">Contact</a> · ' +
+        '<a href="/server-access/" data-i18n="nav.connect">Connect</a> · ' +
         '<a href="https://github.com/linckosz/moonlight-web" target="_blank" rel="noopener" data-umami-event="github" data-umami-event-loc="footer">GitHub</a> · ' +
         '<a href="https://buymeacoffee.com/brunoocto" target="_blank" rel="noopener" data-umami-event="buy-me-a-coffee" data-umami-event-loc="footer" data-i18n="nav.support">☕ Coffee</a>' +
       '</span>' +
@@ -106,6 +111,7 @@
              : path.indexOf('/guides/') === 0 ? 'guides'
              : /\/faq\.html$/.test(path) ? 'faq'
              : /\/contact\.html$/.test(path) ? 'contact'
+             : path.indexOf('/server-access/') === 0 ? 'connect'
              : null;
   if (active && h) {
     var link = h.querySelector('nav a[data-nav="' + active + '"]');
