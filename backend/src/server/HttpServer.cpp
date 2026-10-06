@@ -290,6 +290,11 @@ private:
             Q_IPV6ADDR ip6 = addr.toIPv6Address();
             if (ip6[0] == 0xFE && (ip6[1] & 0xC0) == 0x80) return true; // fe80::/10 link-local
             if ((ip6[0] & 0xFE) == 0xFC) return true;                   // fc00::/7 ULA
+            // IPv6 global unicast (2000::/3): the machine's own global
+            // addresses are served by the local self-signed cert (which now
+            // includes them in SAN). Treat as LAN so SNI selection picks the
+            // local cert instead of the public one.
+            if ((ip6[0] & 0xE0) == 0x20) return true; // 2000::/3 global unicast
         }
         return false;
     }
