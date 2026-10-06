@@ -143,6 +143,12 @@ static QList<QHostAddress> getPrivateLanAddresses()
                     result << addr;
                 else if ((ip6[0] & 0xFE) == 0xFC) // fc00::/7 ULA
                     result << addr;
+                // IPv6 global unicast (2000::/3): the machine's own global
+                // addresses are how IPv6 LAN and direct internet access work.
+                // Include them in the cert SAN so https://[global-v6]/ does
+                // not trigger a hostname mismatch during the TLS handshake.
+                else if ((ip6[0] & 0xE0) == 0x20) // 2000::/3 global unicast
+                    result << addr;
             }
         }
     }
