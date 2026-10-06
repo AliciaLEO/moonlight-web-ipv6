@@ -43,6 +43,9 @@ bool ConnectionGuard::isExempt(const QString& ip)
         Q_IPV6ADDR v6 = addr.toIPv6Address();
         if (v6[0] == 0xFE && (v6[1] & 0xC0) == 0x80) return true; // fe80::/10 link-local
         if ((v6[0] & 0xFE) == 0xFC) return true;                  // fc00::/7 ULA
+        // IPv6 global unicast (2000::/3): direct IPv6 access (including the
+        // machine's own global addresses) must not be rate-limited/banned.
+        if ((v6[0] & 0xE0) == 0x20) return true; // 2000::/3 global unicast
     }
     return false;
 }

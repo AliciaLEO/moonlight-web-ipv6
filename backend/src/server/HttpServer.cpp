@@ -188,10 +188,6 @@ protected:
                     isLanSni = true;
                 }
             }
-            Logger::info(QString("[HTTPS] SNI='%1' local=%2 -> serving %3 cert")
-                .arg(sni.isEmpty() ? QString("<empty>") : sni)
-                .arg(ssl->localAddress().toString())
-                .arg(isLanSni ? "LOCAL" : "PUBLIC"));
             ssl->setSslConfiguration(isLanSni ? m_LocalSslConfig : m_PublicSslConfig);
             ssl->startServerEncryption();
         };

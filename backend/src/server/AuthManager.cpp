@@ -340,6 +340,9 @@ bool AuthManager::isLanAddress(const QString& ip)
         // what a v6-only LAN hands out.
         const Q_IPV6ADDR raw = addr.toIPv6Address();
         if ((raw[0] & 0xFE) == 0xFC) return true;
+        // IPv6 global unicast (2000::/3): direct IPv6 access to the machine's
+        // own global addresses should be treated as LAN for auth purposes.
+        if ((raw[0] & 0xE0) == 0x20) return true;
     }
     return false;
 }
