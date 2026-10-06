@@ -132,8 +132,9 @@ static QList<QHostAddress> getPrivateLanAddresses()
             if (addr.protocol() == QAbstractSocket::IPv4Protocol) {
                 quint32 ip = addr.toIPv4Address();
                 // RFC 1918: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+                // RFC 6598: 100.64.0.0/10 (CGNAT, used by Tailscale)
                 if ((ip & 0xFF000000) == 0x0A000000 || (ip & 0xFFF00000) == 0xAC100000 ||
-                    (ip & 0xFFFF0000) == 0xC0A80000) {
+                    (ip & 0xFFFF0000) == 0xC0A80000 || (ip & 0xFFC00000) == 0x64400000) {
                     result << addr;
                 }
             } else if (addr.protocol() == QAbstractSocket::IPv6Protocol) {
