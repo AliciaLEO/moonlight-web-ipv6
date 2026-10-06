@@ -1,1 +1,356 @@
-LyoKICogTW9vbmxpZ2h0V2ViIOKAlCBicm93c2VyLWJhc2VkIFN1bnNoaW5lL0dhbWVTdHJlYW0gY2xpZW50LgogKiBDb3B5cmlnaHQgKEMpIDIwMjYgQnJ1bm8gTWFydGluIDxicnVub29jdG9AZ21haWwuY29tPgogKgogKiBUaGlzIHByb2dyYW0gaXMgZnJlZSBzb2Z0d2FyZTogeW91IGNhbiByZWRpc3RyaWJ1dGUgaXQgYW5kL29yIG1vZGlmeSBpdAogKiB1bmRlciB0aGUgdGVybXMgb2YgdGhlIEdOVSBHZW5lcmFsIFB1YmxpYyBMaWNlbnNlIGFzIHB1Ymxpc2hlZCBieSB0aGUgRnJlZQogKiBTb2Z0d2FyZSBGb3VuZGF0aW9uLCBlaXRoZXIgdmVyc2lvbiAzIG9mIHRoZSBMaWNlbnNlLCBvciAoYXQgeW91ciBvcHRpb24pCiAqIGFueSBsYXRlciB2ZXJzaW9uLgogKgogKiBUaGlzIHByb2dyYW0gaXMgZGlzdHJpYnV0ZWQgaW4gdGhlIGhvcGUgdGhhdCBpdCB3aWxsIGJlIHVzZWZ1bCwgYnV0IFdJVEhPVVQKICogQU5ZIFdBUlJBTlRZOyB3aXRob3V0IGV2ZW4gdGhlIGltcGxpZWQgd2FycmFudHkgb2YgTUVSQ0hBTlRBQklMSVRZIG9yIEZJVE5FU1MKICogRk9SIEEgUEFSVElDVUxBUiBQVVJQT1NFLiBTZWUgdGhlIEdOVSBHZW5lcmFsIFB1YmxpYyBMaWNlbnNlIGZvciBtb3JlIGRldGFpbHMuCiAqCiAqIFlvdSBzaG91bGQgaGF2ZSByZWNlaXZlZCBhIGNvcHkgb2YgdGhlIEdOVSBHZW5lcmFsIFB1YmxpYyBMaWNlbnNlIGFsb25nIHdpdGgKICogdGhpcyBwcm9ncmFtLiBJZiBub3QsIHNlZSA8aHR0cHM6Ly93d3cuZ251Lm9yZy9saWNlbnNlcy8+LgogKi8KCiNpbmNsdWRlICJSZXF1ZXN0R3VhcmQuaCIKCiNpbmNsdWRlIDxRSG9zdEFkZHJlc3M+CiNpbmNsdWRlIDxRTmV0d29ya0ludGVyZmFjZT4KI2luY2x1ZGUgPFFTdHJpbmdMaXN0PgojaW5jbHVkZSA8UVVybD4KCm5hbWVzcGFjZSBSZXF1ZXN0R3VhcmQgewoKbmFtZXNwYWNlIHsKCnN0cnVjdCBBdXRob3JpdHkKewogICAgUVN0cmluZyBob3N0OyAvLyBsb3dlcmNhc2VkLCBJUHY2IHVuYnJhY2tldGVkCiAgICBRU3RyaW5nIHBvcnQ7IC8vIGVtcHR5IHdoZW4gYWJzZW50IG9yIHRoZSBzY2hlbWUncyBkZWZhdWx0Cn07CgpBdXRob3JpdHkgc3BsaXRBdXRob3JpdHkoY29uc3QgUVN0cmluZyYgdmFsdWUpCnsKICAgIGNvbnN0IFFTdHJpbmcgdiA9IHZhbHVlLnRyaW1tZWQoKTsKICAgIGlmICh2LmlzRW1wdHkoKSkgcmV0dXJuIHt9OwoKICAgIFFTdHJpbmcgaG9zdDsKICAgIFFTdHJpbmcgcG9ydDsKCiAgICAvLyBBY2NlcHQgYm90aCBhIGZ1bGwgb3JpZ2luICgiaHR0cHM6Ly9leGFtcGxlLmNvbTo0NDMiKSBhbmQgYSBiYXJlCiAgICAvLyBhdXRob3JpdHkgKCJleGFtcGxlLmNvbTo0NDMiLCAiWzo6MV06ODAiKSDigJQgT3JpZ2luIGlzIHRoZSBmb3JtZXIsIEhvc3QKICAgIC8vIHRoZSBsYXR0ZXIuCiAgICBpZiAodi5jb250YWlucyhRTGF0aW4xU3RyaW5nKCI6Ly8iKSkpIHsKICAgICAgICBjb25zdCBRVXJsIHVybCh2KTsKICAgICAgICBob3N0ID0gdXJsLmhvc3QoKTsgLy8gYWxyZWFkeSB1bmJyYWNrZXRlZCBhbmQgbG93ZXJjYXNlZCBieSBRVXJsCiAgICAgICAgaWYgKHVybC5wb3J0KCkgPiAwKSBwb3J0ID0gUVN0cmluZzo6bnVtYmVyKHVybC5wb3J0KCkpOwogICAgfSBlbHNlIGlmICh2LnN0YXJ0c1dpdGgoUUxhdGluMUNoYXIoJ1snKSkpIHsKICAgICAgICAvLyBJUHY2IGxpdGVyYWw6IHRoZSBwb3J0LCBpZiBhbnksIGZvbGxvd3MgdGhlIGNsb3NpbmcgYnJhY2tldC4KICAgICAgICBjb25zdCBpbnQgY2xvc2UgPSB2LmluZGV4T2YoUUxhdGluMUNoYXIoJ10nKSk7CiAgICAgICAgaWYgKGNsb3NlIDwgMCkgcmV0dXJuIHt2LnRvTG93ZXIoKSwgUVN0cmluZygpfTsgLy8gbWFsZm9ybWVkOyBjb21wYXJlIGFzLWlzCiAgICAgICAgaG9zdCA9IHYubWlkKDEsIGNsb3NlIC0gMSk7CiAgICAgICAgY29uc3QgUVN0cmluZyByZXN0ID0gdi5taWQoY2xvc2UgKyAxKTsKICAgICAgICBpZiAocmVzdC5zdGFydHNXaXRoKFFMYXRpbjFDaGFyKCc6JykpKSBwb3J0ID0gcmVzdC5taWQoMSk7CiAgICB9IGVsc2UgewogICAgICAgIC8vIEEgc2luZ2xlIGNvbG9uIHNlcGFyYXRlcyBob3N0IGZyb20gcG9ydC4gU2V2ZXJhbCBtZWFucyBhbiB1bmJyYWNrZXRlZAogICAgICAgIC8vIElQdjYgbGl0ZXJhbCwgd2hpY2ggaGFzIG5vIHBvcnQgdG8gc3BsaXQgb2ZmICgiZmU4MDo6NDQzIiBpcyBhbgogICAgICAgIC8vIGFkZHJlc3MsIG5vdCBob3N0ICJmZTgwOiIgb24gcG9ydCA0NDMpLgogICAgICAgIGNvbnN0IGludCBjb2xvbiA9IHYubGFzdEluZGV4T2YoUUxhdGluMUNoYXIoJzonKSk7CiAgICAgICAgaWYgKGNvbG9uID49IDAgJiYgdi5pbmRleE9mKFFMYXRpbjFDaGFyKCc6JykpID09IGNvbG9uKSB7CiAgICAgICAgICAgIGhvc3QgPSB2LmxlZnQoY29sb24pOwogICAgICAgICAgICBwb3J0ID0gdi5taWQoY29sb24gKyAxKTsKICAgICAgICB9IGVsc2UgewogICAgICAgICAgICBob3N0ID0gdjsKICAgICAgICB9CiAgICB9CgogICAgLy8gRHJvcCB0aGUgc2NoZW1lJ3MgZGVmYXVsdCBwb3J0IHNvICJleGFtcGxlLmNvbSIgYW5kICJleGFtcGxlLmNvbTo0NDMiCiAgICAvLyBjb21wYXJlIGVxdWFsLiBBIFRMUy10ZXJtaW5hdGluZyB0dW5uZWwgZm9yd2FyZHMgSG9zdCB3aXRob3V0IHRoZSBwb3J0CiAgICAvLyB3aGlsZSB0aGUgYnJvd3NlcidzIE9yaWdpbiBjYXJyaWVzIHRoZSBpbXBsaWNpdCA0NDMgKG9yIHZpY2UgdmVyc2EpLCBhbmQKICAgIC8vIHJlamVjdGluZyB0aGF0IHBhaXIgd291bGQgYnJlYWsgZXZlcnkgdHVubmVsbGVkIGRlcGxveW1lbnQuIFNhbWUtaG9zdAogICAgLy8gZGlmZmVyZW50LXBvcnQgaXMgInNhbWUgc2l0ZSIgYW55d2F5IOKAlCBhbiBhdHRhY2tlciB3aG8gb3ducyBhbm90aGVyIHBvcnQKICAgIC8vIG9uIG91ciBvd24gaG9zdG5hbWUgaGFzIGFscmVhZHkgd29uLgogICAgaWYgKHBvcnQgPT0gUUxhdGluMVN0cmluZygiODAiKSB8fCBwb3J0ID09IFFMYXRpbjFTdHJpbmcoIjQ0MyIpKSBwb3J0LmNsZWFyKCk7CgogICAgcmV0dXJuIHtob3N0LnRvTG93ZXIoKSwgcG9ydH07Cn0KCn0gLy8gbmFtZXNwYWNlCgpRU3RyaW5nIG5vcm1hbGl6ZUF1dGhvcml0eShjb25zdCBRU3RyaW5nJiB2YWx1ZSkKewogICAgY29uc3QgQXV0aG9yaXR5IGEgPSBzcGxpdEF1dGhvcml0eSh2YWx1ZSk7CiAgICBpZiAoYS5ob3N0LmlzRW1wdHkoKSkgcmV0dXJuIHt9OwogICAgcmV0dXJuIGEucG9ydC5pc0VtcHR5KCkgPyBhLmhvc3QgOiBhLmhvc3QgKyBRTGF0aW4xQ2hhcignOicpICsgYS5wb3J0Owp9CgpJbml0aWF0b3IgY2xhc3NpZnlJbml0aWF0b3IoY29uc3QgUU1hcDxRU3RyaW5nLCBRU3RyaW5nPiYgaGVhZGVycykKewogICAgLy8gU2VjLUZldGNoLVNpdGUgaXMgc2V0IGJ5IHRoZSBicm93c2VyIGl0c2VsZiBhbmQgaXMgdW5yZWFjaGFibGUgZnJvbSBwYWdlCiAgICAvLyBKYXZhU2NyaXB0LCBzbyBhIG1hbGljaW91cyBwYWdlIGNhbm5vdCBmb3JnZSBpdC4gRXZlcnkgZW5naW5lIHRoYXQgY2FuIHJ1bgogICAgLy8gYSBDU1JGIGF0dGFjayB0b2RheSBzZW5kcyBpdC4KICAgIC8vICAgc2FtZS1vcmlnaW4g4oaSIG91ciBvd24gZnJvbnRlbmQKICAgIC8vICAgbm9uZSAgICAgICAg4oaSIHVzZXItaW5pdGlhdGVkIG5hdmlnYXRpb24gKGFkZHJlc3MgYmFyLCBib29rbWFyaykKICAgIC8vICAgc2FtZS1zaXRlICAg4oaSIGEgc2libGluZyBzdWJkb21haW47IG5vdCB1cywgdHJlYXQgYXMgaG9zdGlsZQogICAgLy8gICBjcm9zcy1zaXRlICDihpIgYW5vdGhlciBzaXRlIGVudGlyZWx5CiAgICBjb25zdCBRU3RyaW5nIHNpdGUgPSBoZWFkZXJzLnZhbHVlKFFTdHJpbmdMaXRlcmFsKCJzZWMtZmV0Y2gtc2l0ZSIpKS50cmltbWVkKCkudG9Mb3dlcigpOwogICAgaWYgKCFzaXRlLmlzRW1wdHkoKSkgewogICAgICAgIGlmIChzaXRlID09IFFMYXRpbjFTdHJpbmcoInNhbWUtb3JpZ2luIikgfHwgc2l0ZSA9PSBRTGF0aW4xU3RyaW5nKCJub25lIikpCiAgICAgICAgICAgIHJldHVybiBJbml0aWF0b3I6OlNhbWVPcmlnaW47CiAgICAgICAgcmV0dXJuIEluaXRpYXRvcjo6Q3Jvc3NTaXRlOwogICAgfQoKICAgIC8vIEZhbGxiYWNrIGZvciBlbmdpbmVzIHRoYXQgcHJlZGF0ZSBTZWMtRmV0Y2gtU2l0ZTogY29tcGFyZSBPcmlnaW4gKHdoaWNoCiAgICAvLyBicm93c2VycyBhbHdheXMgYXR0YWNoIHRvIGNyb3NzLW9yaWdpbiByZXF1ZXN0cykgYWdhaW5zdCB0aGUgSG9zdCB3ZSB3ZXJlCiAgICAvLyBhZGRyZXNzZWQgYXMuCiAgICBjb25zdCBRU3RyaW5nIG9yaWdpbiA9IGhlYWRlcnMudmFsdWUoUVN0cmluZ0xpdGVyYWwoIm9yaWdpbiIpKS50cmltbWVkKCk7CiAgICBpZiAob3JpZ2luLmlzRW1wdHkoKSkgcmV0dXJuIEluaXRpYXRvcjo6VW5rbm93bjsgLy8gY3VybCwgc2NyaXB0cywgdHVubmVscwoKICAgIC8vICJudWxsIiBpcyB3aGF0IGEgc2FuZGJveGVkIGlmcmFtZSBvciBhIGNyb3NzLW9yaWdpbiByZWRpcmVjdCBwcm9kdWNlcy4KICAgIC8vIEFuIGF0dGFja2VyIGNhbiBmb3JjZSBpdCBkZWxpYmVyYXRlbHksIHNvIGl0IG5ldmVyIGNvdW50cyBhcyBvdXJzLgogICAgaWYgKG9yaWdpbi5jb21wYXJlKFFMYXRpbjFTdHJpbmcoIm51bGwiKSwgUXQ6OkNhc2VJbnNlbnNpdGl2ZSkgPT0gMCkKICAgICAgICByZXR1cm4gSW5pdGlhdG9yOjpDcm9zc1NpdGU7CgogICAgY29uc3QgUVN0cmluZyBob3N0ID0gbm9ybWFsaXplQXV0aG9yaXR5KGhlYWRlcnMudmFsdWUoUVN0cmluZ0xpdGVyYWwoImhvc3QiKSkpOwogICAgaWYgKGhvc3QuaXNFbXB0eSgpKSByZXR1cm4gSW5pdGlhdG9yOjpVbmtub3duOwoKICAgIHJldHVybiBub3JtYWxpemVBdXRob3JpdHkob3JpZ2luKSA9PSBob3N0ID8gSW5pdGlhdG9yOjpTYW1lT3JpZ2luIDogSW5pdGlhdG9yOjpDcm9zc1NpdGU7Cn0KCmJvb2wgaXNDcm9zc1NpdGUoY29uc3QgUU1hcDxRU3RyaW5nLCBRU3RyaW5nPiYgaGVhZGVycykKewogICAgcmV0dXJuIGNsYXNzaWZ5SW5pdGlhdG9yKGhlYWRlcnMpID09IEluaXRpYXRvcjo6Q3Jvc3NTaXRlOwp9Cgpib29sIGlzV2ViU29ja2V0T3JpZ2luQWxsb3dlZChjb25zdCBRU3RyaW5nJiBvcmlnaW4sIGNvbnN0IFFTdHJpbmcmIGhvc3RIZWFkZXIpCnsKICAgIC8vIFdlYlNvY2tldHMgYXJlIGV4ZW1wdCBmcm9tIHRoZSBzYW1lLW9yaWdpbiBwb2xpY3k6IGFueSBwYWdlIG1heSBvcGVuIG9uZQogICAgLy8gdG8gYW55IGhvc3QsIGFuZCB0aGUgaGFuZHNoYWtlIGNhcnJpZXMgbm8gQ09SUyBuZWdvdGlhdGlvbi4gVGhlIE9yaWdpbgogICAgLy8gaGVhZGVyIGlzIHRoZXJlZm9yZSB0aGUgb25seSB0aGluZyBzdGFuZGluZyBiZXR3ZWVuIGEgbWFsaWNpb3VzIHBhZ2UgYW5kCiAgICAvLyB0aGUgc2lnbmFsaW5nIGNoYW5uZWwgKHdoaWNoIHJlbGF5cyBrZXlib2FyZCBhbmQgbW91c2UgZXZlbnRzIHRvIHRoZQogICAgLy8gaG9zdCkuIEJyb3dzZXJzIGFsd2F5cyBzZW5kIGl0OyBub24tYnJvd3NlciBjbGllbnRzIG5ldmVyIGRvLgogICAgaWYgKG9yaWdpbi50cmltbWVkKCkuaXNFbXB0eSgpKSByZXR1cm4gdHJ1ZTsKICAgIGlmIChvcmlnaW4uY29tcGFyZShRTGF0aW4xU3RyaW5nKCJudWxsIiksIFF0OjpDYXNlSW5zZW5zaXRpdmUpID09IDApIHJldHVybiBmYWxzZTsKCiAgICBjb25zdCBRU3RyaW5nIGhvc3QgPSBub3JtYWxpemVBdXRob3JpdHkoaG9zdEhlYWRlcik7CiAgICBpZiAoaG9zdC5pc0VtcHR5KCkpIHJldHVybiB0cnVlOyAvLyBubyBIb3N0IHRvIGNvbXBhcmUgYWdhaW5zdCAoSFRUUC8xLjApCgogICAgcmV0dXJuIG5vcm1hbGl6ZUF1dGhvcml0eShvcmlnaW4pID09IGhvc3Q7Cn0KCmJvb2wgaXNMb2NhbEhvc3ROYW1lKGNvbnN0IFFTdHJpbmcmIGhvc3RIZWFkZXIpCnsKICAgIC8vIFBvcnQtaW5zZW5zaXRpdmUgb24gcHVycG9zZTogd2hhdCBtYXR0ZXJzIGlzIHdoZXRoZXIgdGhlIE5BTUUgYWRkcmVzc2VzCiAgICAvLyB0aGlzIG1hY2hpbmUuIFdlIHJvdXRpbmVseSBhbnN3ZXIgb24gYSBub24tZGVmYXVsdCBIVFRQUyBwb3J0ICg0NDcyOSBhbmQKICAgIC8vIGZyaWVuZHMgYWZ0ZXIgYSBwb3J0LXBhcml0eSByZWJpbmQpLCBhbmQgdGhlIHBvcnQgc2F5cyBub3RoaW5nIGFib3V0IHdobwogICAgLy8gdGhlIGNhbGxlciB0aGlua3MgdGhleSBhcmUgdGFsa2luZyB0by4KICAgIGNvbnN0IFFTdHJpbmcgaG9zdCA9IHNwbGl0QXV0aG9yaXR5KGhvc3RIZWFkZXIpLmhvc3Q7CgogICAgLy8gTm8gSG9zdCBoZWFkZXIgYXQgYWxsOiBIVFRQLzEuMCBvciBhIHJhdyBzb2NrZXQgY2xpZW50LiBBIGJyb3dzZXIgYWx3YXlzCiAgICAvLyBzZW5kcyBvbmUsIHNvIHRoaXMgY2Fubm90IGJlIGEgcmViaW5kaW5nIGF0dGFjay4KICAgIGlmIChob3N0LmlzRW1wdHkoKSkgcmV0dXJuIHRydWU7CgogICAgaWYgKGhvc3QgPT0gUUxhdGluMVN0cmluZygibG9jYWxob3N0IikgfHwgaG9zdCA9PSBRTGF0aW4xU3RyaW5nKCIxMjcuMC4wLjEiKSB8fAogICAgICAgIGhvc3QgPT0gUUxhdGluMVN0cmluZygiOjoxIikpCiAgICAgICAgcmV0dXJuIHRydWU7CgogICAgY29uc3QgUUhvc3RBZGRyZXNzIGFkZHIoaG9zdCk7CiAgICBpZiAoIWFkZHIuaXNOdWxsKCkpIHsKICAgICAgICAvLyBBbiBJUCBsaXRlcmFsOiB0cnVzdGVkIHdoZW4gaXQgaXMgbG9vcGJhY2sgb3Igb25lIG9mIHRoZSBwcml2YXRlCiAgICAgICAgLy8gcmFuZ2VzIHdlIHNlcnZlIHRoZSBMQU4gb24uIEEgcHVibGljIElQIGxpdGVyYWwgaXMgbm90IOKAlCBub3RoaW5nIGluCiAgICAgICAgLy8gdGhlIHByb2R1Y3QgYWRkcmVzc2VzIHVzIHRoYXQgd2F5LCBhbmQgaG9ub3VyaW5nIGl0IHdvdWxkIGhhbmQgdGhlCiAgICAgICAgLy8gbG9jYWwgcHJpdmlsZWdlIHRvIHdob2V2ZXIgcmVhY2hlcyB0aGUgZm9yd2FyZGVkIHBvcnQuCiAgICAgICAgaWYgKGFkZHIuaXNMb29wYmFjaygpKSByZXR1cm4gdHJ1ZTsKICAgICAgICBpZiAoYWRkci5wcm90b2NvbCgpID09IFFBYnN0cmFjdFNvY2tldDo6SVB2NFByb3RvY29sKSB7CiAgICAgICAgICAgIGNvbnN0IHF1aW50MzIgaXAgPSBhZGRyLnRvSVB2NEFkZHJlc3MoKTsKICAgICAgICAgICAgaWYgKChpcCAmIDB4RkYwMDAwMDApID09IDB4MEEwMDAwMDApIHJldHVybiB0cnVlOyAvLyAxMC4wLjAuMC84CiAgICAgICAgICAgIGlmICgoaXAgJiAweEZGRjAwMDAwKSA9PSAweEFDMTAwMDAwKSByZXR1cm4gdHJ1ZTsgLy8gMTcyLjE2LjAuMC8xMgogICAgICAgICAgICBpZiAoKGlwICYgMHhGRkZGMDAwMCkgPT0gMHhDMEE4MDAwMCkgcmV0dXJuIHRydWU7IC8vIDE5Mi4xNjguMC4wLzE2CiAgICAgICAgICAgIC8vIFRhaWxzY2FsZSAvIG1lc2ggVlBOICgxMDAuNjQuMC4wLzEwLCBSRkMgNjU5OCkuIFRoZSBob3N0IHJlYWNoZXMKICAgICAgICAgICAgLy8gaXRzZWxmIG92ZXIgdGhlIHRhaWxuZXQsIGFuZCBldmVyeSB0YWlsbmV0IHBlZXIgaXMgdGhlIHVzZXIncyBvd24KICAgICAgICAgICAgLy8gZGV2aWNlIOKAlCBub3QgdGhlIHB1YmxpYyBpbnRlcm5ldC4KICAgICAgICAgICAgaWYgKChpcCAmIDB4RkZDMDAwMDApID09IDB4NjQ0MDAwMDApIHJldHVybiB0cnVlOyAvLyAxMDAuNjQuMC4wLzEwCiAgICAgICAgfQogICAgICAgIGlmIChhZGRyLmlzTGlua0xvY2FsKCkpIHJldHVybiB0cnVlOyAvLyAxNjkuMjU0LzE2LCBmZTgwOjovMTAKICAgICAgICBpZiAoYWRkci5wcm90b2NvbCgpID09IFFBYnN0cmFjdFNvY2tldDo6SVB2NlByb3RvY29sKSB7CiAgICAgICAgICAgIC8vIFVuaXF1ZSBsb2NhbCBhZGRyZXNzZXMgKGZjMDA6Oi83KSBhcmUgdGhlIElQdjYgZXF1aXZhbGVudCBvZgogICAgICAgICAgICAvLyBSRkMgMTkxOCBhbmQgYXJlIHdoYXQgYSB2Ni1vbmx5IExBTiBoYW5kcyBvdXQuCiAgICAgICAgICAgIGNvbnN0IFFfSVBWNkFERFIgcmF3ID0gYWRkci50b0lQdjZBZGRyZXNzKCk7CiAgICAgICAgICAgIGlmICgocmF3WzBdICYgMHhGRSkgPT0gMHhGQykgcmV0dXJuIHRydWU7CiAgICAgICAgICAgIC8vIElQdjYgZ2xvYmFsIHVuaWNhc3Q6IHVubGlrZSBJUHY0LCBhIGdsb2JhbCBhZGRyZXNzIGRvZXMgTk9UIG1lYW4KICAgICAgICAgICAgLy8gInB1YmxpYyBpbnRlcm5ldCIuIFRoZSBob3N0J3Mgb3duIGdsb2JhbCBhZGRyZXNzZXMgKGZyb20gaXRzCiAgICAgICAgICAgIC8vIG5ldHdvcmsgaW50ZXJmYWNlcykgYXJlIGhvdyBJUHY2IExBTiBhbmQgZGlyZWN0IGludGVybmV0IGFjY2VzcwogICAgICAgICAgICAvLyB3b3JrLiBUcnVzdCB0aGUgYWRkcmVzcyBpZiBpdCBiZWxvbmdzIHRvIG9uZSBvZiBvdXIgaW50ZXJmYWNlcy4KICAgICAgICAgICAgLy8gVGhpcyBkb2VzIE5PVCB0cnVzdCBhcmJpdHJhcnkgZ2xvYmFsIGFkZHJlc3NlcyDigJQgb25seSBvdXIgb3duLgogICAgICAgICAgICBmb3IgKGNvbnN0IFFIb3N0QWRkcmVzcyYgbG9jYWwgOiBRTmV0d29ya0ludGVyZmFjZTo6YWxsQWRkcmVzc2VzKCkpIHsKICAgICAgICAgICAgICAgIGlmIChsb2NhbC5wcm90b2NvbCgpID09IFFBYnN0cmFjdFNvY2tldDo6SVB2NlByb3RvY29sICYmCiAgICAgICAgICAgICAgICAgICAgbG9jYWwgPT0gYWRkcikgewogICAgICAgICAgICAgICAgICAgIHJldHVybiB0cnVlOwogICAgICAgICAgICAgICAgfQogICAgICAgICAgICB9CiAgICAgICAgfQogICAgICAgIHJldHVybiBmYWxzZTsKICAgIH0KCiAgICAvLyBBbiBtRE5TIG5hbWUgaXMgb25seSByZXNvbHZhYmxlIGJ5IGEgbWFjaGluZSBvbiB0aGUgc2FtZSBsaW5rLCBhbmQgY2Fubm90CiAgICAvLyBiZSByZWdpc3RlcmVkIGJ5IGFuIG91dHNpZGVyLgogICAgcmV0dXJuIGhvc3QuZW5kc1dpdGgoUUxhdGluMVN0cmluZygiLmxvY2FsIikpOwp9Cgpib29sIGlzVHJ1c3RlZEhvc3QoY29uc3QgUVN0cmluZyYgaG9zdEhlYWRlciwgY29uc3QgUVN0cmluZyYgcHVibGljRG9tYWluKQp7CiAgICBpZiAoaXNMb2NhbEhvc3ROYW1lKGhvc3RIZWFkZXIpKSByZXR1cm4gdHJ1ZTsKCiAgICAvLyBPdXIgb3duIGRvbWFpbiBhbHNvIHNwZWFrcyBmb3IgdGhpcyBtYWNoaW5lIOKAlCB0aGUgaG9zdCByZWFjaGVzIGl0c2VsZgogICAgLy8gdGhhdCB3YXkgdGhyb3VnaCBoYWlycGluIE5BVCwgYW5kIGV2ZXJ5IHJlbW90ZSBjbGllbnQgYXJyaXZlcyB1bmRlciBpdC4KICAgIC8vIFRoaXMgaXMgd2hhdCBzdG9wcyBETlMgcmViaW5kaW5nOiBhdHRhY2tlci5leGFtcGxlIHJlLXBvaW50ZWQgYXQKICAgIC8vIDEyNy4wLjAuMSBzdGlsbCBjYXJyaWVzIGl0cyBvd24gbmFtZSBpbiBIb3N0IGFuZCBpcyByZWZ1c2VkLgogICAgY29uc3QgUVN0cmluZyBob3N0ID0gc3BsaXRBdXRob3JpdHkoaG9zdEhlYWRlcikuaG9zdDsKICAgIGNvbnN0IFFTdHJpbmcgZG9tYWluID0gc3BsaXRBdXRob3JpdHkocHVibGljRG9tYWluKS5ob3N0OwogICAgcmV0dXJuICFkb21haW4uaXNFbXB0eSgpICYmIGhvc3QgPT0gZG9tYWluOwp9Cgpib29sIGlzQm9keUNvbnRlbnRUeXBlQWxsb3dlZChjb25zdCBRU3RyaW5nJiBjb250ZW50VHlwZSwgcXNpemV0eXBlIGJvZHlTaXplKQp7CiAgICBpZiAoYm9keVNpemUgPD0gMCkgcmV0dXJuIHRydWU7IC8vIG5vdGhpbmcgdG8gcGFyc2UKCiAgICAvLyBFdmVyeSBBUEkgaGFuZGxlciBwYXJzZXMgdGhlIGJvZHkgYXMgSlNPTiwgc28gcmVxdWlyaW5nIHRoZSBtYXRjaGluZwogICAgLy8gY29udGVudCB0eXBlIGNvc3RzIHVzIG5vdGhpbmcg4oCUIGFuZCBpdCBpcyBhIENTUkYgYmFycmllciBpbiBpdHMgb3duCiAgICAvLyByaWdodDogYXBwbGljYXRpb24vanNvbiBpcyBub3QgYSBDT1JTLXNhZmVsaXN0ZWQgdmFsdWUsIHNvIGEgY3Jvc3Mtb3JpZ2luCiAgICAvLyBmZXRjaCBjYXJyeWluZyBpdCBtdXN0IHBhc3MgYSBwcmVmbGlnaHQsIHdoaWNoIHdlIG5ldmVyIGFuc3dlci4KICAgIC8vCiAgICAvLyBBbiBhYnNlbnQgY29udGVudCB0eXBlIGlzIHJlamVjdGVkIHRvbzogYGZldGNoKHVybCwge21ldGhvZDogJ1BPU1QnLAogICAgLy8gYm9keTogbmV3IEJsb2IoW2pzb25dKX0pYCBzZW5kcyBleGFjdGx5IHRoYXQsIHdpdGggbm8gcHJlZmxpZ2h0LgogICAgY29uc3QgUVN0cmluZyB0eXBlID0gY29udGVudFR5cGUuc2VjdGlvbihRTGF0aW4xQ2hhcignOycpLCAwLCAwKS50cmltbWVkKCkudG9Mb3dlcigpOwogICAgcmV0dXJuIHR5cGUgPT0gUUxhdGluMVN0cmluZygiYXBwbGljYXRpb24vanNvbiIpOwp9CgpSZXF1ZXN0IGRlc2NyaWJlKGNvbnN0IEh0dHBSZXF1ZXN0JiByZXEpCnsKICAgIFJlcXVlc3Qgb3V0OwogICAgb3V0Lm1ldGhvZCA9IHJlcS5tZXRob2Q7CiAgICBvdXQucGF0aCA9IHJlcS5wYXRoOwogICAgb3V0LmhlYWRlcnMgPSByZXEuaGVhZGVyczsKICAgIG91dC5ib2R5U2l6ZSA9IHJlcS5ib2R5LnNpemUoKTsKICAgIHJldHVybiBvdXQ7Cn0KCmludCBibG9ja1N0YXR1cyhPdXRjb21lIG91dGNvbWUpCnsKICAgIHN3aXRjaCAob3V0Y29tZSkgewogICAgY2FzZSBPdXRjb21lOjpCbG9ja0Nyb3NzU2l0ZTogcmV0dXJuIDQwMzsKICAgIGNhc2UgT3V0Y29tZTo6QmxvY2tDb250ZW50VHlwZTogcmV0dXJuIDQxNTsKICAgIGNhc2UgT3V0Y29tZTo6QWxsb3c6IGJyZWFrOwogICAgfQogICAgcmV0dXJuIDA7Cn0KClFTdHJpbmcgYmxvY2tFcnJvcihPdXRjb21lIG91dGNvbWUpCnsKICAgIHN3aXRjaCAob3V0Y29tZSkgewogICAgY2FzZSBPdXRjb21lOjpCbG9ja0Nyb3NzU2l0ZTogcmV0dXJuIFFTdHJpbmdMaXRlcmFsKCJjcm9zc19zaXRlX3JlcXVlc3RfYmxvY2tlZCIpOwogICAgY2FzZSBPdXRjb21lOjpCbG9ja0NvbnRlbnRUeXBlOiByZXR1cm4gUVN0cmluZ0xpdGVyYWwoInVuc3VwcG9ydGVkX21lZGlhX3R5cGUiKTsKICAgIGNhc2UgT3V0Y29tZTo6QWxsb3c6IGJyZWFrOwogICAgfQogICAgcmV0dXJuIHt9Owp9CgpEZWNpc2lvbiBldmFsdWF0ZShjb25zdCBSZXF1ZXN0JiByZXEsIGNvbnN0IENvbnRleHQmIGN0eCkKewogICAgRGVjaXNpb24gZDsKCiAgICBjb25zdCBib29sIGlzQXBpID0gcmVxLnBhdGguc3RhcnRzV2l0aChRTGF0aW4xU3RyaW5nKCIvYXBpLyIpKTsKCiAgICAvLyBPbmx5IHRoZSBBUEkgZ3JhbnRzIHByaXZpbGVnZXMgb3IgY2hhbmdlcyBzdGF0ZTsgc3RhdGljIGZpbGVzIGFyZSBwdWJsaWMKICAgIC8vIGJ5IGRlc2lnbiBhbmQgbXVzdCBrZWVwIGxvYWRpbmcgZnJvbSBhbnl3aGVyZSAoYSBib29rbWFya2VkIHBhZ2UsIGFuCiAgICAvLyBpZnJhbWUgb24gdGhlIHVzZXIncyBvd24gZGFzaGJvYXJkKS4KICAgIGlmIChpc0FwaSAmJiBpc0Nyb3NzU2l0ZShyZXEuaGVhZGVycykpIHsKICAgICAgICBkLm91dGNvbWUgPSBPdXRjb21lOjpCbG9ja0Nyb3NzU2l0ZTsKICAgICAgICByZXR1cm4gZDsKICAgIH0KICAgIGlmIChpc0FwaSAmJiAhaXNCb2R5Q29udGVudFR5cGVBbGxvd2VkKHJlcS5oZWFkZXJzLnZhbHVlKFFTdHJpbmdMaXRlcmFsKCJjb250ZW50LXR5cGUiKSksCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICByZXEuYm9keVNpemUpKSB7CiAgICAgICAgZC5vdXRjb21lID0gT3V0Y29tZTo6QmxvY2tDb250ZW50VHlwZTsKICAgICAgICByZXR1cm4gZDsKICAgIH0KICAgIGQub3V0Y29tZSA9IE91dGNvbWU6OkFsbG93OwoKICAgIC8vIFRoZSBIb3N0IG11c3QgYmUgYSBuYW1lIHdlIG93bi4gVGhpcyBpcyB0aGUgb25lIGNoZWNrIGEgcmViaW5kaW5nIGF0dGFjawogICAgLy8gY2Fubm90IGRvZGdlOiBpdCBtYWtlcyB0aGUgYXR0YWNrZXIncyBwYWdlIHNhbWUtb3JpZ2luIHdpdGggdXMgKHNvIHRoZQogICAgLy8gY3Jvc3Mtc2l0ZSB0ZXN0IGFib3ZlIHBhc3NlcywgYW5kIHRoZSBhdHRhY2tlciBjYW4gUkVBRCBvdXIgcmVzcG9uc2VzKSwKICAgIC8vIGJ1dCB0aGUgYnJvd3NlciBzdGlsbCBzZW5kcyB0aGUgYXR0YWNrZXIncyBvd24gbmFtZSBpbiBIb3N0LgogICAgY29uc3QgUVN0cmluZyBob3N0SGVhZGVyID0gcmVxLmhlYWRlcnMudmFsdWUoUVN0cmluZ0xpdGVyYWwoImhvc3QiKSk7CiAgICBkLmhvc3RUcnVzdGVkID0gaXNUcnVzdGVkSG9zdChob3N0SGVhZGVyLCBjdHgucHVibGljRG9tYWluKTsKICAgIGQuaG9zdFVudHJ1c3RlZCA9IGN0eC5wZWVyTG9jYWwgJiYgIWQuaG9zdFRydXN0ZWQ7CgogICAgLy8gQmVpbmcgcmVhY2hlZCBmcm9tIHRoaXMgbWFjaGluZSBpcyBvbmx5IHdvcnRoIHNvbWV0aGluZyB3aGVuIHRoZSBuYW1lIHdlCiAgICAvLyB3ZXJlIHJlYWNoZWQgdW5kZXIgY291bGQgbm90IGhhdmUgY29tZSBmcm9tIG91dHNpZGUuIFVuZGVyIHRoZSBwdWJsaWMKICAgIC8vIGRvbWFpbiBpdCBjb3VsZDogYSBUTFMtdGVybWluYXRpbmcgdHVubmVsIHJ1bnMgaGVyZSBhbmQgZm9yd2FyZHMgZXZlcnkKICAgIC8vIHZpc2l0b3IgZnJvbSBsb29wYmFjaywgc28gdGhlIHBhaXIgKGxvY2FsIHBlZXIsIG91ciBkb21haW4pIGRlc2NyaWJlcyB0aGUKICAgIC8vIHdob2xlIGludGVybmV0IGp1c3QgYXMgd2VsbCBhcyBpdCBkZXNjcmliZXMgdGhlIGhvc3QuCiAgICBkLmxvY2FsUHJpdmlsZWdlID0gY3R4LnBlZXJMb2NhbCAmJiBpc0xvY2FsSG9zdE5hbWUoaG9zdEhlYWRlcik7CgogICAgLy8gVHdvIHdheXMgdG8gYmUgdGhlIGhvc3QgbWFjaGluZTogcmVhY2ggdXMgZnJvbSB0aGUgbWFjaGluZSBpdHNlbGYsIG9yCiAgICAvLyBwcm92ZSBpdCB3aXRoIHRoZSBob3N0IGtleSBvdmVyIHRoZSBwdWJsaWMgZG9tYWluLgogICAgZC5ob3N0TWFjaGluZSA9IGQubG9jYWxQcml2aWxlZ2UgfHwgY3R4Lmhvc3RTZXNzaW9uOwoKICAgIC8vIEFkbWluIHdyaXRlcyBuZWVkIHRoZSBhZG1pbiBrZXkgb24gdG9wIG9mIHRoZSBhZGRyZXNzIGNoZWNrLiBSZWFkcyBkbwogICAgLy8gbm90OiB0aGUgYWRtaW4gcGFnZSBoYXMgdG8gbG9hZCBhbmQgZmV0Y2ggdGhhdCBrZXkgaW4gdGhlIGZpcnN0IHBsYWNlLgogICAgY29uc3QgYm9vbCBtdXRhdGluZyA9IHJlcS5tZXRob2QgIT0gUUxhdGluMVN0cmluZygiR0VUIikgJiYgcmVxLm1ldGhvZCAhPSBRTGF0aW4xU3RyaW5nKCJIRUFEIik7CiAgICAvLyBBIExBTiBtYWNoaW5lIHRoYXQgdW5sb2NrZWQgd2l0aCB0aGUgcmVtb3RlIGFkbWluIHBhc3N3b3JkIGdldHMgdGhlIHNhbWUKICAgIC8vIHByaXZpbGVnZXMgYXMgdGhlIGhvc3QuIE5vdGUgdGhhdCBpdHMgKnVubG9jayogaXMgZ2F0ZWQgc2VwYXJhdGVseSAoTEFOCiAgICAvLyBwZWVyLCB0cnVzdGVkIEhvc3QsIHJhdGUgbGltaXQpIOKAlCBieSB0aGUgdGltZSBhZG1pblNlc3Npb24gaXMgc2V0LCB0aGF0CiAgICAvLyBjaGVjayBoYXMgYWxyZWFkeSBwYXNzZWQuCiAgICBkLmFkbWluUHJpdmlsZWdlID0KICAgICAgICAhY3R4LmFkbWluTG9ja2VkICYmIChkLmhvc3RNYWNoaW5lIHx8IGN0eC5hZG1pblNlc3Npb24pICYmICghbXV0YXRpbmcgfHwgY3R4LmFkbWluS2V5T2spOwoKICAgIHJldHVybiBkOwp9CgpBZG1pblRva2VuUmVwbHkgYWRtaW5Ub2tlblJlcGx5KGNvbnN0IERlY2lzaW9uJiBkZWNpc2lvbiwgY29uc3QgQ29udGV4dCYgY3R4LCBib29sIGF1dGhlbnRpY2F0ZWQpCnsKICAgIC8vIFRoZSBob3N0IG1hY2hpbmUga2VlcHMgaXRzIHBsYWNlIHdpdGhvdXQgYSBzZXNzaW9uLCBpdCBqdXN0IGhvbGRzIG5vIGtleS4KICAgIGlmIChjdHguYWRtaW5Mb2NrZWQpCiAgICAgICAgcmV0dXJuIGF1dGhlbnRpY2F0ZWQgfHwgZGVjaXNpb24uaG9zdE1hY2hpbmUgPyBBZG1pblRva2VuUmVwbHk6OkVtcHR5CiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgOiBBZG1pblRva2VuUmVwbHk6OkRlbnk7CiAgICBpZiAoZGVjaXNpb24uaG9zdE1hY2hpbmUgfHwgY3R4LmFkbWluU2Vzc2lvbikgcmV0dXJuIEFkbWluVG9rZW5SZXBseTo6R3JhbnQ7CiAgICBpZiAoYXV0aGVudGljYXRlZCkgcmV0dXJuIEFkbWluVG9rZW5SZXBseTo6RW1wdHk7CiAgICByZXR1cm4gQWRtaW5Ub2tlblJlcGx5OjpEZW55Owp9Cgpib29sIGxvY2tlZEJ5Tm9BZG1pbihjb25zdCBRU3RyaW5nJiBtZXRob2QsIGNvbnN0IFFTdHJpbmcmIHBhdGgpCnsKICAgIGlmIChtZXRob2QgPT0gUUxhdGluMVN0cmluZygiR0VUIikgfHwgbWV0aG9kID09IFFMYXRpbjFTdHJpbmcoIkhFQUQiKSkgcmV0dXJuIGZhbHNlOwoKICAgIGNvbnN0IFFTdHJpbmdMaXN0IHNlZyA9IHBhdGguc3BsaXQoUUxhdGluMUNoYXIoJy8nKSwgUXQ6OlNraXBFbXB0eVBhcnRzKTsKICAgIGlmIChzZWcuc2l6ZSgpIDwgMiB8fCBzZWdbMF0gIT0gUUxhdGluMVN0cmluZygiYXBpIikpIHJldHVybiBmYWxzZTsKICAgIGNvbnN0IFFTdHJpbmcmIGFyZWEgPSBzZWdbMV07CgogICAgaWYgKGFyZWEgPT0gUUxhdGluMVN0cmluZygic3lzdGVtIikpIHJldHVybiB0cnVlOwogICAgaWYgKGFyZWEgPT0gUUxhdGluMVN0cmluZygidXBkYXRlIikpIHJldHVybiB0cnVlOwogICAgaWYgKGFyZWEgPT0gUUxhdGluMVN0cmluZygiYXV0aCIpKSB7CiAgICAgICAgc3RhdGljIGNvbnN0IFFTdHJpbmdMaXN0IGRvb3JzID0ge1FTdHJpbmdMaXRlcmFsKCJ2YWxpZGF0ZSIpLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBRU3RyaW5nTGl0ZXJhbCgiYWRtaW4tdW5sb2NrIiksCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIFFTdHJpbmdMaXRlcmFsKCJyZWdlbmVyYXRlIil9OwogICAgICAgIHJldHVybiBzZWcuc2l6ZSgpID09IDMgJiYgZG9vcnMuY29udGFpbnMoc2VnWzJdKTsKICAgIH0KICAgIGlmIChhcmVhID09IFFMYXRpbjFTdHJpbmcoInNoYXJlIikpIHsKICAgICAgICBpZiAoc2VnLnNpemUoKSA+PSAzICYmIHNlZ1syXSA9PSBRTGF0aW4xU3RyaW5nKCJzbG90cyIpKSByZXR1cm4gdHJ1ZTsKICAgICAgICByZXR1cm4gc2VnLnNpemUoKSA9PSA0ICYmIHNlZ1syXSA9PSBRTGF0aW4xU3RyaW5nKCJwbGF5ZXIiKSAmJgogICAgICAgICAgICAgICBzZWdbM10gPT0gUUxhdGluMVN0cmluZygicGluIik7CiAgICB9CiAgICBpZiAoYXJlYSA9PSBRTGF0aW4xU3RyaW5nKCJob3N0cyIpKSB7CiAgICAgICAgaWYgKHNlZy5zaXplKCkgPT0gMykgcmV0dXJuIHRydWU7IC8vIHNjYW4sIG1hbnVhbCwgREVMRVRFIC9hcGkvaG9zdHMvOmlkCiAgICAgICAgLy8gV2hhdCBhIGJvb3RoIHN0aWxsIGRvZXMgd2l0aCBhIGhvc3QgaXQgd2FzIGdpdmVuOiB3YWtlIGl0LCBwbGF5IG9uIGl0LgogICAgICAgIC8vIEFuIGFsbG93LWxpc3QsIHNvIGEgcm91dGUgYWRkZWQgbGF0ZXIgaXMgbG9ja2VkIHVudGlsIGl0IHNheXMgb3RoZXJ3aXNlLgogICAgICAgIHN0YXRpYyBjb25zdCBRU3RyaW5nTGlzdCBwbGF5ID0ge1FTdHJpbmdMaXRlcmFsKCJ3b2wiKSwgUVN0cmluZ0xpdGVyYWwoInN0YXJ0IiksCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgUVN0cmluZ0xpdGVyYWwoInF1aXQiKSwgUVN0cmluZ0xpdGVyYWwoInN0b3Atc2Vzc2lvbiIpfTsKICAgICAgICByZXR1cm4gc2VnLnNpemUoKSAhPSA0IHx8ICFwbGF5LmNvbnRhaW5zKHNlZ1szXSk7CiAgICB9CiAgICByZXR1cm4gZmFsc2U7Cn0KCn0gLy8gbmFtZXNwYWNlIFJlcXVlc3RHdWFyZAo=
+/*
+ * MoonlightWeb — browser-based Sunshine/GameStream client.
+ * Copyright (C) 2026 Bruno Martin <brunoocto@gmail.com>
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation, either version 3 of the License, or (at your option)
+ * any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+ * FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
+#include "RequestGuard.h"
+
+#include <QHostAddress>
+#include <QNetworkInterface>
+#include <QStringList>
+#include <QUrl>
+
+namespace RequestGuard {
+
+namespace {
+
+struct Authority
+{
+    QString host; // lowercased, IPv6 unbracketed
+    QString port; // empty when absent or the scheme's default
+};
+
+Authority splitAuthority(const QString& value)
+{
+    const QString v = value.trimmed();
+    if (v.isEmpty()) return {};
+
+    QString host;
+    QString port;
+
+    // Accept both a full origin ("https://example.com:443") and a bare
+    // authority ("example.com:443", "[::1]:80") — Origin is the former, Host
+    // the latter.
+    if (v.contains(QLatin1String("://"))) {
+        const QUrl url(v);
+        host = url.host(); // already unbracketed and lowercased by QUrl
+        if (url.port() > 0) port = QString::number(url.port());
+    } else if (v.startsWith(QLatin1Char('['))) {
+        // IPv6 literal: the port, if any, follows the closing bracket.
+        const int close = v.indexOf(QLatin1Char(']'));
+        if (close < 0) return {v.toLower(), QString()}; // malformed; compare as-is
+        host = v.mid(1, close - 1);
+        const QString rest = v.mid(close + 1);
+        if (rest.startsWith(QLatin1Char(':'))) port = rest.mid(1);
+    } else {
+        // A single colon separates host from port. Several means an unbracketed
+        // IPv6 literal, which has no port to split off ("fe80::443" is an
+        // address, not host "fe80:" on port 443).
+        const int colon = v.lastIndexOf(QLatin1Char(':'));
+        if (colon >= 0 && v.indexOf(QLatin1Char(':')) == colon) {
+            host = v.left(colon);
+            port = v.mid(colon + 1);
+        } else {
+            host = v;
+        }
+    }
+
+    // Drop the scheme's default port so "example.com" and "example.com:443"
+    // compare equal. A TLS-terminating tunnel forwards Host without the port
+    // while the browser's Origin carries the implicit 443 (or vice versa), and
+    // rejecting that pair would break every tunnelled deployment. Same-host
+    // different-port is "same site" anyway — an attacker who owns another port
+    // on our own hostname has already won.
+    if (port == QLatin1String("80") || port == QLatin1String("443")) port.clear();
+
+    return {host.toLower(), port};
+}
+
+} // namespace
+
+QString normalizeAuthority(const QString& value)
+{
+    const Authority a = splitAuthority(value);
+    if (a.host.isEmpty()) return {};
+    return a.port.isEmpty() ? a.host : a.host + QLatin1Char(':') + a.port;
+}
+
+Initiator classifyInitiator(const QMap<QString, QString>& headers)
+{
+    // Sec-Fetch-Site is set by the browser itself and is unreachable from page
+    // JavaScript, so a malicious page cannot forge it. Every engine that can run
+    // a CSRF attack today sends it.
+    //   same-origin → our own frontend
+    //   none        → user-initiated navigation (address bar, bookmark)
+    //   same-site   → a sibling subdomain; not us, treat as hostile
+    //   cross-site  → another site entirely
+    const QString site = headers.value(QStringLiteral("sec-fetch-site")).trimmed().toLower();
+    if (!site.isEmpty()) {
+        if (site == QLatin1String("same-origin") || site == QLatin1String("none"))
+            return Initiator::SameOrigin;
+        return Initiator::CrossSite;
+    }
+
+    // Fallback for engines that predate Sec-Fetch-Site: compare Origin (which
+    // browsers always attach to cross-origin requests) against the Host we were
+    // addressed as.
+    const QString origin = headers.value(QStringLiteral("origin")).trimmed();
+    if (origin.isEmpty()) return Initiator::Unknown; // curl, scripts, tunnels
+
+    // "null" is what a sandboxed iframe or a cross-origin redirect produces.
+    // An attacker can force it deliberately, so it never counts as ours.
+    if (origin.compare(QLatin1String("null"), Qt::CaseInsensitive) == 0)
+        return Initiator::CrossSite;
+
+    const QString host = normalizeAuthority(headers.value(QStringLiteral("host")));
+    if (host.isEmpty()) return Initiator::Unknown;
+
+    return normalizeAuthority(origin) == host ? Initiator::SameOrigin : Initiator::CrossSite;
+}
+
+bool isCrossSite(const QMap<QString, QString>& headers)
+{
+    return classifyInitiator(headers) == Initiator::CrossSite;
+}
+
+bool isWebSocketOriginAllowed(const QString& origin, const QString& hostHeader)
+{
+    // WebSockets are exempt from the same-origin policy: any page may open one
+    // to any host, and the handshake carries no CORS negotiation. The Origin
+    // header is therefore the only thing standing between a malicious page and
+    // the signaling channel (which relays keyboard and mouse events to the
+    // host). Browsers always send it; non-browser clients never do.
+    if (origin.trimmed().isEmpty()) return true;
+    if (origin.compare(QLatin1String("null"), Qt::CaseInsensitive) == 0) return false;
+
+    const QString host = normalizeAuthority(hostHeader);
+    if (host.isEmpty()) return true; // no Host to compare against (HTTP/1.0)
+
+    return normalizeAuthority(origin) == host;
+}
+
+bool isLocalHostName(const QString& hostHeader)
+{
+    // Port-insensitive on purpose: what matters is whether the NAME addresses
+    // this machine. We routinely answer on a non-default HTTPS port (44729 and
+    // friends after a port-parity rebind), and the port says nothing about who
+    // the caller thinks they are talking to.
+    const QString host = splitAuthority(hostHeader).host;
+
+    // No Host header at all: HTTP/1.0 or a raw socket client. A browser always
+    // sends one, so this cannot be a rebinding attack.
+    if (host.isEmpty()) return true;
+
+    if (host == QLatin1String("localhost") || host == QLatin1String("127.0.0.1") ||
+        host == QLatin1String("::1"))
+        return true;
+
+    const QHostAddress addr(host);
+    if (!addr.isNull()) {
+        // An IP literal: trusted when it is loopback or one of the private
+        // ranges we serve the LAN on. A public IP literal is not — nothing in
+        // the product addresses us that way, and honouring it would hand the
+        // local privilege to whoever reaches the forwarded port.
+        if (addr.isLoopback()) return true;
+        if (addr.protocol() == QAbstractSocket::IPv4Protocol) {
+            const quint32 ip = addr.toIPv4Address();
+            if ((ip & 0xFF000000) == 0x0A000000) return true; // 10.0.0.0/8
+            if ((ip & 0xFFF00000) == 0xAC100000) return true; // 172.16.0.0/12
+            if ((ip & 0xFFFF0000) == 0xC0A80000) return true; // 192.168.0.0/16
+            // Tailscale / mesh VPN (100.64.0.0/10, RFC 6598). The host reaches
+            // itself over the tailnet, and every tailnet peer is the user's own
+            // device — not the public internet.
+            if ((ip & 0xFFC00000) == 0x64400000) return true; // 100.64.0.0/10
+        }
+        if (addr.isLinkLocal()) return true; // 169.254/16, fe80::/10
+        if (addr.protocol() == QAbstractSocket::IPv6Protocol) {
+            // Unique local addresses (fc00::/7) are the IPv6 equivalent of
+            // RFC 1918 and are what a v6-only LAN hands out.
+            const Q_IPV6ADDR raw = addr.toIPv6Address();
+            if ((raw[0] & 0xFE) == 0xFC) return true;
+            // IPv6 global unicast: unlike IPv4, a global address does NOT mean
+            // "public internet". The host's own global addresses (from its
+            // network interfaces) are how IPv6 LAN and direct internet access
+            // work. Trust the address if it belongs to one of our interfaces.
+            // This does NOT trust arbitrary global addresses — only our own.
+            for (const QHostAddress& local : QNetworkInterface::allAddresses()) {
+                if (local.protocol() == QAbstractSocket::IPv6Protocol &&
+                    local == addr) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // An mDNS name is only resolvable by a machine on the same link, and cannot
+    // be registered by an outsider.
+    return host.endsWith(QLatin1String(".local"));
+}
+
+bool isTrustedHost(const QString& hostHeader, const QString& publicDomain)
+{
+    if (isLocalHostName(hostHeader)) return true;
+
+    // Our own domain also speaks for this machine — the host reaches itself
+    // that way through hairpin NAT, and every remote client arrives under it.
+    // This is what stops DNS rebinding: attacker.example re-pointed at
+    // 127.0.0.1 still carries its own name in Host and is refused.
+    const QString host = splitAuthority(hostHeader).host;
+    const QString domain = splitAuthority(publicDomain).host;
+    return !domain.isEmpty() && host == domain;
+}
+
+bool isBodyContentTypeAllowed(const QString& contentType, qsizetype bodySize)
+{
+    if (bodySize <= 0) return true; // nothing to parse
+
+    // Every API handler parses the body as JSON, so requiring the matching
+    // content type costs us nothing — and it is a CSRF barrier in its own
+    // right: application/json is not a CORS-safelisted value, so a cross-origin
+    // fetch carrying it must pass a preflight, which we never answer.
+    //
+    // An absent content type is rejected too: `fetch(url, {method: 'POST',
+    // body: new Blob([json])})` sends exactly that, with no preflight.
+    const QString type = contentType.section(QLatin1Char(';'), 0, 0).trimmed().toLower();
+    return type == QLatin1String("application/json");
+}
+
+Request describe(const HttpRequest& req)
+{
+    Request out;
+    out.method = req.method;
+    out.path = req.path;
+    out.headers = req.headers;
+    out.bodySize = req.body.size();
+    return out;
+}
+
+int blockStatus(Outcome outcome)
+{
+    switch (outcome) {
+    case Outcome::BlockCrossSite: return 403;
+    case Outcome::BlockContentType: return 415;
+    case Outcome::Allow: break;
+    }
+    return 0;
+}
+
+QString blockError(Outcome outcome)
+{
+    switch (outcome) {
+    case Outcome::BlockCrossSite: return QStringLiteral("cross_site_request_blocked");
+    case Outcome::BlockContentType: return QStringLiteral("unsupported_media_type");
+    case Outcome::Allow: break;
+    }
+    return {};
+}
+
+Decision evaluate(const Request& req, const Context& ctx)
+{
+    Decision d;
+
+    const bool isApi = req.path.startsWith(QLatin1String("/api/"));
+
+    // Only the API grants privileges or changes state; static files are public
+    // by design and must keep loading from anywhere (a bookmarked page, an
+    // iframe on the user's own dashboard).
+    if (isApi && isCrossSite(req.headers)) {
+        d.outcome = Outcome::BlockCrossSite;
+        return d;
+    }
+    if (isApi && !isBodyContentTypeAllowed(req.headers.value(QStringLiteral("content-type")),
+                                           req.bodySize)) {
+        d.outcome = Outcome::BlockContentType;
+        return d;
+    }
+    d.outcome = Outcome::Allow;
+
+    // The Host must be a name we own. This is the one check a rebinding attack
+    // cannot dodge: it makes the attacker's page same-origin with us (so the
+    // cross-site test above passes, and the attacker can READ our responses),
+    // but the browser still sends the attacker's own name in Host.
+    const QString hostHeader = req.headers.value(QStringLiteral("host"));
+    d.hostTrusted = isTrustedHost(hostHeader, ctx.publicDomain);
+    d.hostUntrusted = ctx.peerLocal && !d.hostTrusted;
+
+    // Being reached from this machine is only worth something when the name we
+    // were reached under could not have come from outside. Under the public
+    // domain it could: a TLS-terminating tunnel runs here and forwards every
+    // visitor from loopback, so the pair (local peer, our domain) describes the
+    // whole internet just as well as it describes the host.
+    d.localPrivilege = ctx.peerLocal && isLocalHostName(hostHeader);
+
+    // Two ways to be the host machine: reach us from the machine itself, or
+    // prove it with the host key over the public domain.
+    d.hostMachine = d.localPrivilege || ctx.hostSession;
+
+    // Admin writes need the admin key on top of the address check. Reads do
+    // not: the admin page has to load and fetch that key in the first place.
+    const bool mutating = req.method != QLatin1String("GET") && req.method != QLatin1String("HEAD");
+    // A LAN machine that unlocked with the remote admin password gets the same
+    // privileges as the host. Note that its *unlock* is gated separately (LAN
+    // peer, trusted Host, rate limit) — by the time adminSession is set, that
+    // check has already passed.
+    d.adminPrivilege =
+        !ctx.adminLocked && (d.hostMachine || ctx.adminSession) && (!mutating || ctx.adminKeyOk);
+
+    return d;
+}
+
+AdminTokenReply adminTokenReply(const Decision& decision, const Context& ctx, bool authenticated)
+{
+    // The host machine keeps its place without a session, it just holds no key.
+    if (ctx.adminLocked)
+        return authenticated || decision.hostMachine ? AdminTokenReply::Empty
+                                                     : AdminTokenReply::Deny;
+    if (decision.hostMachine || ctx.adminSession) return AdminTokenReply::Grant;
+    if (authenticated) return AdminTokenReply::Empty;
+    return AdminTokenReply::Deny;
+}
+
+bool lockedByNoAdmin(const QString& method, const QString& path)
+{
+    if (method == QLatin1String("GET") || method == QLatin1String("HEAD")) return false;
+
+    const QStringList seg = path.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    if (seg.size() < 2 || seg[0] != QLatin1String("api")) return false;
+    const QString& area = seg[1];
+
+    if (area == QLatin1String("system")) return true;
+    if (area == QLatin1String("update")) return true;
+    if (area == QLatin1String("auth")) {
+        static const QStringList doors = {QStringLiteral("validate"),
+                                          QStringLiteral("admin-unlock"),
+                                          QStringLiteral("regenerate")};
+        return seg.size() == 3 && doors.contains(seg[2]);
+    }
+    if (area == QLatin1String("share")) {
+        if (seg.size() >= 3 && seg[2] == QLatin1String("slots")) return true;
+        return seg.size() == 4 && seg[2] == QLatin1String("player") &&
+               seg[3] == QLatin1String("pin");
+    }
+    if (area == QLatin1String("hosts")) {
+        if (seg.size() == 3) return true; // scan, manual, DELETE /api/hosts/:id
+        // What a booth still does with a host it was given: wake it, play on it.
+        // An allow-list, so a route added later is locked until it says otherwise.
+        static const QStringList play = {QStringLiteral("wol"), QStringLiteral("start"),
+                                         QStringLiteral("quit"), QStringLiteral("stop-session")};
+        return seg.size() != 4 || !play.contains(seg[3]);
+    }
+    return false;
+}
+
+} // namespace RequestGuard
