@@ -755,6 +755,7 @@ void CertManager::ensureLocalSslConfig()
         Logger::error("[CERT] Cannot generate local self-signed cert (libcrypto)");
         return;
     }
+    Logger::info(QString("[CERT] Local self-signed cert generated with %1 SANs").arg(sans.size()));
 
     // Restrict the private key to the owner (0600 on Unix, owner-only ACL on Win).
     QFile::setPermissions(keyPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
