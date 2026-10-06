@@ -333,6 +333,7 @@ bool AuthManager::isLanAddress(const QString& ip)
         if ((v4 & 0xFF000000) == 0x0A000000) return true; // 10.0.0.0/8
         if ((v4 & 0xFFF00000) == 0xAC100000) return true; // 172.16.0.0/12
         if ((v4 & 0xFFFF0000) == 0xC0A80000) return true; // 192.168.0.0/16
+        if ((v4 & 0xFFC00000) == 0x64400000) return true; // 100.64.0.0/10 (Tailscale)
         return false;
     }
     if (addr.protocol() == QAbstractSocket::IPv6Protocol) {
