@@ -39,6 +39,7 @@ bool ConnectionGuard::isExempt(const QString& ip)
         if ((v & 0xFF000000) == 0x0A000000) return true; // 10.0.0.0/8
         if ((v & 0xFFF00000) == 0xAC100000) return true; // 172.16.0.0/12
         if ((v & 0xFFFF0000) == 0xC0A80000) return true; // 192.168.0.0/16
+        if ((v & 0xFFC00000) == 0x64400000) return true; // 100.64.0.0/10 (Tailscale)
     } else if (addr.protocol() == QAbstractSocket::IPv6Protocol) {
         Q_IPV6ADDR v6 = addr.toIPv6Address();
         if (v6[0] == 0xFE && (v6[1] & 0xC0) == 0x80) return true; // fe80::/10 link-local
