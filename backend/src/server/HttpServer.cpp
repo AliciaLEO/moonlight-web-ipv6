@@ -176,7 +176,18 @@ protected:
             QString sni = parseSniHostname(data);
             // Default to the public cert; only use the local self-signed cert when
             // SNI explicitly names a LAN hostname.
+            // Note: browsers do NOT send SNI for IP-literal URLs (e.g.
+            // https://[2409::1]/), so sni is empty for direct IPv6 access. In
+            // that case, check the local address the client connected to: if
+            // it's our own IPv6 (or any non-loopback local address), serve the
+            // local cert which has the IPv6 in its SANs.
             bool isLanSni = !sni.isEmpty() && isLanHostname(sni);
+            if (!isLanSni && sni.isEmpty()) {
+                QHostAddress localAddr = ssl->localAddress();
+                if (localAddr.protocol() == QAbstractSocket::IPv6Protocol && !localAddr.isLoopback()) {
+                    isLanSni = true;
+                }
+            }
             ssl->setSslConfiguration(isLanSni ? m_LocalSslConfig : m_PublicSslConfig);
             ssl->startServerEncryption();
         };
