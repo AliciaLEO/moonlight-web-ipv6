@@ -297,6 +297,7 @@ private:
             if ((ip & 0xFF000000) == 0x0A000000) return true; // 10.0.0.0/8
             if ((ip & 0xFFF00000) == 0xAC100000) return true; // 172.16.0.0/12
             if ((ip & 0xFFFF0000) == 0xC0A80000) return true; // 192.168.0.0/16
+            if ((ip & 0xFFC00000) == 0x64400000) return true; // 100.64.0.0/10 (Tailscale)
         } else if (addr.protocol() == QAbstractSocket::IPv6Protocol) {
             Q_IPV6ADDR ip6 = addr.toIPv6Address();
             if (ip6[0] == 0xFE && (ip6[1] & 0xC0) == 0x80) return true; // fe80::/10 link-local
