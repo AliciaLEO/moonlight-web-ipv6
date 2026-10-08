@@ -276,6 +276,16 @@ void SignalingServer::sendIceConfig(bool needStun, int iceTimeoutMs)
         iceServers.append(iceServer);
     }
 
+    // TURN relay: the browser needs it in its own RTCPeerConnection, and the
+    // frontend takes this array verbatim (no frontend change needed).
+    if (!m_TurnUrl.isEmpty() && !m_TurnUser.isEmpty() && !m_TurnPass.isEmpty()) {
+        QJsonObject turnServer;
+        turnServer["urls"] = QStringLiteral("turn:") + m_TurnUrl;
+        turnServer["username"] = m_TurnUser;
+        turnServer["credential"] = m_TurnPass;
+        iceServers.append(turnServer);
+    }
+
     QJsonObject msg;
     msg["type"] = "ice-config";
     msg["iceServers"] = iceServers;
@@ -1148,6 +1158,20 @@ rtc::Configuration SignalingServer::buildIceConfig(bool isInternet, bool mapped,
         qWarning().noquote() << "[SignalingServer] UDP media ports" << kMediaBlock
                              << "are all taken — using an ephemeral port, which a "
                                 "port-based firewall will block";
+    }
+
+    // TURN relay on the host side too: libdatachannel must allocate its own
+    // relay candidate on the same server, otherwise ICE has nothing to pair
+    // the browser's relay candidate with. Internet viewers only — LAN and
+    // Tailscale clients don't need it.
+    if (isInternet && !m_TurnUrl.isEmpty() && !m_TurnUser.isEmpty() && !m_TurnPass.isEmpty()) {
+        QString turnHost = m_TurnUrl.section(':', 0, 0);
+        quint16 turnPort = m_TurnUrl.section(':', 1, 1).toUShort();
+        if (turnPort == 0) turnPort = 3478;
+        config.iceServers.emplace_back(turnHost.toStdString(), turnPort,
+                                       m_TurnUser.toStdString(), m_TurnPass.toStdString(),
+                                       rtc::RelayType::TurnUdp);
+        qInfo() << "[SignalingServer] ICE config: + TURN" << m_TurnUrl;
     }
 
     if (forceIceTcp) {

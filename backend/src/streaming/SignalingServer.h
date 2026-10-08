@@ -190,6 +190,15 @@ private:
     // does. An instance under its own MW_DOMAIN is covered by the caller.
     QString m_StunServerUrl = QStringLiteral("stun:stream.moonlightweb.top:3478");
 
+    /// TURN relay for viewers that cannot reach this host directly (home has
+    /// no public IP). Empty = disabled. Configured via environment so no UI
+    /// change is needed:
+    ///   MW_TURN_URL    "host:port", e.g. "152.70.126.130:3478"
+    ///   MW_TURN_USER / MW_TURN_PASS   the coturn credentials from turnserver.conf
+    QString m_TurnUrl = QString::fromUtf8(qgetenv("MW_TURN_URL"));
+    QString m_TurnUser = QString::fromUtf8(qgetenv("MW_TURN_USER"));
+    QString m_TurnPass = QString::fromUtf8(qgetenv("MW_TURN_PASS"));
+
     /// Force ICE-TCP candidates (true = UDP + TCP, false = UDP only).
     bool m_ForceIceTcp = false;
 
