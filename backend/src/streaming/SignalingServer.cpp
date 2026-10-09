@@ -1164,14 +1164,21 @@ rtc::Configuration SignalingServer::buildIceConfig(bool isInternet, bool mapped,
     // relay candidate on the same server, otherwise ICE has nothing to pair
     // the browser's relay candidate with. Internet viewers only — LAN and
     // Tailscale clients don't need it.
-    if (isInternet && !m_TurnUrl.isEmpty() && !m_TurnUser.isEmpty() && !m_TurnPass.isEmpty()) {
-        QString turnHost = m_TurnUrl.section(':', 0, 0);
-        quint16 turnPort = m_TurnUrl.section(':', 1, 1).toUShort();
-        if (turnPort == 0) turnPort = 3478;
-        config.iceServers.emplace_back(turnHost.toStdString(), turnPort,
-                                       m_TurnUser.toStdString(), m_TurnPass.toStdString(),
-                                       rtc::RelayType::TurnUdp);
-        qInfo() << "[SignalingServer] ICE config: + TURN" << m_TurnUrl;
+    // Note: buildIceConfig is static, so read the env vars directly instead
+    // of the m_Turn* members (same source the members are initialized from).
+    {
+        const QString turnUrl = QString::fromUtf8(qgetenv("MW_TURN_URL"));
+        const QString turnUser = QString::fromUtf8(qgetenv("MW_TURN_USER"));
+        const QString turnPass = QString::fromUtf8(qgetenv("MW_TURN_PASS"));
+        if (isInternet && !turnUrl.isEmpty() && !turnUser.isEmpty() && !turnPass.isEmpty()) {
+            const QString turnHost = turnUrl.section(':', 0, 0);
+            quint16 turnPort = turnUrl.section(':', 1, 1).toUShort();
+            if (turnPort == 0) turnPort = 3478;
+            config.iceServers.emplace_back(turnHost.toStdString(), turnPort,
+                                           turnUser.toStdString(), turnPass.toStdString(),
+                                           rtc::IceServer::RelayType::TurnUdp);
+            qInfo() << "[SignalingServer] ICE config: + TURN" << turnUrl;
+        }
     }
 
     if (forceIceTcp) {
