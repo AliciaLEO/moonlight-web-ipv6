@@ -1066,9 +1066,22 @@ void HttpServer::processRequest(QTcpSocket* socket, const QByteArray& requestDat
         bool isLoopbackHost = hostname.compare("localhost", Qt::CaseInsensitive) == 0 ||
                               hostname == "127.0.0.1" || hostname == "::1" || hostname == "[::1]";
 
+        // Exception 3: skip redirect for Tailscale peers (100.64.0.0/10).
+        // Tailscale is an encrypted WireGuard overlay; HTTP over it is already
+        // secure, and redirecting to HTTPS would break clients (e.g. sandboxed
+        // agents) that cannot complete TLS to a self-signed cert through the
+        // tailnet proxy.
+        bool isTailscalePeer = false;
+        QHostAddress peerAddr = socket->peerAddress();
+        if (peerAddr.protocol() == QAbstractSocket::IPv4Protocol) {
+            quint32 pip = peerAddr.toIPv4Address();
+            if ((pip & 0xFFC00000) == 0x64400000) isTailscalePeer = true; // 100.64.0.0/10
+        }
+
         // Skip redirect behind a TLS-terminating tunnel (localhost client +
-        // public Host header) or for a loopback Host (served as HTTP directly).
-        if (!((isLocalClient && isPublicDomain) || isLoopbackHost)) {
+        // public Host header), for a loopback Host (served as HTTP directly),
+        // or for Tailscale peers (encrypted overlay, no HTTPS redirect needed).
+        if (!((isLocalClient && isPublicDomain) || isLoopbackHost || isTailscalePeer)) {
             QString portPart;
             if (m_ActiveHttpsPort != 443) portPart = QString(":%1").arg(m_ActiveHttpsPort);
 
